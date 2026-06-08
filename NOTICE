@@ -1,0 +1,24 @@
+Baton
+Copyright (c) 2026 Rakshan Shetty
+Licensed under the MIT License (see LICENSE).
+
+This product adapts logic from the following open-source projects. No source
+files were copied verbatim; their approaches were reimplemented for Baton's
+local, git-only use. Attribution is provided here in good faith.
+
+-------------------------------------------------------------------------------
+handler.dev — Launchable.ai
+  https://github.com/Launchable-AI/handler.dev
+  License: MIT
+  Adapted: git worktree create/list/status/merge/remove logic
+           (packages/server/src/services/worktree.ts) and the shell-free
+           execFile execution approach (packages/server/src/lib/safe-exec.ts).
+
+-------------------------------------------------------------------------------
+rover — Endor Software Inc.
+  https://github.com/endorhq/rover
+  License: Apache-2.0
+  Adapted: per-task branch-naming + base-commit recording pattern
+           (packages/cli/src/lib/task-setup.ts, TaskSetup.initial()).
+  Apache-2.0 NOTICE: portions of this product's design are derived from rover,
+  Copyright (c) Endor Software Inc., licensed under the Apache License 2.0.
