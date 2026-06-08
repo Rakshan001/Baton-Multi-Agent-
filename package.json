@@ -1,0 +1,50 @@
+{
+  "name": "baton-cli",
+  "version": "0.0.1",
+  "description": "Hand a unit of coding work from one AI agent to another — plan on your expensive agent, pass the baton to your cheap one.",
+  "type": "module",
+  "bin": {
+    "baton": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "claude-code",
+    "cursor",
+    "handoff",
+    "llm",
+    "cli",
+    "developer-tools"
+  ],
+  "author": "Rakshan Shetty",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rakshan001/Baton-Multi-Agent-.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "commander": "^12.1.0",
+    "execa": "^9.5.1",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
