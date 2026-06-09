@@ -1,0 +1,104 @@
+/* ============================================================
+   BATON — preferences hook (ported from app.jsx usePrefs)
+   theme / accent / motion / write / view / apiBase / offline,
+   persisted to localStorage and applied to <html>.
+   ============================================================ */
+import { useState, useEffect } from "react";
+import { ACCENTS } from "../lib/registry";
+import { BatonAPI } from "../lib/api";
+import { showToast } from "../lib/toast";
+import { ls } from "../lib/storage";
+
+export type Theme = "system" | "light" | "dark";
+export type Motion = "full" | "reduce";
+export type View = "board" | "canvas";
+
+// Re-exported for back-compat: callers import `ls` from this module.
+export { ls };
+
+export interface Prefs {
+  theme: Theme;
+  resolvedTheme: "light" | "dark";
+  setTheme: (v: Theme) => void;
+  accent: string;
+  setAccent: (v: string) => void;
+  motion: Motion;
+  setMotion: (v: Motion) => void;
+  writeEnabled: boolean;
+  setWriteEnabled: (v: boolean) => void;
+  view: View;
+  setView: (v: View) => void;
+  apiBase: string;
+  setApiBase: (v: string) => void;
+  offline: boolean;
+  setOffline: (v: boolean) => void;
+}
+
+export function usePrefs(): Prefs {
+  const [theme, setThemeRaw] = useState<Theme>(() => ls.get<Theme>("baton:theme", "dark"));
+  const [accent, setAccentRaw] = useState<string>(() => ls.get("baton:accent", "blue"));
+  const [motion, setMotionRaw] = useState<Motion>(() => ls.get<Motion>("baton:motion", "full"));
+  const [writeEnabled, setWriteRaw] = useState<boolean>(() => ls.get("baton:write", false));
+  const [view, setViewRaw] = useState<View>(() => ls.get<View>("baton:view", "board"));
+  const [apiBase, setApiBaseRaw] = useState<string>(() =>
+    ls.get("baton:api", import.meta.env.VITE_BATON_API || "http://localhost:7077"),
+  );
+  const [offline, setOfflineRaw] = useState(false);
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("dark");
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const r: "light" | "dark" = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
+      document.documentElement.dataset.theme = r;
+      setResolvedTheme(r);
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [theme]);
+
+  useEffect(() => {
+    const ac = ACCENTS.find((a) => a.id === accent) || ACCENTS[0];
+    const r = document.documentElement.style;
+    r.setProperty("--accent-h", ac.h);
+    r.setProperty("--accent-s", ac.s);
+    r.setProperty("--accent-l", ac.l);
+  }, [accent]);
+
+  useEffect(() => {
+    document.documentElement.dataset.motion = motion === "reduce" ? "reduce" : "";
+  }, [motion]);
+
+  useEffect(() => {
+    BatonAPI.writeEnabled = writeEnabled;
+  }, [writeEnabled]);
+
+  useEffect(() => {
+    BatonAPI.setForcedOffline(offline);
+  }, [offline]);
+
+  return {
+    theme, resolvedTheme,
+    setTheme: (v) => { setThemeRaw(v); ls.set("baton:theme", v); },
+    accent,
+    setAccent: (v) => { setAccentRaw(v); ls.set("baton:accent", v); },
+    motion,
+    setMotion: (v) => { setMotionRaw(v); ls.set("baton:motion", v); },
+    writeEnabled,
+    setWriteEnabled: (v) => {
+      setWriteRaw(v);
+      ls.set("baton:write", v);
+      showToast({
+        kind: v ? "ok" : "info",
+        title: v ? "Write actions enabled" : "Read-only mode",
+        desc: v ? "Merge & Remove are now live." : "Merge & Remove are disabled.",
+      });
+    },
+    view,
+    setView: (v) => { setViewRaw(v); ls.set("baton:view", v); },
+    apiBase,
+    setApiBase: (v) => { setApiBaseRaw(v); ls.set("baton:api", v); BatonAPI.setApiBase(v); },
+    offline, setOffline: setOfflineRaw,
+  };
+}
