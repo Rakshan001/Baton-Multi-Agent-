@@ -158,10 +158,10 @@ export function StatCounter({
 }
 
 /* ---------- ApiDot ---------- */
-export function ApiDot({ state, lastUpdated, onRefresh }: { state: "online" | "fetching" | "offline"; lastUpdated: number | null; onRefresh: () => void }) {
+export function ApiDot({ state, lastUpdated, onRefresh, live = false }: { state: "online" | "fetching" | "offline"; lastUpdated: number | null; onRefresh: () => void; live?: boolean }) {
   const [, force] = useReducer((x) => x + 1, 0);
   useEffect(() => { const t = setInterval(force, 1000); return () => clearInterval(t); }, []);
-  const meta = ({ online: { c: "var(--clean)", t: "Connected" }, fetching: { c: "var(--accent)", t: "Syncing…" }, offline: { c: "var(--conflict)", t: "Offline" } } as const)[state] || { c: "var(--idle)", t: "—" };
+  const meta = ({ online: { c: "var(--clean)", t: live ? "Live (push)" : "Connected (polling)" }, fetching: { c: "var(--accent)", t: "Syncing…" }, offline: { c: "var(--conflict)", t: "Offline" } } as const)[state] || { c: "var(--idle)", t: "—" };
   const ago = lastUpdated ? timeAgo(lastUpdated) : "—";
   return (
     <button className="fr" onClick={onRefresh} data-tip={`${meta.t} · localhost:7077\nUpdated ${ago} — click to refresh`} data-tip-side="bottom"

@@ -4,14 +4,41 @@
  * Logic adapted from handler.dev's backend-agnostic worktree service
  * (.refs/handler.dev/packages/server/src/services/worktree.ts, MIT) — rewritten
  * to run git locally via execa instead of through a Docker/SSH CommandRunner,
- * and to derive state from git itself rather than an in-memory record. See NOTICE.
+ * and to derive state from git itself rather than an in-memory record.
+ *
+ * Worktree create/remove robustness (collision-aware naming, prune-on-orphan,
+ * retry-on-busy) and in-progress repo-state detection are adapted from
+ * daintree's WorkspaceService (.refs/daintree/electron/workspace-host/
+ * WorkspaceService.ts, Apache-2.0). The porcelain-v2 conflict parser + labels
+ * are adapted from daintree's porcelainConflicts
+ * (.refs/daintree/electron/services/git/porcelainConflicts.ts, Apache-2.0).
+ * See NOTICE.
  */
+import { stat } from 'node:fs/promises';
 import { git, gitTry } from './util/exec.js';
+
+export type RepoState = 'clean' | 'merging' | 'rebasing' | 'cherry-picking' | 'reverting';
+
+export interface ConflictEntry {
+  path: string;
+  xy: string; // porcelain v2 unmerged code, e.g. "UU"
+  label: string; // human label, e.g. "both modified"
+}
 
 export interface WorktreeStatus {
   state: 'clean' | 'dirty' | 'conflict';
+  repoState: RepoState;
   changedFiles: string[];
   conflictFiles: string[];
+  conflictDetails: ConflictEntry[];
+  insertions: number;
+  deletions: number;
+}
+
+export interface WorktreeEntry {
+  path: string;
+  branch: string | null;
+  head: string | null;
 }
 
 /** Absolute path of the repo's top level (throws if not in a git repo). */
@@ -34,6 +61,33 @@ export async function headCommit(cwd?: string): Promise<string | null> {
   return r.ok ? r.stdout : null;
 }
 
+/** True if a local branch with this exact name already exists. */
+export async function branchExists(branch: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], cwd);
+  return r.ok;
+}
+
+/** All registered worktrees, parsed from `git worktree list --porcelain`. */
+export async function listWorktrees(cwd?: string): Promise<WorktreeEntry[]> {
+  const r = await gitTry(['worktree', 'list', '--porcelain'], cwd);
+  if (!r.ok || !r.stdout) return [];
+  const entries: WorktreeEntry[] = [];
+  let cur: WorktreeEntry | null = null;
+  for (const line of r.stdout.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      if (cur) entries.push(cur);
+      cur = { path: line.slice('worktree '.length), branch: null, head: null };
+    } else if (cur && line.startsWith('HEAD ')) {
+      cur.head = line.slice('HEAD '.length);
+    } else if (cur && line.startsWith('branch ')) {
+      // "branch refs/heads/foo" → "foo"
+      cur.branch = line.slice('branch '.length).replace(/^refs\/heads\//, '');
+    }
+  }
+  if (cur) entries.push(cur);
+  return entries;
+}
+
 /** Create a branch + worktree at `path` based on `base` (default HEAD). */
 export async function createWorktree(
   path: string,
@@ -47,31 +101,146 @@ export async function createWorktree(
   await git(['worktree', 'add', '-b', branch, path, base], cwd);
 }
 
-/** Remove a worktree and delete its branch. Best-effort, never throws. */
-export async function removeWorktree(
-  path: string,
-  branch: string,
-  cwd?: string,
-): Promise<void> {
-  await gitTry(['worktree', 'remove', path, '--force'], cwd);
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Remove a worktree and delete its branch. Robust to the common failure modes:
+ * if the worktree dir was deleted out from under us, prune stale metadata
+ * instead of issuing a doomed `remove`; retry transient EBUSY/EPERM; always
+ * prune afterward to sweep leftovers. Best-effort, never throws.
+ */
+export async function removeWorktree(path: string, branch: string, cwd?: string): Promise<void> {
+  if (!(await pathExists(path))) {
+    await gitTry(['worktree', 'prune'], cwd);
+  } else {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const r = await gitTry(['worktree', 'remove', path, '--force'], cwd);
+      if (r.ok) break;
+      if (!/EBUSY|EPERM|resource busy|in use/i.test(r.stderr) || attempt === 3) break;
+      await sleep(150 * attempt);
+    }
+    await gitTry(['worktree', 'prune'], cwd);
+  }
   await gitTry(['branch', '-D', branch], cwd);
 }
 
-/** Working-tree status of a worktree: clean / dirty / conflict. */
+export const CONFLICT_LABELS: Record<string, string> = {
+  UU: 'both modified',
+  AA: 'both added',
+  DD: 'both deleted',
+  AU: 'added by us',
+  UA: 'added by them',
+  DU: 'deleted by us',
+  UD: 'deleted by them',
+};
+
+/**
+ * Parse unmerged ("u ") entries from `git status --porcelain=v2` into labeled
+ * conflicts. Pure — exported for tests.
+ * Format: `u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`
+ */
+export function parseConflicts(raw: string): ConflictEntry[] {
+  const out: ConflictEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.startsWith('u ')) continue;
+    const parts = line.split(' ');
+    if (parts.length < 11) continue;
+    const xy = parts[1] ?? '';
+    const path = parts.slice(10).join(' ');
+    if (!path) continue;
+    out.push({ path, xy, label: CONFLICT_LABELS[xy] ?? xy });
+  }
+  return out;
+}
+
+/** Detect an in-progress git operation in a worktree via its marker files. */
+export async function repoState(path: string): Promise<RepoState> {
+  const markers: [string, RepoState][] = [
+    ['MERGE_HEAD', 'merging'],
+    ['rebase-merge', 'rebasing'],
+    ['rebase-apply', 'rebasing'],
+    ['CHERRY_PICK_HEAD', 'cherry-picking'],
+    ['REVERT_HEAD', 'reverting'],
+  ];
+  for (const [marker, state] of markers) {
+    const r = await gitTry(['-C', path, 'rev-parse', '--git-path', marker]);
+    if (r.ok && r.stdout && (await pathExists(r.stdout))) return state;
+  }
+  return 'clean';
+}
+
+/** Working-tree status of a worktree: clean / dirty / conflict, with churn. */
 export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
-  const r = await gitTry(['-C', path, 'status', '--porcelain']);
+  const repo = await repoState(path);
+  const r = await gitTry(['-C', path, 'status', '--porcelain=v2']);
   if (!r.ok || r.stdout === '') {
-    return { state: 'clean', changedFiles: [], conflictFiles: [] };
+    return {
+      state: 'clean',
+      repoState: repo,
+      changedFiles: [],
+      conflictFiles: [],
+      conflictDetails: [],
+      insertions: 0,
+      deletions: 0,
+    };
   }
-  const lines = r.stdout.split('\n').filter(Boolean);
-  const conflictFiles = lines
-    .filter((l) => /^(UU|AA|DD|AU|UA|DU|UD) /.test(l))
-    .map((l) => l.slice(3));
-  if (conflictFiles.length > 0) {
-    return { state: 'conflict', changedFiles: [], conflictFiles };
+
+  const conflictDetails = parseConflicts(r.stdout);
+  const { insertions, deletions } = await churn(path);
+
+  if (conflictDetails.length > 0) {
+    return {
+      state: 'conflict',
+      repoState: repo,
+      changedFiles: [],
+      conflictFiles: conflictDetails.map((c) => c.path),
+      conflictDetails,
+      insertions,
+      deletions,
+    };
   }
-  const changedFiles = lines.map((l) => l.slice(3));
-  return { state: 'dirty', changedFiles, conflictFiles: [] };
+
+  // Changed paths: ordinary ("1"/"2") and untracked ("?") porcelain v2 entries.
+  const changedFiles: string[] = [];
+  for (const line of r.stdout.split('\n').filter(Boolean)) {
+    if (line.startsWith('1 ') || line.startsWith('2 ')) {
+      changedFiles.push(line.split(' ').slice(8).join(' '));
+    } else if (line.startsWith('? ')) {
+      changedFiles.push(line.slice(2));
+    }
+  }
+  return {
+    state: 'dirty',
+    repoState: repo,
+    changedFiles,
+    conflictFiles: [],
+    conflictDetails: [],
+    insertions,
+    deletions,
+  };
+}
+
+/** Total inserted/deleted lines vs HEAD (tracked changes), via --numstat. */
+async function churn(path: string): Promise<{ insertions: number; deletions: number }> {
+  const r = await gitTry(['-C', path, 'diff', '--numstat', 'HEAD']);
+  if (!r.ok || !r.stdout) return { insertions: 0, deletions: 0 };
+  let insertions = 0;
+  let deletions = 0;
+  for (const line of r.stdout.split('\n').filter(Boolean)) {
+    const [ins, del] = line.split('\t');
+    insertions += parseInt(ins, 10) || 0; // "-" (binary) → 0
+    deletions += parseInt(del, 10) || 0;
+  }
+  return { insertions, deletions };
 }
 
 /** Commits `branch` is ahead / behind `base`. Returns {0,0} on any error. */
@@ -122,14 +291,15 @@ export async function branchCommits(
 
 /**
  * Merge `branch` into the current branch. Default: SQUASH into one clean commit
- * (keeps the agent's WIP commits out of the real history). Reports conflicts.
+ * (keeps the agent's WIP commits out of the real history). Reports conflicts
+ * with human labels.
  */
 export async function mergeBranch(
   branch: string,
   message: string,
   opts: { squash?: boolean } = {},
   cwd?: string,
-): Promise<{ success: boolean; conflicts: string[] }> {
+): Promise<{ success: boolean; conflicts: ConflictEntry[] }> {
   const squash = opts.squash !== false;
 
   const r = squash
@@ -149,10 +319,10 @@ export async function mergeBranch(
     return { success: true, conflicts: [] };
   }
 
-  const conf = await gitTry(['diff', '--name-only', '--diff-filter=U'], cwd);
-  const conflicts = conf.ok ? conf.stdout.split('\n').filter(Boolean) : [];
+  const conf = await gitTry(['status', '--porcelain=v2'], cwd);
+  const conflicts = conf.ok ? parseConflicts(conf.stdout) : [];
   if (conflicts.length > 0) {
-    await gitTry(squash ? ['merge', '--abort'] : ['merge', '--abort'], cwd);
+    await gitTry(['merge', '--abort'], cwd);
     // --squash leaves staged changes on failure; reset to clean up.
     if (squash) await gitTry(['reset', '--merge'], cwd);
     return { success: false, conflicts };

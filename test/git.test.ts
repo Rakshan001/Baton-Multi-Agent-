@@ -7,9 +7,11 @@ import { git } from '../src/util/exec.js';
 import {
   aheadBehind,
   archiveBranch,
+  branchExists,
   createWorktree,
   currentBranch,
   headCommit,
+  listWorktrees,
   mergeBranch,
   removeWorktree,
   worktreeStatus,
@@ -95,9 +97,35 @@ describe('git worktree lifecycle', () => {
 
     const res = await mergeBranch('baton/conflict', 'merge attempt', {}, root);
     expect(res.success).toBe(false);
-    expect(res.conflicts).toContain('README.md');
+    expect(res.conflicts.map((c) => c.path)).toContain('README.md');
+    // conflicts carry a human label, not just a path
+    expect(res.conflicts.find((c) => c.path === 'README.md')?.label).toBe('both modified');
 
     // merge was aborted → main is clean and unchanged
     expect((await worktreeStatus(root)).state).toBe('clean');
+  });
+
+  it('branchExists and listWorktrees reflect created worktrees', async () => {
+    const wt = join(root, '.baton', 'wt', 'wtest');
+    expect(await branchExists('baton/wtest', root)).toBe(false);
+    await createWorktree(wt, 'baton/wtest', 'HEAD', root);
+    expect(await branchExists('baton/wtest', root)).toBe(true);
+    const list = await listWorktrees(root);
+    expect(list.some((w) => w.branch === 'baton/wtest')).toBe(true);
+  });
+
+  it('removeWorktree prunes cleanly when the worktree dir is gone', async () => {
+    const wt = join(root, '.baton', 'wt', 'orphan');
+    await createWorktree(wt, 'baton/orphan', 'HEAD', root);
+
+    // simulate the worktree being deleted out from under baton
+    await rm(wt, { recursive: true, force: true });
+
+    // should not throw, should prune stale metadata and delete the branch
+    await removeWorktree(wt, 'baton/orphan', root);
+    const worktrees = await git(['worktree', 'list', '--porcelain'], root);
+    expect(worktrees).not.toContain('orphan');
+    const branches = await git(['branch'], root);
+    expect(branches).not.toContain('baton/orphan');
   });
 });

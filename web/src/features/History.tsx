@@ -1,14 +1,45 @@
 /* ============================================================
    BATON — History / Provenance (ported from insights.jsx)
    ============================================================ */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 import { AgentBadge, EmptyState, ErrorState } from "../components/primitives";
 import { ScreenHeader, SearchInput, AgentFilter } from "./shared";
 import { getAgent } from "../lib/registry";
 import { timeAgo } from "../lib/format";
-import type { TaskHistory, AgentId } from "../types";
+import { BatonAPI } from "../lib/api";
+import type { TaskHistory, AgentId, CompletionReport } from "../types";
 import type { PollState } from "../hooks/usePoll";
+
+/** Lazy completion-report details for an expanded merged task. */
+function ReportBlock({ slug }: { slug: string }) {
+  const [report, setReport] = useState<CompletionReport | null | "loading">("loading");
+  useEffect(() => {
+    let on = true;
+    BatonAPI.getReport(slug).then((r) => { if (on) setReport(r); }).catch(() => { if (on) setReport(null); });
+    return () => { on = false; };
+  }, [slug]);
+  if (report === "loading" || report === null) return null;
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--border-subtle)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <Icon name="checkCircle" size={13} style={{ color: "var(--clean)" }} />
+        <span style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)" }}>Completion report</span>
+        {report.overlappedWith.length > 0 && (
+          <span className="tag" data-tip={`Overlapped with: ${report.overlappedWith.join(", ")}`}>
+            notified {report.overlappedWith.length} waiting session{report.overlappedWith.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {report.files.slice(0, 16).map((f) => (
+          <span key={f} className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "2px 7px" }}>{f}</span>
+        ))}
+        {report.files.length > 16 && <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>+{report.files.length - 16} more</span>}
+      </div>
+    </div>
+  );
+}
 
 export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHistory[]>; onOpen: (slug: string) => void }) {
   const [q, setQ] = useState("");
@@ -89,6 +120,7 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
                             </li>
                           ))}
                         </ol>
+                        {!inProgress && <ReportBlock slug={h.slug} />}
                       </div>
                     )}
                   </div>

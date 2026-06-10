@@ -29,6 +29,12 @@ yarn-error.log*
 # Baton runtime state (local handoff history)
 .baton/
 
+# Generated knowledge graphs (rebuild with `baton kb init`)
+graphify-out/
+
+# Machine-specific MCP config (absolute paths; regenerate with `baton kb init`)
+.mcp.json
+
 # Test coverage
 coverage/
 .refs/

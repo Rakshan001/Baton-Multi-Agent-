@@ -22,3 +22,18 @@ rover — Endor Software Inc.
            (packages/cli/src/lib/task-setup.ts, TaskSetup.initial()).
   Apache-2.0 NOTICE: portions of this product's design are derived from rover,
   Copyright (c) Endor Software Inc., licensed under the Apache License 2.0.
+
+-------------------------------------------------------------------------------
+Daintree — daintreehq
+  https://github.com/daintreehq/daintree
+  License: Apache-2.0
+  Adapted: hardened git invocation — per-command timeout, environment
+           sanitization, and non-interactive `-c` config flags
+           (electron/utils/hardenedGit.ts); worktree create/remove robustness —
+           collision-aware branch naming, prune-on-orphan, retry-on-busy, and
+           in-progress repo-state detection (electron/workspace-host/
+           WorkspaceService.ts); porcelain-v2 conflict parsing + labels
+           (electron/services/git/porcelainConflicts.ts).
+  Apache-2.0 NOTICE: portions of this product's design are derived from
+  Daintree, Copyright (c) 2025-2026 Greg Priday, licensed under the Apache
+  License 2.0.

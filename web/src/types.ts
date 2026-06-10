@@ -80,3 +80,83 @@ export interface Meta {
   writeEnabled: boolean;
   version: string;
 }
+
+/** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */
+export interface KbProjectStat {
+  id: string;
+  name: string;
+  path: string;
+  nodes: number;
+  edges: number;
+  communities: number;
+  lastBuiltAt: string | null;
+  building: boolean;
+}
+
+/** Knowledge-base status — GET /api/kb. */
+export interface KbStatus {
+  initialized: boolean;
+  graphifyInstalled: boolean;
+  projects: KbProjectStat[];
+  merged: KbProjectStat | null;
+}
+
+/** A graph.json node (graphify networkx node-link export). */
+export interface GraphNode {
+  id: string;
+  label: string;
+  file_type?: string;
+  source_file?: string;
+  source_location?: string;
+  community?: number;
+  norm_label?: string;
+}
+
+/** A graph.json edge. `source`/`target` are node ids (force-graph mutates them to objects). */
+export interface GraphLink {
+  source: string | GraphNode;
+  target: string | GraphNode;
+  relation?: string;
+  confidence?: string;
+  confidence_score?: number;
+}
+
+/** GET /api/kb/graph?project=… — graphify's graph.json. */
+export interface GraphData {
+  directed?: boolean;
+  nodes: GraphNode[];
+  links: GraphLink[];
+}
+
+/** Who is editing a path right now (src/signals.ts). */
+export interface SignalHolder {
+  slug: string;
+  agent: AgentId | string | null;
+  lastEditAt: string;
+}
+
+/** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
+export interface EditSignal {
+  path: string;
+  level: "info" | "warning";
+  holders: SignalHolder[];
+}
+
+/** What a merged task shipped — GET /api/reports[/:slug] (src/reports.ts). */
+export interface CompletionReport {
+  slug: string;
+  task: string;
+  agent: AgentId | string | null;
+  mergedAt: string;
+  summary: string;
+  files: string[];
+  commits: { sha: string; message: string; at: string }[];
+  overlappedWith: string[];
+}
+
+/** Agent-blame for one file — GET /api/blame?file=… */
+export interface BlameResult {
+  file: string;
+  merged: { path: string; slug: string; task: string; agent: string | null; sha: string; message: string; at: string }[];
+  live: SignalHolder[];
+}

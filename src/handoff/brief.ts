@@ -1,0 +1,158 @@
+/**
+ * Handoff brief generation — the knowledge pack a cheaper agent picks up with
+ * `baton take`. Not a raw history dump: a curated HANDOFF.md with objective,
+ * touched files, the extracted plan, and (when the KB is initialized) a
+ * graphify graph excerpt scoped to the task.
+ */
+import matter from 'gray-matter';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { gitTry } from '../util/exec.js';
+import type { Task } from '../store.js';
+import { loadKb } from '../kb/state.js';
+import { queryGraph } from '../kb/graphify.js';
+import { sessionContextFor, type SessionContext } from './claude-session.js';
+
+export interface HandoffMeta {
+  baton: number;
+  from: string;
+  to: string;
+  status: 'ready' | 'in-progress' | 'done';
+  created: string;
+  repo: string;
+  branch: string;
+  est_tokens: number;
+  est_cost_usd: number;
+}
+
+export interface HandoffBrief {
+  meta: HandoffMeta;
+  markdown: string; // full HANDOFF.md content (frontmatter + body)
+  path: string;
+}
+
+/** Very rough cost of replaying this much context on a metered API (Sonnet-class input). */
+function estCostUsd(tokens: number): number {
+  return Math.round(tokens * (3 / 1_000_000) * 100) / 100;
+}
+
+export function handoffPath(worktreePath: string): string {
+  return join(worktreePath, 'HANDOFF.md');
+}
+
+export async function buildBrief(
+  task: Task,
+  opts: { from?: string; to: string; note?: string; root: string },
+): Promise<HandoffBrief> {
+  const session: SessionContext | null = await sessionContextFor(task.worktreePath);
+
+  // Git ground truth: what actually changed vs the base branch.
+  const diffStat = await gitTry(
+    ['-C', task.worktreePath, 'diff', '--stat', `${task.baseBranch}...HEAD`],
+    opts.root,
+  );
+  const dirtyStat = await gitTry(['-C', task.worktreePath, 'diff', '--stat', 'HEAD']);
+
+  const meta: HandoffMeta = {
+    baton: 1,
+    from: opts.from ?? 'claude',
+    to: opts.to,
+    status: 'ready',
+    created: new Date().toISOString(),
+    repo: opts.root,
+    branch: task.branch,
+    est_tokens: session?.estTokens ?? 0,
+    est_cost_usd: estCostUsd(session?.estTokens ?? 0),
+  };
+
+  const open = session?.todos.filter((t) => t.status !== 'completed') ?? [];
+  const done = session?.todos.filter((t) => t.status === 'completed') ?? [];
+
+  const body: string[] = [
+    `# Handoff: ${task.task}`,
+    '',
+    '## Objective',
+    task.task,
+    ...(opts.note ? ['', `> Note from the handing-off side: ${opts.note}`] : []),
+    '',
+    '## Where to work',
+    '```',
+    `cd ${task.worktreePath}`,
+    '```',
+    `Branch \`${task.branch}\` (based on \`${task.baseBranch}\`). Commit here; merge later with \`baton merge\`.`,
+    '',
+    '## State of the work',
+    diffStat.ok && diffStat.stdout ? '### Committed vs base\n```\n' + diffStat.stdout + '\n```' : '_No commits beyond the base branch yet._',
+    dirtyStat.ok && dirtyStat.stdout ? '### Uncommitted\n```\n' + dirtyStat.stdout + '\n```' : '',
+  ];
+
+  if (session) {
+    if (done.length || open.length) {
+      body.push('', '## Plan');
+      for (const t of done) body.push(`- [x] ${t.content}`);
+      for (const t of open) body.push(`- [ ] ${t.content}`);
+    }
+    if (session.filesEdited.length) {
+      body.push('', '## Files the previous agent edited', ...session.filesEdited.map((f) => `- ${f}`));
+    }
+    if (session.lastNotes.length) {
+      body.push('', '## Last notes from the previous agent', ...session.lastNotes.map((n) => `> ${n.replace(/\n/g, '\n> ')}`));
+    }
+    if (session.commands.length) {
+      body.push('', '## Commands it ran (context/verification)', '```', ...session.commands.slice(-8), '```');
+    }
+  } else {
+    body.push('', '_No Claude Code session transcript found for this worktree — context above is from git alone._');
+  }
+
+  // Graph excerpt: a token-budgeted map of the code relevant to this task.
+  const kb = await loadKb(opts.root);
+  if (kb) {
+    const graphPath = kb.mergedGraphPath ?? kb.projects[0]?.graphPath;
+    if (graphPath) {
+      const excerpt = await queryGraph(task.task, graphPath, 1500);
+      if (excerpt) body.push('', '## Codebase map (graph excerpt)', '```', excerpt, '```');
+    }
+  }
+
+  body.push(
+    '',
+    '## Before you finish',
+    '- Run the project tests/build and include the output in your summary.',
+    `- \`baton done ${task.slug}\` (or update this file's status) when complete.`,
+    '',
+    '## Do NOT',
+    '- Touch files outside this worktree.',
+    '- Force-push or rewrite history on the base branch.',
+    '- Re-plan from scratch — execute the plan above; flag blockers instead.',
+  );
+
+  const markdown = matter.stringify(body.filter((l) => l !== '').join('\n').replace(/\n{3,}/g, '\n\n'), meta as unknown as Record<string, unknown>);
+  return { meta, markdown, path: handoffPath(task.worktreePath) };
+}
+
+export async function writeBrief(brief: HandoffBrief): Promise<void> {
+  await writeFile(brief.path, brief.markdown, 'utf-8');
+}
+
+export async function readBrief(worktreePath: string): Promise<{ meta: Partial<HandoffMeta>; body: string } | null> {
+  try {
+    const raw = await readFile(handoffPath(worktreePath), 'utf-8');
+    const parsed = matter(raw);
+    return { meta: parsed.data as Partial<HandoffMeta>, body: parsed.content };
+  } catch {
+    return null;
+  }
+}
+
+export async function setBriefStatus(worktreePath: string, status: HandoffMeta['status']): Promise<boolean> {
+  try {
+    const raw = await readFile(handoffPath(worktreePath), 'utf-8');
+    const parsed = matter(raw);
+    parsed.data.status = status;
+    await writeFile(handoffPath(worktreePath), matter.stringify(parsed.content, parsed.data), 'utf-8');
+    return true;
+  } catch {
+    return false;
+  }
+}

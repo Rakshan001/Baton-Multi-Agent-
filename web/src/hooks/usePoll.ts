@@ -66,7 +66,8 @@ export function usePoll<T>(
   return { ...state, lastUpdated, refetch: run };
 }
 
-export const useStatus = () => usePoll<StatusRow[]>(() => BatonAPI.getStatus(), { interval: 2000 });
-export const useHistory = () => usePoll<TaskHistory[]>(() => BatonAPI.getHistory(), { interval: 10000 });
+/** When SSE is live, polling is only a safety net — stretch the intervals. */
+export const useStatus = (live = false) => usePoll<StatusRow[]>(() => BatonAPI.getStatus(), { interval: live ? 30000 : 2000 });
+export const useHistory = (live = false) => usePoll<TaskHistory[]>(() => BatonAPI.getHistory(), { interval: live ? 60000 : 10000 });
 export const useTask = (slug: string) =>
   usePoll<TaskDetail>(() => BatonAPI.getTask(slug), { interval: 2000, deps: [slug] });

@@ -6,9 +6,55 @@ import { Icon } from "../components/Icon";
 import { AgentBadge, EmptyState } from "../components/primitives";
 import { ScreenHeader } from "./shared";
 import { getAgent } from "../lib/registry";
-import { basename, dirname } from "../lib/format";
-import type { StatusRow } from "../types";
-import type { PollState } from "../hooks/usePoll";
+import { basename, dirname, timeAgo } from "../lib/format";
+import { BatonAPI } from "../lib/api";
+import { usePoll, type PollState } from "../hooks/usePoll";
+import type { StatusRow, EditSignal, AgentId } from "../types";
+
+/** Live edit signals — uncommitted, real-time, from the worktree watcher. */
+function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
+  const signals = usePoll<EditSignal[]>(() => BatonAPI.getSignals(), { interval: 5000 });
+  const rows = signals.data ?? [];
+  if (!rows.length) return null;
+  const warnings = rows.filter((s) => s.level === "warning");
+  return (
+    <div className="card" style={{ marginBottom: 16, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <Icon name="zap" size={14} style={{ color: warnings.length ? "var(--conflict)" : "var(--accent)" }} />
+        <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>Editing right now</span>
+        <span className="tag">{rows.length} file{rows.length === 1 ? "" : "s"}</span>
+        {warnings.length > 0 && (
+          <span style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, padding: "1px 8px" }}>
+            {warnings.length} overlapping
+          </span>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {rows.slice(0, 12).map((s) => (
+          <div key={s.path} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: "var(--r-sm)", background: s.level === "warning" ? "var(--conflict-soft)" : "transparent" }}>
+            {s.level === "warning"
+              ? <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
+              : <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--accent)", flex: "none", margin: "0 3px" }} />}
+            <span className="mono" style={{ fontSize: "var(--fs-12)", color: s.level === "warning" ? "var(--conflict-text)" : "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.path}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
+              {s.holders.slice(0, 4).map((h, i) => (
+                <button key={`${h.slug}-${i}`} className="fr" onClick={() => onOpen(h.slug)} data-tip={`${h.slug}${h.lastEditAt ? `\nlast edit ${timeAgo(new Date(h.lastEditAt).getTime())}` : ""}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, border: "none", background: "none", cursor: "pointer", padding: 0 }}>
+                  <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
+                  <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      {warnings.length > 0 && (
+        <p style={{ margin: "10px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+          Agents checking <span className="mono">check_files</span> before editing will be told to wait on the overlapping paths.
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function ConflictsScreen({ status, onOpen }: { status: PollState<StatusRow[]>; onOpen: (slug: string) => void }) {
   const sessions = (status.data || []).filter((s) => (s.conflictFiles || []).length);
@@ -22,6 +68,7 @@ export function ConflictsScreen({ status, onOpen }: { status: PollState<StatusRo
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="Conflicts" subtitle={files.length ? `${files.length} file${files.length === 1 ? "" : "s"} under edit · ${sharedCount} shared by 2+ sessions` : "Merge-risk matrix from live git status"} />
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 20 }}>
+        <LiveSignals onOpen={onOpen} />
         {status.isLoading && !status.data ? (
           <div className="skeleton" style={{ height: 240, borderRadius: 12 }} />
         ) : files.length === 0 ? (

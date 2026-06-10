@@ -15,6 +15,16 @@ export interface Task {
   createdAt: string; // ISO
 }
 
+/** Thrown when a slug doesn't resolve to a recorded task. */
+export class TaskNotFoundError extends Error {
+  slug: string;
+  constructor(slug: string) {
+    super(`No task '${slug}'`);
+    this.name = 'TaskNotFoundError';
+    this.slug = slug;
+  }
+}
+
 export function batonDir(gitRoot: string): string {
   return join(gitRoot, '.baton');
 }

@@ -11,12 +11,14 @@ import { ApiDot, ComingSoon } from "./components/primitives";
 import { TweaksPanel } from "./components/TweaksPanel";
 import { usePrefs, ls, type Prefs } from "./hooks/usePrefs";
 import { useStatus, useHistory, usePoll } from "./hooks/usePoll";
+import { useEvents } from "./hooks/useEvents";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { BatonAPI } from "./lib/api";
 import { showToast } from "./lib/toast";
 import { WORKSPACE, type Project } from "./lib/preview";
 import type { ScenarioName } from "./lib/demoData";
 import { CommandCenter } from "./features/CommandCenter";
+import { KnowledgeGraphScreen } from "./features/KnowledgeGraph";
 import { ActivityScreen } from "./features/Activity";
 import { ConflictsScreen } from "./features/Conflicts";
 import { HistoryScreen } from "./features/History";
@@ -35,6 +37,7 @@ const NAV: NavItem[] = [
   { id: "home", label: "Command Center", icon: "grid" },
   { id: "activity", label: "Activity", icon: "zap" },
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
+  { id: "graph", label: "Knowledge Graph", icon: "network" },
   { id: "history", label: "History", icon: "history" },
   { id: "agents", label: "Agents", icon: "bot" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -134,10 +137,10 @@ function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string
   );
 }
 
-function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo }: {
+function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo, live }: {
   counts: Counts; apiState: "online" | "fetching" | "offline"; lastUpdated: number | null;
   onRefresh: () => void; onMenu: () => void; onSearch: () => void; onLaunch: (agent: AgentId | null) => void;
-  navigate: (id: string) => void; prefs: Prefs; route: string; project: Project; onProject: (id: string) => void; demo: boolean;
+  navigate: (id: string) => void; prefs: Prefs; route: string; project: Project; onProject: (id: string) => void; demo: boolean; live: boolean;
 }) {
   const isMobile = useMediaQuery("(max-width: 860px)");
   const isNarrow = useMediaQuery("(max-width: 1080px)");
@@ -175,7 +178,7 @@ function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, on
           <Icon name="gitMerge" size={13} /> Write
         </span>
       )}
-      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} />
+      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} />
       <ThemeToggle prefs={prefs} />
     </header>
   );
@@ -273,8 +276,9 @@ export default function App() {
   const [demo, setDemoState] = useState(() => BatonAPI.demo);
   const setDemo = (v: boolean) => { BatonAPI.setDemo(v); setDemoState(v); };
 
-  const status = useStatus();
-  const history = useHistory();
+  const events = useEvents({ enabled: !prefs.offline && !demo });
+  const status = useStatus(events.live);
+  const history = useHistory(events.live);
   const meta = usePoll<Meta>(() => BatonAPI.getMeta(), { interval: 30000 });
   const isMobile = useMediaQuery("(max-width: 860px)");
 
@@ -345,6 +349,7 @@ export default function App() {
     switch (route) {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
+      case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "history": return <HistoryScreen history={history} onOpen={onOpen} />;
       case "agents": return <AgentsScreen status={status} history={history} onOpen={onOpen} onLaunch={onLaunch} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
@@ -359,7 +364,7 @@ export default function App() {
       <TopBar counts={counts} apiState={apiState} lastUpdated={status.lastUpdated}
         onRefresh={() => { status.refetch(); history.refetch(); }}
         onMenu={() => setNavOpen(true)} onSearch={() => setCmdOpen(true)} onLaunch={onLaunch} navigate={navigate}
-        prefs={prefs} route={route} project={project} onProject={onProject} demo={demo} />
+        prefs={prefs} route={route} project={project} onProject={onProject} demo={demo} live={events.live} />
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         {!isMobile && <Sidebar route={route} navigate={navigate} counts={counts} project={project} />}
         <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", background: "var(--bg-base)" }}>

@@ -20,8 +20,13 @@ async function buildTable(): Promise<string> {
   const display = rows.map((r) => ({
     slug: r.slug,
     agent: r.agent ? `${r.agent}●` : '–',
-    status: r.status,
+    // An in-progress git op (merging/rebasing) is more actionable than "dirty".
+    status: r.repoState === 'clean' ? r.status : r.repoState,
     sync: r.ahead || r.behind ? `+${r.ahead}/-${r.behind}` : '·',
+    changes:
+      r.filesChanged === 0 && r.insertions === 0 && r.deletions === 0
+        ? '·'
+        : `${r.filesChanged}f +${r.insertions}/-${r.deletions}`,
     conflict:
       r.conflictFiles.length === 0
         ? '–'
@@ -33,14 +38,15 @@ async function buildTable(): Promise<string> {
     agent: Math.max(5, ...display.map((r) => r.agent.length)),
     status: Math.max(6, ...display.map((r) => r.status.length)),
     sync: Math.max(4, ...display.map((r) => r.sync.length)),
+    changes: Math.max(7, ...display.map((r) => r.changes.length)),
   };
 
   const lines = [
-    `${pad('TASK', w.slug)}  ${pad('AGENT', w.agent)}  ${pad('STATUS', w.status)}  ${pad('SYNC', w.sync)}  CONFLICT`,
+    `${pad('TASK', w.slug)}  ${pad('AGENT', w.agent)}  ${pad('STATUS', w.status)}  ${pad('SYNC', w.sync)}  ${pad('CHANGES', w.changes)}  CONFLICT`,
   ];
   for (const r of display) {
     lines.push(
-      `${pad(r.slug, w.slug)}  ${pad(r.agent, w.agent)}  ${pad(r.status, w.status)}  ${pad(r.sync, w.sync)}  ${r.conflict}`,
+      `${pad(r.slug, w.slug)}  ${pad(r.agent, w.agent)}  ${pad(r.status, w.status)}  ${pad(r.sync, w.sync)}  ${pad(r.changes, w.changes)}  ${r.conflict}`,
     );
   }
   return lines.join('\n');

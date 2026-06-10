@@ -4,7 +4,7 @@
  */
 import { detectAgents } from './agents.js';
 import { computeConflicts } from './conflicts.js';
-import { aheadBehind, worktreeStatus } from './git.js';
+import { aheadBehind, worktreeStatus, type RepoState } from './git.js';
 import { loadTasks } from './store.js';
 
 export interface StatusRow {
@@ -12,10 +12,13 @@ export interface StatusRow {
   task: string;
   agent: string | null;
   status: 'clean' | 'dirty' | 'conflict';
+  repoState: RepoState;
   ahead: number;
   behind: number;
   conflictFiles: string[];
   filesChanged: number;
+  insertions: number;
+  deletions: number;
   createdAt: string;
 }
 
@@ -35,10 +38,13 @@ export async function collectStatus(root: string): Promise<StatusRow[]> {
         task: t.task,
         agent: agents.get(t.worktreePath) ?? null,
         status: st.state,
+        repoState: st.repoState,
         ahead,
         behind,
         conflictFiles: conflicts.get(t.slug) ?? [],
         filesChanged: st.changedFiles.length,
+        insertions: st.insertions,
+        deletions: st.deletions,
         createdAt: t.createdAt,
       };
     }),

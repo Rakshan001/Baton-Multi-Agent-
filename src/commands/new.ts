@@ -6,26 +6,42 @@
  * (.refs/rover/packages/cli/src/lib/task-setup.ts, Apache-2.0). See NOTICE.
  */
 import { join } from 'node:path';
-import { createWorktree, currentBranch, gitRoot, headCommit } from '../git.js';
+import { branchExists, createWorktree, currentBranch, gitRoot, headCommit } from '../git.js';
 import { recordTask } from '../history.js';
 import { addTask, batonDir, loadTasks, slugify, type Task } from '../store.js';
+import { bus } from '../events.js';
 
-export async function newCmd(taskText: string): Promise<void> {
-  const text = taskText?.trim();
-  if (!text) {
-    console.error('Usage: baton new "<task description>"');
-    process.exitCode = 1;
-    return;
+/**
+ * Core create logic, shared by the CLI (`baton new`) and the HTTP API
+ * (`POST /api/tasks`). Scaffolds a branch + worktree, records the task, and
+ * returns it. Throws `EmptyTaskError` when the description is blank.
+ */
+export class EmptyTaskError extends Error {
+  constructor() {
+    super('Task description is required');
+    this.name = 'EmptyTaskError';
   }
+}
 
-  const root = await gitRoot();
-  const existing = await loadTasks(root);
-  const slug = slugify(text, existing.map((t) => t.slug));
+export async function createTask(taskText: string, root?: string): Promise<Task> {
+  const text = taskText?.trim();
+  if (!text) throw new EmptyTaskError();
+
+  const repoRoot = root ?? (await gitRoot());
+  const existing = await loadTasks(repoRoot);
+  // Dedupe against recorded tasks first, then against actual git branches so we
+  // never collide with a `baton/<slug>` branch baton didn't record.
+  const taken = existing.map((t) => t.slug);
+  let slug = slugify(text, taken);
+  while (await branchExists(`baton/${slug}`, repoRoot)) {
+    taken.push(slug);
+    slug = slugify(text, taken);
+  }
   const branch = `baton/${slug}`;
-  const worktreePath = join(batonDir(root), 'wt', slug);
-  const baseBranch = await currentBranch(root);
+  const worktreePath = join(batonDir(repoRoot), 'wt', slug);
+  const baseBranch = await currentBranch(repoRoot);
 
-  await createWorktree(worktreePath, branch, 'HEAD', root);
+  await createWorktree(worktreePath, branch, 'HEAD', repoRoot);
   const baseCommit = await headCommit(worktreePath);
 
   const task: Task = {
@@ -37,12 +53,24 @@ export async function newCmd(taskText: string): Promise<void> {
     baseCommit,
     createdAt: new Date().toISOString(),
   };
-  await addTask(root, task);
-  recordTask(root, { slug, task: text, branch, baseBranch, createdAt: task.createdAt });
+  await addTask(repoRoot, task);
+  recordTask(repoRoot, { slug, task: text, branch, baseBranch, createdAt: task.createdAt });
+  bus.publish({ type: 'task.created', slug, task: text });
+  return task;
+}
 
-  console.log(`✓ created ${branch}`);
-  console.log(`  worktree: ${worktreePath}`);
+export async function newCmd(taskText: string): Promise<void> {
+  if (!taskText?.trim()) {
+    console.error('Usage: baton new "<task description>"');
+    process.exitCode = 1;
+    return;
+  }
+
+  const task = await createTask(taskText);
+
+  console.log(`✓ created ${task.branch}`);
+  console.log(`  worktree: ${task.worktreePath}`);
   console.log('');
   console.log('  Launch your agent there:');
-  console.log(`    cd ${worktreePath}`);
+  console.log(`    cd ${task.worktreePath}`);
 }

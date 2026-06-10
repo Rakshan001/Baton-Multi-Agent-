@@ -16,7 +16,8 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult } from "../types";
+import { DEMO_KB, demoGraphFor } from "./demoKb";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -143,6 +144,10 @@ class BatonClient {
   private emit() {
     this.listeners.forEach((l) => l());
   }
+  /** External wake-up (SSE push): make every poll-driven screen refetch now. */
+  notify() {
+    this.emit();
+  }
 
   /* ---- transport ---- */
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -208,6 +213,81 @@ class BatonClient {
       return { repo: p.path, branch: p.branch, writeEnabled: this.writeEnabled, version: "demo" };
     }
     return this.request<Meta>("/api/meta");
+  }
+
+  /* ---- knowledge base (graphify) ---- */
+  async getKb(): Promise<KbStatus> {
+    if (this.demo) {
+      await this.demoGate();
+      return DEMO_KB;
+    }
+    return this.request<KbStatus>("/api/kb");
+  }
+  async getKbGraph(project: string): Promise<GraphData> {
+    if (this.demo) {
+      await this.demoGate(120);
+      return demoGraphFor(project);
+    }
+    return this.request<GraphData>(`/api/kb/graph?project=${encodeURIComponent(project)}`);
+  }
+  async rebuildKb(project?: string, full = false): Promise<{ building: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(200);
+      return { building: project ? [project] : DEMO_KB.projects.map((p) => p.id) };
+    }
+    return this.request<{ building: string[] }>("/api/kb/rebuild", {
+      method: "POST",
+      body: JSON.stringify({ project, full }),
+    });
+  }
+
+  /* ---- coordination: signals / reports / blame ---- */
+  async getSignals(): Promise<EditSignal[]> {
+    if (this.demo) {
+      await this.demoGate();
+      // mirror the busy scenario's overlap so the section is explorable
+      const overlap = this.demoSessions.filter((s) => (s.conflictFiles || []).length);
+      const byPath = new Map<string, typeof overlap>();
+      overlap.forEach((s) => s.conflictFiles.forEach((f) => { if (!byPath.has(f)) byPath.set(f, []); byPath.get(f)!.push(s); }));
+      return [...byPath.entries()].map(([path, ss]) => ({
+        path,
+        level: ss.length > 1 ? "warning" as const : "info" as const,
+        holders: ss.map((s) => ({ slug: s.slug, agent: s.agent, lastEditAt: new Date(Date.now() - 120_000).toISOString() })),
+      }));
+    }
+    const r = await this.request<{ signals: EditSignal[] }>("/api/signals");
+    return r.signals;
+  }
+  async getReports(): Promise<CompletionReport[]> {
+    if (this.demo) {
+      await this.demoGate();
+      return this.demoHistory.filter((h) => h.mergedAt).slice(0, 10).map((h) => ({
+        slug: h.slug, task: h.task, agent: h.agent, mergedAt: h.mergedAt!,
+        summary: h.task, files: ["src/app.ts", "src/lib/api.ts"],
+        commits: h.commits, overlappedWith: [],
+      }));
+    }
+    return this.request<CompletionReport[]>("/api/reports");
+  }
+  async getReport(slug: string): Promise<CompletionReport | null> {
+    if (this.demo) {
+      const all = await this.getReports();
+      return all.find((r) => r.slug === slug) ?? null;
+    }
+    try {
+      return await this.request<CompletionReport>(`/api/reports/${encodeURIComponent(slug)}`);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "NOT_FOUND") return null;
+      throw e;
+    }
+  }
+  async getBlame(file: string): Promise<BlameResult> {
+    if (this.demo) {
+      await this.demoGate();
+      return { file, merged: [], live: [] };
+    }
+    return this.request<BlameResult>(`/api/blame?file=${encodeURIComponent(file)}`);
   }
 
   /** Client-side slug preview (mirrors the CLI's slugify for the launch form). */
@@ -308,8 +388,8 @@ class BatonClient {
     this.emit();
     return res;
   }
-  /** PREVIEW (not in contract): hand work off to another agent. */
-  async handoffTask(slug: string, opts: { toAgent: AgentId; commitPending?: boolean }): Promise<{ slug: string; toAgent: AgentId }> {
+  /** Hand work off: POST /api/tasks/:slug/handoff generates a HANDOFF.md brief. */
+  async handoffTask(slug: string, opts: { toAgent: AgentId; commitPending?: boolean; note?: string }): Promise<{ slug: string; toAgent: AgentId; estTokens?: number; estCostUsd?: number; briefPath?: string }> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(180);
@@ -322,12 +402,15 @@ class BatonClient {
       }
       s.agent = opts.toAgent;
       this.emit();
-      return { slug, toAgent: opts.toAgent };
+      return { slug, toAgent: opts.toAgent, estTokens: 48_200, estCostUsd: 0.14, briefPath: `${this.activeProject().path}/.baton/wt/${slug}/HANDOFF.md` };
     }
-    await delay(400);
-    this.agentOverride.set(slug, opts.toAgent);
+    const r = await this.request<{ slug: string; toAgent: string; estTokens: number; estCostUsd: number; briefPath: string }>(
+      `/api/tasks/${encodeURIComponent(slug)}/handoff`,
+      { method: "POST", body: JSON.stringify({ toAgent: opts.toAgent, note: opts.note, commitPending: opts.commitPending }) },
+    );
+    this.agentOverride.set(slug, opts.toAgent); // board shows the intended owner until the agent attaches
     this.emit();
-    return { slug, toAgent: opts.toAgent };
+    return { ...r, toAgent: opts.toAgent };
   }
 
   /** Roll back an optimistic mutation (used on API failure). */

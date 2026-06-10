@@ -1,8 +1,8 @@
 /* ============================================================
-   BATON — Handoff flow (ported from handoff.jsx)
-   PREVIEW: handing a session to another agent isn't supported by
-   the daemon yet. Write-gated; in write mode it reassigns the
-   session optimistically so the board reflects it honestly.
+   BATON — Handoff flow
+   POST /api/tasks/:slug/handoff generates a HANDOFF.md brief in the
+   worktree (session context + plan + graph excerpt); the receiving
+   agent picks it up with `baton take`. Write-gated.
    ============================================================ */
 import { useState, useRef, useEffect } from "react";
 import { Icon } from "../components/Icon";
@@ -25,6 +25,7 @@ export function HandoffDialog({
   const [commitPending, setCommitPending] = useState(true);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [doneInfo, setDoneInfo] = useState<{ toAgent: AgentId; estTokens?: number; estCostUsd?: number; briefPath?: string } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const hasPending = (task?.filesChanged || 0) > 0;
   const options = AGENT_REGISTRY.filter((a) => a.id !== task?.agent);
@@ -41,11 +42,37 @@ export function HandoffDialog({
     if (!target || !writeEnabled) return;
     setBusy(true);
     try {
-      await BatonAPI.handoffTask(slug, { toAgent: target, commitPending: commitPending && hasPending });
-      showToast({ kind: "ok", title: `Handed off to ${getAgent(target).short}`, desc: branchFor(slug), mono: true });
-      onClose();
+      const r = await BatonAPI.handoffTask(slug, { toAgent: target, commitPending: commitPending && hasPending, note: note.trim() || undefined });
+      showToast({ kind: "ok", title: `Brief ready for ${getAgent(target).short}`, desc: branchFor(slug), mono: true });
+      setDoneInfo({ toAgent: target, estTokens: r.estTokens, estCostUsd: r.estCostUsd, briefPath: r.briefPath });
+      setBusy(false);
     } catch (e) { showToast({ kind: "error", title: "Handoff failed", desc: (e as Error).message }); setBusy(false); }
   };
+
+  if (doneInfo) {
+    const wt = doneInfo.briefPath?.replace(/\/HANDOFF\.md$/, "") ?? "";
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: 20 }}>
+        <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
+        <div role="dialog" aria-modal="true" aria-label="Handoff brief ready" style={{ position: "relative", width: "min(520px, 100%)", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)", animation: "scale-in var(--dur-2) var(--ease-out)", padding: 22 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <span style={{ width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center", background: "var(--clean-soft)", border: "1px solid var(--clean-border)", color: "var(--clean-text)" }}><Icon name="check" size={18} /></span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)" }}>HANDOFF.md is ready</h2>
+              <p style={{ margin: "2px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+                For <AgentBadge id={doneInfo.toAgent} size="sm" />{typeof doneInfo.estTokens === "number" && doneInfo.estTokens > 0 ? <> · condensed from ≈{doneInfo.estTokens.toLocaleString()} tokens of session</> : null}
+              </p>
+            </div>
+          </div>
+          <div className="tag" style={{ marginBottom: 8 }}>Start the next agent with</div>
+          <pre className="mono" style={{ margin: 0, padding: "10px 12px", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-md)", fontSize: "var(--fs-12)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{`cd ${wt}\nbaton take ${slug}`}</pre>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+            <button className="btn btn-primary fr" onClick={onClose}>Done</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: 20 }}>
@@ -60,7 +87,6 @@ export function HandoffDialog({
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <h2 style={{ margin: 0, fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)" }}>Hand off session</h2>
-                <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="Session transfer isn't supported by the daemon yet — designed preview.">Preview</span>
               </div>
               <p style={{ margin: "3px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task?.task}</p>
             </div>

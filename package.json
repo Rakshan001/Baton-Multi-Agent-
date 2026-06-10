@@ -37,6 +37,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "execa": "^9.5.1",
     "gray-matter": "^4.0.3"
