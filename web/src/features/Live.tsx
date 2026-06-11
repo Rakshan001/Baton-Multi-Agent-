@@ -212,6 +212,9 @@ export function LiveSession({
         case "commit.created":
           if (mslug === slug) push({ t: "commit", text: msg.message as string, meta: (msg.sha as string)?.slice(0, 7), at: Date.now() });
           break;
+        case "agent.output":
+          if (mslug === slug) push({ t: (msg.stream as string) === "err" ? "warn" : "out", text: msg.line as string, at: Date.now() });
+          break;
         case "agent.started":
           if (mslug === slug) push({ t: "boot", text: `${getAgent((msg.agent as StatusRow["agent"]) ?? null).short} attached`, at: Date.now() });
           break;

@@ -61,6 +61,22 @@ async function appendAgentGuide(root: string): Promise<string | null> {
   return 'AGENTS.md';
 }
 
+/**
+ * Keep graphify away from our own generated files: with an LLM key set, it
+ * would semantically re-extract CODEBASE.md/AGENTS.md/kb/ on every rebuild —
+ * wasted tokens and self-referential graph nodes. Idempotent merge.
+ */
+async function ensureGraphifyIgnore(root: string): Promise<void> {
+  const file = join(root, '.graphifyignore');
+  const MARKER = '# baton: generated knowledge-base files (do not index)';
+  const ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
+  let current = '';
+  if (existsSync(file)) current = await readFile(file, 'utf-8');
+  if (current.includes(MARKER)) return;
+  const block = `${current.trimEnd()}\n\n${MARKER}\n${ENTRIES.join('\n')}\n`.replace(/^\n+/, '');
+  await writeFile(file, block, 'utf-8');
+}
+
 /** Interactive share-or-local question (TTY only; non-TTY defaults to local). */
 async function askShare(): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
@@ -94,6 +110,8 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   const projects = await detectProjects(target);
   console.log(`detected ${projects.length} project${projects.length === 1 ? '' : 's'}:`);
   for (const p of projects) console.log(`  • ${p.id}  (${p.path})`);
+
+  await ensureGraphifyIgnore(root);
 
   for (const p of projects) {
     console.log(`\n→ extracting ${p.id} ...`);
@@ -240,13 +258,13 @@ export async function kbImportCmd(source: string, opts: { rebuild?: boolean } = 
   for (const w of result.warnings) console.log(`! ${w}`);
   if (result.commitsBehind !== null && result.commitsBehind > 0) {
     console.log(`KB is ${result.commitsBehind} commit${result.commitsBehind === 1 ? '' : 's'} behind your HEAD.`);
-    const graphifyOk = (await detectGraphify()).ok;
-    if (opts.rebuild !== false && graphifyOk) {
+    const detection = await detectGraphify();
+    if (opts.rebuild !== false && detection.ok) {
       console.log('→ refreshing (incremental)…');
       await kbRebuildCmd(undefined, {});
       return;
     }
-    if (!graphifyOk) console.log(`  install graphify to refresh: ${installHint(await detectGraphify())}`);
+    if (!detection.ok) console.log(`  install graphify to refresh: ${installHint(detection)}`);
     else console.log('  refresh with: baton kb rebuild');
   } else {
     console.log('✓ knowledge base imported and current');

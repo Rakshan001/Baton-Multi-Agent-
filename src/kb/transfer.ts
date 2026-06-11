@@ -20,17 +20,10 @@ import { existsSync, createReadStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
-import { gitTry } from '../util/exec.js';
-import { graphPathFor, mergedGraphFile, saveKb, type KbProject, type KbState } from './state.js';
-
-const require_ = createRequire(import.meta.url);
-const BATON_VERSION: string = (() => {
-  try {
-    return (require_('../../package.json') as { version?: string }).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-})();
+import { gitTry, probeBinary } from '../util/exec.js';
+import { BATON_VERSION } from '../version.js';
+import { readStats } from './graphify.js';
+import { graphPathFor, loadKb, mergedGraphFile, saveKb, type KbProject, type KbState } from './state.js';
 
 export interface KbManifest {
   batonVersion: string;
@@ -44,12 +37,7 @@ export interface KbManifest {
 const PROJECT_ARTIFACTS = ['graph.json', 'manifest.json', 'GRAPH_REPORT.md', '.graphify_labels.json'] as const;
 
 export async function detectTar(): Promise<boolean> {
-  try {
-    await execa('tar', ['--version'], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return probeBinary('tar');
 }
 
 export async function buildManifest(root: string, state: KbState): Promise<KbManifest> {
@@ -140,12 +128,8 @@ export function reanchorProjects(root: string, manifest: KbManifest): Array<{ pr
 }
 
 async function isValidGraph(file: string): Promise<boolean> {
-  try {
-    const g = JSON.parse(await readFile(file, 'utf-8')) as { nodes?: unknown[] };
-    return Array.isArray(g.nodes) && g.nodes.length > 0;
-  } catch {
-    return false;
-  }
+  const stats = await readStats(file);
+  return stats !== null && stats.nodes > 0;
 }
 
 /** Import from a .tar.gz pack OR a kb/ directory (the committed share layout). */
@@ -199,11 +183,15 @@ export async function importKb(root: string, source: string): Promise<ImportResu
 
     if (!imported.length) throw new Error(`no projects could be imported: ${warnings.join('; ')}`);
 
+    // Preserve local settings (share mode) across imports — the pack replaces
+    // graphs and projects, not this repo's sharing preference.
+    const previous = await loadKb(root);
     const state: KbState = {
       root,
       projects: imported,
       mergedGraphPath: null,
       lastBuiltAt: manifest.createdAt ?? null,
+      share: previous?.share ?? false,
     };
     if (manifest.merged && existsSync(join(tmp, 'merged-graph.json'))) {
       const dest = mergedGraphFile(root);
@@ -215,6 +203,7 @@ export async function importKb(root: string, source: string): Promise<ImportResu
       await cp(join(tmp, 'CODEBASE.md'), join(root, 'CODEBASE.md'));
     }
     await saveKb(root, state);
+    if (state.share) await writeShareDir(root, state);
 
     // Staleness: how far has this repo moved since the pack was built?
     let commitsBehind: number | null = null;

@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-06-11 (session 2: KB v2)** (branch: `feat/worktree-orchestration`, merged to `main`)
+> Last updated: **2026-06-11 (session 3: KB v3 — review fixes, real tokens, headless agents)** (branch: `feat/worktree-orchestration`, merged to `main`)
 
 ## What this project is
 
@@ -35,6 +35,8 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **CODEBASE.md layer** | `baton kb init/rebuild` generates a <2k-token deterministic map per project (stack, tree, top graph symbols, query pointers) + a root index for multi-server containers; staleness footer tied to the graph's commit; AGENTS.md tells agents to read it first. Prior art: Aider repo-map, Repomix, llms.txt | `baton kb rebuild` → open CODEBASE.md; `baton kb status` flags staleness |
 | **Agent routing** | `baton.config.json` (committed): plan→claude/opus, UI→gemini, bugfix→codex, default cursor; `baton pass` without `--to` auto-routes (word-boundary keyword scoring, no LLM); `baton route "<task>"`; `/api/routing`; Handoff dialog preselects with a "suggested" chip, Launch shows a suggestion row, Settings shows the rules. Prior art: claude-code-router | `baton route "fix the crash"` → codex; `baton pass <slug>` → routed frontmatter |
 | **KB export/import/share** | `baton kb export` → .tar.gz pack (graphs + CODEBASE.md + manifest with git HEAD); `baton kb import <pack\|kb/>` re-anchors paths, validates graphs, reports "N commits behind" and auto-refreshes; dashboard Export/Import buttons on the Knowledge Graph page; `baton kb share on` keeps a committed `kb/` dir so teammates clone-and-go | export, clone repo elsewhere, `baton kb import <pack>` → graphs appear with zero re-indexing |
+| **Real token usage** | `baton usage` + `GET /api/usage`: parses Claude Code session JSONLs (input/output/cache tokens + est cost per session, mtime-cached), mapped to task slugs; Activity shows a real "Tokens used (Claude)" card + per-session tokens; KB page shows the savings metric (this repo: map ≈ 824 tokens vs ≈ 248k reading it — ~300× cheaper). Prior art: Orca | `baton usage` |
+| **Headless agent launch** | `baton start <slug> [--agent claude\|codex\|gemini]` runs the agent's print mode in the worktree (prompt = HANDOFF.md brief when present), output streamed as `agent.output` SSE events into the Live screen; `baton stop`; Detail "Start agent" button; Launch dialog "start headless after create" (its Preview badge disappears on that path); 409 on double-start; never adds permission-bypass flags. Prior art: Rover | `baton start <slug> --prompt "say hi"` |
 
 Tests: 34 vitest tests at root, all green. Both workspaces strict TS, build clean.
 
@@ -45,15 +47,16 @@ Tests: 34 vitest tests at root, all green. Both workspaces strict TS, build clea
    second daemon, real Live feed, real Activity, the Handoff "suggested" routing
    chip, the Launch suggestion row, the Settings routing card, and the KB
    Export/Import buttons. ~20 min with `baton serve --write` at :7077.
-2. **Launch dialog "attach agent" is still a labelled preview** — worktree creation is
-   real (POST /api/tasks); the agent process must be started manually in the worktree.
-   Auto-spawn (e.g. `baton new --agent claude` running `claude` in the worktree) is unbuilt.
-3. **Real token usage** — no data source yet; the demo showcase keeps illustrative
-   numbers behind the demo flag. Possible source: parse session JSONL sizes (the
-   handoff parser already estimates tokens).
-4. **npm packaging** — `package.json` `files` only ships `dist/`; `web/dist` must be
+2. **Interactive agent terminals** — headless one-shot runs are real now; full
+   interactive PTY terminals in the dashboard (node-pty + xterm, Orca/Daintree style)
+   remain unbuilt by choice (native dep). cursor/aider/opencode have no headless mode.
+3. **Non-Claude token usage** — codex/gemini session formats aren't parsed yet
+   (src/usage.ts is Claude-only); their sessions show no token data.
+4. **Fleet broadcast** (Daintree-style: one prompt → N sessions at once) — researched,
+   deferred by user choice this round.
+5. **npm packaging** — `package.json` `files` only ships `dist/`; `web/dist` must be
    included (or copied into `dist/web`) before publishing the CLI to npm.
-5. **Roadmap (MVP.md)** — M3 redaction-first secret stripping for safe export; M4 link
+6. **Roadmap (MVP.md)** — M3 redaction-first secret stripping for safe export; M4 link
    sharing + permissions (hosted phase).
 
 ## Where things live
@@ -71,6 +74,8 @@ src/kb/               graphify wrapper, sub-project detection, kb state, MCP sni
 src/kb/codebasemd.ts  CODEBASE.md generation (tree, stack, god-nodes, staleness footer)
 src/kb/transfer.ts    KB export/import/share (tar pack, re-anchor, committed kb/ dir)
 src/routing.ts        task-type → agent routing (baton.config.json, keyword scoring)
+src/usage.ts          real token usage from Claude session JSONLs (+ cost estimates)
+src/spawn.ts          headless agent runs (claude -p / codex exec / gemini -p)
 src/handoff/          Claude JSONL session parser + HANDOFF.md brief builder
 web/src/lib/connections.ts   daemon connections (real project switcher)
 web/src/hooks/useEvents.ts   SSE client hook

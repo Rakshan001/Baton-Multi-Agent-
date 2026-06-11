@@ -174,7 +174,12 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="Knowledge Graph"
-        subtitle={active ? `${active.nodes.toLocaleString()} nodes · ${active.edges.toLocaleString()} edges · ${active.communities} communities${active.lastBuiltAt ? ` · built ${new Date(active.lastBuiltAt).toLocaleTimeString()}` : ""}` : "Code graph built by graphify"}>
+        subtitle={active
+          ? `${active.nodes.toLocaleString()} nodes · ${active.edges.toLocaleString()} edges · ${active.communities} communities${active.lastBuiltAt ? ` · built ${new Date(active.lastBuiltAt).toLocaleTimeString()}` : ""}${
+              active.mapTokens && active.repoTokens && active.repoTokens > active.mapTokens
+                ? ` · map ≈ ${active.mapTokens.toLocaleString()} tokens vs ≈ ${(active.repoTokens / 1000).toFixed(0)}k reading the project (~${Math.round(active.repoTokens / active.mapTokens)}× cheaper)`
+                : ""}`
+          : "Code graph built by graphify"}>
         {BatonAPI.kbExportUrl() ? (
           <a className="btn fr" href={BatonAPI.kbExportUrl()!} download data-tip="Download the KB as a shareable .tar.gz pack" style={{ height: 30, textDecoration: "none" }}>
             <Icon name="arrowRight" size={14} style={{ transform: "rotate(90deg)" }} /> Export

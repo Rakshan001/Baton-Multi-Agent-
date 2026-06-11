@@ -78,6 +78,18 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
     throw new Error(slug ? `No task '${slug}'` : 'Not inside a baton worktree — pass a slug: baton pass <slug>');
   }
 
+  // --auto debounce FIRST: don't churn a fresh, untaken brief (or run routing)
+  // on every hook fire.
+  if (opts.auto) {
+    const existing = await readBrief(task.worktreePath);
+    if (existing?.meta.status === 'ready') {
+      try {
+        const st = await stat(join(task.worktreePath, 'HANDOFF.md'));
+        if (Date.now() - st.mtimeMs < 10 * 60_000) return null;
+      } catch { /* rewrite it */ }
+    }
+  }
+
   // No explicit target → route by task type (committable rules in baton.config.json).
   let routed: RoutingSuggestion | null = null;
   let to = opts.to;
@@ -87,17 +99,6 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
     routed = suggestAgent(task.task, config);
     to = routed.agent;
     model = routed.model;
-  }
-
-  // --auto debounce: don't churn a fresh, untaken brief on every hook fire.
-  if (opts.auto) {
-    const existing = await readBrief(task.worktreePath);
-    if (existing?.meta.status === 'ready') {
-      try {
-        const st = await stat(join(task.worktreePath, 'HANDOFF.md'));
-        if (Date.now() - st.mtimeMs < 10 * 60_000) return null;
-      } catch { /* rewrite it */ }
-    }
   }
 
   // Checkpoint uncommitted work so the next agent starts from a real commit.

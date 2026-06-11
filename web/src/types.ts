@@ -103,6 +103,41 @@ export interface KbProjectStat {
   communities: number;
   lastBuiltAt: string | null;
   building: boolean;
+  /** ≈ tokens to read CODEBASE.md vs reading the whole project (savings metric). */
+  mapTokens?: number | null;
+  repoTokens?: number | null;
+}
+
+/** Real per-session token usage — GET /api/usage (src/usage.ts). */
+export interface SessionUsage {
+  sessionId: string;
+  slug: string | null;
+  agent: "claude";
+  model: string | null;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  estCostUsd: number;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+export interface UsageTotals {
+  sessions: number;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  estCostUsd: number;
+}
+
+export interface RepoUsage {
+  sessions: SessionUsage[];
+  totals: UsageTotals;
+  byModel: Record<string, UsageTotals>;
 }
 
 /** Knowledge-base status — GET /api/kb. */

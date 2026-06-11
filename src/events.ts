@@ -17,6 +17,7 @@ export type BatonEvent =
   | { type: 'commit.created'; slug: string; sha: string; message: string }
   | { type: 'agent.started'; slug: string; agent: string }
   | { type: 'agent.stopped'; slug: string; agent: string }
+  | { type: 'agent.output'; slug: string; line: string; stream: 'out' | 'err' }
   | { type: 'file.edited'; slug: string; path: string; at: string }
   | { type: 'signal.overlap'; path: string; slugs: string[] }
   | { type: 'kb.rebuilt'; project: string }

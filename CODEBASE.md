@@ -15,13 +15,13 @@
 ## Structure
 
 ```
-dist/ (74 files)
+dist/ (86 files)
 docs/
   01-coordination-and-locking.md
   02-handoff-market.md
   03-session-export-tools.md
   README.md
-graphify-out/ (34 files)
+graphify-out/ (36 files)
 node_modules/ (2003 files)
 report/
   SUMMARY.md
@@ -39,9 +39,9 @@ src/
     pass.ts
     path.ts
     rm.ts
+    route.ts
     serve.ts
-    signals.ts
-    … +2 more files
+    … +4 more files
   handoff/
     brief.ts
     claude-session.ts
@@ -51,6 +51,7 @@ src/
     mcp.ts
     projects.ts
     state.ts
+    transfer.ts
   util/
     exec.ts
     quiet.ts
@@ -64,9 +65,9 @@ src/
   mcp.ts
   poller.ts
   reports.ts
+  routing.ts
   server.ts
-  signals.ts
-  … +2 more files
+  … +5 more files
 test/
   agents.test.ts
   codebasemd.test.ts
@@ -75,6 +76,8 @@ test/
   git.test.ts
   hardened.test.ts
   history.test.ts
+  routing-parity.test.ts
+  routing.test.ts
   store.test.ts
 web/
   dist/ (4 files)
@@ -83,7 +86,7 @@ web/
     components/ (8 files)
     features/ (17 files)
     hooks/ (4 files)
-    lib/ (10 files)
+    lib/ (11 files)
     styles/ (2 files)
     App.tsx
     main.tsx
@@ -98,6 +101,7 @@ web/
   vite.config.ts
 BUILD.md
 CLAUDE.md
+CODEBASE.md
 LICENSE
 MVP.md
 NOTICE
@@ -107,32 +111,31 @@ PRIOR_ART.md
 README.md
 SETUP.md
 STATUS.md
-tsconfig.json
-… +1 more files
+… +2 more files
 ```
 
 ## Key symbols (most connected in the code graph)
 
 - `App.tsx` — web/src/App.tsx:1 (85 connections)
-- `server.ts` — src/server.ts:1 (66 connections)
+- `server.ts` — src/server.ts:1 (76 connections)
+- `api.ts` — web/src/lib/api.ts:1 (60 connections)
+- `types.ts` — web/src/types.ts:1 (59 connections)
 - `primitives.tsx` — web/src/components/primitives.tsx:1 (56 connections)
-- `api.ts` — web/src/lib/api.ts:1 (54 connections)
-- `types.ts` — web/src/types.ts:1 (49 connections)
-- `git.ts` — src/git.ts:1 (45 connections)
-- `BatonClient` — web/src/lib/api.ts:58 (38 connections)
-- `cli.ts` — src/cli.ts:1 (38 connections)
+- `git.ts` — src/git.ts:1 (47 connections)
+- `cli.ts` — src/cli.ts:1 (45 connections)
+- `kb.ts` — src/commands/kb.ts:1 (43 connections)
+- `BatonClient` — web/src/lib/api.ts:59 (42 connections)
+- `gitRoot()` — src/git.ts:45 (42 connections)
+- `handle()` — src/server.ts:185 (40 connections)
 - `preview.ts` — web/src/lib/preview.ts:1 (38 connections)
 - `Live.tsx` — web/src/features/Live.tsx:1 (36 connections)
 - `Board.tsx` — web/src/features/Board.tsx:1 (35 connections)
-- `gitRoot()` — src/git.ts:45 (35 connections)
-- `handle()` — src/server.ts:183 (34 connections)
 - `merge.ts` — src/commands/merge.ts:1 (34 connections)
-- `Activity.tsx` — web/src/features/Activity.tsx:1 (32 connections)
-- `kb.ts` — src/commands/kb.ts:1 (32 connections)
+- `Activity.tsx` — web/src/features/Activity.tsx:1 (33 connections)
+- `Settings.tsx` — web/src/features/Settings.tsx:1 (33 connections)
+- `pass.ts` — src/commands/pass.ts:1 (32 connections)
 - `Detail.tsx` — web/src/features/Detail.tsx:1 (31 connections)
 - `Diff.tsx` — web/src/features/Diff.tsx:1 (31 connections)
-- `Canvas.tsx` — web/src/features/Canvas.tsx:1 (30 connections)
-- `Settings.tsx` — web/src/features/Settings.tsx:1 (29 connections)
 
 ## Query more
 
@@ -140,4 +143,4 @@ tsconfig.json
 - Who is editing what right now: `baton` MCP tool `check_files` / `baton signals`
 - File attribution: `baton blame <file>`
 
-<!-- baton:codebase generated=2026-06-11T01:44:25.783Z commit=566ff0bb7c6f02833a589c0bd4a8e2cbb3804efc -->
+<!-- baton:codebase generated=2026-06-11T11:41:33.033Z commit=597f2623dff0feea05e3a8fa8062359af2f1bc48 -->

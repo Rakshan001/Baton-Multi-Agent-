@@ -113,6 +113,19 @@ export async function git(args: string[], cwd?: string, signal?: AbortSignal): P
   return stdout.trim();
 }
 
+/**
+ * Is a CLI on the PATH and runnable? Cross-platform (no `which`/`command -v`):
+ * we just try to run it. Shared by every binary probe (tar, graphify, agents).
+ */
+export async function probeBinary(cmd: string, args: string[] = ['--version'], timeoutMs = 5000): Promise<boolean> {
+  try {
+    await execa(cmd, args, { timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Run a git command without throwing. Inspect `.ok` for success. */
 export async function gitTry(args: string[], cwd?: string, signal?: AbortSignal): Promise<GitResult> {
   try {

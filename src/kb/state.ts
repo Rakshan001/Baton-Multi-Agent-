@@ -13,6 +13,10 @@ export interface KbProject {
   name: string;
   path: string;      // absolute project dir
   graphPath: string; // <path>/graphify-out/graph.json
+  /** ≈ tokens to read CODEBASE.md (the map) — set by refreshCodebaseDocs. */
+  mapTokens?: number;
+  /** ≈ tokens to read the whole project's files — the cost the map avoids. */
+  repoTokens?: number;
 }
 
 export interface KbState {

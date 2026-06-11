@@ -27,7 +27,9 @@ export function LaunchSession({
   const [phase, setPhase] = useState<Phase>("form");
   const [step, setStep] = useState(-1);
   const [suggestion, setSuggestion] = useState<RoutingSuggestion | null>(null);
+  const [headlessStart, setHeadlessStart] = useState(false);
   const userPickedAgent = useRef(initialAgent !== null);
+  const HEADLESS = ["claude", "codex", "gemini"];
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
 
@@ -54,10 +56,13 @@ export function LaunchSession({
     return () => { alive.current = false; document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
   }, [onClose, phase]);
 
+  const willStart = headlessStart && writeEnabled && HEADLESS.includes(agent);
   const steps: { label: string; sub: string; icon: IconName }[] = [
     { label: "Creating isolated worktree", sub: `.baton/wt/${slug}`, icon: "folder" },
     { label: "Checking out branch", sub: `baton/${slug}`, icon: "gitBranch" },
-    { label: `Attaching ${a.short}`, sub: "agent ready to work", icon: "bot" },
+    willStart
+      ? { label: `Starting ${a.short} (headless)`, sub: "agent runs the task in the worktree", icon: "bot" }
+      : { label: `Attaching ${a.short}`, sub: "agent ready to work", icon: "bot" },
   ];
 
   const launch = async () => {
@@ -75,10 +80,18 @@ export function LaunchSession({
     const res = await apiP;
     if (!alive.current) return;
     if (!res.ok) { showToast({ kind: "error", title: "Launch failed", desc: res.e.message }); setPhase("form"); setStep(-1); return; }
+    if (willStart) {
+      try {
+        await BatonAPI.startAgentRun(res.r.slug, { agent });
+        showToast({ kind: "ok", title: `${a.short} running headless`, desc: "Watch it on the Live screen", mono: false });
+      } catch (e) {
+        showToast({ kind: "error", title: `${a.short} could not start`, desc: (e as Error).message });
+      }
+    }
     setPhase("done");
     await new Promise((r) => setTimeout(r, 850));
     if (!alive.current) return;
-    showToast({ kind: "ok", title: `${a.short} session created`, desc: `baton/${res.r.slug}`, mono: true });
+    if (!willStart) showToast({ kind: "ok", title: `${a.short} session created`, desc: `baton/${res.r.slug}`, mono: true });
     onLaunched(res.r.slug);
     onClose();
   };
@@ -97,7 +110,7 @@ export function LaunchSession({
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <h2 style={{ margin: 0, fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)" }}>Launch session</h2>
-              <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="The worktree is created for real; attaching the agent process from the UI isn't supported yet.">Preview</span>
+              {!willStart && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="The worktree is created for real; tick 'Start headless' below (write mode) to also run the agent for real.">Preview</span>}
             </div>
             <p style={{ margin: "3px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>Spin up an isolated worktree + branch for an agent.</p>
           </div>
@@ -132,6 +145,12 @@ export function LaunchSession({
                 <span>branches from <span className="mono" style={{ color: "var(--text-secondary)" }}>main</span> →</span>
                 <span className="mono" style={{ color: valid ? "var(--accent-text)" : "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>baton/{valid ? slug : "…"}</span>
               </div>
+              {writeEnabled && HEADLESS.includes(agent) && (
+                <label style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 10, cursor: "pointer", fontSize: "var(--fs-13)", color: "var(--text-secondary)" }}>
+                  <input type="checkbox" checked={headlessStart} onChange={(e) => setHeadlessStart(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+                  Start {a.short} headless after create <span style={{ color: "var(--text-quaternary)", fontSize: "var(--fs-12)" }}>· runs the task non-interactively, output on the Live screen</span>
+                </label>
+              )}
               {suggestion && suggestion.source === "rule" && suggestion.agent !== agent && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "var(--fs-12)", color: "var(--text-secondary)", padding: "7px 10px", borderRadius: "var(--r-sm)", background: "var(--accent-soft)", border: "1px dashed var(--accent-border)" }}>
                   <Icon name="sparkle" size={13} style={{ color: "var(--accent)", flex: "none" }} />

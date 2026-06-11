@@ -2,18 +2,13 @@
  * `baton route "<task>"` — which agent should take this task, and why.
  * Uses the committable routing config (baton.config.json) or built-ins.
  */
-import { execa } from 'execa';
 import { gitRoot } from '../git.js';
+import { probeBinary } from '../util/exec.js';
 import { loadRouting, suggestAgent, CONFIG_FILE } from '../routing.js';
 
 async function onPath(agent: string): Promise<boolean> {
   if (agent === 'any') return true;
-  try {
-    await execa('which', [agent], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return probeBinary(agent);
 }
 
 export async function routeCmd(text: string): Promise<void> {

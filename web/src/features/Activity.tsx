@@ -12,7 +12,7 @@ import { progressEstimate, timeAgo } from "../lib/format";
 import { getUsage, fmtTokens } from "../lib/preview";
 import { BatonAPI } from "../lib/api";
 import { usePoll, type PollState } from "../hooks/usePoll";
-import type { StatusRow, EditSignal, AgentId } from "../types";
+import type { StatusRow, EditSignal, AgentId, RepoUsage } from "../types";
 
 export function Sparkline({ data, color = "var(--accent)", w = 64, h = 22 }: { data: number[]; color?: string; w?: number; h?: number }) {
   const max = Math.max(1, ...data); const n = data.length;
@@ -94,6 +94,10 @@ export function ActivityScreen({
   const demo = BatonAPI.demo;
   const sessions = status.data || [];
   const active = sessions.filter((s) => s.agent !== null);
+  // Real usage from Claude session files (30s poll; null in demo / on error).
+  const usage = usePoll<RepoUsage | null>(() => BatonAPI.getRealUsage(), { interval: 30000, enabled: !demo });
+  const real = usage.data ?? null;
+  const usageBySlug = new Map((real?.sessions ?? []).filter((s) => s.slug).map((s) => [s.slug!, s]));
 
   const agg = sessions.reduce((a, s) => {
     if (demo) { const u = getUsage(s.slug); a.in += u.input; a.out += u.output; a.req += u.requests; }
@@ -128,6 +132,13 @@ export function ActivityScreen({
       ]
     : [
         { label: "Active sessions", value: active.length, sub: `${sessions.length} total worktree${sessions.length === 1 ? "" : "s"}`, icon: "bot", tone: "accent" },
+        ...(real && real.totals.sessions > 0
+          ? [{
+              label: "Tokens used (Claude)", value: fmtTokens(real.totals.inputTokens + real.totals.outputTokens),
+              sub: `${real.totals.sessions} session${real.totals.sessions === 1 ? "" : "s"} · cache-read ${fmtTokens(real.totals.cacheReadTokens)} · ≈ $${real.totals.estCostUsd.toFixed(2)} est`,
+              icon: "zap" as IconName, tone: "accent" as const,
+            }]
+          : []),
         { label: "Commits ahead", value: agg.commits, sub: "across all branches", icon: "gitCommit" },
         { label: "Files changed", value: agg.files, sub: agg.ins || agg.del ? `+${agg.ins} −${agg.del}` : "uncommitted work", icon: "fileWarning" },
         { label: "Avg progress", value: avgProgress + "%", sub: "est. from commits", icon: "history", tone: "ready" },
@@ -242,12 +253,25 @@ export function ActivityScreen({
                             </div>
                             <div style={{ flex: "none" }} className="ar-hide-md"><Sparkline data={u.spark} color={a.color} /></div>
                           </>
-                        ) : (
-                          <div style={{ flex: "none", width: 110, textAlign: "right" }} className="ar-hide-sm">
-                            <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{s.filesChanged} file{s.filesChanged === 1 ? "" : "s"}</div>
-                            <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>{s.ahead}↑ {s.behind}↓</div>
-                          </div>
-                        )}
+                        ) : (() => {
+                          const ru = usageBySlug.get(s.slug);
+                          return (
+                            <div style={{ flex: "none", width: 110, textAlign: "right" }} className="ar-hide-sm"
+                              data-tip={ru ? `${fmtTokens(ru.inputTokens)} in · ${fmtTokens(ru.outputTokens)} out · cache-read ${fmtTokens(ru.cacheReadTokens)} · ≈ $${ru.estCostUsd.toFixed(2)} est` : undefined}>
+                              {ru ? (
+                                <>
+                                  <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{fmtTokens(ru.inputTokens + ru.outputTokens)}</div>
+                                  <div style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>tokens · real</div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{s.filesChanged} file{s.filesChanged === 1 ? "" : "s"}</div>
+                                  <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>{s.ahead}↑ {s.behind}↓</div>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })()}
                         <div style={{ flex: "none", display: "flex", gap: 6 }}>
                           <button className="btn btn-sm fr" onClick={() => onLive(s.slug)} data-tip="Watch live session" style={{ borderColor: "var(--conflict-border)" }}>
                             <span style={{ position: "relative", width: 7, height: 7 }}><span style={{ position: "absolute", inset: 0, borderRadius: 99, background: "var(--conflict-strong)" }} /><span style={{ position: "absolute", inset: 0, borderRadius: 99, background: "var(--conflict-strong)", animation: "ping 1.6s var(--ease-out) infinite" }} /></span>

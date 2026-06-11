@@ -17,8 +17,8 @@ type Handler = (e: BatonEventMsg) => void;
 
 const EVENT_TYPES = [
   "status.changed", "task.created", "task.removed", "task.merged",
-  "commit.created", "agent.started", "agent.stopped", "file.edited",
-  "signal.overlap", "kb.rebuilt", "handoff.created",
+  "commit.created", "agent.started", "agent.stopped", "agent.output",
+  "file.edited", "signal.overlap", "kb.rebuilt", "handoff.created",
 ] as const;
 
 export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {

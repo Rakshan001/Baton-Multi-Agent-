@@ -11,8 +11,9 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import { PROJECT_MARKERS, SKIP_DIRS } from './projects.js';
-import type { KbProject, KbState } from './state.js';
+import { SKIP_DIRS } from './projects.js';
+import { readStats } from './graphify.js';
+import { saveKb, type KbProject, type KbState } from './state.js';
 
 /* ------------------------------ god nodes ------------------------------ */
 
@@ -91,6 +92,39 @@ async function countFiles(dir: string, budget = 2000): Promise<number> {
   return count;
 }
 
+/**
+ * ≈ how many tokens reading the whole project would cost (bytes/4 over
+ * everything an agent would actually read — skip-listed dirs excluded).
+ * Budget-capped so a pathological tree can't stall a rebuild.
+ */
+export async function measureProjectTokens(dir: string, fileBudget = 20_000): Promise<number> {
+  const { stat } = await import('node:fs/promises');
+  let bytes = 0;
+  let files = 0;
+  const stack = [dir];
+  while (stack.length && files < fileBudget) {
+    const d = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.isSymbolicLink()) continue;
+      if (e.isDirectory()) {
+        if (!COLLAPSE_DIRS.has(e.name)) stack.push(join(d, e.name));
+      } else {
+        files++;
+        try {
+          bytes += (await stat(join(d, e.name))).size;
+        } catch { /* vanished mid-walk */ }
+      }
+    }
+  }
+  return Math.round(bytes / 4);
+}
+
 /** Scan a project directory into a DirNode (depth-limited, noise collapsed). */
 export async function scanDir(path: string, depth = 1): Promise<DirNode> {
   const node: DirNode = { name: basename(path), dirs: [], files: [] };
@@ -103,6 +137,10 @@ export async function scanDir(path: string, depth = 1): Promise<DirNode> {
   entries.sort((a, b) => a.name.localeCompare(b.name));
   for (const e of entries) {
     if (e.name.startsWith('.')) continue;
+    if (e.isSymbolicLink()) {
+      node.files.push(`${e.name} → (symlink)`); // never follow — cycles, escapes
+      continue;
+    }
     if (e.isDirectory()) {
       const child = join(path, e.name);
       if (COLLAPSE_DIRS.has(e.name) || depth >= MAX_DEPTH) {
@@ -238,16 +276,6 @@ export async function renderCodebaseMd(project: KbProject, meta: RenderMeta): Pr
 
 /* ------------------------------ refresh hook ---------------------------- */
 
-/** Read built_at_commit cheaply from a graph.json (null when missing/unbuilt). */
-async function builtCommitOf(graphPath: string): Promise<string | null> {
-  try {
-    const g = JSON.parse(await readFile(graphPath, 'utf-8')) as GraphJson;
-    return g.built_at_commit ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * THE single freshness hook: regenerates every project's CODEBASE.md (and the
  * root index for multi-project containers). Called by `kb init`, `kb rebuild`,
@@ -261,7 +289,11 @@ export async function refreshCodebaseDocs(root: string, state: KbState): Promise
     const file = join(p.path, 'CODEBASE.md');
     await writeFile(file, md, 'utf-8');
     written.push(file);
+    // Token-savings metric: what the map costs vs what reading the repo costs.
+    p.mapTokens = Math.round(md.length / 4);
+    p.repoTokens = await measureProjectTokens(p.path);
   }
+  await saveKb(root, state);
   if (state.projects.length > 1) {
     const index: string[] = [
       '# CODEBASE — project index',
@@ -291,15 +323,10 @@ export async function codebaseDocStatus(p: KbProject): Promise<'missing' | 'fres
     const md = await readFile(join(p.path, 'CODEBASE.md'), 'utf-8');
     const m = md.match(/<!-- baton:codebase generated=\S+ commit=(\S+) -->/);
     if (!m) return 'missing';
-    const graphCommit = await builtCommitOf(p.graphPath);
+    const graphCommit = (await readStats(p.graphPath))?.builtAtCommit ?? null;
     if (!graphCommit || m[1] === 'unknown') return 'fresh'; // nothing to compare against
     return m[1] === graphCommit ? 'fresh' : 'stale';
   } catch {
     return 'missing';
   }
-}
-
-/** Marker-aware: is this path itself a project root? (re-export convenience) */
-export function isProjectRoot(path: string): boolean {
-  return PROJECT_MARKERS.some((m) => existsSync(join(path, m)));
 }

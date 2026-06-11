@@ -40,21 +40,25 @@ export function sessionDirFor(cwd: string): string {
   return join(homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
 }
 
-/** Newest .jsonl transcript in the session dir for `cwd`, or null. */
-export async function latestSessionFile(cwd: string): Promise<string | null> {
+/** All .jsonl transcripts for `cwd`, newest first ([] when none). */
+export async function listSessionFiles(cwd: string): Promise<string[]> {
   try {
     const dir = sessionDirFor(cwd);
     const entries = await readdir(dir);
     const files = entries.filter((f) => f.endsWith('.jsonl'));
-    if (!files.length) return null;
     const stats = await Promise.all(
       files.map(async (f) => ({ f: join(dir, f), mtime: (await stat(join(dir, f))).mtimeMs })),
     );
     stats.sort((a, b) => b.mtime - a.mtime);
-    return stats[0].f;
+    return stats.map((s) => s.f);
   } catch {
-    return null;
+    return [];
   }
+}
+
+/** Newest .jsonl transcript in the session dir for `cwd`, or null. */
+export async function latestSessionFile(cwd: string): Promise<string | null> {
+  return (await listSessionFiles(cwd))[0] ?? null;
 }
 
 interface ToolUseBlock {

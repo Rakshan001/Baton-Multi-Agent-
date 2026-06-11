@@ -26,6 +26,8 @@ import { passCmd } from './commands/pass.js';
 import { doneCmd, takeCmd } from './commands/take.js';
 import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
+import { usageCmd } from './commands/usage.js';
+import { startCmd, stopCmd } from './commands/start.js';
 
 const program = new Command();
 
@@ -127,6 +129,25 @@ kb.command('mcp')
   .action((opts: { agent?: string }) => run(() => kbMcpCmd(opts)));
 
 program
+  .command('start')
+  .argument('<slug>', 'task slug')
+  .option('--agent <agent>', 'claude | codex | gemini (headless print modes)', 'claude')
+  .option('--prompt <text>', 'override the prompt (default: HANDOFF.md brief, else the task text)')
+  .description("run an agent headlessly in the task's worktree, streaming output")
+  .action((slug: string, opts: { agent?: string; prompt?: string }) => run(() => startCmd(slug, opts)));
+
+program
+  .command('stop')
+  .argument('<slug>', 'task slug')
+  .description('stop a baton-started headless agent')
+  .action((slug: string) => run(() => stopCmd(slug)));
+
+program
+  .command('usage')
+  .description('real token usage per Claude Code session (parsed from session files, costs estimated)')
+  .action(() => run(usageCmd));
+
+program
   .command('route')
   .argument('<task...>', 'task description to route')
   .description('which agent should take this task (rules from baton.config.json, no LLM)')
@@ -139,7 +160,7 @@ program
   .option('--note <text>', 'extra context for the receiving agent')
   .option('--from <agent>', 'handing-off agent (default claude)')
   .option('--no-commit-pending', 'skip the checkpoint commit of uncommitted changes')
-  .option('--auto', 'quiet hook mode: no-op outside a worktree, skip if a fresh brief exists')
+  .option('--auto', 'quiet hook mode: no-op outside a worktree, skip if a fresh brief exists (briefs are routed by task type unless --to is given)')
   .description('package this session into a HANDOFF.md brief for another agent')
   .action((slug: string | undefined, opts: { to?: string; note?: string; from?: string; commitPending?: boolean; auto?: boolean }) =>
     run(() => passCmd(slug, opts)));

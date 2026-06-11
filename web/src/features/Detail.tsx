@@ -190,6 +190,21 @@ export function DetailSheet({
                   <Icon name="share" size={14} style={{ color: "var(--accent-text)" }} />
                   <span style={{ textAlign: "left" }}>Hand off<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>route to another agent</span></span>
                 </button>
+                <button className="btn fr" disabled={!writeEnabled}
+                  onClick={gate(async () => {
+                    try {
+                      const r = await BatonAPI.startAgentRun(slug, {});
+                      showToast({ kind: "ok", title: `${r.agent} running headless`, desc: "Watch on the Live screen" });
+                      onLive(slug);
+                    } catch (e) {
+                      showToast({ kind: "error", title: "Could not start agent", desc: (e as Error).message });
+                    }
+                  })}
+                  style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }) }}
+                  data-tip={writeEnabled ? "Run claude -p with the brief/task in this worktree" : readOnlyTip}>
+                  <Icon name="zap" size={14} style={{ color: "var(--accent-text)" }} />
+                  <span style={{ textAlign: "left" }}>Start agent<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>headless · output in Live</span></span>
+                </button>
               </div>
             </div>
           </>

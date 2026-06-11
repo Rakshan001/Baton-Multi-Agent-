@@ -16,7 +16,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage } from "../types";
 import { BUILTIN_ROUTING, suggestAgent } from "./routing";
 import { DEMO_KB, demoGraphFor } from "./demoKb";
 import {
@@ -282,6 +282,41 @@ class BatonClient {
     }
     this.emit();
     return body as ImportResult;
+  }
+
+  /* ---- headless agent control ---- */
+  async startAgentRun(slug: string, opts: { agent?: AgentId; prompt?: string } = {}): Promise<{ slug: string; agent: string; promptSource: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(200);
+      return { slug, agent: opts.agent ?? "claude", promptSource: "task" };
+    }
+    const r = await this.request<{ slug: string; agent: string; promptSource: string }>(
+      `/api/tasks/${encodeURIComponent(slug)}/agent/start`,
+      { method: "POST", body: JSON.stringify(opts) },
+    );
+    this.emit();
+    return r;
+  }
+  async stopAgentRun(slug: string): Promise<{ stopped: boolean }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(120);
+      return { stopped: true };
+    }
+    const r = await this.request<{ stopped: boolean }>(`/api/tasks/${encodeURIComponent(slug)}/agent/stop`, { method: "POST", body: "{}" });
+    this.emit();
+    return r;
+  }
+
+  /* ---- real token usage (Claude session files) ---- */
+  async getRealUsage(): Promise<RepoUsage | null> {
+    if (this.demo) return null; // demo keeps its labelled illustrative numbers
+    try {
+      return await this.request<RepoUsage>("/api/usage");
+    } catch {
+      return null; // usage is an enhancement — never break the page over it
+    }
   }
 
   /* ---- routing (task-type → agent) ---- */

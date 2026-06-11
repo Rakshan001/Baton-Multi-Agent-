@@ -6,6 +6,7 @@
  */
 import { execa } from 'execa';
 import { readFile, stat } from 'node:fs/promises';
+import { probeBinary } from '../util/exec.js';
 
 /** Graphify runs can chew through a big repo; give them room but never hang forever. */
 const EXTRACT_TIMEOUT_MS = 15 * 60_000;
@@ -20,18 +21,14 @@ export interface GraphifyDetection {
 }
 
 export async function detectGraphify(): Promise<GraphifyDetection> {
-  const probe = async (cmd: string, args: string[]): Promise<string | null> => {
-    try {
-      const { stdout } = await execa(cmd, args, { timeout: QUICK_TIMEOUT_MS });
-      return stdout.trim();
-    } catch {
-      return null;
-    }
-  };
-  const version = await probe('graphify', ['--version']);
-  if (version) return { ok: true, version: version.replace(/^graphify\s+/, ''), uv: true, pipx: true };
-  const [uv, pipx] = await Promise.all([probe('uv', ['--version']), probe('pipx', ['--version'])]);
-  return { ok: false, uv: uv !== null, pipx: pipx !== null };
+  // version string needed for the ok path; probeBinary covers the boolean installers
+  try {
+    const { stdout } = await execa('graphify', ['--version'], { timeout: QUICK_TIMEOUT_MS });
+    return { ok: true, version: stdout.trim().replace(/^graphify\s+/, ''), uv: true, pipx: true };
+  } catch {
+    const [uv, pipx] = await Promise.all([probeBinary('uv'), probeBinary('pipx')]);
+    return { ok: false, uv, pipx };
+  }
 }
 
 export function installHint(d: GraphifyDetection): string {
@@ -138,15 +135,19 @@ export interface GraphStats {
   edges: number;
   communities: number;
   builtAt: string | null; // file mtime ISO
+  /** Git commit the graph was built at (graphify's built_at_commit), if recorded. */
+  builtAtCommit: string | null;
 }
 
-/** Cheap stats from a graph.json without holding the whole parse around. */
+/** Cheap stats from a graph.json without holding the whole parse around.
+ *  The ONE place that knows graph.json's envelope shape — extend here, not ad hoc. */
 export async function readStats(graphJsonPath: string): Promise<GraphStats | null> {
   try {
     const [raw, st] = await Promise.all([readFile(graphJsonPath, 'utf-8'), stat(graphJsonPath)]);
     const g = JSON.parse(raw) as {
       nodes?: Array<{ community?: number }>;
       links?: unknown[];
+      built_at_commit?: string;
     };
     const nodes = g.nodes ?? [];
     const communities = new Set(nodes.map((n) => n.community).filter((c) => c !== undefined));
@@ -155,6 +156,7 @@ export async function readStats(graphJsonPath: string): Promise<GraphStats | nul
       edges: g.links?.length ?? 0,
       communities: communities.size,
       builtAt: st.mtime.toISOString(),
+      builtAtCommit: g.built_at_commit ?? null,
     };
   } catch {
     return null;

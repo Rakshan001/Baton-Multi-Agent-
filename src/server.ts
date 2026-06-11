@@ -39,19 +39,16 @@ import { getTask } from './store.js';
 import { refreshCodebaseDocs } from './kb/codebasemd.js';
 import { loadRouting, suggestAgent } from './routing.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
+import { BATON_VERSION } from './version.js';
+import { usageForRepo } from './usage.js';
+import { AgentRunningError, runningHeadless, startAgent, stopAgent } from './spawn.js';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 const require = createRequire(import.meta.url);
-const VERSION: string = (() => {
-  try {
-    return (require('../package.json') as { version?: string }).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-})();
+const VERSION = BATON_VERSION;
 
 interface ServeOptions {
   port: number;
@@ -224,6 +221,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const report = getReport(root, decodeURIComponent(rm_[1]));
     return report ? send(res, 200, report, origin) : send(res, 404, { error: 'no report' }, origin);
   }
+  // GET /api/usage — real token usage parsed from Claude Code session files
+  if (method === 'GET' && path === '/api/usage') {
+    return send(res, 200, await usageForRepo(root, await loadTasks(root)), origin);
+  }
+
   // GET /api/routing[?task=…] — routing config + suggestion for a task text
   if (method === 'GET' && path === '/api/routing') {
     const { config, path: configPath, errors } = await loadRouting(root);
@@ -254,6 +256,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
         nodes: p.stats?.nodes ?? 0, edges: p.stats?.edges ?? 0,
         communities: p.stats?.communities ?? 0,
         lastBuiltAt: p.stats?.builtAt ?? null, building: p.building,
+        mapTokens: p.mapTokens ?? null, repoTokens: p.repoTokens ?? null,
       })),
       merged: merged
         ? {
@@ -440,6 +443,34 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       if (e instanceof MainWorktreeError) return send(res, 400, { error: e.message }, origin);
       if (e instanceof DirtyWorktreeError) return send(res, 409, { error: e.message, state: e.state }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // GET /api/agents/running — baton-managed headless agent runs
+  if (method === 'GET' && path === '/api/agents/running') {
+    return send(res, 200, { running: runningHeadless() }, origin);
+  }
+
+  // POST /api/tasks/:slug/agent/start|stop — headless agent control (write-gated)
+  const am = path.match(/^\/api\/tasks\/([^/]+)\/agent\/(start|stop)$/);
+  if (am && method === 'POST') {
+    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    const slug = decodeURIComponent(am[1]);
+    if (am[2] === 'stop') {
+      return send(res, 200, { stopped: stopAgent(slug) }, origin);
+    }
+    let body: { agent?: string; prompt?: string } = {};
+    try {
+      const raw = await readBody(req);
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      return send(res, 400, { error: 'invalid JSON body' }, origin);
+    }
+    try {
+      return send(res, 201, await startAgent(slug, body, root), origin);
+    } catch (e) {
+      if (e instanceof AgentRunningError) return send(res, 409, { error: e.message }, origin);
+      return send(res, 400, { error: (e as Error).message }, origin);
     }
   }
 

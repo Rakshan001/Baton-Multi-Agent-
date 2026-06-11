@@ -57,3 +57,16 @@ claude-code-router
   Adapted: concept only, no code — task-type → agent/model routing config
   shape (baton.config.json), applied at the agent-handoff level instead of an
   API proxy (src/routing.ts).
+
+Orca
+  https://github.com/lovecastinc/orca (referenced locally under .refs/orca)
+  License: MIT
+  Adapted: concept only, no code — per-session Claude Code usage schema
+  (input/output/cache tokens + estimated cost, parsed from session JSONLs)
+  for src/usage.ts.
+
+Rover
+  https://github.com/endorhq/rover (referenced locally under .refs/rover)
+  License: Apache-2.0
+  Adapted: concept only, no code — invoking agent CLIs headlessly with a
+  prompt (one-shot print/exec modes) for src/spawn.ts.
