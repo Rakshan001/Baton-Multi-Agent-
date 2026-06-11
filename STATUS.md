@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-06-11 (session 3: KB v3 — review fixes, real tokens, headless agents)** (branch: `feat/worktree-orchestration`, merged to `main`)
+> Last updated: **2026-06-11 (session 4: UI verification pass)** (branch: `feat/worktree-orchestration`, merged to `main`)
 
 ## What this project is
 
@@ -42,11 +42,24 @@ Tests: 34 vitest tests at root, all green. Both workspaces strict TS, build clea
 
 ## Pending / next 🔜
 
-1. **Final in-browser pass of the real-mode UI** — code + builds + curl + API
-   verified; the visual walkthrough is pending for: add-connection flow with a
-   second daemon, real Live feed, real Activity, the Handoff "suggested" routing
-   chip, the Launch suggestion row, the Settings routing card, and the KB
-   Export/Import buttons. ~20 min with `baton serve --write` at :7077.
+1. **Headless runs aren't shown as "active" on the status board** (found in the
+   2026-06-11 visual pass). `baton start` spawns `claude -p` etc., but the board's
+   agent indicator comes from `src/agents.ts` (ps scan for agent CLIs by worktree
+   cwd), which doesn't match short-lived headless children — and `claude -p` often
+   finishes in seconds. So Activity's "active sessions" table and its Live button
+   stay empty during a headless run; watch one via the **Live screen** (it consumes
+   `agent.output` events directly) or `baton start` in the terminal. Worth wiring
+   `runningHeadless()` into `collectStatus` so headless runs show as active too.
+2. **Visual pass — 2 surfaces still need a real-browser look.** Confirmed working in
+   the browser on 2026-06-11: Knowledge Graph (savings subtitle + Export/Import),
+   Activity real-mode (real token card: 6 sessions / 271.92M cache-read / ≈$673 +
+   live edit signals), Settings routing card, Launch routing-suggestion row +
+   headless checkbox (Preview badge clears), and the full project-switcher flow
+   (add 2nd daemon → switch → unreachable → Connect-screen fallback → recover). NOT
+   re-seen in-browser this pass (Chrome MCP was offline; board cards are
+   drag-and-drop so synthetic clicks don't open the detail sheet/Live modal): the
+   **Handoff "suggested" chip** (demo-verified earlier) and **Live `agent.output`
+   rows** (SSE-verified via curl earlier). Re-check both when Chrome MCP is up.
 2. **Interactive agent terminals** — headless one-shot runs are real now; full
    interactive PTY terminals in the dashboard (node-pty + xterm, Orca/Daintree style)
    remain unbuilt by choice (native dep). cursor/aider/opencode have no headless mode.
