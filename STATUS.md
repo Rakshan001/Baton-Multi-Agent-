@@ -37,32 +37,29 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **KB export/import/share** | `baton kb export` → .tar.gz pack (graphs + CODEBASE.md + manifest with git HEAD); `baton kb import <pack\|kb/>` re-anchors paths, validates graphs, reports "N commits behind" and auto-refreshes; dashboard Export/Import buttons on the Knowledge Graph page; `baton kb share on` keeps a committed `kb/` dir so teammates clone-and-go | export, clone repo elsewhere, `baton kb import <pack>` → graphs appear with zero re-indexing |
 | **Real token usage** | `baton usage` + `GET /api/usage`: parses Claude Code session JSONLs (input/output/cache tokens + est cost per session, mtime-cached), mapped to task slugs; Activity shows a real "Tokens used (Claude)" card + per-session tokens; KB page shows the savings metric (this repo: map ≈ 824 tokens vs ≈ 248k reading it — ~300× cheaper). Prior art: Orca | `baton usage` |
 | **Headless agent launch** | `baton start <slug> [--agent claude\|codex\|gemini]` runs the agent's print mode in the worktree (prompt = HANDOFF.md brief when present), output streamed as `agent.output` SSE events into the Live screen; `baton stop`; Detail "Start agent" button; Launch dialog "start headless after create" (its Preview badge disappears on that path); 409 on double-start; never adds permission-bypass flags. Prior art: Rover | `baton start <slug> --prompt "say hi"` |
+| **Interactive agent terminals** | Real PTY sessions in the dashboard: tmux hosts each session (`baton-<repoHash>-<slug>`, zero new daemon deps, survives daemon restarts), driven via one control-mode client per session; output → per-session SSE stream (`/api/tasks/:slug/terminal/stream`, snapshot+live), input/resize → POST (hex-encoded send-keys, injection-proof); xterm.js panel in the Live screen (Terminal tab, auto-selected when live), Launch dialog 3-way start mode (worktree only / interactive / headless), Detail "Open terminal" button; mutual 409 with headless runs; kill-on-task-remove; tmux-missing → capability flag + install hint; demo mode plays a canned transcript. All six agents launchable (`cursor-agent` for cursor; aider/opencode bare). Prior art: handler.dev (tmux+capture-pane), claude-squad | Launch → "Open interactive terminal" → type into the live claude TUI; `tmux ls`; kill daemon, restart → session reattaches |
 
 Tests: 34 vitest tests at root, all green. Both workspaces strict TS, build clean.
 
 ## Pending / next 🔜
 
-1. **Headless runs aren't shown as "active" on the status board** (found in the
-   2026-06-11 visual pass). `baton start` spawns `claude -p` etc., but the board's
-   agent indicator comes from `src/agents.ts` (ps scan for agent CLIs by worktree
-   cwd), which doesn't match short-lived headless children — and `claude -p` often
-   finishes in seconds. So Activity's "active sessions" table and its Live button
-   stay empty during a headless run; watch one via the **Live screen** (it consumes
-   `agent.output` events directly) or `baton start` in the terminal. Worth wiring
-   `runningHeadless()` into `collectStatus` so headless runs show as active too.
-2. **Visual pass — 2 surfaces still need a real-browser look.** Confirmed working in
-   the browser on 2026-06-11: Knowledge Graph (savings subtitle + Export/Import),
-   Activity real-mode (real token card: 6 sessions / 271.92M cache-read / ≈$673 +
-   live edit signals), Settings routing card, Launch routing-suggestion row +
-   headless checkbox (Preview badge clears), and the full project-switcher flow
-   (add 2nd daemon → switch → unreachable → Connect-screen fallback → recover). NOT
-   re-seen in-browser this pass (Chrome MCP was offline; board cards are
-   drag-and-drop so synthetic clicks don't open the detail sheet/Live modal): the
-   **Handoff "suggested" chip** (demo-verified earlier) and **Live `agent.output`
-   rows** (SSE-verified via curl earlier). Re-check both when Chrome MCP is up.
-2. **Interactive agent terminals** — headless one-shot runs are real now; full
-   interactive PTY terminals in the dashboard (node-pty + xterm, Orca/Daintree style)
-   remain unbuilt by choice (native dep). cursor/aider/opencode have no headless mode.
+1. **Headless one-shot runs still aren't shown as "active" on the status board**
+   (`claude -p` children are too short-lived for the `src/agents.ts` ps scan).
+   Interactive tmux terminals DO show as active — the agent process persists with
+   the worktree cwd, so the scan catches it (verified 2026-06-12). Worth wiring
+   `runningHeadless()` into `collectStatus` for the one-shot case too.
+2. **tmux test-environment caveat** (2026-06-12): a daemon launched inside a
+   sandboxed wrapper (e.g. the IDE preview helper) can wedge the shared tmux server
+   (orphaned control client stops draining → every tmux command on the machine
+   hangs). Hardening added: control clients attach with `-d` (kick stale clients),
+   all one-shot tmux calls have a 10s timeout, errors surface as clean 4xx/503.
+   Normal usage — `baton serve` run from a real terminal — is unaffected (verified
+   end-to-end). If tmux ever wedges: `pkill -f 'tmux -C attach' && rm -rf /tmp/tmux-$UID`.
+3. **Visual pass** — confirmed in-browser 2026-06-12: Launch 3-way start mode (radio
+   group, Preview badge clears on real modes), real claude TUI rendering in the Live
+   Terminal tab via SSE, keystrokes from the browser moving the TUI selector, tmux
+   session create/adopt/kill from the UI. Still pending a look when Chrome MCP is up:
+   Handoff "suggested" chip (demo-verified earlier).
 3. **Non-Claude token usage** — codex/gemini session formats aren't parsed yet
    (src/usage.ts is Claude-only); their sessions show no token data.
 4. **Fleet broadcast** (Daintree-style: one prompt → N sessions at once) — researched,

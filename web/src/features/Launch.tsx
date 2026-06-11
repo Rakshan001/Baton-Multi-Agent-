@@ -27,11 +27,19 @@ export function LaunchSession({
   const [phase, setPhase] = useState<Phase>("form");
   const [step, setStep] = useState(-1);
   const [suggestion, setSuggestion] = useState<RoutingSuggestion | null>(null);
-  const [headlessStart, setHeadlessStart] = useState(false);
+  const [startMode, setStartMode] = useState<"none" | "headless" | "terminal">("none");
+  const [terminals, setTerminals] = useState<{ available: boolean; hint?: string } | null>(null);
   const userPickedAgent = useRef(initialAgent !== null);
   const HEADLESS = ["claude", "codex", "gemini"];
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
+
+  // Terminal capability (tmux on the daemon) decides if "interactive" is offered.
+  useEffect(() => {
+    void BatonAPI.getMeta().then((m) => {
+      if (alive.current) setTerminals(m.terminals ?? { available: false });
+    }).catch(() => { if (alive.current) setTerminals({ available: false }); });
+  }, []);
 
   // Routing suggestion while typing (debounced). Never overrides an explicit pick.
   useEffect(() => {
@@ -56,13 +64,20 @@ export function LaunchSession({
     return () => { alive.current = false; document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
   }, [onClose, phase]);
 
-  const willStart = headlessStart && writeEnabled && HEADLESS.includes(agent);
+  const canHeadless = writeEnabled && HEADLESS.includes(agent);
+  const canTerminal = writeEnabled && !!terminals?.available;
+  const mode = startMode === "headless" && !canHeadless ? "none"
+    : startMode === "terminal" && !canTerminal ? "none"
+    : startMode;
+  const willStart = mode !== "none";
   const steps: { label: string; sub: string; icon: IconName }[] = [
     { label: "Creating isolated worktree", sub: `.baton/wt/${slug}`, icon: "folder" },
     { label: "Checking out branch", sub: `baton/${slug}`, icon: "gitBranch" },
-    willStart
+    mode === "headless"
       ? { label: `Starting ${a.short} (headless)`, sub: "agent runs the task in the worktree", icon: "bot" }
-      : { label: `Attaching ${a.short}`, sub: "agent ready to work", icon: "bot" },
+      : mode === "terminal"
+        ? { label: `Starting ${a.short} (interactive)`, sub: "live terminal opens on the Live screen", icon: "terminal" }
+        : { label: `Attaching ${a.short}`, sub: "agent ready to work", icon: "bot" },
   ];
 
   const launch = async () => {
@@ -80,12 +95,19 @@ export function LaunchSession({
     const res = await apiP;
     if (!alive.current) return;
     if (!res.ok) { showToast({ kind: "error", title: "Launch failed", desc: res.e.message }); setPhase("form"); setStep(-1); return; }
-    if (willStart) {
+    if (mode === "headless") {
       try {
         await BatonAPI.startAgentRun(res.r.slug, { agent });
         showToast({ kind: "ok", title: `${a.short} running headless`, desc: "Watch it on the Live screen", mono: false });
       } catch (e) {
         showToast({ kind: "error", title: `${a.short} could not start`, desc: (e as Error).message });
+      }
+    } else if (mode === "terminal") {
+      try {
+        await BatonAPI.createTerminal(res.r.slug, { agent, prompt: task.trim() });
+        showToast({ kind: "ok", title: `${a.short} terminal open`, desc: "Interactive session on the Live screen", mono: false });
+      } catch (e) {
+        showToast({ kind: "error", title: `${a.short} terminal could not start`, desc: (e as Error).message });
       }
     }
     setPhase("done");
@@ -145,11 +167,29 @@ export function LaunchSession({
                 <span>branches from <span className="mono" style={{ color: "var(--text-secondary)" }}>main</span> →</span>
                 <span className="mono" style={{ color: valid ? "var(--accent-text)" : "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>baton/{valid ? slug : "…"}</span>
               </div>
-              {writeEnabled && HEADLESS.includes(agent) && (
-                <label style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 10, cursor: "pointer", fontSize: "var(--fs-13)", color: "var(--text-secondary)" }}>
-                  <input type="checkbox" checked={headlessStart} onChange={(e) => setHeadlessStart(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
-                  Start {a.short} headless after create <span style={{ color: "var(--text-quaternary)", fontSize: "var(--fs-12)" }}>· runs the task non-interactively, output on the Live screen</span>
-                </label>
+              {writeEnabled && (
+                <div style={{ marginTop: 10 }}>
+                  <div className="tag" style={{ marginBottom: 6 }}>After create</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {([
+                      { id: "none" as const, label: "Just create the worktree", sub: "you start the agent yourself", show: true },
+                      { id: "terminal" as const, label: `Open ${a.short} interactive terminal`, sub: "full TUI in the dashboard, type to steer it", show: canTerminal },
+                      { id: "headless" as const, label: `Start ${a.short} headless`, sub: "one-shot run, output on the Live screen", show: canHeadless },
+                    ]).filter((o) => o.show).map((o) => (
+                      <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: "var(--fs-13)", color: "var(--text-secondary)", padding: "5px 8px", borderRadius: "var(--r-sm)", background: mode === o.id ? "var(--bg-surface-2)" : "transparent", border: `1px solid ${mode === o.id ? "var(--border-default)" : "transparent"}` }}>
+                        <input type="radio" name="startMode" checked={mode === o.id} onChange={() => setStartMode(o.id)} style={{ accentColor: "var(--accent)" }} />
+                        <span style={{ fontWeight: mode === o.id ? "var(--fw-medium)" : 400 }}>{o.label}</span>
+                        <span style={{ color: "var(--text-quaternary)", fontSize: "var(--fs-12)" }}>· {o.sub}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {terminals && !terminals.available && (
+                    <div style={{ marginTop: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
+                      <Icon name="terminal" size={12} />
+                      Interactive terminals need tmux{terminals.hint ? <> — <span className="mono" style={{ color: "var(--accent-text)" }}>{terminals.hint}</span></> : null}
+                    </div>
+                  )}
+                </div>
               )}
               {suggestion && suggestion.source === "rule" && suggestion.agent !== agent && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "var(--fs-12)", color: "var(--text-secondary)", padding: "7px 10px", borderRadius: "var(--r-sm)", background: "var(--accent-soft)", border: "1px dashed var(--accent-border)" }}>

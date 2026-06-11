@@ -19,6 +19,7 @@ const EVENT_TYPES = [
   "status.changed", "task.created", "task.removed", "task.merged",
   "commit.created", "agent.started", "agent.stopped", "agent.output",
   "file.edited", "signal.overlap", "kb.rebuilt", "handoff.created",
+  "terminal.started", "terminal.exited",
 ] as const;
 
 export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {

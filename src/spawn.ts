@@ -46,6 +46,11 @@ interface RunningAgent {
 
 const running = new Map<string, RunningAgent>();
 
+/** Is a headless run active for this slug? (terminals.ts uses this to refuse a second agent.) */
+export function hasHeadlessRun(slug: string): boolean {
+  return running.has(slug);
+}
+
 const LINE_CAP = 500;
 
 function pushLines(slug: string, run: RunningAgent, chunk: string, stream: 'out' | 'err'): void {

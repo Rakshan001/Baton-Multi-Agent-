@@ -91,6 +91,16 @@ export interface Meta {
   branch: string;
   writeEnabled: boolean;
   version: string;
+  /** Interactive-terminal capability (tmux on the daemon's PATH). */
+  terminals?: { available: boolean; hint?: string };
+}
+
+/** One live interactive terminal — GET /api/terminals (src/terminals.ts). */
+export interface TerminalInfo {
+  slug: string;
+  agent: string;
+  sessionName: string;
+  startedAt: string;
 }
 
 /** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */

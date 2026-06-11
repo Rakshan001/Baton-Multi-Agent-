@@ -42,6 +42,11 @@ import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
 import { AgentRunningError, runningHeadless, startAgent, stopAgent } from './spawn.js';
+import {
+  createTerminal, detectTmux, getScrollback, hasTerminal, killTerminal, listTerminals,
+  reattachOrphans, resizeTerminal, writeInput,
+  HeadlessConflictError, TerminalRunningError, TerminalUnavailableError,
+} from './terminals.js';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
@@ -140,7 +145,12 @@ function handleEvents(req: IncomingMessage, res: ServerResponse, origin: string)
     res.write(`id: ${id}\nevent: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
   if (lastId > 0) for (const e of bus.since(lastId)) write(e.id, e.event.type, e.event);
 
-  const unsub = bus.onAny((e) => write(e.id, e.event.type, e.event));
+  // Raw terminal bytes flow only on the per-session stream; the global feed
+  // carries the low-volume terminal.started/exited markers.
+  const unsub = bus.onAny((e) => {
+    if (e.event.type === 'terminal.output') return;
+    write(e.id, e.event.type, e.event);
+  });
   const release = poller?.retain() ?? (() => undefined);
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
 
@@ -148,6 +158,40 @@ function handleEvents(req: IncomingMessage, res: ServerResponse, origin: string)
     clearInterval(heartbeat);
     unsub();
     release();
+  });
+}
+
+/**
+ * GET /api/tasks/:slug/terminal/stream — per-session SSE byte stream.
+ * One snapshot frame (the scrollback ring) so late joiners see the current
+ * screen, then live terminal.output frames. Readable on a read-only daemon.
+ */
+function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: string, origin: string): void {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': origin,
+    'Vary': 'Origin',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': connected\n\n');
+
+  const write = (type: string, data: unknown) =>
+    res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  const snapshot = getScrollback(slug);
+  write('terminal.snapshot', { slug, data: (snapshot ?? Buffer.alloc(0)).toString('base64') });
+
+  const unsub = bus.onAny((e) => {
+    const ev = e.event;
+    if ((ev.type === 'terminal.output' || ev.type === 'terminal.exited' || ev.type === 'terminal.started') && ev.slug === slug) {
+      write(ev.type, ev);
+    }
+  });
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsub();
   });
 }
 
@@ -396,7 +440,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
   if (method === 'GET' && path === '/api/history') return send(res, 200, listHistory(root), origin);
   if (method === 'GET' && path === '/api/meta') {
-    return send(res, 200, { repo: root, branch: await currentBranch(root), writeEnabled: !!opts.writeEnabled, version: VERSION }, origin);
+    const tmuxOk = await detectTmux();
+    return send(res, 200, {
+      repo: root, branch: await currentBranch(root), writeEnabled: !!opts.writeEnabled, version: VERSION,
+      terminals: tmuxOk
+        ? { available: true }
+        : { available: false, hint: process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux' },
+    }, origin);
   }
 
   if (method === 'POST' && path === '/api/tasks') {
@@ -437,6 +487,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const slug = decodeURIComponent(m[1]);
     const force = url.searchParams.get('force') === 'true';
     try {
+      // A live agent process holds the worktree cwd and fights `git worktree remove`.
+      await killTerminal(slug);
+      stopAgent(slug);
       return send(res, 200, await removeTaskWorktree(slug, { force }, root), origin);
     } catch (e) {
       if (e instanceof TaskNotFoundError) return send(res, 404, { error: e.message }, origin);
@@ -451,6 +504,78 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, { running: runningHeadless() }, origin);
   }
 
+  // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
+  if (method === 'GET' && path === '/api/terminals') {
+    const available = await detectTmux();
+    if (available) await reattachOrphans(root);
+    return send(res, 200, {
+      available,
+      ...(available ? {} : { hint: process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux' }),
+      terminals: listTerminals(),
+    }, origin);
+  }
+
+  // /api/tasks/:slug/terminal[/input|resize|stream] — interactive terminal control
+  const tm = path.match(/^\/api\/tasks\/([^/]+)\/terminal(?:\/(input|resize|stream))?$/);
+  if (tm) {
+    const slug = decodeURIComponent(tm[1]);
+    const sub = tm[2];
+    // After a daemon restart the tmux session may outlive the in-memory map.
+    if (!hasTerminal(slug) && (await detectTmux())) await reattachOrphans(root);
+
+    if (!sub && method === 'POST') {
+      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+      let body: { agent?: string; prompt?: string; cols?: number; rows?: number } = {};
+      try {
+        const raw = await readBody(req);
+        body = raw ? JSON.parse(raw) : {};
+      } catch {
+        return send(res, 400, { error: 'invalid JSON body' }, origin);
+      }
+      try {
+        return send(res, 201, await createTerminal(slug, body, root), origin);
+      } catch (e) {
+        if (e instanceof TerminalUnavailableError) return send(res, 503, { error: e.message, hint: process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux' }, origin);
+        if (e instanceof TerminalRunningError || e instanceof HeadlessConflictError) return send(res, 409, { error: e.message }, origin);
+        return send(res, 400, { error: (e as Error).message }, origin);
+      }
+    }
+    if (!sub && method === 'DELETE') {
+      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+      return send(res, 200, { killed: await killTerminal(slug) }, origin);
+    }
+    if (sub === 'input' && method === 'POST') {
+      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+      let body: { data?: string } = {};
+      try {
+        const raw = await readBody(req);
+        body = raw ? JSON.parse(raw) : {};
+      } catch {
+        return send(res, 400, { error: 'invalid JSON body' }, origin);
+      }
+      if (typeof body.data !== 'string') return send(res, 400, { error: 'pass { data: base64 }' }, origin);
+      const ok = writeInput(slug, Buffer.from(body.data, 'base64'));
+      return ok
+        ? send(res, 200, { written: true }, origin)
+        : send(res, 404, { error: `no live terminal for '${slug}'` }, origin);
+    }
+    if (sub === 'resize' && method === 'POST') {
+      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+      let body: { cols?: number; rows?: number } = {};
+      try {
+        const raw = await readBody(req);
+        body = raw ? JSON.parse(raw) : {};
+      } catch {
+        return send(res, 400, { error: 'invalid JSON body' }, origin);
+      }
+      const ok = await resizeTerminal(slug, Number(body.cols), Number(body.rows));
+      return send(res, ok ? 200 : 404, ok ? { resized: true } : { error: `no live terminal for '${slug}'` }, origin);
+    }
+    if (sub === 'stream' && method === 'GET') {
+      return handleTerminalStream(req, res, slug, origin);
+    }
+  }
+
   // POST /api/tasks/:slug/agent/start|stop — headless agent control (write-gated)
   const am = path.match(/^\/api\/tasks\/([^/]+)\/agent\/(start|stop)$/);
   if (am && method === 'POST') {
@@ -458,6 +583,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const slug = decodeURIComponent(am[1]);
     if (am[2] === 'stop') {
       return send(res, 200, { stopped: stopAgent(slug) }, origin);
+    }
+    if (hasTerminal(slug)) {
+      return send(res, 409, { error: `an interactive terminal is already open for '${slug}' — close it before starting a headless run` }, origin);
     }
     let body: { agent?: string; prompt?: string } = {};
     try {
@@ -547,6 +675,12 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const watcher = new WorktreeWatcher(root);
   await watcher.start();
   new SignalTracker(root).start();
+  // Interactive terminals survive daemon restarts (tmux owns the PTY) — adopt
+  // any that belong to this repo, and kill them when their task goes away.
+  void detectTmux().then((ok) => (ok ? reattachOrphans(root) : undefined)).catch(() => undefined);
+  bus.onType('task.removed', (e) => {
+    if (e.event.type === 'task.removed') void killTerminal(e.event.slug);
+  });
   // Keep CODEBASE.md in step with graph rebuilds. A multi-project rebuild
   // fires several kb.rebuilt events — debounce so we regenerate once.
   let docsTimer: ReturnType<typeof setTimeout> | null = null;
