@@ -2,7 +2,7 @@
    BATON — Settings screen (ported from admin.jsx)
    Appearance · Connection · Agent registry
    ============================================================ */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../components/Icon";
 import { AgentBadge, SegmentedControl, Switch, ComingSoon } from "../components/primitives";
 import { BatonMark } from "../components/BatonMark";
@@ -12,6 +12,48 @@ import { showToast } from "../lib/toast";
 import { BatonAPI } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
+import type { AgentId, RoutingInfo } from "../types";
+
+/** Read-only view of baton.config.json routing rules (edit the file to change them). */
+function RoutingSettings() {
+  const [info, setInfo] = useState<RoutingInfo | null>(null);
+  useEffect(() => {
+    let on = true;
+    BatonAPI.getRouting().then((r) => { if (on) setInfo(r); }).catch(() => undefined);
+    return () => { on = false; };
+  }, []);
+  if (!info) return null;
+  return (
+    <SettingsBlock title="Task routing" desc="Which agent gets a handoff, by task keywords. Used when you pass without --to.">
+      {info.errors.length > 0 && (
+        <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)", background: "var(--conflict-soft)", fontSize: "var(--fs-12)", color: "var(--conflict-text)" }}>
+          {info.errors.map((e, i) => <div key={i}>! {e}</div>)}
+        </div>
+      )}
+      {info.config.rules.map((r, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {r.match.map((kw) => <span key={kw} className="mono" style={{ fontSize: 11, color: "var(--text-secondary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "1px 7px" }}>{kw}</span>)}
+          </div>
+          <Icon name="arrowRight" size={13} style={{ color: "var(--text-quaternary)", flex: "none" }} />
+          <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <AgentBadge id={r.agent as AgentId} size="sm" />
+            {r.model && <span className="tag" data-tip="Suggested model for the receiving CLI">{r.model}</span>}
+          </span>
+        </div>
+      ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+        <span style={{ flex: 1, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>No keyword match → default</span>
+        <AgentBadge id={info.config.default as AgentId} size="sm" />
+      </div>
+      <div style={{ padding: "10px 16px", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+        {info.path
+          ? <>Rules from <span className="mono" style={{ color: "var(--text-secondary)" }}>baton.config.json</span> — edit it in your editor; it's committed and shared with your team.</>
+          : <>Built-in defaults — create <span className="mono" style={{ color: "var(--text-secondary)" }}>baton.config.json</span> at the repo root to customize (committed, team-shared).</>}
+      </div>
+    </SettingsBlock>
+  );
+}
 
 function SettingsBlock({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
   return (
@@ -186,6 +228,8 @@ export function SettingsScreen({ prefs, repo }: { prefs: Prefs; repo: string | n
           </SettingsBlock>
 
           <ConnectionSettings prefs={prefs} />
+
+          <RoutingSettings />
 
           <SettingsBlock title="Agent registry" desc="Color, label, and glyph for each agent. Drives badges across the app.">
             {AGENT_REGISTRY.map((a) => (

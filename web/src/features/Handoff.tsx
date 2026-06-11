@@ -10,7 +10,7 @@ import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
 import { BatonAPI, branchFor } from "../lib/api";
 import { showToast } from "../lib/toast";
-import type { StatusRow, AgentId } from "../types";
+import type { StatusRow, AgentId, RoutingSuggestion } from "../types";
 
 export function HandoffDialog({
   slug, session, onClose, writeEnabled,
@@ -26,9 +26,24 @@ export function HandoffDialog({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [doneInfo, setDoneInfo] = useState<{ toAgent: AgentId; estTokens?: number; estCostUsd?: number; briefPath?: string } | null>(null);
+  const [suggestion, setSuggestion] = useState<RoutingSuggestion | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const hasPending = (task?.filesChanged || 0) > 0;
   const options = AGENT_REGISTRY.filter((a) => a.id !== task?.agent);
+
+  // Routing suggestion: preselect only while the user hasn't picked anything.
+  useEffect(() => {
+    if (!task?.task) return;
+    let on = true;
+    BatonAPI.getRouting(task.task).then((r) => {
+      if (!on || !r.suggestion) return;
+      setSuggestion(r.suggestion);
+      const valid = options.some((a) => a.id === r.suggestion!.agent);
+      if (valid) setTarget((cur) => cur ?? (r.suggestion!.agent as AgentId));
+    }).catch(() => undefined);
+    return () => { on = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.task]);
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -112,10 +127,19 @@ export function HandoffDialog({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
               {options.map((a) => {
                 const on = target === a.id;
+                const suggested = suggestion?.agent === a.id;
                 return (
                   <button key={a.id} className="fr" onClick={() => setTarget(a.id)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", background: on ? `color-mix(in srgb, ${a.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${a.color} 45%, transparent)` : "var(--border-subtle)"}`, textAlign: "left", boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${a.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1)" }}>
                     <AgentBadge id={a.id} size="sm" showLabel={false} />
-                    <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)" }}>{a.short}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", display: "block" }}>{a.short}</span>
+                      {suggested && (
+                        <span style={{ fontSize: 9.5, color: "var(--accent-text)", display: "block" }}
+                          data-tip={suggestion?.source === "rule" ? `Routing rule matched: ${suggestion.matched.join(", ")}` : "Default route (baton.config.json)"}>
+                          suggested{suggestion?.matched.length ? ` · '${suggestion.matched[0]}'` : ""}{suggestion?.model ? ` · ${suggestion.model}` : ""}
+                        </span>
+                      )}
+                    </div>
                     {on && <Icon name="check" size={14} style={{ color: a.color }} />}
                   </button>
                 );

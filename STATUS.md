@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-06-11** (branch: `feat/worktree-orchestration`, merged to `main`)
+> Last updated: **2026-06-11 (session 2: KB v2)** (branch: `feat/worktree-orchestration`, merged to `main`)
 
 ## What this project is
 
@@ -32,15 +32,19 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **Real project switcher** | Connections model: register multiple daemons (one per repo, `baton serve -p <port>`), switch between them in the top-left switcher; identity from each daemon's `/api/meta` | top-left switcher → "Add connection…" |
 | **Real Live Session** | Demo's fake website mock + fake dev-servers are gone; real mode streams the SSE feed per session (edits, commits, attach/detach, overlap warnings) with API backfill | open a session → Live |
 | **Honest Activity page** | Real mode: active/commits/files/progress cards, per-agent commits+files rollup, live edit-signals section; fake token numbers exist only in demo mode | Activity page with demo OFF |
+| **CODEBASE.md layer** | `baton kb init/rebuild` generates a <2k-token deterministic map per project (stack, tree, top graph symbols, query pointers) + a root index for multi-server containers; staleness footer tied to the graph's commit; AGENTS.md tells agents to read it first. Prior art: Aider repo-map, Repomix, llms.txt | `baton kb rebuild` → open CODEBASE.md; `baton kb status` flags staleness |
+| **Agent routing** | `baton.config.json` (committed): plan→claude/opus, UI→gemini, bugfix→codex, default cursor; `baton pass` without `--to` auto-routes (word-boundary keyword scoring, no LLM); `baton route "<task>"`; `/api/routing`; Handoff dialog preselects with a "suggested" chip, Launch shows a suggestion row, Settings shows the rules. Prior art: claude-code-router | `baton route "fix the crash"` → codex; `baton pass <slug>` → routed frontmatter |
+| **KB export/import/share** | `baton kb export` → .tar.gz pack (graphs + CODEBASE.md + manifest with git HEAD); `baton kb import <pack\|kb/>` re-anchors paths, validates graphs, reports "N commits behind" and auto-refreshes; dashboard Export/Import buttons on the Knowledge Graph page; `baton kb share on` keeps a committed `kb/` dir so teammates clone-and-go | export, clone repo elsewhere, `baton kb import <pack>` → graphs appear with zero re-indexing |
 
 Tests: 34 vitest tests at root, all green. Both workspaces strict TS, build clean.
 
 ## Pending / next 🔜
 
-1. **Final in-browser pass of the real-mode UI items** — code + builds + curl verified;
-   the visual walkthrough (add-connection flow with a second daemon, real Live feed,
-   real Activity) was interrupted mid-verification. Steps are in the Verification
-   section of the last plan; ~15 min.
+1. **Final in-browser pass of the real-mode UI** — code + builds + curl + API
+   verified; the visual walkthrough is pending for: add-connection flow with a
+   second daemon, real Live feed, real Activity, the Handoff "suggested" routing
+   chip, the Launch suggestion row, the Settings routing card, and the KB
+   Export/Import buttons. ~20 min with `baton serve --write` at :7077.
 2. **Launch dialog "attach agent" is still a labelled preview** — worktree creation is
    real (POST /api/tasks); the agent process must be started manually in the worktree.
    Auto-spawn (e.g. `baton new --agent claude` running `claude` in the worktree) is unbuilt.
@@ -64,6 +68,9 @@ src/signals.ts        live edit signals + checkFiles (the wait/coordinate layer)
 src/reports.ts        completion reports (built at merge time)
 src/mcp.ts            `baton mcp` stdio server (check_files, get_report, who_touched…)
 src/kb/               graphify wrapper, sub-project detection, kb state, MCP snippets
+src/kb/codebasemd.ts  CODEBASE.md generation (tree, stack, god-nodes, staleness footer)
+src/kb/transfer.ts    KB export/import/share (tar pack, re-anchor, committed kb/ dir)
+src/routing.ts        task-type → agent routing (baton.config.json, keyword scoring)
 src/handoff/          Claude JSONL session parser + HANDOFF.md brief builder
 web/src/lib/connections.ts   daemon connections (real project switcher)
 web/src/hooks/useEvents.ts   SSE client hook

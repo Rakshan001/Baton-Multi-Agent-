@@ -19,12 +19,13 @@ import { serveCmd } from './commands/serve.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
 import { pathCmd } from './commands/path.js';
-import { kbInitCmd, kbMcpCmd, kbRebuildCmd, kbStatusCmd } from './commands/kb.js';
+import { kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
 import { doneCmd, takeCmd } from './commands/take.js';
 import { hooksInstallCmd } from './commands/hooks.js';
+import { routeCmd } from './commands/route.js';
 
 const program = new Command();
 
@@ -88,8 +89,26 @@ kb.command('init')
   .argument('[path]', 'folder to index (default: repo root; sub-projects auto-detected)')
   .option('--no-mcp', 'skip writing graphify MCP servers to .mcp.json')
   .option('--no-docs', 'skip adding the coordination guide to AGENTS.md/CLAUDE.md')
+  .option('--share', 'commit the KB to git (kb/ directory) so teammates skip re-indexing')
+  .option('--local', 'keep the KB local-only (skip the share question)')
   .description('set up the knowledge base: graph per sub-project + merged graph + git hooks')
-  .action((path: string | undefined, opts: { mcp?: boolean; docs?: boolean }) => run(() => kbInitCmd(path, opts)));
+  .action((path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean }) => run(() => kbInitCmd(path, opts)));
+
+kb.command('export')
+  .option('--out <file>', 'output file (default: baton-kb-<repo>-<sha>.tar.gz)')
+  .description('export the knowledge base as a shareable .tar.gz pack')
+  .action((opts: { out?: string }) => run(() => kbExportCmd(opts)));
+
+kb.command('import')
+  .argument('<source>', 'a KB pack (.tar.gz) or a committed kb/ directory')
+  .option('--no-rebuild', 'skip the automatic incremental refresh when the pack is behind HEAD')
+  .description('adopt an exported knowledge base (re-anchored to this repo, staleness-checked)')
+  .action((source: string, opts: { rebuild?: boolean }) => run(() => kbImportCmd(source, opts)));
+
+kb.command('share')
+  .argument('[mode]', 'on | off (omit to show current mode)')
+  .description('toggle git-sharing of the KB via a committed kb/ directory')
+  .action((mode: string | undefined) => run(() => kbShareCmd(mode)));
 
 kb.command('status')
   .description('show projects, node/edge counts, last build')
@@ -108,9 +127,15 @@ kb.command('mcp')
   .action((opts: { agent?: string }) => run(() => kbMcpCmd(opts)));
 
 program
+  .command('route')
+  .argument('<task...>', 'task description to route')
+  .description('which agent should take this task (rules from baton.config.json, no LLM)')
+  .action((task: string[]) => run(() => routeCmd(task.join(' '))));
+
+program
   .command('pass')
   .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .option('--to <agent>', 'receiving agent: cursor | codex | gemini | any', 'any')
+  .option('--to <agent>', 'receiving agent: cursor | codex | gemini | any (omit to auto-route by task type)')
   .option('--note <text>', 'extra context for the receiving agent')
   .option('--from <agent>', 'handing-off agent (default claude)')
   .option('--no-commit-pending', 'skip the checkpoint commit of uncommitted changes')

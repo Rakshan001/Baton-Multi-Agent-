@@ -4,7 +4,7 @@
    project switcher chips, search with neighbor highlight, community
    legend filter, node inspector, write-gated rebuild.
    ============================================================ */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { EmptyState, CopyButton } from "../components/primitives";
 import { GraphCanvas } from "../components/GraphCanvas";
@@ -41,6 +41,26 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
   const [community, setCommunity] = useState<number | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onImportFile = async (file: File | undefined) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const r = await BatonAPI.importKbPack(file);
+      const ok = r.projects.filter((p) => p.status === "ok").length;
+      const skipped = r.projects.length - ok;
+      const behind = r.commitsBehind && r.commitsBehind > 0 ? ` · ${r.commitsBehind} commit${r.commitsBehind === 1 ? "" : "s"} behind — hit Rebuild` : "";
+      showToast({ kind: skipped ? "info" : "ok", title: `Imported ${ok}/${r.projects.length} project${r.projects.length === 1 ? "" : "s"}`, desc: `${r.warnings[0] ?? ""}${behind}`.trim() || undefined });
+      kb.refetch();
+    } catch (e) {
+      showToast({ kind: "error", title: "Import failed", desc: (e as Error).message });
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   const projects: KbProjectStat[] = useMemo(() => {
     if (!kb.data?.initialized) return [];
@@ -155,6 +175,24 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="Knowledge Graph"
         subtitle={active ? `${active.nodes.toLocaleString()} nodes · ${active.edges.toLocaleString()} edges · ${active.communities} communities${active.lastBuiltAt ? ` · built ${new Date(active.lastBuiltAt).toLocaleTimeString()}` : ""}` : "Code graph built by graphify"}>
+        {BatonAPI.kbExportUrl() ? (
+          <a className="btn fr" href={BatonAPI.kbExportUrl()!} download data-tip="Download the KB as a shareable .tar.gz pack" style={{ height: 30, textDecoration: "none" }}>
+            <Icon name="arrowRight" size={14} style={{ transform: "rotate(90deg)" }} /> Export
+          </a>
+        ) : (
+          <button className="btn fr" disabled data-tip="Not available in demo mode" style={{ height: 30, opacity: 0.55 }}>
+            <Icon name="arrowRight" size={14} style={{ transform: "rotate(90deg)" }} /> Export
+          </button>
+        )}
+        <input ref={fileRef} type="file" accept=".tar.gz,.tgz,application/gzip" style={{ display: "none" }}
+          onChange={(e) => void onImportFile(e.target.files?.[0])} />
+        <button className="btn fr" onClick={() => fileRef.current?.click()}
+          disabled={!writeEnabled || importing}
+          data-tip={!writeEnabled ? "Start `baton serve --write` to enable" : "Import a KB pack exported elsewhere"}
+          style={{ height: 30 }}>
+          <Icon name="arrowRight" size={14} style={{ transform: "rotate(-90deg)" }} />
+          {importing ? "Importing…" : "Import"}
+        </button>
         <button className="btn fr" onClick={rebuild}
           disabled={!writeEnabled || rebuilding || !!active?.building}
           data-tip={!writeEnabled ? "Start `baton serve --write` to enable" : "Incremental re-extract (no LLM needed)"}

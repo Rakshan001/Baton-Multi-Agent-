@@ -36,6 +36,13 @@ import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
 import { getTask } from './store.js';
+import { refreshCodebaseDocs } from './kb/codebasemd.js';
+import { loadRouting, suggestAgent } from './routing.js';
+import { detectTar, importKb, stageForExport } from './kb/transfer.js';
+import { execa } from 'execa';
+import { createWriteStream } from 'node:fs';
+import { mkdir, rm } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const VERSION: string = (() => {
@@ -217,6 +224,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const report = getReport(root, decodeURIComponent(rm_[1]));
     return report ? send(res, 200, report, origin) : send(res, 404, { error: 'no report' }, origin);
   }
+  // GET /api/routing[?task=…] — routing config + suggestion for a task text
+  if (method === 'GET' && path === '/api/routing') {
+    const { config, path: configPath, errors } = await loadRouting(root);
+    const taskText = url.searchParams.get('task');
+    return send(res, 200, {
+      config,
+      path: configPath,
+      errors,
+      suggestion: taskText ? suggestAgent(taskText, config) : null,
+    }, origin);
+  }
+
   // GET /api/blame?file=path — merged attribution + live editors for a file
   if (method === 'GET' && path === '/api/blame') {
     const file = url.searchParams.get('file');
@@ -309,6 +328,62 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 202, { building: buildQueue.buildingIds().length ? buildQueue.buildingIds() : targets.map((t) => t.id) }, origin);
   }
 
+  // GET /api/kb/export — stream the KB pack as a .tar.gz download
+  if (method === 'GET' && path === '/api/kb/export') {
+    const state = await loadKb(root);
+    if (!state) return send(res, 404, { error: 'knowledge base not initialized', hint: 'run: baton kb init' }, origin);
+    if (!(await detectTar())) return send(res, 500, { error: 'tar not found on PATH' }, origin);
+    const staging = await stageForExport(root, state);
+    res.writeHead(200, {
+      'Content-Type': 'application/gzip',
+      'Content-Disposition': `attachment; filename="baton-kb-${basename(root)}.tar.gz"`,
+      'Access-Control-Allow-Origin': origin,
+      'Vary': 'Origin',
+    });
+    const child = execa('tar', ['-czf', '-', '-C', staging, '.'], { buffer: false });
+    child.stdout?.pipe(res);
+    const cleanup = () => void rm(staging, { recursive: true, force: true });
+    child.once('exit', cleanup);
+    req.once('close', () => child.kill());
+    return;
+  }
+
+  // POST /api/kb/import — raw .tar.gz body (write-gated, 200MB cap)
+  if (method === 'POST' && path === '/api/kb/import') {
+    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    const tmpDir = join(root, '.baton', 'tmp');
+    await mkdir(tmpDir, { recursive: true });
+    const upload = join(tmpDir, `upload-${Date.now()}.tar.gz`);
+    const MAX = 200 * 1024 * 1024;
+    let bytes = 0;
+    try {
+      await new Promise<void>((resolvePromise, reject) => {
+        const out = createWriteStream(upload);
+        req.on('data', (chunk: Buffer) => {
+          bytes += chunk.length;
+          if (bytes > MAX) {
+            out.destroy();
+            req.destroy();
+            reject(new Error('upload exceeds 200MB'));
+          }
+        });
+        req.pipe(out);
+        out.on('finish', resolvePromise);
+        out.on('error', reject);
+        req.on('error', reject);
+      });
+      const result = await importKb(root, upload);
+      for (const p of result.projects) {
+        if (p.status === 'ok') bus.publish({ type: 'kb.rebuilt', project: p.id });
+      }
+      return send(res, 200, result, origin);
+    } catch (e) {
+      return send(res, 400, { error: (e as Error).message }, origin);
+    } finally {
+      void rm(upload, { force: true });
+    }
+  }
+
   if (method === 'GET' && path === '/api/kb/mcp') {
     const state = await loadKb(root);
     if (!state) return send(res, 404, { error: 'knowledge base not initialized', hint: 'run: baton kb init' }, origin);
@@ -382,9 +457,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       return send(res, 400, { error: 'invalid JSON body' }, origin);
     }
     try {
-      const brief = await passTask(slug, { to: body.toAgent ?? 'any', note: body.note, commitPending: body.commitPending }, root);
-      if (!brief) return send(res, 404, { error: `no task '${slug}'` }, origin);
-      return send(res, 201, { slug, toAgent: brief.meta.to, estTokens: brief.meta.est_tokens, estCostUsd: brief.meta.est_cost_usd, briefPath: brief.path, markdown: brief.markdown }, origin);
+      // toAgent absent or "auto" → routed by baton.config.json rules
+      const result = await passTask(slug, { to: body.toAgent, note: body.note, commitPending: body.commitPending }, root);
+      if (!result) return send(res, 404, { error: `no task '${slug}'` }, origin);
+      const { brief, routed } = result;
+      return send(res, 201, {
+        slug, toAgent: brief.meta.to, model: brief.meta.model ?? null,
+        routed: routed !== null, matched: routed?.matched ?? [],
+        estTokens: brief.meta.est_tokens, estCostUsd: brief.meta.est_cost_usd,
+        briefPath: brief.path, markdown: brief.markdown,
+      }, origin);
     } catch (e) {
       return send(res, 500, { error: (e as Error).message }, origin);
     }
@@ -434,6 +516,15 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const watcher = new WorktreeWatcher(root);
   await watcher.start();
   new SignalTracker(root).start();
+  // Keep CODEBASE.md in step with graph rebuilds. A multi-project rebuild
+  // fires several kb.rebuilt events — debounce so we regenerate once.
+  let docsTimer: ReturnType<typeof setTimeout> | null = null;
+  bus.onType('kb.rebuilt', () => {
+    if (docsTimer) clearTimeout(docsTimer);
+    docsTimer = setTimeout(() => {
+      void loadKb(root).then((kb) => (kb ? refreshCodebaseDocs(root, kb) : undefined)).catch(() => undefined);
+    }, 2000);
+  });
   const server = createServer((req, res) => {
     void handle(req, res, root, opts).catch((e) =>
       send(res, 500, { error: (e as Error).message }, corsOrigin(req)),

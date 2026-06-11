@@ -16,7 +16,8 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult } from "../types";
+import { BUILTIN_ROUTING, suggestAgent } from "./routing";
 import { DEMO_KB, demoGraphFor } from "./demoKb";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
@@ -251,6 +252,46 @@ class BatonClient {
       method: "POST",
       body: JSON.stringify({ project, full }),
     });
+  }
+
+  /** Download URL for the KB pack (null in demo mode — nothing real to export). */
+  kbExportUrl(): string | null {
+    return this.demo ? null : `${this.baseUrl}/api/kb/export`;
+  }
+  async importKbPack(file: File): Promise<ImportResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(300);
+      return { projects: [{ id: "api", status: "ok" }, { id: "web", status: "ok" }], gitHead: "demo", commitsBehind: 0, warnings: [] };
+    }
+    if (this.forcedOffline) throw new ApiError("OFFLINE", "Could not reach Baton");
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/kb/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/gzip" },
+        body: file,
+      });
+    } catch {
+      throw new ApiError("OFFLINE", "Could not reach Baton");
+    }
+    const body = (await res.json().catch(() => null)) as ImportResult | { error?: string } | null;
+    if (!res.ok) {
+      if (res.status === 403) throw new ApiError("READ_ONLY", (body as { error?: string })?.error || "read-only", 403);
+      throw new ApiError("BAD_REQUEST", (body as { error?: string })?.error || res.statusText, res.status);
+    }
+    this.emit();
+    return body as ImportResult;
+  }
+
+  /* ---- routing (task-type → agent) ---- */
+  async getRouting(task?: string): Promise<RoutingInfo> {
+    if (this.demo) {
+      await delay(60); // suggestion must feel instant; no offline gate needed
+      return { config: BUILTIN_ROUTING, path: null, errors: [], suggestion: task ? suggestAgent(task) : null };
+    }
+    const q = task ? `?task=${encodeURIComponent(task)}` : "";
+    return this.request<RoutingInfo>(`/api/routing${q}`);
   }
 
   /* ---- coordination: signals / reports / blame ---- */

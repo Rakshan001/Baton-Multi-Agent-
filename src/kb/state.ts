@@ -20,6 +20,8 @@ export interface KbState {
   projects: KbProject[];
   mergedGraphPath: string | null; // .baton/kb/merged-graph.json when >1 project
   lastBuiltAt: string | null;
+  /** Git-share mode: mirror shareable artifacts into a committed kb/ directory. */
+  share?: boolean;
 }
 
 export function kbFile(root: string): string {

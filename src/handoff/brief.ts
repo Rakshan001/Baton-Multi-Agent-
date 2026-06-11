@@ -17,6 +17,8 @@ export interface HandoffMeta {
   baton: number;
   from: string;
   to: string;
+  /** Suggested model for the receiving CLI (advisory — Baton can't enforce it). */
+  model?: string;
   status: 'ready' | 'in-progress' | 'done';
   created: string;
   repo: string;
@@ -42,7 +44,7 @@ export function handoffPath(worktreePath: string): string {
 
 export async function buildBrief(
   task: Task,
-  opts: { from?: string; to: string; note?: string; root: string },
+  opts: { from?: string; to: string; model?: string; note?: string; root: string },
 ): Promise<HandoffBrief> {
   const session: SessionContext | null = await sessionContextFor(task.worktreePath);
 
@@ -57,6 +59,7 @@ export async function buildBrief(
     baton: 1,
     from: opts.from ?? 'claude',
     to: opts.to,
+    ...(opts.model ? { model: opts.model } : {}),
     status: 'ready',
     created: new Date().toISOString(),
     repo: opts.root,
@@ -80,6 +83,9 @@ export async function buildBrief(
     `cd ${task.worktreePath}`,
     '```',
     `Branch \`${task.branch}\` (based on \`${task.baseBranch}\`). Commit here; merge later with \`baton merge\`.`,
+    ...(opts.model
+      ? [`Suggested model: \`${opts.model}\` — start the receiving CLI with it if it supports model selection (e.g. \`claude --model ${opts.model}\`); Baton can't enforce this.`]
+      : []),
     '',
     '## State of the work',
     diffStat.ok && diffStat.stdout ? '### Committed vs base\n```\n' + diffStat.stdout + '\n```' : '_No commits beyond the base branch yet._',

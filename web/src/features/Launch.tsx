@@ -10,7 +10,7 @@ import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, AgentGlyph, getAgent } from "../lib/registry";
 import { BatonAPI } from "../lib/api";
 import { showToast } from "../lib/toast";
-import type { AgentId } from "../types";
+import type { AgentId, RoutingSuggestion } from "../types";
 
 type Phase = "form" | "provisioning" | "done";
 
@@ -26,8 +26,21 @@ export function LaunchSession({
   const [task, setTask] = useState("");
   const [phase, setPhase] = useState<Phase>("form");
   const [step, setStep] = useState(-1);
+  const [suggestion, setSuggestion] = useState<RoutingSuggestion | null>(null);
+  const userPickedAgent = useRef(initialAgent !== null);
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
+
+  // Routing suggestion while typing (debounced). Never overrides an explicit pick.
+  useEffect(() => {
+    if (task.trim().length < 4) { setSuggestion(null); return; }
+    const t = setTimeout(() => {
+      BatonAPI.getRouting(task.trim()).then((r) => {
+        if (alive.current) setSuggestion(r.suggestion);
+      }).catch(() => undefined);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [task]);
   const a = getAgent(agent);
   const slug = useMemo(() => BatonAPI.slugify(task || ""), [task]);
   const valid = task.trim().length >= 3;
@@ -99,7 +112,7 @@ export function LaunchSession({
                 {AGENT_REGISTRY.map((ag) => {
                   const on = agent === ag.id;
                   return (
-                    <button key={ag.id} className="fr" onClick={() => setAgent(ag.id as AgentId)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? `color-mix(in srgb, ${ag.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${ag.color} 45%, transparent)` : "var(--border-subtle)"}`, boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${ag.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1), background var(--dur-1)" }}>
+                    <button key={ag.id} className="fr" onClick={() => { userPickedAgent.current = true; setAgent(ag.id as AgentId); }} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? `color-mix(in srgb, ${ag.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${ag.color} 45%, transparent)` : "var(--border-subtle)"}`, boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${ag.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1), background var(--dur-1)" }}>
                       <AgentBadge id={ag.id} size="sm" showLabel={false} />
                       <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ag.short}</span>
                       {on && <Icon name="check" size={14} style={{ color: ag.color, flex: "none" }} />}
@@ -119,6 +132,15 @@ export function LaunchSession({
                 <span>branches from <span className="mono" style={{ color: "var(--text-secondary)" }}>main</span> →</span>
                 <span className="mono" style={{ color: valid ? "var(--accent-text)" : "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>baton/{valid ? slug : "…"}</span>
               </div>
+              {suggestion && suggestion.source === "rule" && suggestion.agent !== agent && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "var(--fs-12)", color: "var(--text-secondary)", padding: "7px 10px", borderRadius: "var(--r-sm)", background: "var(--accent-soft)", border: "1px dashed var(--accent-border)" }}>
+                  <Icon name="sparkle" size={13} style={{ color: "var(--accent)", flex: "none" }} />
+                  <span style={{ flex: 1 }}>
+                    Routing suggests <b>{getAgent(suggestion.agent as AgentId).short}</b>{suggestion.model ? ` (${suggestion.model})` : ""} — matched '{suggestion.matched[0]}'
+                  </span>
+                  <button className="btn btn-sm fr" onClick={() => setAgent(suggestion.agent as AgentId)} style={{ height: 24 }}>Use it</button>
+                </div>
+              )}
             </div>
           </div>
         ) : (

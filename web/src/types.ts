@@ -166,6 +166,42 @@ export interface CompletionReport {
   overlappedWith: string[];
 }
 
+/** POST /api/kb/import result (src/kb/transfer.ts). */
+export interface ImportResult {
+  projects: Array<{ id: string; status: "ok" | "path-missing" | "invalid-graph" }>;
+  gitHead: string | null;
+  commitsBehind: number | null;
+  warnings: string[];
+}
+
+/** Routing rule from baton.config.json (src/routing.ts). */
+export interface RoutingRule {
+  match: string[];
+  agent: string;
+  model?: string;
+}
+
+export interface RoutingConfig {
+  rules: RoutingRule[];
+  default: string;
+}
+
+export interface RoutingSuggestion {
+  agent: string;
+  model?: string;
+  rule: RoutingRule | null;
+  matched: string[];
+  source: "rule" | "default";
+}
+
+/** GET /api/routing[?task=…] */
+export interface RoutingInfo {
+  config: RoutingConfig;
+  path: string | null;
+  errors: string[];
+  suggestion: RoutingSuggestion | null;
+}
+
 /** Agent-blame for one file — GET /api/blame?file=… */
 export interface BlameResult {
   file: string;

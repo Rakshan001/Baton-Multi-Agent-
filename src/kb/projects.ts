@@ -7,8 +7,8 @@ import { readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 
-const PROJECT_MARKERS = ['package.json', 'pyproject.toml', 'go.mod', 'Cargo.toml', 'pom.xml'];
-const SKIP_DIRS = new Set([
+export const PROJECT_MARKERS = ['package.json', 'pyproject.toml', 'go.mod', 'Cargo.toml', 'pom.xml'];
+export const SKIP_DIRS = new Set([
   'node_modules', '.git', '.baton', 'graphify-out', 'dist', 'build', '.next',
   '.venv', 'venv', '__pycache__', 'vendor', '.refs',
 ]);

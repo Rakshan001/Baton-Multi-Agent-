@@ -5,8 +5,9 @@
  */
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { gitRoot } from '../git.js';
+import { gitTry } from '../util/exec.js';
 import {
   buildGraph, detectGraphify, hasLlmBackend, installGitHook, installHint, mergeGraphs, update,
 } from '../kb/graphify.js';
@@ -15,6 +16,8 @@ import {
   graphPathFor, kbStatus, loadKb, mergedGraphFile, saveKb, type KbState,
 } from '../kb/state.js';
 import { jsonSnippet, snippetFor } from '../kb/mcp.js';
+import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
+import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 
 const AGENT_GUIDE = `
 <!-- baton:coordination -->
@@ -29,19 +32,28 @@ be working on:
    re-check later instead of creating conflicting changes.
 3. After waiting, call \`get_report\` for the finished task — the issue you
    were assigned may already be fixed; verify before re-doing work.
-4. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
+4. Read \`CODEBASE.md\` in the project root FIRST — it is the token-cheap map
+   (structure, stack, key symbols). Don't re-scan the repo to orient yourself.
+5. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
    the codebase instead of broad file scans.
 <!-- /baton:coordination -->
 `;
 
-/** Append the coordination guide to AGENTS.md / CLAUDE.md (once, idempotent). */
+const GUIDE_RE = /<!-- baton:coordination -->[\s\S]*?<!-- \/baton:coordination -->\n?/;
+
+/** Write/refresh the coordination guide in AGENTS.md / CLAUDE.md (replace-on-change, idempotent). */
 async function appendAgentGuide(root: string): Promise<string | null> {
   const candidates = ['AGENTS.md', 'CLAUDE.md'];
   for (const name of candidates) {
     const p = join(root, name);
     if (!existsSync(p)) continue;
     const current = await readFile(p, 'utf-8');
-    if (current.includes('<!-- baton:coordination -->')) return null; // already there
+    if (GUIDE_RE.test(current)) {
+      const next = current.replace(GUIDE_RE, AGENT_GUIDE.trimStart());
+      if (next === current) return null; // up to date
+      await writeFile(p, next, 'utf-8');
+      return name;
+    }
     await writeFile(p, current.trimEnd() + '\n' + AGENT_GUIDE, 'utf-8');
     return name;
   }
@@ -49,7 +61,20 @@ async function appendAgentGuide(root: string): Promise<string | null> {
   return 'AGENTS.md';
 }
 
-export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean } = {}): Promise<void> {
+/** Interactive share-or-local question (TTY only; non-TTY defaults to local). */
+async function askShare(): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question('Share the knowledge base via git (committed kb/ directory)? [y/N] ');
+    return /^y(es)?$/i.test(answer.trim());
+  } finally {
+    rl.close();
+  }
+}
+
+export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean } = {}): Promise<void> {
   const root = await gitRoot();
   const target = resolve(path ?? root);
 
@@ -75,11 +100,13 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
     await buildGraph(p.path, { onOutput: (l) => console.log(`    ${l}`) });
   }
 
+  const share = opts.share === true ? true : opts.local === true ? false : await askShare();
   const state: KbState = {
     root,
     projects: projects.map((p) => ({ ...p, graphPath: graphPathFor(p.path) })),
     mergedGraphPath: null,
     lastBuiltAt: new Date().toISOString(),
+    share,
   };
 
   if (state.projects.length > 1) {
@@ -95,6 +122,12 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
     : '! could not install git hooks — run `graphify hook install` manually');
 
   await saveKb(root, state);
+  const docs = await refreshCodebaseDocs(root, state);
+  console.log(`✓ CODEBASE.md ×${docs.length} (token-cheap structure maps)`);
+  if (share) {
+    const dir = await writeShareDir(root, state);
+    console.log(`✓ share mode ON — committed KB at ${dir} (teammates: baton kb import kb/)`);
+  }
   console.log(`✓ knowledge base ready (.baton/kb.json)`);
 
   // Project-scoped .mcp.json is picked up by Claude Code in every worktree.
@@ -136,10 +169,12 @@ export async function kbStatusCmd(): Promise<void> {
   console.log(`knowledge base @ ${state.root}  (built ${state.lastBuiltAt ?? 'never'})`);
   for (const p of projects) {
     const s = p.stats;
+    const doc = await codebaseDocStatus(p);
+    const docNote = doc === 'fresh' ? '' : doc === 'stale' ? '  [CODEBASE.md stale — run: baton kb rebuild]' : '  [CODEBASE.md missing]';
     console.log(
       s
-        ? `  ${p.id.padEnd(24)} ${String(s.nodes).padStart(6)} nodes  ${String(s.edges).padStart(6)} edges  ${String(s.communities).padStart(3)} communities${p.building ? '  [building]' : ''}`
-        : `  ${p.id.padEnd(24)} (no graph yet)${p.building ? '  [building]' : ''}`,
+        ? `  ${p.id.padEnd(24)} ${String(s.nodes).padStart(6)} nodes  ${String(s.edges).padStart(6)} edges  ${String(s.communities).padStart(3)} communities${p.building ? '  [building]' : ''}${docNote}`
+        : `  ${p.id.padEnd(24)} (no graph yet)${p.building ? '  [building]' : ''}${docNote}`,
     );
   }
   if (merged?.stats) {
@@ -175,7 +210,71 @@ export async function kbRebuildCmd(
   }
   state.lastBuiltAt = new Date().toISOString();
   await saveKb(root, state);
-  console.log('✓ rebuilt');
+  const docs = await refreshCodebaseDocs(root, state);
+  if (state.share) await writeShareDir(root, state);
+  console.log(`✓ rebuilt (+ CODEBASE.md ×${docs.length}${state.share ? ' + kb/ share dir' : ''})`);
+}
+
+export async function kbExportCmd(opts: { out?: string } = {}): Promise<void> {
+  const root = await gitRoot();
+  const state = await loadKb(root);
+  if (!state) {
+    console.error('knowledge base not initialized — run: baton kb init');
+    process.exitCode = 1;
+    return;
+  }
+  const head = await gitTry(['rev-parse', '--short', 'HEAD'], root);
+  const defaultName = `baton-kb-${basename(root)}-${head.ok ? head.stdout : 'nohead'}.tar.gz`;
+  const { file, bytes } = await exportKb(root, state, opts.out ?? defaultName);
+  console.log(`✓ exported knowledge base → ${file} (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+  console.log('  share it; the receiver runs: baton kb import <file>');
+}
+
+export async function kbImportCmd(source: string, opts: { rebuild?: boolean } = {}): Promise<void> {
+  const root = await gitRoot();
+  const result = await importKb(root, source);
+  for (const p of result.projects) {
+    const mark = p.status === 'ok' ? '✓' : '✗';
+    console.log(`${mark} ${p.id}: ${p.status}`);
+  }
+  for (const w of result.warnings) console.log(`! ${w}`);
+  if (result.commitsBehind !== null && result.commitsBehind > 0) {
+    console.log(`KB is ${result.commitsBehind} commit${result.commitsBehind === 1 ? '' : 's'} behind your HEAD.`);
+    const graphifyOk = (await detectGraphify()).ok;
+    if (opts.rebuild !== false && graphifyOk) {
+      console.log('→ refreshing (incremental)…');
+      await kbRebuildCmd(undefined, {});
+      return;
+    }
+    if (!graphifyOk) console.log(`  install graphify to refresh: ${installHint(await detectGraphify())}`);
+    else console.log('  refresh with: baton kb rebuild');
+  } else {
+    console.log('✓ knowledge base imported and current');
+  }
+}
+
+export async function kbShareCmd(mode?: string): Promise<void> {
+  const root = await gitRoot();
+  const state = await loadKb(root);
+  if (!state) {
+    console.error('knowledge base not initialized — run: baton kb init');
+    process.exitCode = 1;
+    return;
+  }
+  if (mode === 'on') state.share = true;
+  else if (mode === 'off') state.share = false;
+  else {
+    console.log(`share mode is ${state.share ? 'ON (committed kb/ directory)' : 'OFF (local only)'}`);
+    console.log('  toggle with: baton kb share on|off');
+    return;
+  }
+  await saveKb(root, state);
+  if (state.share) {
+    const dir = await writeShareDir(root, state);
+    console.log(`✓ share mode ON — ${dir} is committable (teammates: baton kb import kb/)`);
+  } else {
+    console.log('✓ share mode OFF — kb/ will no longer be refreshed (delete it if you no longer want it committed)');
+  }
 }
 
 export async function kbMcpCmd(opts: { agent?: string } = {}): Promise<void> {

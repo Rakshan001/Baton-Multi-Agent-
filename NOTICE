@@ -37,3 +37,23 @@ Daintree — daintreehq
   Apache-2.0 NOTICE: portions of this product's design are derived from
   Daintree, Copyright (c) 2025-2026 Greg Priday, licensed under the Apache
   License 2.0.
+
+Aider (repo-map)
+  https://github.com/Aider-AI/aider
+  License: Apache-2.0
+  Adapted: concept only, no code — CODEBASE.md's degree-ranked "key symbols"
+  section under a token budget follows Aider's tree-sitter + graph-ranked
+  repo-map idea (src/kb/codebasemd.ts).
+
+Repomix / llms.txt convention
+  https://github.com/yamadashy/repomix (MIT) · https://llmstxt.org/
+  Adapted: concept only, no code — packing a curated, AI-friendly markdown
+  index of a codebase (CODEBASE.md root index + per-project maps,
+  src/kb/codebasemd.ts).
+
+claude-code-router
+  https://github.com/musistudio/claude-code-router
+  License: MIT
+  Adapted: concept only, no code — task-type → agent/model routing config
+  shape (baton.config.json), applied at the agent-handoff level instead of an
+  API proxy (src/routing.ts).

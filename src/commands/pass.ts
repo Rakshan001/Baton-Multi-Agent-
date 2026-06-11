@@ -13,6 +13,7 @@ import { gitRoot } from '../git.js';
 import { gitTry } from '../util/exec.js';
 import { batonDir, getTask, loadTasks, type Task } from '../store.js';
 import { buildBrief, readBrief, writeBrief, type HandoffBrief } from '../handoff/brief.js';
+import { loadRouting, suggestAgent, type RoutingSuggestion } from '../routing.js';
 import { bus } from '../events.js';
 
 const nodeRequire = createRequire(import.meta.url);
@@ -54,6 +55,7 @@ export async function resolveTask(root: string, slug?: string, cwd = process.cwd
 }
 
 export interface PassOptions {
+  /** Receiving agent. Omitted (or "auto") → routed via baton.config.json rules. */
   to?: string;
   note?: string;
   /** Quiet hook mode: no-op outside a worktree, skip if a fresh brief exists. */
@@ -62,13 +64,29 @@ export interface PassOptions {
   from?: string;
 }
 
+export interface PassResult {
+  brief: HandoffBrief;
+  routed: RoutingSuggestion | null; // set when the target came from routing, not --to
+}
+
 /** Core pass pipeline, shared by CLI and POST /api/tasks/:slug/handoff. */
-export async function passTask(slug: string | undefined, opts: PassOptions, root?: string): Promise<HandoffBrief | null> {
+export async function passTask(slug: string | undefined, opts: PassOptions, root?: string): Promise<PassResult | null> {
   const repoRoot = root ?? (await gitRoot());
   const task = await resolveTask(repoRoot, slug);
   if (!task) {
     if (opts.auto) return null; // hook fired outside a baton worktree — fine
     throw new Error(slug ? `No task '${slug}'` : 'Not inside a baton worktree — pass a slug: baton pass <slug>');
+  }
+
+  // No explicit target → route by task type (committable rules in baton.config.json).
+  let routed: RoutingSuggestion | null = null;
+  let to = opts.to;
+  let model: string | undefined;
+  if (!to || to === 'auto') {
+    const { config } = await loadRouting(repoRoot);
+    routed = suggestAgent(task.task, config);
+    to = routed.agent;
+    model = routed.model;
   }
 
   // --auto debounce: don't churn a fresh, untaken brief on every hook fire.
@@ -91,18 +109,23 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
     }
   }
 
-  const brief = await buildBrief(task, { from: opts.from ?? 'claude', to: opts.to ?? 'any', note: opts.note, root: repoRoot });
+  const brief = await buildBrief(task, { from: opts.from ?? 'claude', to: to ?? 'any', model, note: opts.note, root: repoRoot });
   await writeBrief(brief);
   recordHandoff(repoRoot, { slug: task.slug, from: brief.meta.from, to: brief.meta.to, createdAt: brief.meta.created, status: 'ready' });
   bus.publish({ type: 'handoff.created', slug: task.slug, toAgent: brief.meta.to });
-  return brief;
+  return { brief, routed };
 }
 
 export async function passCmd(slug: string | undefined, opts: PassOptions): Promise<void> {
   try {
-    const brief = await passTask(slug, opts);
-    if (!brief) return; // silent no-op (--auto)
+    const result = await passTask(slug, opts);
+    if (!result) return; // silent no-op (--auto)
+    const { brief, routed } = result;
     console.log(`✓ handoff brief ready → ${brief.path}`);
+    if (routed) {
+      const why = routed.source === 'rule' ? `matched ${routed.matched.map((m) => `'${m}'`).join(', ')}` : 'default route';
+      console.log(`  routed → ${routed.agent}${routed.model ? ` (model: ${routed.model})` : ''} · ${why} · override with --to <agent>`);
+    }
     console.log(`  to: ${brief.meta.to} · session ≈ ${brief.meta.est_tokens.toLocaleString()} tokens (≈ $${brief.meta.est_cost_usd} to replay raw)`);
     console.log('');
     console.log('  Next agent picks it up with:');
