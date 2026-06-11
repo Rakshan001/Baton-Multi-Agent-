@@ -1,6 +1,6 @@
 /* ============================================================
    BATON — preferences hook (ported from app.jsx usePrefs)
-   theme / accent / motion / write / view / apiBase / offline,
+   theme / accent / motion / write / view / offline,
    persisted to localStorage and applied to <html>.
    ============================================================ */
 import { useState, useEffect } from "react";
@@ -28,8 +28,6 @@ export interface Prefs {
   setWriteEnabled: (v: boolean) => void;
   view: View;
   setView: (v: View) => void;
-  apiBase: string;
-  setApiBase: (v: string) => void;
   offline: boolean;
   setOffline: (v: boolean) => void;
 }
@@ -40,9 +38,6 @@ export function usePrefs(): Prefs {
   const [motion, setMotionRaw] = useState<Motion>(() => ls.get<Motion>("baton:motion", "full"));
   const [writeEnabled, setWriteRaw] = useState<boolean>(() => ls.get("baton:write", false));
   const [view, setViewRaw] = useState<View>(() => ls.get<View>("baton:view", "board"));
-  const [apiBase, setApiBaseRaw] = useState<string>(() =>
-    ls.get("baton:api", import.meta.env.VITE_BATON_API || "http://localhost:7077"),
-  );
   const [offline, setOfflineRaw] = useState(false);
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("dark");
 
@@ -97,8 +92,6 @@ export function usePrefs(): Prefs {
     },
     view,
     setView: (v) => { setViewRaw(v); ls.set("baton:view", v); },
-    apiBase,
-    setApiBase: (v) => { setApiBaseRaw(v); ls.set("baton:api", v); BatonAPI.setApiBase(v); },
     offline, setOffline: setOfflineRaw,
   };
 }

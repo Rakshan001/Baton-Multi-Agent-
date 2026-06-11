@@ -22,7 +22,8 @@ import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
 } from "./demoData";
-import { WORKSPACE, type Project } from "./preview";
+import { WORKSPACE, type DemoProject } from "./preview";
+import { loadConnections, type Connection } from "./connections";
 import { ls } from "./storage";
 
 export type ApiErrorCode =
@@ -75,9 +76,22 @@ class BatonClient {
   private agentOverride = new Map<string, AgentId>();
   private listeners = new Set<Listener>();
 
+  /** Active daemon connection (real mode). "" baseUrl = same-origin / VITE_BATON_API. */
+  connectionId = ls.get<string>("baton:connection", "default");
+
   constructor() {
-    this.baseUrl = import.meta.env.VITE_BATON_API || "";
+    const conn = loadConnections().find((c) => c.id === this.connectionId);
+    this.baseUrl = conn?.baseUrl || import.meta.env.VITE_BATON_API || "";
+    if (!conn) this.connectionId = "default";
     this.applyDataset();
+  }
+
+  /** Switch the active daemon (real-mode project switcher). */
+  setConnection(conn: Connection) {
+    this.connectionId = conn.id;
+    this.baseUrl = conn.baseUrl || import.meta.env.VITE_BATON_API || "";
+    ls.set("baton:connection", conn.id);
+    this.emit(); // every poll hook refetches against the new daemon
   }
 
   get isOffline(): boolean {
@@ -86,9 +100,6 @@ class BatonClient {
   setForcedOffline(v: boolean) {
     this.forcedOffline = v;
     this.emit();
-  }
-  setApiBase(v: string) {
-    this.baseUrl = v;
   }
   setWriteEnabled(v: boolean) {
     this.writeEnabled = v;
@@ -111,7 +122,7 @@ class BatonClient {
     ls.set("baton:project", id);
     this.applyDataset();
   }
-  activeProject(): Project {
+  activeProject(): DemoProject {
     return WORKSPACE.projects.find((p) => p.id === this.project) || WORKSPACE.projects[0];
   }
   /** Seed the in-memory store from the active scenario / project. */

@@ -1,16 +1,18 @@
 /* ============================================================
-   BATON — Live coding session (PREVIEW) (ported from live.jsx)
-   Live activity stream + running-app preview + the project's dev
-   servers. Live streaming isn't exposed by the daemon yet — labelled.
+   BATON — Live coding session (ported from live.jsx)
+   Demo mode: scripted activity stream (showcase). Real mode: the
+   daemon's SSE feed — file edits, commits, agent attach/detach,
+   overlap warnings — backfilled from /api/tasks/:slug + signals.
    ============================================================ */
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Icon, type IconName } from "../components/Icon";
-import { AgentBadge, SegmentedControl } from "../components/primitives";
+import { AgentBadge } from "../components/primitives";
 import { getAgent, AGENT_REGISTRY, AgentGlyph } from "../lib/registry";
 import { deriveColumn, COLUMN_DEFS } from "../lib/derive";
-import { branchFor } from "../lib/api";
-import { buildActivity, getDiff, SERVERS, type DevServer, type LiveEvent, type LiveEventType } from "../lib/preview";
+import { BatonAPI, branchFor } from "../lib/api";
+import { buildActivity, getDiff, type LiveEvent, type LiveEventType } from "../lib/preview";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import type { BatonEventMsg } from "../hooks/useEvents";
 import type { StatusRow } from "../types";
 
 const LIVE_EV: Record<LiveEventType, { icon: IconName | null; c: string; italic?: boolean; term?: boolean }> = {
@@ -32,78 +34,6 @@ function LiveDot({ color = "var(--clean)", size = 7 }: { color?: string; size?: 
       <span style={{ position: "absolute", inset: 0, borderRadius: 99, background: color }} />
       <span style={{ position: "absolute", inset: 0, borderRadius: 99, background: color, animation: "ping 1.6s var(--ease-out) infinite" }} />
     </span>
-  );
-}
-
-function LivePreviewFrame({ accent, pulse }: { accent: string; pulse: boolean }) {
-  return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-base)", minHeight: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px", borderBottom: "1px solid var(--border-subtle)", flex: "none" }}>
-        <span style={{ display: "flex", gap: 5 }}>{["#ff5f57", "#febc2e", "#28c840"].map((c) => <span key={c} style={{ width: 9, height: 9, borderRadius: 99, background: c, opacity: 0.85 }} />)}</span>
-        <button className="btn btn-ghost btn-icon fr" style={{ width: 24, height: 24 }} aria-label="Reload"><Icon name="refresh" size={12} style={{ animation: pulse ? "spin 0.6s var(--ease-out)" : "none" }} /></button>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 10px", background: "var(--bg-input)", border: "1px solid var(--border-subtle)", borderRadius: 99 }}>
-          <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--clean)" }} />
-          <span className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>localhost:3000</span>
-        </div>
-        <button className="btn btn-ghost btn-icon fr" style={{ width: 24, height: 24 }} data-tip="Open in browser" aria-label="Open"><Icon name="externalLink" size={12} /></button>
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-        {pulse && <div style={{ position: "absolute", inset: 0, boxShadow: `inset 0 0 0 2px ${accent}`, opacity: 0.5, animation: "fade-in var(--dur-2)", pointerEvents: "none", zIndex: 2 }} />}
-        <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#fff", color: "#0c0d12" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid #ececf1" }}>
-            <span style={{ width: 22, height: 22, borderRadius: 6, background: accent, display: "grid", placeItems: "center", color: "#fff", fontSize: 12, fontWeight: 800 }}>O</span>
-            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: "-0.02em" }}>Orbit</span>
-            <div style={{ display: "flex", gap: 14, marginLeft: 12 }}>{["Products", "Orders", "Customers"].map((n, i) => <span key={n} style={{ fontSize: 12.5, color: i === 0 ? "#0c0d12" : "#7c828c", fontWeight: i === 0 ? 600 : 500 }}>{n}</span>)}</div>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, color: "#7c828c", border: "1px solid #e6e7ec", borderRadius: 99, padding: "3px 9px" }}>Sign in</span>
-              <span style={{ fontSize: 11, color: "#fff", background: accent, borderRadius: 99, padding: "4px 11px", fontWeight: 600 }}>Get started</span>
-            </div>
-          </div>
-          <div style={{ padding: "26px 24px", flex: 1, minHeight: 0, overflow: "hidden" }}>
-            <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1.15, maxWidth: 380 }}>Everything you ship, in one orbit.</div>
-            <div style={{ fontSize: 13, color: "#6b7280", marginTop: 8, maxWidth: 360, lineHeight: 1.5 }}>The commerce platform for modern teams — fast, composable, and built to scale.</div>
-            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-              <span style={{ fontSize: 12.5, color: "#fff", background: "#0c0d12", borderRadius: 8, padding: "9px 16px", fontWeight: 600 }}>Start free</span>
-              <span style={{ fontSize: 12.5, color: "#0c0d12", border: "1px solid #e6e7ec", borderRadius: 8, padding: "9px 16px", fontWeight: 600 }}>Book a demo</span>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginTop: 26 }}>
-              {([["Revenue", "$248k"], ["Orders", "1,932"], ["Conversion", "3.8%"]] as const).map(([k, v]) => (
-                <div key={k} style={{ border: "1px solid #ececf1", borderRadius: 12, padding: "13px 14px", background: "#fbfbfd" }}>
-                  <div style={{ fontSize: 11, color: "#8b909a" }}>{k}</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 4 }}>{v}</div>
-                  <div style={{ height: 3, borderRadius: 9, background: "#eef0f3", marginTop: 9 }}><div style={{ height: "100%", width: "62%", borderRadius: 9, background: accent }} /></div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ServerRow({ s }: { s: DevServer }) {
-  const owner = s.owner ? getAgent(s.owner as StatusRow["agent"]) : null;
-  const meta = ({ running: { c: "var(--clean)", label: "running" }, degraded: { c: "var(--dirty)", label: "degraded" }, stopped: { c: "var(--idle)", label: "stopped" } } as const)[s.status];
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", borderBottom: "1px solid var(--border-subtle)" }}>
-      {s.status === "running" ? <LiveDot color={meta.c} /> : <span style={{ width: 7, height: 7, borderRadius: 99, background: meta.c, flex: "none" }} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>{s.label}</span>
-          <span style={{ fontSize: 10, color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "1px 6px" }}>{s.framework}</span>
-          {owner && <span data-tip={`owned by ${owner.short}`} style={{ display: "inline-flex" }}><AgentBadge id={s.owner as StatusRow["agent"]} size="sm" showLabel={false} /></span>}
-        </div>
-        <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>$ {s.cmd}</div>
-      </div>
-      <div style={{ textAlign: "right", flex: "none" }}>
-        {s.port && <div className="mono" style={{ fontSize: 11, color: meta.c }}>:{s.port}</div>}
-        <div style={{ fontSize: 10, color: "var(--text-quaternary)" }}>{s.uptime}</div>
-      </div>
-      {s.preview
-        ? <button className="btn btn-sm btn-icon fr" data-tip="Open preview" aria-label="Open"><Icon name="externalLink" size={13} /></button>
-        : <button className="btn btn-sm btn-icon fr" data-tip="Restart" aria-label="Restart"><Icon name="refresh" size={13} /></button>}
-    </div>
   );
 }
 
@@ -199,8 +129,10 @@ function LiveSessionRail({ sessions, currentSlug, onPick, onClose }: {
   );
 }
 
+const cap = (list: TimedEvent[]) => (list.length > 500 ? list.slice(-500) : list);
+
 export function LiveSession({
-  slug, session, sessions, onClose, setSlug, onOpenDiff,
+  slug, session, sessions, onClose, setSlug, onOpenDiff, demo = false, subscribe,
 }: {
   slug: string;
   session?: StatusRow;
@@ -208,40 +140,100 @@ export function LiveSession({
   onClose: () => void;
   setSlug: (slug: string) => void;
   onOpenDiff: (slug: string) => void;
+  demo?: boolean;
+  subscribe?: (type: string, fn: (e: BatonEventMsg) => void) => () => void;
 }) {
   const task = session;
   const agent = getAgent(task?.agent ?? null);
   const accent = task?.agent ? agent.color : "var(--accent)";
   const [events, setEvents] = useState<TimedEvent[]>([]);
-  const [streaming, setStreaming] = useState(true);
+  const [demoStreaming, setDemoStreaming] = useState(true);
   const [elapsed, setElapsed] = useState(0);
-  const [pulse, setPulse] = useState(false);
-  const [tab, setTab] = useState<"activity" | "preview">("activity");
   const [railOpen, setRailOpen] = useState(false);
-  const isWide = useMediaQuery("(min-width: 850px)");
   const showRail = useMediaQuery("(min-width: 780px)");
   const logRef = useRef<HTMLDivElement>(null);
   const others = useMemo(() => sessions.filter((s) => s.agent && s.slug !== slug), [sessions, slug]);
   const pick = (s: string) => { setSlug(s); setRailOpen(false); };
-  const running = SERVERS.filter((s) => s.status === "running").length;
+  // Real mode: "working" = an agent process is attached to the worktree.
+  const streaming = demo ? demoStreaming : task?.agent != null;
 
+  // Demo: scripted showcase stream.
   useEffect(() => {
-    setEvents([]); setStreaming(true); setRailOpen(false);
+    if (!demo) return;
+    setEvents([]); setDemoStreaming(true); setRailOpen(false);
     const script = buildActivity(slug, task);
     let i = 0, alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
       if (!alive) return;
-      if (i >= script.length) { setStreaming(false); return; }
+      if (i >= script.length) { setDemoStreaming(false); return; }
       const ev = script[i++];
       setEvents((cur) => [...cur, { ...ev, at: Date.now() }]);
-      if (ev.t === "edit" || ev.t === "create" || ev.t === "commit") { setPulse(true); setTimeout(() => setPulse(false), 520); }
       timer = setTimeout(tick, i < 4 ? 520 : 720 + Math.random() * 520);
     };
     timer = setTimeout(tick, 320);
     return () => { alive = false; clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug]);
+  }, [slug, demo]);
+
+  // Real: backfill from the API, then ride the SSE feed.
+  useEffect(() => {
+    if (demo) return;
+    setEvents([]); setRailOpen(false);
+    let alive = true;
+    void (async () => {
+      const rows: TimedEvent[] = [];
+      try {
+        const detail = await BatonAPI.getTask(slug);
+        rows.push({ t: "boot", text: `Watching ${branchFor(slug)} — ${detail.filesChanged} uncommitted file${detail.filesChanged === 1 ? "" : "s"}`, at: Date.parse(detail.createdAt) || Date.now() });
+        for (const c of detail.commits.slice(0, 10).reverse()) {
+          rows.push({ t: "commit", text: c.message, meta: c.sha.slice(0, 7), at: Date.parse(c.at) || Date.now() });
+        }
+      } catch {
+        rows.push({ t: "warn", text: "Session not found — it may have been merged or removed.", at: Date.now() });
+      }
+      try {
+        for (const sig of await BatonAPI.getSignals()) {
+          for (const h of sig.holders) {
+            if (h.slug === slug) rows.push({ t: "edit", text: `Editing ${sig.path}`, at: Date.parse(h.lastEditAt) || Date.now() });
+          }
+        }
+      } catch { /* signals are best-effort */ }
+      if (alive) setEvents(cap(rows.sort((a, b) => a.at - b.at)));
+    })();
+
+    const push = (ev: TimedEvent) => setEvents((cur) => cap([...cur, ev]));
+    const unsub = subscribe?.("*", (msg) => {
+      const mslug = msg.slug as string | undefined;
+      switch (msg.type) {
+        case "file.edited":
+          if (mslug === slug) push({ t: "edit", text: `Edited ${msg.path as string}`, at: Date.parse(msg.at as string) || Date.now() });
+          break;
+        case "commit.created":
+          if (mslug === slug) push({ t: "commit", text: msg.message as string, meta: (msg.sha as string)?.slice(0, 7), at: Date.now() });
+          break;
+        case "agent.started":
+          if (mslug === slug) push({ t: "boot", text: `${getAgent((msg.agent as StatusRow["agent"]) ?? null).short} attached`, at: Date.now() });
+          break;
+        case "agent.stopped":
+          if (mslug === slug) push({ t: "warn", text: `${getAgent((msg.agent as StatusRow["agent"]) ?? null).short} detached`, at: Date.now() });
+          break;
+        case "handoff.created":
+          if (mslug === slug) push({ t: "commit", text: `Handoff brief created → ${msg.toAgent as string}`, at: Date.now() });
+          break;
+        case "signal.overlap": {
+          const slugs = (msg.slugs as string[]) ?? [];
+          if (slugs.includes(slug)) {
+            const othersList = slugs.filter((s) => s !== slug).join(", ");
+            push({ t: "warn", text: `Overlap on ${msg.path as string} — also edited by ${othersList}`, at: Date.now() });
+          }
+          break;
+        }
+      }
+    });
+    return () => { alive = false; unsub?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, demo, subscribe]);
 
   useEffect(() => { const t = setInterval(() => setElapsed((e) => e + 1), 1000); return () => clearInterval(t); }, [slug]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
@@ -259,7 +251,7 @@ export function LiveSession({
         <Icon name="terminal" size={14} style={{ color: "var(--text-tertiary)" }} />
         <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>Activity</span>
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-12)", color: streaming ? "var(--clean-text)" : "var(--text-tertiary)" }}>
-          {streaming ? <><LiveDot size={6} /> {agent.short} is working</> : <>idle · waiting for changes</>}
+          {streaming ? <><LiveDot size={6} /> {agent.short} is working</> : <>idle · {demo ? "waiting for changes" : "no agent attached"}</>}
         </span>
       </div>
       <div ref={logRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 13px", display: "flex", flexDirection: "column", gap: 2 }}>
@@ -276,26 +268,20 @@ export function LiveSession({
             </div>
           );
         })}
+        {!demo && events.length === 0 && (
+          <div style={{ display: "grid", placeItems: "center", flex: 1, padding: 24 }}>
+            <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", textAlign: "center", maxWidth: 340 }}>
+              No activity yet — events appear here as the agent edits files and commits on <span className="mono">{branchFor(slug)}</span>.
+            </span>
+          </div>
+        )}
         {streaming && <div style={{ display: "flex", gap: 9, alignItems: "center", padding: "3px 0 3px 53px" }}><span style={{ width: 7, height: 14, background: accent, animation: "blink 1s steps(2) infinite", borderRadius: 1 }} /></div>}
       </div>
       <div style={{ flex: "none", padding: "8px 13px", borderTop: "1px solid var(--border-subtle)", background: "var(--bg-surface)", display: "flex", alignItems: "center", gap: 8 }}>
-        {getDiff(slug).length > 0 && <button className="btn btn-sm fr" onClick={() => onOpenDiff(slug)}><Icon name="terminal" size={12} /> View diff</button>}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-quaternary)" }}>{events.filter((e) => e.t === "edit" || e.t === "create" || e.t === "delete").length} file ops this run</span>
-      </div>
-    </div>
-  );
-
-  const PreviewPane = (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
-      <div style={{ flex: 1, minHeight: 0, borderBottom: isWide ? "1px solid var(--border-subtle)" : "none" }}><LivePreviewFrame accent={accent} pulse={pulse} /></div>
-      <div style={{ flex: "none", maxHeight: isWide ? "44%" : "none", display: "flex", flexDirection: "column", background: "var(--bg-surface)", minHeight: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 13px", borderBottom: "1px solid var(--border-subtle)", flex: "none" }}>
-          <Icon name="layers" size={14} style={{ color: "var(--text-tertiary)" }} />
-          <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>Dev servers</span>
-          <span className="mono" style={{ fontSize: 11, color: "var(--clean-text)" }}>{running} running</span>
-          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-quaternary)", display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={11} /> managed by Baton</span>
-        </div>
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>{SERVERS.map((s) => <ServerRow key={s.id} s={s} />)}</div>
+        {demo && getDiff(slug).length > 0 && <button className="btn btn-sm fr" onClick={() => onOpenDiff(slug)}><Icon name="terminal" size={12} /> View diff</button>}
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-quaternary)" }}>
+          {events.filter((e) => e.t === "edit" || e.t === "create" || e.t === "delete").length} file edit{events.filter((e) => e.t === "edit" || e.t === "create" || e.t === "delete").length === 1 ? "" : "s"} · {events.filter((e) => e.t === "commit").length} commit{events.filter((e) => e.t === "commit").length === 1 ? "" : "s"} this session
+        </span>
       </div>
     </div>
   );
@@ -317,7 +303,7 @@ export function LiveSession({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task?.task || slug}</span>
-              <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px", flex: "none" }} data-tip="Live session streaming isn't exposed by the API yet — illustrative preview.">Preview</span>
+              {demo && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px", flex: "none" }} data-tip="Demo mode — this stream is illustrative. Real sessions stream the daemon's live events.">Preview</span>}
             </div>
             <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
               <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <Icon name="clock" size={11} /> {mm}:{ss}
@@ -350,22 +336,7 @@ export function LiveSession({
               <LiveSessionRail sessions={sessions} currentSlug={slug} onPick={pick} />
             </aside>
           )}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            {isWide ? (
-              <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-                <div style={{ flex: "1.05 1 0", minWidth: 0, borderRight: "1px solid var(--border-subtle)" }}>{ActivityPane}</div>
-                <div style={{ flex: "1 1 0", minWidth: 0 }}>{PreviewPane}</div>
-              </div>
-            ) : (
-              <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <div style={{ flex: "none", padding: 8, borderBottom: "1px solid var(--border-subtle)" }}>
-                  <SegmentedControl size="sm" ariaLabel="Live panes" value={tab} onChange={setTab}
-                    options={[{ value: "activity", label: "Activity", icon: "terminal" }, { value: "preview", label: "Preview & servers", icon: "monitor" }]} />
-                </div>
-                <div style={{ flex: 1, minHeight: 0 }}>{tab === "activity" ? ActivityPane : PreviewPane}</div>
-              </div>
-            )}
-          </div>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>{ActivityPane}</div>
         </div>
 
         {!showRail && railOpen && (

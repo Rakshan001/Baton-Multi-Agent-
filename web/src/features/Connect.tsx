@@ -5,7 +5,13 @@ import { Icon } from "../components/Icon";
 import { BatonMark } from "../components/BatonMark";
 import { CommandLine } from "../components/primitives";
 
-export function Connect({ phase, onRetry, retrying }: { phase: "connecting" | "offline"; onRetry: () => void; retrying: boolean }) {
+export interface ConnectAlternative { id: string; name: string; baseUrl: string }
+
+export function Connect({ phase, onRetry, retrying, alternatives = [], onPick }: {
+  phase: "connecting" | "offline"; onRetry: () => void; retrying: boolean;
+  /** Other registered daemons, so a dead connection never traps the user. */
+  alternatives?: ConnectAlternative[]; onPick?: (id: string) => void;
+}) {
   return (
     <div style={{ height: "100%", display: "grid", placeItems: "center", padding: 24, background: "radial-gradient(120% 90% at 50% -10%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 60%)" }}>
       <div style={{ width: "min(520px, 100%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 22, textAlign: "center", animation: "fade-up var(--dur-4) var(--ease-out)" }}>
@@ -47,6 +53,17 @@ export function Connect({ phase, onRetry, retrying }: { phase: "connecting" | "o
               <Icon name="refresh" size={15} style={{ animation: retrying ? "spin 0.8s linear infinite" : "none" }} />
               {retrying ? "Retrying…" : "Retry connection"}
             </button>
+            {alternatives.length > 0 && onPick && (
+              <div style={{ width: "100%", maxWidth: 420, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>…or switch to another daemon:</div>
+                {alternatives.map((a) => (
+                  <button key={a.id} className="btn fr" onClick={() => onPick(a.id)} style={{ justifyContent: "space-between", width: "100%" }}>
+                    <span style={{ fontWeight: "var(--fw-semibold)" }}>{a.name}</span>
+                    <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{a.baseUrl || "this origin"}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

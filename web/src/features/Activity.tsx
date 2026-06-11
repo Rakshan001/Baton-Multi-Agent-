@@ -1,17 +1,18 @@
 /* ============================================================
    BATON — Activity dashboard (ported from activity.jsx)
-   Progress + token usage (PREVIEW — not from the API) + provenance,
-   with per-session entry points to the diff viewer and handoff.
+   Real mode: everything is derived from /api/status + /api/signals.
+   Demo mode keeps the illustrative token-usage showcase (labelled).
    ============================================================ */
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "../components/Icon";
 import { AgentBadge, EmptyState } from "../components/primitives";
 import { ScreenHeader } from "./shared";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
-import { progressEstimate } from "../lib/format";
+import { progressEstimate, timeAgo } from "../lib/format";
 import { getUsage, fmtTokens } from "../lib/preview";
-import type { StatusRow } from "../types";
-import type { PollState } from "../hooks/usePoll";
+import { BatonAPI } from "../lib/api";
+import { usePoll, type PollState } from "../hooks/usePoll";
+import type { StatusRow, EditSignal, AgentId } from "../types";
 
 export function Sparkline({ data, color = "var(--accent)", w = 64, h = 22 }: { data: number[]; color?: string; w?: number; h?: number }) {
   const max = Math.max(1, ...data); const n = data.length;
@@ -27,10 +28,10 @@ export function Sparkline({ data, color = "var(--accent)", w = 64, h = 22 }: { d
   );
 }
 
-function UsageBar({ inTok, outTok, max, color }: { inTok: number; outTok: number; max: number; color: string }) {
+function UsageBar({ inTok, outTok, max, color, tip }: { inTok: number; outTok: number; max: number; color: string; tip?: string }) {
   const pct = (n: number) => `${(n / Math.max(1, max)) * 100}%`;
   return (
-    <div style={{ display: "flex", height: 8, borderRadius: 99, overflow: "hidden", background: "var(--bg-active)", width: "100%" }} data-tip={`${fmtTokens(inTok)} in · ${fmtTokens(outTok)} out`}>
+    <div style={{ display: "flex", height: 8, borderRadius: 99, overflow: "hidden", background: "var(--bg-active)", width: "100%" }} data-tip={tip ?? `${fmtTokens(inTok)} in · ${fmtTokens(outTok)} out`}>
       <span style={{ width: pct(inTok), background: color, opacity: 0.55 }} />
       <span style={{ width: pct(outTok), background: color }} />
     </div>
@@ -46,6 +47,41 @@ function PreviewBanner({ children }: { children: ReactNode }) {
   );
 }
 
+/** Real mode: files under live edit right now (from /api/signals). */
+function LiveSignalsSection() {
+  const signals = usePoll<EditSignal[]>(() => BatonAPI.getSignals(), { interval: 5000 });
+  const rows = signals.data ?? [];
+  return (
+    <section className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon name="zap" size={14} style={{ color: "var(--text-tertiary)" }} />
+        <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Live edit signals</h2>
+        <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{rows.length ? `${rows.length} file${rows.length === 1 ? "" : "s"}` : ""}</span>
+      </div>
+      <div style={{ padding: rows.length ? "4px 16px 10px" : 0 }}>
+        {rows.length === 0 ? (
+          <div style={{ padding: "14px 16px", fontSize: "var(--fs-13)", color: "var(--text-tertiary)" }}>No files being edited right now.</div>
+        ) : rows.slice(0, 10).map((s) => (
+          <div key={s.path} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border-subtle)", background: "transparent" }}>
+            {s.level === "warning"
+              ? <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
+              : <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--accent)", flex: "none", margin: "0 3px" }} />}
+            <span className="mono" style={{ fontSize: "var(--fs-12)", color: s.level === "warning" ? "var(--conflict-text)" : "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.path}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
+              {s.holders.slice(0, 3).map((h, i) => (
+                <span key={`${h.slug}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 5 }} data-tip={h.lastEditAt ? `last edit ${timeAgo(new Date(h.lastEditAt).getTime())}` : undefined}>
+                  <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
+                  <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function ActivityScreen({
   status, onOpen, onOpenDiff, onHandoff, onLive,
 }: {
@@ -55,34 +91,58 @@ export function ActivityScreen({
   onHandoff: (slug: string) => void;
   onLive: (slug: string) => void;
 }) {
+  const demo = BatonAPI.demo;
   const sessions = status.data || [];
   const active = sessions.filter((s) => s.agent !== null);
 
-  const agg = sessions.reduce((a, s) => { const u = getUsage(s.slug); a.in += u.input; a.out += u.output; a.req += u.requests; a.commits += s.ahead; return a; }, { in: 0, out: 0, req: 0, commits: 0 });
+  const agg = sessions.reduce((a, s) => {
+    if (demo) { const u = getUsage(s.slug); a.in += u.input; a.out += u.output; a.req += u.requests; }
+    a.commits += s.ahead; a.files += s.filesChanged; a.ins += s.insertions ?? 0; a.del += s.deletions ?? 0;
+    return a;
+  }, { in: 0, out: 0, req: 0, commits: 0, files: 0, ins: 0, del: 0 });
   const avgProgress = active.length ? Math.round((active.reduce((n, s) => n + progressEstimate(s.ahead), 0) / active.length) * 100) : 0;
 
-  const byAgent: Record<string, { in: number; out: number; req: number; n: number }> = {};
-  active.forEach((s) => { const u = getUsage(s.slug); const a = byAgent[s.agent!] || { in: 0, out: 0, req: 0, n: 0 }; a.in += u.input; a.out += u.output; a.req += u.requests; a.n++; byAgent[s.agent!] = a; });
+  // Per-agent rollup. Demo: fake tokens; real: commits + files from /api/status.
+  const byAgent: Record<string, { in: number; out: number; req: number; n: number; commits: number; files: number }> = {};
+  active.forEach((s) => {
+    const a = byAgent[s.agent!] || { in: 0, out: 0, req: 0, n: 0, commits: 0, files: 0 };
+    if (demo) { const u = getUsage(s.slug); a.in += u.input; a.out += u.output; a.req += u.requests; }
+    a.n++; a.commits += s.ahead; a.files += s.filesChanged;
+    byAgent[s.agent!] = a;
+  });
   const agentRows = AGENT_REGISTRY.map((a) => ({ a, u: byAgent[a.id!] })).filter((r) => r.u);
   const maxAgentTok = Math.max(1, ...agentRows.map((r) => r.u.in + r.u.out));
+  const maxAgentWork = Math.max(1, ...agentRows.map((r) => r.u.commits + r.u.files));
 
-  const rows = [...active].sort((a, b) => { const ua = getUsage(a.slug), ub = getUsage(b.slug); return (ub.input + ub.output) - (ua.input + ua.output); });
+  const rows = [...active].sort((a, b) => {
+    if (demo) { const ua = getUsage(a.slug), ub = getUsage(b.slug); return (ub.input + ub.output) - (ua.input + ua.output); }
+    return b.ahead - a.ahead || b.filesChanged - a.filesChanged;
+  });
 
-  const cards: { label: string; value: ReactNode; sub: string; icon: IconName; tone?: "accent" | "ready"; preview?: boolean }[] = [
-    { label: "Tokens used", value: fmtTokens(agg.in + agg.out), sub: `${fmtTokens(agg.in)} in · ${fmtTokens(agg.out)} out`, icon: "zap", tone: "accent", preview: true },
-    { label: "Model requests", value: agg.req, sub: `${active.length} active session${active.length === 1 ? "" : "s"}`, icon: "sparkle", preview: true },
-    { label: "Commits ahead", value: agg.commits, sub: "across all branches", icon: "gitCommit" },
-    { label: "Avg progress", value: avgProgress + "%", sub: "est. from commits", icon: "history", tone: "ready" },
-  ];
+  const cards: { label: string; value: ReactNode; sub: string; icon: IconName; tone?: "accent" | "ready"; preview?: boolean }[] = demo
+    ? [
+        { label: "Tokens used", value: fmtTokens(agg.in + agg.out), sub: `${fmtTokens(agg.in)} in · ${fmtTokens(agg.out)} out`, icon: "zap", tone: "accent", preview: true },
+        { label: "Model requests", value: agg.req, sub: `${active.length} active session${active.length === 1 ? "" : "s"}`, icon: "sparkle", preview: true },
+        { label: "Commits ahead", value: agg.commits, sub: "across all branches", icon: "gitCommit" },
+        { label: "Avg progress", value: avgProgress + "%", sub: "est. from commits", icon: "history", tone: "ready" },
+      ]
+    : [
+        { label: "Active sessions", value: active.length, sub: `${sessions.length} total worktree${sessions.length === 1 ? "" : "s"}`, icon: "bot", tone: "accent" },
+        { label: "Commits ahead", value: agg.commits, sub: "across all branches", icon: "gitCommit" },
+        { label: "Files changed", value: agg.files, sub: agg.ins || agg.del ? `+${agg.ins} −${agg.del}` : "uncommitted work", icon: "fileWarning" },
+        { label: "Avg progress", value: avgProgress + "%", sub: "est. from commits", icon: "history", tone: "ready" },
+      ];
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      <ScreenHeader title="Activity" subtitle="Progress, token usage & provenance across active sessions" />
+      <ScreenHeader title="Activity" subtitle={demo ? "Progress, token usage & provenance across active sessions" : "Live progress & edit signals across active sessions"} />
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 20 }}>
         <div style={{ maxWidth: 1080, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>
-          <PreviewBanner>
-            <b style={{ color: "var(--text-primary)", fontWeight: 600 }}>Preview.</b> Token usage isn't reported by the Baton API yet — values here are illustrative. Commits &amp; progress are derived from real <span className="mono">/api/status</span> data.
-          </PreviewBanner>
+          {demo && (
+            <PreviewBanner>
+              <b style={{ color: "var(--text-primary)", fontWeight: 600 }}>Preview.</b> Token usage isn't reported by the Baton API yet — values here are illustrative. Commits &amp; progress are derived from real <span className="mono">/api/status</span> data.
+            </PreviewBanner>
+          )}
 
           {status.isLoading && !status.data ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 12 }}>{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton" style={{ height: 96, borderRadius: 12 }} />)}</div>
@@ -104,15 +164,19 @@ export function ActivityScreen({
                 ))}
               </div>
 
-              {/* per-agent usage */}
+              {!demo && <LiveSignalsSection />}
+
+              {/* per-agent rollup: tokens in demo, real work counters otherwise */}
               <section className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
                   <Icon name="bot" size={14} style={{ color: "var(--text-tertiary)" }} />
-                  <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Token usage by agent</h2>
-                  <span style={{ marginLeft: "auto", display: "flex", gap: 12, fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: "var(--text-secondary)", opacity: 0.55 }} /> input</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: "var(--text-secondary)" }} /> output</span>
-                  </span>
+                  <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>{demo ? "Token usage by agent" : "Per-agent activity"}</h2>
+                  {demo && (
+                    <span style={{ marginLeft: "auto", display: "flex", gap: 12, fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: "var(--text-secondary)", opacity: 0.55 }} /> input</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: "var(--text-secondary)" }} /> output</span>
+                    </span>
+                  )}
                 </div>
                 <div style={{ padding: "6px 16px 12px" }}>
                   {agentRows.length === 0 ? <div style={{ padding: "14px 0", fontSize: "var(--fs-13)", color: "var(--text-tertiary)" }}>No active agents.</div> :
@@ -125,9 +189,22 @@ export function ActivityScreen({
                             <div style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{u.n} session{u.n === 1 ? "" : "s"}</div>
                           </div>
                         </div>
-                        <div style={{ flex: 1, minWidth: 0 }}><UsageBar inTok={u.in} outTok={u.out} max={maxAgentTok} color={a.color} /></div>
-                        <span className="mono" style={{ width: 84, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>{fmtTokens(u.in + u.out)}</span>
-                        <span className="mono" style={{ width: 58, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }} data-tip="model requests">{u.req} req</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {demo
+                            ? <UsageBar inTok={u.in} outTok={u.out} max={maxAgentTok} color={a.color} />
+                            : <UsageBar inTok={u.commits} outTok={u.files} max={maxAgentWork} color={a.color} tip={`${u.commits} commit${u.commits === 1 ? "" : "s"} · ${u.files} file${u.files === 1 ? "" : "s"} changed`} />}
+                        </div>
+                        {demo ? (
+                          <>
+                            <span className="mono" style={{ width: 84, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>{fmtTokens(u.in + u.out)}</span>
+                            <span className="mono" style={{ width: 58, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }} data-tip="model requests">{u.req} req</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="mono" style={{ width: 84, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>{u.commits} commit{u.commits === 1 ? "" : "s"}</span>
+                            <span className="mono" style={{ width: 58, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{u.files} files</span>
+                          </>
+                        )}
                       </div>
                     ))}
                 </div>
@@ -142,7 +219,8 @@ export function ActivityScreen({
                 </div>
                 <div>
                   {rows.map((s) => {
-                    const u = getUsage(s.slug); const a = getAgent(s.agent); const prog = Math.round(progressEstimate(s.ahead) * 100);
+                    const a = getAgent(s.agent); const prog = Math.round(progressEstimate(s.ahead) * 100);
+                    const u = demo ? getUsage(s.slug) : null;
                     return (
                       <div key={s.slug} className="activity-row" style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
                         <button className="fr" onClick={() => onOpen(s.slug)} style={{ flex: "2 1 220px", minWidth: 0, display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", textAlign: "left", padding: 0 }}>
@@ -156,17 +234,26 @@ export function ActivityScreen({
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}><span>progress <i style={{ fontStyle: "normal", color: "var(--text-quaternary)" }}>est.</i></span><span className="mono">{prog}%</span></div>
                           <div style={{ height: 4, borderRadius: 99, background: "var(--bg-active)", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(s.ahead > 0 ? 8 : 0, prog)}%`, background: a.color, borderRadius: 99 }} /></div>
                         </div>
-                        <div style={{ flex: "none", width: 80, textAlign: "right" }} className="ar-hide-sm" data-tip={`${fmtTokens(u.input)} in · ${fmtTokens(u.output)} out · ${(u.contextPct * 100).toFixed(0)}% context`}>
-                          <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{fmtTokens(u.input + u.output)}</div>
-                          <div style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>tokens</div>
-                        </div>
-                        <div style={{ flex: "none" }} className="ar-hide-md"><Sparkline data={u.spark} color={a.color} /></div>
+                        {u ? (
+                          <>
+                            <div style={{ flex: "none", width: 80, textAlign: "right" }} className="ar-hide-sm" data-tip={`${fmtTokens(u.input)} in · ${fmtTokens(u.output)} out · ${(u.contextPct * 100).toFixed(0)}% context`}>
+                              <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{fmtTokens(u.input + u.output)}</div>
+                              <div style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>tokens</div>
+                            </div>
+                            <div style={{ flex: "none" }} className="ar-hide-md"><Sparkline data={u.spark} color={a.color} /></div>
+                          </>
+                        ) : (
+                          <div style={{ flex: "none", width: 110, textAlign: "right" }} className="ar-hide-sm">
+                            <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{s.filesChanged} file{s.filesChanged === 1 ? "" : "s"}</div>
+                            <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>{s.ahead}↑ {s.behind}↓</div>
+                          </div>
+                        )}
                         <div style={{ flex: "none", display: "flex", gap: 6 }}>
                           <button className="btn btn-sm fr" onClick={() => onLive(s.slug)} data-tip="Watch live session" style={{ borderColor: "var(--conflict-border)" }}>
                             <span style={{ position: "relative", width: 7, height: 7 }}><span style={{ position: "absolute", inset: 0, borderRadius: 99, background: "var(--conflict-strong)" }} /><span style={{ position: "absolute", inset: 0, borderRadius: 99, background: "var(--conflict-strong)", animation: "ping 1.6s var(--ease-out) infinite" }} /></span>
                             <span className="ar-hide-sm">Live</span>
                           </button>
-                          <button className="btn btn-sm fr" onClick={() => onOpenDiff(s.slug)} data-tip="See code changes (git diff)"><Icon name="terminal" size={13} /> <span className="ar-hide-sm">Diff</span></button>
+                          {demo && <button className="btn btn-sm fr" onClick={() => onOpenDiff(s.slug)} data-tip="See code changes (git diff)"><Icon name="terminal" size={13} /> <span className="ar-hide-sm">Diff</span></button>}
                           <button className="btn btn-sm btn-icon fr" onClick={() => onHandoff(s.slug)} data-tip="Hand off to another agent" aria-label="Hand off"><Icon name="share" size={13} /></button>
                         </div>
                       </div>

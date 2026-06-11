@@ -8,7 +8,7 @@
    honesty boundary explicit.
    ============================================================ */
 import type { DemoSession } from "./demoData";
-import type { TaskHistory } from "../types";
+import type { TaskHistory, Project } from "../types";
 
 export type DiffLineType = "add" | "del" | "ctx";
 export interface DiffLine { t: DiffLineType; o: number | null; n: number | null; s: string }
@@ -241,30 +241,7 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
-/* ---------------- DEV SERVERS (project-level, illustrative) ----------------
-   Baton runs as a centralised manager — one repo, many long-running services. */
-export type ServerStatus = "running" | "degraded" | "stopped";
-export interface DevServer {
-  id: string;
-  label: string;
-  cmd: string;
-  port: number | null;
-  status: ServerStatus;
-  uptime: string;
-  owner: string | null;
-  framework: string;
-  preview?: boolean;
-}
-export const SERVERS: DevServer[] = [
-  { id: "web", label: "web", cmd: "next dev", port: 3000, status: "running", uptime: "2h 14m", owner: null, framework: "Next.js", preview: true },
-  { id: "api", label: "api", cmd: "tsx watch src/server", port: 7077, status: "running", uptime: "2h 14m", owner: null, framework: "tRPC" },
-  { id: "storybook", label: "storybook", cmd: "storybook dev", port: 6006, status: "running", uptime: "47m", owner: "settings-dark-mode", framework: "Storybook" },
-  { id: "worker", label: "worker", cmd: "tsx watch src/worker", port: null, status: "running", uptime: "2h 14m", owner: null, framework: "BullMQ" },
-  { id: "db", label: "postgres", cmd: "docker compose up db", port: 5432, status: "running", uptime: "2h 15m", owner: null, framework: "Postgres 16" },
-  { id: "test", label: "e2e", cmd: "playwright test --ui", port: 9323, status: "degraded", uptime: "12m", owner: "fix-checkout-e2e", framework: "Playwright" },
-];
-
-/* ---------------- LIVE ACTIVITY STREAM (illustrative) ---------------- */
+/* ---------------- LIVE ACTIVITY (demo-mode scripted stream) ---------------- */
 export type LiveEventType = "boot" | "think" | "read" | "edit" | "create" | "delete" | "cmd" | "out" | "commit" | "warn";
 export interface LiveEvent { t: LiveEventType; text: string; meta?: string }
 
@@ -311,20 +288,14 @@ export function buildActivity(slug: string, s?: SessionLike): LiveEvent[] {
    is the connected project (its data comes from the active scenario);
    the others are preview projects in the same workspace so the
    ProjectSwitcher is exercised. Ported from data-preview.js. */
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  branch: string;
-  framework: string;
-  color: string;
-  primary?: boolean;
+export interface DemoProject extends Project {
   data?: { sessions: DemoSession[]; history: TaskHistory[] };
 }
 export interface Workspace {
   folder: string;
-  projects: Project[];
+  projects: DemoProject[];
 }
+export type { Project };
 
 const _now = Date.now();
 const _MIN = 60_000;
@@ -335,7 +306,7 @@ const mk = (o: Partial<DemoSession> & Pick<DemoSession, "slug" | "task" | "agent
   ahead: 0, behind: 0, conflictFiles: [], filesChanged: 0, commits: [], ...o,
 });
 
-const PULSE: Project["data"] = {
+const PULSE: DemoProject["data"] = {
   sessions: [
     mk({ slug: "pulse-ingest-rework", task: "Rework the event ingestion pipeline", agent: "claude", status: "dirty", ahead: 2, behind: 0, filesChanged: 6, createdAt: _iso(2 * _HR), commits: [_c("a31f0c2", "feat(ingest): batched writes", 1 * _HR), _c("7b9e441", "perf(ingest): backpressure queue", 30 * _MIN)] }),
     mk({ slug: "pulse-grafana-dash", task: "Build Grafana dashboards for latency", agent: "codex", status: "clean", ahead: 3, behind: 0, createdAt: _iso(4 * _HR), commits: [_c("c02a8d1", "feat(obs): p50/p95/p99 panels", 3 * _HR), _c("d51b9f3", "feat(obs): alert annotations", 2 * _HR), _c("e8c2a07", "chore(obs): provision as code", 1 * _HR)] }),
@@ -346,7 +317,7 @@ const PULSE: Project["data"] = {
     { slug: "pulse-otel", task: "Wire OpenTelemetry tracing", agent: "claude", mergedAt: _iso(20 * _HR), commits: [_c("11aa22b", "feat(otel): trace context propagation", 22 * _HR)] },
   ],
 };
-const ATLAS: Project["data"] = {
+const ATLAS: DemoProject["data"] = {
   sessions: [
     mk({ slug: "atlas-search-index", task: "Add full-text search to the docs", agent: "cursor", status: "dirty", ahead: 1, behind: 0, filesChanged: 3, createdAt: _iso(80 * _MIN), commits: [_c("9c10ee2", "feat(search): build lunr index at compile", 40 * _MIN)] }),
     mk({ slug: "atlas-versioned-docs", task: "Support versioned documentation", agent: "aider", status: "clean", ahead: 2, behind: 0, createdAt: _iso(3 * _HR), commits: [_c("4f0b7a1", "feat(docs): version switcher", 2 * _HR), _c("a7e3c90", "feat(docs): per-version routing", 1 * _HR)] }),

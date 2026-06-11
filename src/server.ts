@@ -12,6 +12,9 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { extname, join, normalize, sep } from 'node:path';
 import { collectStatus } from './board.js';
 import { currentBranch, gitRoot } from './git.js';
 import { listHistory } from './history.js';
@@ -51,6 +54,67 @@ interface ServeOptions {
 
 /** Lazily-started per-daemon live infrastructure (one per `serve()`). */
 let poller: StatusPoller | null = null;
+
+/**
+ * Built dashboard location. Compiled server lives at dist/server.js, so
+ * ../web/dist resolves to <repo>/web/dist; the same is true when running
+ * from src/ via tsx.
+ */
+const WEB_DIST = fileURLToPath(new URL('../web/dist', import.meta.url));
+
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2',
+};
+
+/** Serve the built dashboard (SPA) for non-/api requests. Localhost-only by bind. */
+async function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string, origin: string): Promise<void> {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return send(res, 405, { error: 'method not allowed' }, origin);
+  }
+  if (!existsSync(WEB_DIST)) {
+    return send(res, 404, { error: 'dashboard not built', hint: 'run: npm run build --prefix web' }, origin);
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return send(res, 400, { error: 'bad path' }, origin);
+  }
+  if (decoded === '/') decoded = '/index.html';
+
+  // Traversal guard: the resolved file must stay inside web/dist.
+  let file = normalize(join(WEB_DIST, decoded));
+  if (file !== WEB_DIST && !file.startsWith(WEB_DIST + sep)) {
+    return send(res, 403, { error: 'forbidden' }, origin);
+  }
+
+  let st = await stat(file).catch(() => null);
+  if (!st || st.isDirectory()) {
+    // SPA fallback for routes; assets (anything with an extension) 404 plainly.
+    if (extname(decoded)) return send(res, 404, { error: 'not found' }, origin);
+    file = join(WEB_DIST, 'index.html');
+    st = await stat(file).catch(() => null);
+    if (!st) return send(res, 404, { error: 'dashboard not built', hint: 'run: npm run build --prefix web' }, origin);
+  }
+
+  const isIndex = file.endsWith(`${sep}index.html`);
+  res.writeHead(200, {
+    'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
+    'Content-Length': st.size,
+    // Vite hashes asset filenames, so assets are immutable; index.html must revalidate.
+    'Cache-Control': isIndex ? 'no-cache' : 'public, max-age=31536000, immutable',
+  });
+  if (req.method === 'HEAD') return void res.end();
+  createReadStream(file).pipe(res);
+}
 
 /**
  * GET /api/events — Server-Sent Events stream of every bus event.
@@ -357,6 +421,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     }
   }
 
+  // Anything outside /api/* is the dashboard (SPA).
+  if (!path.startsWith('/api/')) return serveStatic(req, res, path, origin);
+
   send(res, 404, { error: 'not found' }, origin);
 }
 
@@ -374,6 +441,10 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   });
 
   await new Promise<void>((resolve) => server.listen(opts.port, '127.0.0.1', resolve));
-  console.log(`baton serve → http://localhost:${opts.port}`);
-  console.log('  GET /api/status · /api/history · /api/meta · /api/tasks/:slug · /api/events (SSE) · /api/kb   POST /api/tasks   (Ctrl+C to stop)');
+  if (existsSync(WEB_DIST)) {
+    console.log(`baton serve → dashboard http://localhost:${opts.port}`);
+  } else {
+    console.log(`baton serve → http://localhost:${opts.port}  (dashboard not built — run: npm run build --prefix web)`);
+  }
+  console.log('  API: /api/status · /api/history · /api/meta · /api/tasks/:slug · /api/events (SSE) · /api/kb   (Ctrl+C to stop)');
 }

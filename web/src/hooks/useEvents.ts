@@ -21,7 +21,7 @@ const EVENT_TYPES = [
   "signal.overlap", "kb.rebuilt", "handoff.created",
 ] as const;
 
-export function useEvents({ enabled = true }: { enabled?: boolean } = {}): {
+export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {
   live: boolean;
   subscribe: (type: string, fn: Handler) => () => void;
 } {
@@ -34,7 +34,7 @@ export function useEvents({ enabled = true }: { enabled?: boolean } = {}): {
       setLive(false);
       return;
     }
-    const es = new EventSource(`${BatonAPI.baseUrl}/api/events`);
+    const es = new EventSource(`${baseUrl || BatonAPI.baseUrl}/api/events`);
     es.onopen = () => setLive(true);
     es.onerror = () => setLive(false); // EventSource retries on its own
 
@@ -56,7 +56,7 @@ export function useEvents({ enabled = true }: { enabled?: boolean } = {}): {
       es.close();
       setLive(false);
     };
-  }, [enabled, BatonAPI.demo]);
+  }, [enabled, baseUrl, BatonAPI.demo]);
 
   const subscribe = (type: string, fn: Handler) => {
     const map = handlersRef.current;

@@ -9,6 +9,8 @@ import { BatonMark } from "../components/BatonMark";
 import { ScreenHeader } from "./shared";
 import { AGENT_REGISTRY, ACCENTS } from "../lib/registry";
 import { showToast } from "../lib/toast";
+import { BatonAPI } from "../lib/api";
+import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
 
 function SettingsBlock({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
@@ -35,20 +37,38 @@ function SettingRow({ label, hint, children }: { label: string; hint?: string; c
 }
 
 function ConnectionSettings({ prefs }: { prefs: Prefs }) {
-  const [apiDraft, setApiDraft] = useState(prefs.apiBase);
+  const [savedBase, setSavedBase] = useState(BatonAPI.baseUrl);
+  const [apiDraft, setApiDraft] = useState(savedBase);
   const [testing, setTesting] = useState(false);
   const online = !prefs.offline;
-  const dirty = apiDraft.trim() !== prefs.apiBase;
+  const dirty = apiDraft.trim() !== savedBase;
   const sColor = online ? "var(--clean)" : "var(--conflict)";
-  const test = () => {
+  const test = async () => {
     setTesting(true);
-    setTimeout(() => {
+    try {
+      const meta = await fetchMeta({ id: "probe", name: "probe", baseUrl: apiDraft.trim().replace(/\/+$/, "") });
+      showToast({ kind: "ok", title: "Connection healthy", desc: `${meta.repo} (${meta.branch})`, mono: true });
+    } catch {
+      showToast({ kind: "error", title: "Can't reach Baton", desc: `${apiDraft.trim() || "this origin"} — is \`baton serve\` running?` });
+    } finally {
       setTesting(false);
-      showToast(online ? { kind: "ok", title: "Connection healthy", desc: prefs.apiBase || "this origin", mono: true } : { kind: "error", title: "Can't reach Baton", desc: "Is `baton serve` running?" });
-    }, 850);
+    }
+  };
+  const save = () => {
+    const v = apiDraft.trim().replace(/\/+$/, "");
+    try {
+      const conn = updateConnectionUrl(BatonAPI.connectionId, v);
+      BatonAPI.setConnection(conn);
+      setSavedBase(conn.baseUrl);
+      setApiDraft(conn.baseUrl);
+      showToast({ kind: "ok", title: "Endpoint saved", desc: v || "same-origin", mono: true });
+    } catch (e) {
+      showToast({ kind: "error", title: "Invalid URL", desc: (e as Error).message });
+    }
   };
   const gated = [{ icon: "gitMerge" as const, label: "Merge" }, { icon: "trash" as const, label: "Remove" }, { icon: "grip" as const, label: "Drag-to-merge" }];
-  const displayBase = (prefs.apiBase || "same-origin").replace(/^https?:\/\//, "");
+  const activeName = loadConnections().find((c) => c.id === BatonAPI.connectionId)?.name ?? "This daemon";
+  const displayBase = `${activeName} · ${(savedBase || "same-origin").replace(/^https?:\/\//, "")}`;
 
   return (
     <section className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -75,8 +95,8 @@ function ConnectionSettings({ prefs }: { prefs: Prefs }) {
 
       <div style={{ padding: "13px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)" }}>API endpoint</span>
-          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>VITE_BATON_API</span>
+          <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)" }}>API endpoint <span style={{ color: "var(--text-quaternary)", fontWeight: 400 }}>· active connection</span></span>
+          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>{activeName}</span>
         </div>
         <div style={{ display: "flex", gap: 7 }}>
           <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, height: 34, padding: "0 11px", background: "var(--bg-input)", border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)" }}>
@@ -84,8 +104,8 @@ function ConnectionSettings({ prefs }: { prefs: Prefs }) {
             <input value={apiDraft} onChange={(e) => setApiDraft(e.target.value)} aria-label="API endpoint" className="mono" spellCheck={false} placeholder="http://localhost:7077"
               style={{ flex: 1, minWidth: 0, height: "100%", border: "none", background: "transparent", color: "var(--text-primary)", fontSize: "var(--fs-13)", outline: "none" }} />
           </div>
-          <button className="btn btn-sm fr" style={{ height: 34 }} disabled={!dirty} onClick={() => { const v = apiDraft.trim(); setApiDraft(v); prefs.setApiBase(v); showToast({ kind: "ok", title: "Endpoint saved", desc: v || "same-origin", mono: true }); }}>Save</button>
-          {dirty && <button className="btn btn-sm btn-ghost fr" style={{ height: 34 }} onClick={() => setApiDraft(prefs.apiBase)} aria-label="Reset"><Icon name="x" size={13} /></button>}
+          <button className="btn btn-sm fr" style={{ height: 34 }} disabled={!dirty} onClick={save}>Save</button>
+          {dirty && <button className="btn btn-sm btn-ghost fr" style={{ height: 34 }} onClick={() => setApiDraft(savedBase)} aria-label="Reset"><Icon name="x" size={13} /></button>}
         </div>
       </div>
 

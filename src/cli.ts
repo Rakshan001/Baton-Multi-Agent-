@@ -70,7 +70,7 @@ program
   .command('serve')
   .option('-p, --port <port>', 'port (default 7077)')
   .option('--write', 'enable write actions (merge / remove) from the dashboard')
-  .description('start the local JSON API for the web dashboard')
+  .description('start the local daemon: JSON API + the built web dashboard')
   .action((opts: { port?: string; write?: boolean }) => run(() => serveCmd(opts)));
 
 program

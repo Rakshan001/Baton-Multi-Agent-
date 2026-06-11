@@ -73,6 +73,18 @@ export interface ConflictEntry {
   label: string;
 }
 
+/** UI project identity — shown in the switcher/sidebar. Real mode derives it
+ *  from a connection's /api/meta; demo mode uses lib/preview WORKSPACE. */
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  branch: string;
+  framework: string;
+  color: string;
+  primary?: boolean;
+}
+
 /** Daemon metadata — GET /api/meta (repo root + current branch + capabilities). */
 export interface Meta {
   repo: string;
