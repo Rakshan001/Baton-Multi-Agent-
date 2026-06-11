@@ -11,6 +11,14 @@ execution-ready brief** to a cheaper agent (e.g. Cursor Auto / Copilot) that jus
 
 ---
 
+## Project docs
+
+- **[STATUS.md](STATUS.md)** — what's built, what's pending, where things live (start here when resuming work)
+- **[SETUP.md](SETUP.md)** — fresh-machine setup in ~10 minutes
+- **[CLAUDE.md](CLAUDE.md)** — context auto-loaded by Claude Code (conventions + commands)
+
+---
+
 ## Why
 
 Developers increasingly run two or three AI coding tools and split work to save money/quota
