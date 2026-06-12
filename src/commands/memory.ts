@@ -5,7 +5,7 @@
  */
 import { gitRoot } from '../git.js';
 import {
-  gcMemories, listMemories, mainRepoRoot, removeMemory, saveMemory,
+  gcMemories, listMemories, removeMemory, saveMemory,
   MemoryValidationError, type MemoryStatus,
 } from '../memory.js';
 
@@ -26,7 +26,7 @@ function printFact(f: MemoryStatus): void {
 }
 
 export async function memoryListCmd(): Promise<void> {
-  const root = await mainRepoRoot(await gitRoot());
+  const root = await gitRoot(); // memory.ts resolves the main repo root internally
   const facts = await listMemories(root);
   if (!facts.length) {
     console.log('no memories yet — agents save them with the `save_memory` MCP tool');
@@ -38,7 +38,7 @@ export async function memoryListCmd(): Promise<void> {
 }
 
 export async function memoryAddCmd(fact: string, opts: { type?: string; files?: string; task?: string }): Promise<void> {
-  const root = await mainRepoRoot(await gitRoot());
+  const root = await gitRoot(); // memory.ts resolves the main repo root internally
   try {
     const saved = await saveMemory(root, {
       fact,
@@ -59,14 +59,14 @@ export async function memoryAddCmd(fact: string, opts: { type?: string; files?: 
 }
 
 export async function memoryRmCmd(id: string): Promise<void> {
-  const root = await mainRepoRoot(await gitRoot());
+  const root = await gitRoot(); // memory.ts resolves the main repo root internally
   const ok = await removeMemory(root, id);
   console.log(ok ? `✓ removed ${id}` : `no memory '${id}'`);
   if (!ok) process.exitCode = 1;
 }
 
 export async function memoryGcCmd(): Promise<void> {
-  const root = await mainRepoRoot(await gitRoot());
+  const root = await gitRoot(); // memory.ts resolves the main repo root internally
   const removed = await gcMemories(root);
   console.log(removed.length ? `✓ removed ${removed.length} stale fact${removed.length === 1 ? '' : 's'}: ${removed.join(', ')}` : 'nothing stale to remove');
 }

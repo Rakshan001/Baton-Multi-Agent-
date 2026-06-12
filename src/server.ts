@@ -41,13 +41,13 @@ import { loadRouting, suggestAgent } from './routing.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
-import { AgentRunningError, runningHeadless, startAgent, stopAgent } from './spawn.js';
+import { AgentRunningError, HEADLESS_AGENTS, runningHeadless, startAgent, stopAgent, TerminalConflictError } from './spawn.js';
 import {
   createTerminal, detectTmux, getScrollback, hasTerminal, killTerminal, listTerminals,
   reattachOrphans, resizeTerminal, writeInput,
-  HeadlessConflictError, TerminalRunningError, TerminalUnavailableError,
+  HeadlessConflictError, TerminalRunningError, TerminalUnavailableError, INTERACTIVE_AGENTS,
 } from './terminals.js';
-import { gcMemories, listMemories, memoryDir, MemoryValidationError, removeMemory, saveMemory } from './memory.js';
+import { gcMemories, listMemories, mainRepoRoot, memoryDir, MemoryValidationError, removeMemory, saveMemory } from './memory.js';
 import { watch } from 'node:fs';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
@@ -217,6 +217,21 @@ function send(res: ServerResponse, status: number, body: unknown, origin: string
   res.end(json);
 }
 
+/** Single definition of the write-gate response — every mutating route uses it. */
+function denyReadOnly(res: ServerResponse, origin: string): void {
+  send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+}
+
+/** Parse a JSON request body; null = malformed (route replies 400). */
+async function readJsonBody<T>(req: IncomingMessage): Promise<T | null> {
+  try {
+    const raw = await readBody(req);
+    return (raw ? JSON.parse(raw) : {}) as T;
+  } catch {
+    return null;
+  }
+}
+
 function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -347,16 +362,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   // POST /api/kb/rebuild — queue an incremental (or full) rebuild (write-gated)
   if (method === 'POST' && path === '/api/kb/rebuild') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const state = await loadKb(root);
     if (!state) return send(res, 404, { error: 'knowledge base not initialized', hint: 'run: baton kb init' }, origin);
-    let body: { project?: string; full?: boolean } = {};
-    try {
-      const raw = await readBody(req);
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      return send(res, 400, { error: 'invalid JSON body' }, origin);
-    }
+    const body = await readJsonBody<{ project?: string; full?: boolean }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     const targets = body.project ? state.projects.filter((p) => p.id === body.project) : state.projects;
     if (body.project && targets.length === 0) return send(res, 404, { error: `no project '${body.project}'` }, origin);
     for (const p of targets) {
@@ -399,7 +409,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   // POST /api/kb/import — raw .tar.gz body (write-gated, 200MB cap)
   if (method === 'POST' && path === '/api/kb/import') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const tmpDir = join(root, '.baton', 'tmp');
     await mkdir(tmpDir, { recursive: true });
     const upload = join(tmpDir, `upload-${Date.now()}.tar.gz`);
@@ -445,6 +455,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const tmuxOk = await detectTmux();
     return send(res, 200, {
       repo: root, branch: await currentBranch(root), writeEnabled: !!opts.writeEnabled, version: VERSION,
+      agents: { headless: HEADLESS_AGENTS, interactive: INTERACTIVE_AGENTS },
       terminals: tmuxOk
         ? { available: true }
         : { available: false, hint: process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux' },
@@ -485,7 +496,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   // DELETE /api/tasks/:slug — remove worktree + branch (write-gated)
   if (m && method === 'DELETE') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const slug = decodeURIComponent(m[1]);
     const force = url.searchParams.get('force') === 'true';
     try {
@@ -512,14 +523,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
   // POST /api/memory — quick-add from the dashboard (write-gated)
   if (method === 'POST' && path === '/api/memory') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
-    let body: { fact?: string; type?: string; files?: string[]; agent?: string; task?: string } = {};
-    try {
-      const raw = await readBody(req);
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      return send(res, 400, { error: 'invalid JSON body' }, origin);
-    }
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ fact?: string; type?: string; files?: string[]; agent?: string; task?: string }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
       const saved = await saveMemory(root, { fact: body.fact ?? '', type: body.type, files: body.files, agent: body.agent ?? 'dashboard', task: body.task });
       bus.publish({ type: 'memory.updated' });
@@ -531,7 +537,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
   // POST /api/memory/gc — drop stale facts (write-gated)
   if (method === 'POST' && path === '/api/memory/gc') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const removed = await gcMemories(root);
     if (removed.length) bus.publish({ type: 'memory.updated' });
     return send(res, 200, { removed }, origin);
@@ -539,7 +545,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // DELETE /api/memory/:id (write-gated)
   const memDel = path.match(/^\/api\/memory\/([^/]+)$/);
   if (memDel && method === 'DELETE') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const ok = await removeMemory(root, decodeURIComponent(memDel[1]));
     if (ok) bus.publish({ type: 'memory.updated' });
     return send(res, ok ? 200 : 404, ok ? { removed: true } : { error: 'no such memory' }, origin);
@@ -565,14 +571,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!hasTerminal(slug) && (await detectTmux())) await reattachOrphans(root);
 
     if (!sub && method === 'POST') {
-      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
-      let body: { agent?: string; prompt?: string; cols?: number; rows?: number } = {};
-      try {
-        const raw = await readBody(req);
-        body = raw ? JSON.parse(raw) : {};
-      } catch {
-        return send(res, 400, { error: 'invalid JSON body' }, origin);
-      }
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
+      const body = await readJsonBody<{ agent?: string; prompt?: string; cols?: number; rows?: number }>(req);
+      if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
       try {
         return send(res, 201, await createTerminal(slug, body, root), origin);
       } catch (e) {
@@ -582,18 +583,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       }
     }
     if (!sub && method === 'DELETE') {
-      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
       return send(res, 200, { killed: await killTerminal(slug) }, origin);
     }
     if (sub === 'input' && method === 'POST') {
-      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
-      let body: { data?: string } = {};
-      try {
-        const raw = await readBody(req);
-        body = raw ? JSON.parse(raw) : {};
-      } catch {
-        return send(res, 400, { error: 'invalid JSON body' }, origin);
-      }
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
+      const body = await readJsonBody<{ data?: string }>(req);
+      if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
       if (typeof body.data !== 'string') return send(res, 400, { error: 'pass { data: base64 }' }, origin);
       const ok = writeInput(slug, Buffer.from(body.data, 'base64'));
       return ok
@@ -601,14 +597,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
         : send(res, 404, { error: `no live terminal for '${slug}'` }, origin);
     }
     if (sub === 'resize' && method === 'POST') {
-      if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
-      let body: { cols?: number; rows?: number } = {};
-      try {
-        const raw = await readBody(req);
-        body = raw ? JSON.parse(raw) : {};
-      } catch {
-        return send(res, 400, { error: 'invalid JSON body' }, origin);
-      }
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
+      const body = await readJsonBody<{ cols?: number; rows?: number }>(req);
+      if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
       const ok = await resizeTerminal(slug, Number(body.cols), Number(body.rows));
       return send(res, ok ? 200 : 404, ok ? { resized: true } : { error: `no live terminal for '${slug}'` }, origin);
     }
@@ -620,7 +611,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // POST /api/tasks/:slug/agent/start|stop — headless agent control (write-gated)
   const am = path.match(/^\/api\/tasks\/([^/]+)\/agent\/(start|stop)$/);
   if (am && method === 'POST') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const slug = decodeURIComponent(am[1]);
     if (am[2] === 'stop') {
       return send(res, 200, { stopped: stopAgent(slug) }, origin);
@@ -628,17 +619,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (hasTerminal(slug)) {
       return send(res, 409, { error: `an interactive terminal is already open for '${slug}' — close it before starting a headless run` }, origin);
     }
-    let body: { agent?: string; prompt?: string } = {};
-    try {
-      const raw = await readBody(req);
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      return send(res, 400, { error: 'invalid JSON body' }, origin);
-    }
+    const body = await readJsonBody<{ agent?: string; prompt?: string }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
       return send(res, 201, await startAgent(slug, body, root), origin);
     } catch (e) {
-      if (e instanceof AgentRunningError) return send(res, 409, { error: e.message }, origin);
+      if (e instanceof AgentRunningError || e instanceof TerminalConflictError) return send(res, 409, { error: e.message }, origin);
       return send(res, 400, { error: (e as Error).message }, origin);
     }
   }
@@ -647,15 +633,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // GET  /api/tasks/:slug/handoff — read the current brief
   const hm = path.match(/^\/api\/tasks\/([^/]+)\/handoff$/);
   if (hm && method === 'POST') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const slug = decodeURIComponent(hm[1]);
-    let body: { toAgent?: string; note?: string; commitPending?: boolean } = {};
-    try {
-      const raw = await readBody(req);
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      return send(res, 400, { error: 'invalid JSON body' }, origin);
-    }
+    const body = await readJsonBody<{ toAgent?: string; note?: string; commitPending?: boolean }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
       // toAgent absent or "auto" → routed by baton.config.json rules
       const result = await passTask(slug, { to: body.toAgent, note: body.note, commitPending: body.commitPending }, root);
@@ -683,15 +664,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // POST /api/tasks/:slug/merge — merge branch into current (write-gated)
   const mm = path.match(/^\/api\/tasks\/([^/]+)\/merge$/);
   if (mm && method === 'POST') {
-    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const slug = decodeURIComponent(mm[1]);
-    let body: { squash?: boolean; archive?: boolean } = {};
-    try {
-      const raw = await readBody(req);
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      return send(res, 400, { error: 'invalid JSON body' }, origin);
-    }
+    const body = await readJsonBody<{ squash?: boolean; archive?: boolean }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
       return send(res, 200, await mergeTaskBranch(slug, body, root), origin);
     } catch (e) {
@@ -725,7 +701,7 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // Memory facts are written by separate MCP processes (one per agent session);
   // watch the store so the dashboard updates live. Debounced — saves touch 2 paths.
   try {
-    const memDirPath = memoryDir(root);
+    const memDirPath = memoryDir(await mainRepoRoot(root));
     await mkdir(memDirPath, { recursive: true });
     let memTimer: ReturnType<typeof setTimeout> | null = null;
     watch(memDirPath, () => {

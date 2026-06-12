@@ -4,6 +4,7 @@
 import { resolve } from 'node:path';
 import { gitRoot, removeWorktree, worktreeStatus } from '../git.js';
 import { getTask, removeTask, TaskNotFoundError } from '../store.js';
+import { killSessionFor } from '../util/tmux.js';
 import { bus } from '../events.js';
 
 /** Thrown when removing the repo's own main worktree is attempted. */
@@ -44,6 +45,12 @@ export async function removeTaskWorktree(
     const status = await worktreeStatus(task.worktreePath);
     if (status.state !== 'clean') throw new DirtyWorktreeError(slug, status.state);
   }
+
+  // Kill any interactive agent session BEFORE deleting its working directory —
+  // via tmux directly (deterministic session name), so this works no matter
+  // which process owns the terminal (CLI rm vs daemon-owned session). The
+  // owning daemon's control client sees the session die and cleans itself up.
+  await killSessionFor(repoRoot, slug);
 
   await removeWorktree(task.worktreePath, task.branch, repoRoot);
   await removeTask(repoRoot, slug);

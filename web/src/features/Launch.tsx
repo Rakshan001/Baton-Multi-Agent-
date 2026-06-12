@@ -29,15 +29,20 @@ export function LaunchSession({
   const [suggestion, setSuggestion] = useState<RoutingSuggestion | null>(null);
   const [startMode, setStartMode] = useState<"none" | "headless" | "terminal">("none");
   const [terminals, setTerminals] = useState<{ available: boolean; hint?: string } | null>(null);
+  const [headlessAgents, setHeadlessAgents] = useState<string[]>(["claude", "codex", "gemini"]); // fallback until meta loads
+  const [interactiveAgents, setInteractiveAgents] = useState<string[] | null>(null); // null = any agent
   const userPickedAgent = useRef(initialAgent !== null);
-  const HEADLESS = ["claude", "codex", "gemini"];
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
 
-  // Terminal capability (tmux on the daemon) decides if "interactive" is offered.
+  // Capabilities come from the daemon (single source of truth: spawn.ts /
+  // terminals.ts launcher maps) — the UI never hard-guesses what it can launch.
   useEffect(() => {
     void BatonAPI.getMeta().then((m) => {
-      if (alive.current) setTerminals(m.terminals ?? { available: false });
+      if (!alive.current) return;
+      setTerminals(m.terminals ?? { available: false });
+      if (m.agents?.headless) setHeadlessAgents(m.agents.headless);
+      if (m.agents?.interactive) setInteractiveAgents(m.agents.interactive);
     }).catch(() => { if (alive.current) setTerminals({ available: false }); });
   }, []);
 
@@ -64,8 +69,8 @@ export function LaunchSession({
     return () => { alive.current = false; document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
   }, [onClose, phase]);
 
-  const canHeadless = writeEnabled && HEADLESS.includes(agent);
-  const canTerminal = writeEnabled && !!terminals?.available;
+  const canHeadless = writeEnabled && headlessAgents.includes(agent);
+  const canTerminal = writeEnabled && !!terminals?.available && (interactiveAgents === null || interactiveAgents.includes(agent));
   const mode = startMode === "headless" && !canHeadless ? "none"
     : startMode === "terminal" && !canTerminal ? "none"
     : startMode;

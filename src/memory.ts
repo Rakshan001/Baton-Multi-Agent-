@@ -15,7 +15,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { git } from './util/exec.js';
@@ -165,16 +165,41 @@ export async function mainRepoRoot(cwd?: string): Promise<string> {
   return dirname(abs);
 }
 
+/**
+ * Every public function below resolves the main root ITSELF (cached), so a
+ * caller holding a worktree path — `baton pass` run from inside a worktree
+ * via the Claude Stop hook, a daemon started in the wrong directory — can
+ * never read or write a per-worktree shadow store.
+ */
+const rootCache = new Map<string, string>();
+async function resolveRoot(root: string): Promise<string> {
+  const hit = rootCache.get(root);
+  if (hit) return hit;
+  const main = await mainRepoRoot(root);
+  rootCache.set(root, main);
+  return main;
+}
+
 export function memoryDir(mainRoot: string): string {
   return join(mainRoot, '.baton', 'memory', 'facts');
 }
 
 const sha1 = (data: string | Buffer) => createHash('sha1').update(data).digest('hex').slice(0, 12);
 
+/** Content hash of an anchored file, cached by mtime (re-hash only on change). */
+const hashCache = new Map<string, { mtimeMs: number; hash: string }>();
 async function fileHash(mainRoot: string, relPath: string): Promise<string> {
+  const abs = join(mainRoot, relPath);
   try {
-    return sha1(await readFile(join(mainRoot, relPath)));
+    const st = await stat(abs);
+    const hit = hashCache.get(abs);
+    if (hit && hit.mtimeMs === st.mtimeMs) return hit.hash;
+    const hash = sha1(await readFile(abs));
+    if (hashCache.size > 4096) hashCache.clear();
+    hashCache.set(abs, { mtimeMs: st.mtimeMs, hash });
+    return hash;
   } catch {
+    hashCache.delete(abs);
     return ''; // absent
   }
 }
@@ -191,7 +216,8 @@ export interface SaveMemoryInput {
   task?: string;
 }
 
-export async function saveMemory(mainRoot: string, input: SaveMemoryInput): Promise<MemoryStatus> {
+export async function saveMemory(root: string, input: SaveMemoryInput): Promise<MemoryStatus> {
+  const mainRoot = await resolveRoot(root);
   const fact = (input.fact ?? '').trim();
   if (fact.length < 10) throw new MemoryValidationError('fact too short — write 1–3 full sentences (why + how to apply)');
   if (fact.length > FACT_MAX_CHARS) throw new MemoryValidationError(`fact too long (${fact.length} > ${FACT_MAX_CHARS} chars) — store the insight, not the artifact`);
@@ -249,22 +275,51 @@ export async function saveMemory(mainRoot: string, input: SaveMemoryInput): Prom
   return { ...record, freshness: 'fresh', staleReason: null, commitsBehind: 0 };
 }
 
+/** Parsed facts cached by file mtime — repeated polls re-parse only changes. */
+const factCache = new Map<string, { mtimeMs: number; fact: MemoryFact | null }>();
+
 async function listMemoryFacts(mainRoot: string): Promise<MemoryFact[]> {
   const dir = memoryDir(mainRoot);
   if (!existsSync(dir)) return [];
   const out: MemoryFact[] = [];
+  const seen = new Set<string>();
   for (const name of await readdir(dir)) {
     if (!name.endsWith('.md')) continue;
-    const parsed = parseFactFile(await readFile(join(dir, name), 'utf-8').catch(() => ''));
-    if (parsed) out.push(parsed);
+    const file = join(dir, name);
+    seen.add(file);
+    try {
+      const st = await stat(file);
+      const hit = factCache.get(file);
+      if (hit && hit.mtimeMs === st.mtimeMs) {
+        if (hit.fact) out.push(hit.fact);
+        continue;
+      }
+      const parsed = parseFactFile(await readFile(file, 'utf-8'));
+      factCache.set(file, { mtimeMs: st.mtimeMs, fact: parsed });
+      if (parsed) out.push(parsed);
+    } catch {
+      factCache.delete(file); // raced with a delete — skip
+    }
+  }
+  // Drop cache entries for deleted files so memory stays bounded.
+  for (const key of factCache.keys()) {
+    if (key.startsWith(dir) && !seen.has(key)) factCache.delete(key);
   }
   return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/** rev-list counts cached per (anchor, HEAD) — stable until a new commit lands. */
+const behindCache = new Map<string, number | null>();
+
 /** Re-check every fact's evidence anchors and report freshness. */
-export async function listMemories(mainRoot: string): Promise<MemoryStatus[]> {
+export async function listMemories(root: string): Promise<MemoryStatus[]> {
+  const mainRoot = await resolveRoot(root);
   const facts = await listMemoryFacts(mainRoot);
-  const behindCache = new Map<string, number | null>();
+  let head: string | null = null;
+  try {
+    head = await git(['rev-parse', 'HEAD'], mainRoot);
+  } catch { /* empty repo — commit distance unavailable */ }
+
   const statuses: MemoryStatus[] = [];
   for (const f of facts) {
     let staleReason: string | null = null;
@@ -276,15 +331,17 @@ export async function listMemories(mainRoot: string): Promise<MemoryStatus[]> {
       }
     }
     let commitsBehind: number | null = null;
-    if (f.anchors.commit) {
-      if (!behindCache.has(f.anchors.commit)) {
+    if (f.anchors.commit && head) {
+      const key = `${f.anchors.commit}..${head}`;
+      if (!behindCache.has(key)) {
+        if (behindCache.size > 2048) behindCache.clear();
         try {
-          behindCache.set(f.anchors.commit, Number(await git(['rev-list', '--count', `${f.anchors.commit}..HEAD`], mainRoot)));
+          behindCache.set(key, Number(await git(['rev-list', '--count', key], mainRoot)));
         } catch {
-          behindCache.set(f.anchors.commit, null);
+          behindCache.set(key, null); // unknown anchor (gc'd / rewritten history)
         }
       }
-      commitsBehind = behindCache.get(f.anchors.commit) ?? null;
+      commitsBehind = behindCache.get(key) ?? null;
     }
     const freshness: Freshness = staleReason ? 'stale' : commitsBehind && commitsBehind > 0 ? 'aging' : 'fresh';
     statuses.push({ ...f, freshness, staleReason, commitsBehind });
@@ -304,8 +361,8 @@ export interface RecallResult {
  * the caller's summary) — a stale "fact" presented as truth is how models
  * hallucinate.
  */
-export async function recallMemories(mainRoot: string, opts: { topic?: string; limit?: number } = {}): Promise<RecallResult> {
-  const all = await listMemories(mainRoot);
+export async function recallMemories(root: string, opts: { topic?: string; limit?: number } = {}): Promise<RecallResult> {
+  const all = await listMemories(root);
   const usable = all.filter((f) => f.freshness !== 'stale');
   const limit = Math.max(1, Math.min(opts.limit ?? 10, 50));
   let picked = usable;
@@ -319,20 +376,22 @@ export async function recallMemories(mainRoot: string, opts: { topic?: string; l
   return { facts: picked.slice(0, limit), total: all.length, staleDropped: all.length - usable.length };
 }
 
-export async function removeMemory(mainRoot: string, id: string): Promise<boolean> {
+export async function removeMemory(root: string, id: string): Promise<boolean> {
+  const mainRoot = await resolveRoot(root);
   const file = join(memoryDir(mainRoot), `${id.replace(/[^a-z0-9-]/gi, '')}.md`);
   if (!existsSync(file)) return false;
   await rm(file, { force: true });
+  factCache.delete(file);
   return true;
 }
 
 /** Drop stale facts (changed/removed anchors). Returns removed ids. */
-export async function gcMemories(mainRoot: string): Promise<string[]> {
-  const all = await listMemories(mainRoot);
+export async function gcMemories(root: string): Promise<string[]> {
+  const all = await listMemories(root);
   const removed: string[] = [];
   for (const f of all) {
     if (f.freshness === 'stale') {
-      if (await removeMemory(mainRoot, f.id)) removed.push(f.id);
+      if (await removeMemory(root, f.id)) removed.push(f.id);
     }
   }
   return removed;

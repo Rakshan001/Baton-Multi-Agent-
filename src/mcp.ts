@@ -19,7 +19,7 @@ import { gitRoot } from './git.js';
 import { queryFile } from './history.js';
 import { checkFiles, getSignals } from './signals.js';
 import { getReport, listReports } from './reports.js';
-import { mainRepoRoot, MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
+import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
 
 const asText = (data: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
@@ -96,8 +96,8 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ fact, type, files, agent, task }) => {
       try {
-        const main = await mainRepoRoot(root);
-        const saved = await saveMemory(main, { fact, type, files, agent, task });
+        // memory.ts resolves the MAIN repo root internally (worktree-safe).
+        const saved = await saveMemory(root, { fact, type, files, agent, task });
         return asText({ saved: saved.id, supersedes: saved.supersedes, anchoredFiles: saved.anchors.files.map((f) => f.path) });
       } catch (e) {
         if (e instanceof MemoryValidationError) return asText({ rejected: e.message });
@@ -117,8 +117,7 @@ export async function startMcpServer(): Promise<void> {
       },
     },
     async ({ topic, limit }) => {
-      const main = await mainRepoRoot(root);
-      const r = await recallMemories(main, { topic, limit });
+      const r = await recallMemories(root, { topic, limit });
       return asText({
         facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
         totalStored: r.total,

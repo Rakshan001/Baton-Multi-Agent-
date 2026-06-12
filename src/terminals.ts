@@ -14,13 +14,17 @@
  * Safety: agents run with the user's own CLI auth and DEFAULT permission
  * settings — Baton never adds permission-bypass flags.
  */
-import { createHash } from 'node:crypto';
 import { execa, type ResultPromise } from 'execa';
 import { gitRoot } from './git.js';
 import { getTask } from './store.js';
 import { probeBinary } from './util/exec.js';
+import { detectTmux, repoPrefix, sessionNameFor, slugFromSession, tmux, tmuxTry } from './util/tmux.js';
 import { bus } from './events.js';
 import { hasHeadlessRun } from './spawn.js';
+
+// Session naming + tmux exec live in util/tmux.js so spawn.ts and rm.ts can
+// coordinate cross-process through the same deterministic names.
+export { detectTmux, repoPrefix, sessionNameFor, slugFromSession };
 
 export interface InteractiveLauncher {
   cmd: string;
@@ -65,20 +69,6 @@ export class HeadlessConflictError extends Error {
 /* ------------------------------------------------------------------ */
 /* Pure helpers (exported for tests)                                   */
 /* ------------------------------------------------------------------ */
-
-/** Stable per-repo prefix so two repos' daemons can never collide on a slug. */
-export function repoPrefix(root: string): string {
-  return `baton-${createHash('sha1').update(root).digest('hex').slice(0, 6)}-`;
-}
-
-export function sessionNameFor(root: string, slug: string): string {
-  return `${repoPrefix(root)}${slug}`;
-}
-
-export function slugFromSession(root: string, sessionName: string): string | null {
-  const prefix = repoPrefix(root);
-  return sessionName.startsWith(prefix) ? sessionName.slice(prefix.length) : null;
-}
 
 /** POSIX single-quote escaping — safe on every tmux version's shell-command. */
 export function shQuote(s: string): string {
@@ -175,12 +165,6 @@ interface TerminalSession extends TerminalInfo {
 
 const terminals = new Map<string, TerminalSession>();
 
-let tmuxProbe: Promise<boolean> | null = null;
-export function detectTmux(): Promise<boolean> {
-  tmuxProbe ??= probeBinary('tmux', ['-V']);
-  return tmuxProbe;
-}
-
 export function hasTerminal(slug: string): boolean {
   return terminals.has(slug);
 }
@@ -194,22 +178,6 @@ export function listTerminals(): TerminalInfo[] {
 export function getScrollback(slug: string): Buffer | null {
   return terminals.get(slug)?.scrollback.snapshot() ?? null;
 }
-
-/**
- * One-shot tmux calls get a hard timeout: a wedged tmux server (e.g. a stale
- * client that stopped draining output) must surface as an error, never hang
- * the daemon's request handlers.
- */
-const TMUX_TIMEOUT_MS = 10_000;
-const tmux = (args: string[]) => execa('tmux', args, { timeout: TMUX_TIMEOUT_MS });
-const tmuxTry = async (args: string[]): Promise<boolean> => {
-  try {
-    await tmux(args);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 /* ------------------------------------------------------------------ */
 /* Control client: one per session, owns output + input                */

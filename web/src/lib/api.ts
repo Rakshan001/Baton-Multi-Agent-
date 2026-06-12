@@ -223,7 +223,11 @@ class BatonClient {
     if (this.demo) {
       await this.demoGate();
       const p = this.activeProject();
-      return { repo: p.path, branch: p.branch, writeEnabled: this.writeEnabled, version: "demo", terminals: { available: true } };
+      return {
+        repo: p.path, branch: p.branch, writeEnabled: this.writeEnabled, version: "demo",
+        terminals: { available: true },
+        agents: { headless: ["claude", "codex", "gemini"], interactive: ["claude", "cursor", "codex", "gemini", "aider", "opencode"] },
+      };
     }
     return this.request<Meta>("/api/meta");
   }

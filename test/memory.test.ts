@@ -152,6 +152,25 @@ describe('memory store (real temp git repo)', () => {
     });
     expect(saved.anchors.files.map((f) => f.path)).toEqual(['a.txt']);
   });
+
+  it('resolves the MAIN repo store even when called with a worktree path', async () => {
+    // Reproduces the `baton pass`-from-Stop-hook scenario: cwd is the worktree.
+    const wt = join(root, '.baton', 'wt', 'task-x');
+    await execa('git', ['worktree', 'add', '-b', 'baton/task-x', wt], { cwd: root });
+
+    const saved = await saveMemory(wt, { fact: 'Saved from inside a worktree; must land in the shared main-repo store.' });
+    expect(saved.id).toMatch(/^mem-/);
+
+    // Visible from the main root AND from the worktree — one shared store.
+    const fromMain = await listMemories(root);
+    const fromWt = await listMemories(wt);
+    expect(fromMain.some((f) => f.id === saved.id)).toBe(true);
+    expect(fromWt.some((f) => f.id === saved.id)).toBe(true);
+
+    // And nothing was written into a per-worktree shadow store.
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(join(wt, '.baton', 'memory'))).toBe(false);
+  });
 });
 
 describe('memoryBriefSection', () => {

@@ -93,6 +93,9 @@ export interface Meta {
   version: string;
   /** Interactive-terminal capability (tmux on the daemon's PATH). */
   terminals?: { available: boolean; hint?: string };
+  /** Which agents each launch mode supports — single source of truth is the
+   *  daemon (src/spawn.ts LAUNCHERS / src/terminals.ts INTERACTIVE_LAUNCHERS). */
+  agents?: { headless: string[]; interactive: string[] };
 }
 
 /** One live interactive terminal — GET /api/terminals (src/terminals.ts). */
