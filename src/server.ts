@@ -47,6 +47,8 @@ import {
   reattachOrphans, resizeTerminal, writeInput,
   HeadlessConflictError, TerminalRunningError, TerminalUnavailableError,
 } from './terminals.js';
+import { gcMemories, listMemories, memoryDir, MemoryValidationError, removeMemory, saveMemory } from './memory.js';
+import { watch } from 'node:fs';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
@@ -504,6 +506,45 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, { running: runningHeadless() }, origin);
   }
 
+  // GET /api/memory — all facts with evidence-checked freshness
+  if (method === 'GET' && path === '/api/memory') {
+    return send(res, 200, { facts: await listMemories(root) }, origin);
+  }
+  // POST /api/memory — quick-add from the dashboard (write-gated)
+  if (method === 'POST' && path === '/api/memory') {
+    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    let body: { fact?: string; type?: string; files?: string[]; agent?: string; task?: string } = {};
+    try {
+      const raw = await readBody(req);
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      return send(res, 400, { error: 'invalid JSON body' }, origin);
+    }
+    try {
+      const saved = await saveMemory(root, { fact: body.fact ?? '', type: body.type, files: body.files, agent: body.agent ?? 'dashboard', task: body.task });
+      bus.publish({ type: 'memory.updated' });
+      return send(res, 201, saved, origin);
+    } catch (e) {
+      if (e instanceof MemoryValidationError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+  // POST /api/memory/gc — drop stale facts (write-gated)
+  if (method === 'POST' && path === '/api/memory/gc') {
+    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    const removed = await gcMemories(root);
+    if (removed.length) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, { removed }, origin);
+  }
+  // DELETE /api/memory/:id (write-gated)
+  const memDel = path.match(/^\/api\/memory\/([^/]+)$/);
+  if (memDel && method === 'DELETE') {
+    if (!opts.writeEnabled) return send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+    const ok = await removeMemory(root, decodeURIComponent(memDel[1]));
+    if (ok) bus.publish({ type: 'memory.updated' });
+    return send(res, ok ? 200 : 404, ok ? { removed: true } : { error: 'no such memory' }, origin);
+  }
+
   // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
   if (method === 'GET' && path === '/api/terminals') {
     const available = await detectTmux();
@@ -681,6 +722,17 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   bus.onType('task.removed', (e) => {
     if (e.event.type === 'task.removed') void killTerminal(e.event.slug);
   });
+  // Memory facts are written by separate MCP processes (one per agent session);
+  // watch the store so the dashboard updates live. Debounced — saves touch 2 paths.
+  try {
+    const memDirPath = memoryDir(root);
+    await mkdir(memDirPath, { recursive: true });
+    let memTimer: ReturnType<typeof setTimeout> | null = null;
+    watch(memDirPath, () => {
+      if (memTimer) clearTimeout(memTimer);
+      memTimer = setTimeout(() => bus.publish({ type: 'memory.updated' }), 300);
+    });
+  } catch { /* memory watching is best-effort */ }
   // Keep CODEBASE.md in step with graph rebuilds. A multi-project rebuild
   // fires several kb.rebuilt events — debounce so we regenerate once.
   let docsTimer: ReturnType<typeof setTimeout> | null = null;

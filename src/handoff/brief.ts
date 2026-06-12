@@ -11,6 +11,7 @@ import { gitTry } from '../util/exec.js';
 import type { Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { queryGraph } from '../kb/graphify.js';
+import { memoryBriefSection, recallMemories } from '../memory.js';
 import { sessionContextFor, type SessionContext } from './claude-session.js';
 
 export interface HandoffMeta {
@@ -120,6 +121,14 @@ export async function buildBrief(
       if (excerpt) body.push('', '## Codebase map (graph excerpt)', '```', excerpt, '```');
     }
   }
+
+  // Project memory: facts earlier sessions learned, evidence-checked — stale
+  // facts (changed anchors) are withheld so the executor never inherits rot.
+  try {
+    const recalled = await recallMemories(opts.root, { topic: task.task, limit: 6 });
+    const section = memoryBriefSection(recalled.facts, recalled.staleDropped);
+    if (section) body.push('', section);
+  } catch { /* memory is an enhancement — never block a handoff */ }
 
   body.push(
     '',

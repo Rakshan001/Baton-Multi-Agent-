@@ -24,7 +24,8 @@ export type BatonEvent =
   | { type: 'handoff.created'; slug: string; toAgent: string }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
-  | { type: 'terminal.output'; slug: string; data: string /* base64 */ };
+  | { type: 'terminal.output'; slug: string; data: string /* base64 */ }
+  | { type: 'memory.updated' };
 
 export type BatonEventType = BatonEvent['type'];
 

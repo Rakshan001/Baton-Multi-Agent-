@@ -103,6 +103,21 @@ export interface TerminalInfo {
   startedAt: string;
 }
 
+/** One project-memory fact with evidence-checked freshness — GET /api/memory (src/memory.ts). */
+export interface MemoryFactStatus {
+  id: string;
+  type: "decision" | "gotcha" | "convention" | "reference" | "preference";
+  fact: string;
+  agent: string | null;
+  task: string | null;
+  createdAt: string;
+  anchors: { commit: string | null; files: { path: string; hash: string }[] };
+  supersedes: string | null;
+  freshness: "fresh" | "aging" | "stale";
+  staleReason: string | null;
+  commitsBehind: number | null;
+}
+
 /** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */
 export interface KbProjectStat {
   id: string;
