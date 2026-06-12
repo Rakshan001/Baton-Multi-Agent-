@@ -191,6 +191,12 @@ export function LaunchSession({
                   )}
                 </div>
               )}
+              {!writeEnabled && (
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 10, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", padding: "7px 10px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)" }}>
+                  <Icon name="terminal" size={12} style={{ flex: "none" }} />
+                  <span>Only the worktree is created here. To also start the agent (interactive terminal / headless), run the daemon with <span className="mono" style={{ color: "var(--accent-text)" }}>baton serve --write</span>.</span>
+                </div>
+              )}
               {suggestion && suggestion.source === "rule" && suggestion.agent !== agent && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "var(--fs-12)", color: "var(--text-secondary)", padding: "7px 10px", borderRadius: "var(--r-sm)", background: "var(--accent-soft)", border: "1px dashed var(--accent-border)" }}>
                   <Icon name="sparkle" size={13} style={{ color: "var(--accent)", flex: "none" }} />

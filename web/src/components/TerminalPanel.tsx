@@ -159,8 +159,8 @@ export function TerminalPanel({ slug, task, writeEnabled, demo }: {
       {(!canType || exited) && (
         <div style={{ flex: "none", padding: "5px 12px", borderTop: "1px solid var(--border-subtle)", fontSize: 11, color: "var(--text-tertiary)", background: "var(--bg-surface)" }}>
           {exited ? "Session ended — relaunch from the task to start a new one."
-            : demo ? "Demo playback — real sessions are fully interactive."
-            : "View-only — start the daemon with --write to type."}
+            : demo ? "Demo playback — for real interactive terminals run `baton serve --write` and open the daemon dashboard (default localhost:7077), or turn demo off in Tweaks."
+            : "View-only — restart the daemon with `baton serve --write` to type."}
         </div>
       )}
     </div>

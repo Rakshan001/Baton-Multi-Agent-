@@ -357,7 +357,7 @@ export function LiveSession({
               style={!BatonAPI.writeEnabled || termStarting ? { opacity: 0.55, cursor: "not-allowed" } : {}}>
               <Icon name="terminal" size={14} /> {termStarting ? "Starting…" : `Open ${getAgent((task?.agent ?? "claude") as AgentId).short} terminal`}
             </button>
-            {!BatonAPI.writeEnabled && <span style={{ fontSize: 11, color: "var(--text-quaternary)" }}>read-only daemon — terminals are view-only here</span>}
+            {!BatonAPI.writeEnabled && <span style={{ fontSize: 11, color: "var(--text-quaternary)" }}>daemon is read-only — restart it with <span className="mono">baton serve --write</span> to open terminals</span>}
           </>
         )}
       </div>
