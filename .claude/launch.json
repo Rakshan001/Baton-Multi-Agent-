@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "baton-web",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "web"],
-      "port": 5173
+      "name": "baton-daemon",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["dist/cli.js", "serve", "--write", "-p", "7077"],
+      "port": 7077
     }
   ]
 }

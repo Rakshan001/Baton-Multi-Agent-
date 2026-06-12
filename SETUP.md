@@ -7,6 +7,8 @@ From zero to the running dashboard in ~10 minutes. (What/why: [STATUS.md](STATUS
 - **Node.js ≥ 20** (`node --version`)
 - **git**
 - **uv** (Python tool manager, for graphify): https://docs.astral.sh/uv/ — or pipx/pip
+- **tmux** (interactive agent terminals in the dashboard): `brew install tmux` /
+  `apt install tmux` — optional; without it, headless runs still work
 
 ## Install
 

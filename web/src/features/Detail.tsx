@@ -7,7 +7,7 @@ import { Sheet, AgentBadge, StatusPill, SyncChips, ProgressBar, ErrorState, Conf
 import { getAgent } from "../lib/registry";
 import { deriveColumn, COLUMN_DEFS } from "../lib/derive";
 import { timeAgo } from "../lib/format";
-import { BatonAPI } from "../lib/api";
+import { ApiError, BatonAPI } from "../lib/api";
 import { showToast } from "../lib/toast";
 import { getDiff } from "../lib/preview";
 import type { TaskDetail } from "../types";
@@ -189,6 +189,23 @@ export function DetailSheet({
                 <button className="btn fr" onClick={() => onHandoff(slug)} style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9 }} data-tip="Hand this work to another agent">
                   <Icon name="share" size={14} style={{ color: "var(--accent-text)" }} />
                   <span style={{ textAlign: "left" }}>Hand off<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>route to another agent</span></span>
+                </button>
+                <button className="btn fr" disabled={!writeEnabled}
+                  onClick={gate(async () => {
+                    try {
+                      const t = await BatonAPI.createTerminal(slug, { agent: (task.agent ?? "claude") as NonNullable<typeof task.agent> });
+                      showToast({ kind: "ok", title: `${t.agent} terminal open`, desc: "Interactive session on the Live screen" });
+                      onLive(slug);
+                    } catch (e) {
+                      // 409 = a terminal is already live for this task — just go watch it.
+                      if (e instanceof ApiError && e.code === "CONFLICT") { onLive(slug); return; }
+                      showToast({ kind: "error", title: "Could not open terminal", desc: (e as Error).message });
+                    }
+                  })}
+                  style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }) }}
+                  data-tip={writeEnabled ? "Run the agent interactively (tmux) in this worktree" : readOnlyTip}>
+                  <Icon name="terminal" size={14} style={{ color: "var(--accent-text)" }} />
+                  <span style={{ textAlign: "left" }}>Open terminal<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>interactive · in Live</span></span>
                 </button>
                 <button className="btn fr" disabled={!writeEnabled}
                   onClick={gate(async () => {

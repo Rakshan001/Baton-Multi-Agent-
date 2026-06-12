@@ -7,13 +7,15 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Icon, type IconName } from "../components/Icon";
 import { AgentBadge } from "../components/primitives";
+import { TerminalPanel } from "../components/TerminalPanel";
 import { getAgent, AGENT_REGISTRY, AgentGlyph } from "../lib/registry";
 import { deriveColumn, COLUMN_DEFS } from "../lib/derive";
 import { BatonAPI, branchFor } from "../lib/api";
 import { buildActivity, getDiff, type LiveEvent, type LiveEventType } from "../lib/preview";
+import { showToast } from "../lib/toast";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import type { BatonEventMsg } from "../hooks/useEvents";
-import type { StatusRow } from "../types";
+import type { AgentId, StatusRow, TerminalInfo } from "../types";
 
 const LIVE_EV: Record<LiveEventType, { icon: IconName | null; c: string; italic?: boolean; term?: boolean }> = {
   boot: { icon: "link", c: "var(--accent-text)" },
@@ -150,6 +152,11 @@ export function LiveSession({
   const [demoStreaming, setDemoStreaming] = useState(true);
   const [elapsed, setElapsed] = useState(0);
   const [railOpen, setRailOpen] = useState(false);
+  const [tab, setTab] = useState<"activity" | "terminal">("activity");
+  const [terminal, setTerminal] = useState<TerminalInfo | null>(null);
+  const [termCap, setTermCap] = useState<{ available: boolean; hint?: string } | null>(null);
+  const [termStarting, setTermStarting] = useState(false);
+  const userPickedTab = useRef(false);
   const showRail = useMediaQuery("(min-width: 780px)");
   const logRef = useRef<HTMLDivElement>(null);
   const others = useMemo(() => sessions.filter((s) => s.agent && s.slug !== slug), [sessions, slug]);
@@ -238,6 +245,46 @@ export function LiveSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, demo, subscribe]);
 
+  // Interactive terminal: discover live sessions + capability for this slug.
+  useEffect(() => {
+    let alive = true;
+    setTerminal(null); setTab("activity"); userPickedTab.current = false;
+    void BatonAPI.getTerminals().then((r) => {
+      if (!alive) return;
+      setTermCap({ available: r.available, hint: r.hint });
+      const t = r.terminals.find((x) => x.slug === slug) ?? null;
+      setTerminal(t);
+      // A live agent terminal is the main event — unless the user picked a tab.
+      if (t && !userPickedTab.current) setTab("terminal");
+    }).catch(() => setTermCap({ available: false }));
+    return () => { alive = false; };
+  }, [slug]);
+
+  // Follow terminal start/exit events (subscribe identity changes per render — no state resets here).
+  useEffect(() => {
+    const unsub = subscribe?.("*", (msg) => {
+      if (msg.slug !== slug) return;
+      if (msg.type === "terminal.started") {
+        setTerminal({ slug, agent: (msg.agent as string) ?? "claude", sessionName: "", startedAt: new Date().toISOString() });
+        if (!userPickedTab.current) setTab("terminal");
+      }
+      if (msg.type === "terminal.exited") setTerminal(null);
+    });
+    return () => { unsub?.(); };
+  }, [slug, subscribe]);
+
+  const startTerminal = async () => {
+    setTermStarting(true);
+    try {
+      const t = await BatonAPI.createTerminal(slug, { agent: (task?.agent ?? "claude") as AgentId });
+      setTerminal(t); setTab("terminal");
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not open terminal", desc: (e as Error).message });
+    } finally {
+      setTermStarting(false);
+    }
+  };
+
   useEffect(() => { const t = setInterval(() => setElapsed((e) => e + 1), 1000); return () => clearInterval(t); }, [slug]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
   useEffect(() => {
@@ -287,6 +334,44 @@ export function LiveSession({
         </span>
       </div>
     </div>
+  );
+
+  const TerminalPane = demo || terminal ? (
+    <TerminalPanel slug={slug} task={task?.task} writeEnabled={BatonAPI.writeEnabled} demo={demo} />
+  ) : (
+    <div style={{ display: "grid", placeItems: "center", height: "100%", background: "var(--code-bg)", padding: 24 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center", maxWidth: 380 }}>
+        <span style={{ width: 44, height: 44, borderRadius: 12, display: "grid", placeItems: "center", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)" }}>
+          <Icon name="terminal" size={20} style={{ color: "var(--text-tertiary)" }} />
+        </span>
+        {termCap && !termCap.available ? (
+          <>
+            <span style={{ fontSize: "var(--fs-13)", color: "var(--text-secondary)" }}>Interactive terminals need <b>tmux</b> on the daemon's machine.</span>
+            {termCap.hint && <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--accent-text)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", padding: "4px 10px" }}>{termCap.hint}</span>}
+          </>
+        ) : (
+          <>
+            <span style={{ fontSize: "var(--fs-13)", color: "var(--text-secondary)" }}>No agent terminal is open for this session.</span>
+            <button className="btn btn-primary fr" disabled={!BatonAPI.writeEnabled || termStarting} onClick={startTerminal}
+              data-tip={BatonAPI.writeEnabled ? `Run ${getAgent((task?.agent ?? "claude") as AgentId).short} interactively in this worktree` : "Start the daemon with --write to launch agents"}
+              style={!BatonAPI.writeEnabled || termStarting ? { opacity: 0.55, cursor: "not-allowed" } : {}}>
+              <Icon name="terminal" size={14} /> {termStarting ? "Starting…" : `Open ${getAgent((task?.agent ?? "claude") as AgentId).short} terminal`}
+            </button>
+            {!BatonAPI.writeEnabled && <span style={{ fontSize: 11, color: "var(--text-quaternary)" }}>daemon is read-only — restart it with <span className="mono">baton serve --write</span> to open terminals</span>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  const TabBtn = ({ id, label, icon }: { id: "activity" | "terminal"; label: string; icon: IconName }) => (
+    <button className="fr" onClick={() => { userPickedTab.current = true; setTab(id); }} aria-pressed={tab === id} style={{
+      display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 99, cursor: "pointer",
+      fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", border: `1px solid ${tab === id ? "var(--border-strong)" : "transparent"}`,
+      background: tab === id ? "var(--bg-surface)" : "transparent", color: tab === id ? "var(--text-primary)" : "var(--text-tertiary)" }}>
+      <Icon name={icon} size={12} /> {label}
+      {id === "terminal" && terminal && <LiveDot size={5} />}
+    </button>
   );
 
   return (
@@ -339,7 +424,15 @@ export function LiveSession({
               <LiveSessionRail sessions={sessions} currentSlug={slug} onPick={pick} />
             </aside>
           )}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>{ActivityPane}</div>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-surface)" }}>
+              <TabBtn id="activity" label="Activity" icon="layers" />
+              <TabBtn id="terminal" label="Terminal" icon="terminal" />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              {tab === "activity" ? ActivityPane : TerminalPane}
+            </div>
+          </div>
         </div>
 
         {!showRail && railOpen && (

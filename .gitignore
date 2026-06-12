@@ -19,6 +19,9 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+# web Vite env files hold no secrets (same-origin defaults) — keep them in git
+!web/.env.development
+!web/.env.production
 
 # Editor / OS
 .DS_Store

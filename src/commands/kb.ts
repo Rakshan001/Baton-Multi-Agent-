@@ -36,6 +36,13 @@ be working on:
    (structure, stack, key symbols). Don't re-scan the repo to orient yourself.
 5. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
    the codebase instead of broad file scans.
+6. Call \`recall_memory\` with your topic BEFORE exploring — facts earlier
+   sessions learned (decisions, gotchas, conventions), evidence-checked so
+   stale ones are withheld. Cheaper than re-discovering them.
+7. When you make a decision, hit a gotcha, or learn a non-obvious convention,
+   call \`save_memory\` (1–3 sentences + the files it is about) so the next
+   session skips that discovery. Never store secrets (rejected) or anything
+   derivable from the code itself.
 <!-- /baton:coordination -->
 `;
 

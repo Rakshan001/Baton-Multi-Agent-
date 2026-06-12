@@ -16,7 +16,8 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus } from "../types";
+import { DEMO_MEMORY } from "./demoMemory";
 import { BUILTIN_ROUTING, suggestAgent } from "./routing";
 import { DEMO_KB, demoGraphFor } from "./demoKb";
 import {
@@ -222,7 +223,11 @@ class BatonClient {
     if (this.demo) {
       await this.demoGate();
       const p = this.activeProject();
-      return { repo: p.path, branch: p.branch, writeEnabled: this.writeEnabled, version: "demo" };
+      return {
+        repo: p.path, branch: p.branch, writeEnabled: this.writeEnabled, version: "demo",
+        terminals: { available: true },
+        agents: { headless: ["claude", "codex", "gemini"], interactive: ["claude", "cursor", "codex", "gemini", "aider", "opencode"] },
+      };
     }
     return this.request<Meta>("/api/meta");
   }
@@ -305,6 +310,108 @@ class BatonClient {
       return { stopped: true };
     }
     const r = await this.request<{ stopped: boolean }>(`/api/tasks/${encodeURIComponent(slug)}/agent/stop`, { method: "POST", body: "{}" });
+    this.emit();
+    return r;
+  }
+
+  /* ---- interactive terminals (tmux-backed, src/terminals.ts) ---- */
+  async getTerminals(): Promise<{ available: boolean; hint?: string; terminals: TerminalInfo[] }> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return { available: true, terminals: [] };
+    }
+    return this.request("/api/terminals");
+  }
+  async createTerminal(slug: string, opts: { agent?: AgentId; prompt?: string; cols?: number; rows?: number } = {}): Promise<TerminalInfo> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(200);
+      return { slug, agent: opts.agent ?? "claude", sessionName: `baton-demo-${slug}`, startedAt: new Date().toISOString() };
+    }
+    const r = await this.request<TerminalInfo>(`/api/tasks/${encodeURIComponent(slug)}/terminal`, {
+      method: "POST", body: JSON.stringify(opts),
+    });
+    this.emit();
+    return r;
+  }
+  async killTerminal(slug: string): Promise<{ killed: boolean }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(120);
+      return { killed: true };
+    }
+    const r = await this.request<{ killed: boolean }>(`/api/tasks/${encodeURIComponent(slug)}/terminal`, { method: "DELETE" });
+    this.emit();
+    return r;
+  }
+  /** Raw keystrokes (base64) → the agent's PTY. Fire-and-forget latency path. */
+  async sendTerminalInput(slug: string, data: string): Promise<void> {
+    if (this.demo) return; // demo terminal is playback-only
+    await this.request(`/api/tasks/${encodeURIComponent(slug)}/terminal/input`, {
+      method: "POST", body: JSON.stringify({ data }),
+    });
+  }
+  async resizeTerminal(slug: string, cols: number, rows: number): Promise<void> {
+    if (this.demo) return;
+    await this.request(`/api/tasks/${encodeURIComponent(slug)}/terminal/resize`, {
+      method: "POST", body: JSON.stringify({ cols, rows }),
+    }).catch(() => undefined); // resize is best-effort
+  }
+  /** Per-session SSE byte stream URL (EventSource). Null in demo mode. */
+  terminalStreamUrl(slug: string): string | null {
+    return this.demo ? null : `${this.baseUrl}/api/tasks/${encodeURIComponent(slug)}/terminal/stream`;
+  }
+
+  /* ---- project memory (evidence-anchored facts, src/memory.ts) ---- */
+  private demoMemory: MemoryFactStatus[] | null = null;
+  async getMemories(): Promise<MemoryFactStatus[]> {
+    if (this.demo) {
+      await this.demoGate(60);
+      this.demoMemory ??= JSON.parse(JSON.stringify(DEMO_MEMORY)) as MemoryFactStatus[];
+      return this.demoMemory;
+    }
+    const r = await this.request<{ facts: MemoryFactStatus[] }>("/api/memory");
+    return r.facts;
+  }
+  async addMemory(input: { fact: string; type?: string; files?: string[]; task?: string }): Promise<MemoryFactStatus> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(150);
+      const fact: MemoryFactStatus = {
+        id: `mem-${this.slugify(input.fact)}`, type: (input.type as MemoryFactStatus["type"]) ?? "reference",
+        fact: input.fact, agent: "dashboard", task: input.task ?? null, createdAt: new Date().toISOString(),
+        anchors: { commit: "demo", files: (input.files ?? []).map((p) => ({ path: p, hash: "demo" })) },
+        supersedes: null, freshness: "fresh", staleReason: null, commitsBehind: 0,
+      };
+      this.demoMemory = [fact, ...(this.demoMemory ?? [...DEMO_MEMORY])];
+      this.emit();
+      return fact;
+    }
+    const r = await this.request<MemoryFactStatus>("/api/memory", { method: "POST", body: JSON.stringify(input) });
+    this.emit();
+    return r;
+  }
+  async deleteMemory(id: string): Promise<void> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(100);
+      this.demoMemory = (this.demoMemory ?? [...DEMO_MEMORY]).filter((f) => f.id !== id);
+      this.emit();
+      return;
+    }
+    await this.request(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" });
+    this.emit();
+  }
+  async gcMemories(): Promise<{ removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(150);
+      const stale = (this.demoMemory ?? [...DEMO_MEMORY]).filter((f) => f.freshness === "stale").map((f) => f.id);
+      this.demoMemory = (this.demoMemory ?? [...DEMO_MEMORY]).filter((f) => f.freshness !== "stale");
+      this.emit();
+      return { removed: stale };
+    }
+    const r = await this.request<{ removed: string[] }>("/api/memory/gc", { method: "POST", body: "{}" });
     this.emit();
     return r;
   }

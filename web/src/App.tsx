@@ -34,6 +34,7 @@ import { DiffViewer } from "./features/Diff";
 import { HandoffDialog } from "./features/Handoff";
 import { LaunchSession } from "./features/Launch";
 import { LiveSession } from "./features/Live";
+import { MemoryScreen } from "./features/Memory";
 import type { Meta, AgentId, Project } from "./types";
 
 interface NavItem { id: string; label: string; icon: IconName }
@@ -42,6 +43,7 @@ const NAV: NavItem[] = [
   { id: "activity", label: "Activity", icon: "zap" },
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
   { id: "graph", label: "Knowledge Graph", icon: "network" },
+  { id: "memory", label: "Memory", icon: "sparkle" },
   { id: "history", label: "History", icon: "history" },
   { id: "agents", label: "Agents", icon: "bot" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -392,6 +394,14 @@ export default function App() {
   const meta = usePoll<Meta>(() => BatonAPI.getMeta(), { interval: 30000, deps: [connectionId] });
   const isMobile = useMediaQuery("(max-width: 860px)");
 
+  // Real mode: the UI's write capability follows the daemon (`baton serve --write`)
+  // instead of hiding behind a per-browser toggle. Demo mode keeps pure prefs.
+  const daemonWrite = demo ? null : (meta.data ? !!meta.data.writeEnabled : null);
+  useEffect(() => {
+    prefs.followDaemonWrite(daemonWrite);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [daemonWrite]);
+
   const navigate = (r: string) => { setRoute(r); ls.set("baton:route", r); };
   const onOpen = (slug: string) => setSelected(slug);
   const onLaunch = (agent: AgentId | null) => setLaunchOpen({ agent });
@@ -476,6 +486,7 @@ export default function App() {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
+      case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} />;
       case "history": return <HistoryScreen history={history} onOpen={onOpen} />;
       case "agents": return <AgentsScreen status={status} history={history} onOpen={onOpen} onLaunch={onLaunch} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;

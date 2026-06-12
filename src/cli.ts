@@ -28,6 +28,7 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
+import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './commands/memory.js';
 
 const program = new Command();
 
@@ -82,6 +83,36 @@ program
   .option('-f, --force', 'remove even with uncommitted changes')
   .description("remove a task's worktree + branch")
   .action((slug: string, opts: { force?: boolean }) => run(() => rmCmd(slug, opts)));
+
+const memory = program
+  .command('memory')
+  .description('shared project memory: facts agents learned, evidence-anchored');
+
+memory
+  .command('list', { isDefault: true })
+  .description('list all facts with freshness (● fresh · ◐ aging · ○ stale)')
+  .action(() => run(memoryListCmd));
+
+memory
+  .command('add')
+  .argument('<fact...>', 'the fact (1–3 sentences: why + how to apply)')
+  .option('--type <type>', 'decision | gotcha | convention | reference | preference')
+  .option('--files <paths>', 'comma-separated repo-relative files (evidence anchors)')
+  .option('--task <slug>', 'task slug for attribution')
+  .description('save a fact from the terminal')
+  .action((fact: string[], opts: { type?: string; files?: string; task?: string }) =>
+    run(() => memoryAddCmd(fact.join(' '), opts)));
+
+memory
+  .command('rm')
+  .argument('<id>', 'memory id')
+  .description('remove a fact')
+  .action((id: string) => run(() => memoryRmCmd(id)));
+
+memory
+  .command('gc')
+  .description('drop stale facts (anchored files changed since they were saved)')
+  .action(() => run(memoryGcCmd));
 
 const kb = program
   .command('kb')

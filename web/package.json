@@ -12,6 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "force-graph": "^1.51.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

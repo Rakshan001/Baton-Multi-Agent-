@@ -14,6 +14,7 @@ import { execa, type ResultPromise } from 'execa';
 import { gitRoot } from './git.js';
 import { getTask } from './store.js';
 import { readBrief } from './handoff/brief.js';
+import { tmuxSessionExists } from './util/tmux.js';
 import { bus } from './events.js';
 
 export interface Launcher {
@@ -37,6 +38,13 @@ export class AgentRunningError extends Error {
   }
 }
 
+export class TerminalConflictError extends Error {
+  constructor(slug: string) {
+    super(`an interactive terminal is already open for '${slug}' — close it (dashboard or \`tmux kill-session\`) before starting a headless run`);
+    this.name = 'TerminalConflictError';
+  }
+}
+
 interface RunningAgent {
   agent: string;
   child: ResultPromise;
@@ -45,6 +53,11 @@ interface RunningAgent {
 }
 
 const running = new Map<string, RunningAgent>();
+
+/** Is a headless run active for this slug? (terminals.ts uses this to refuse a second agent.) */
+export function hasHeadlessRun(slug: string): boolean {
+  return running.has(slug);
+}
 
 const LINE_CAP = 500;
 
@@ -79,6 +92,10 @@ export async function startAgent(
     throw new Error(`'${agent}' has no headless mode baton can drive — supported: ${HEADLESS_AGENTS.join(', ')}. Start it manually in ${task.worktreePath}`);
   }
   if (running.has(slug)) throw new AgentRunningError(slug, running.get(slug)!.agent);
+  // Cross-PROCESS exclusion: the in-memory map only sees this process, but an
+  // interactive terminal may be owned by the daemon (or survive it). The tmux
+  // session name is deterministic, so tmux itself is the shared lock.
+  if (await tmuxSessionExists(repoRoot, slug)) throw new TerminalConflictError(slug);
 
   // Prompt: prefer a HANDOFF.md brief (the curated knowledge pack), else the task.
   let prompt = opts.prompt;

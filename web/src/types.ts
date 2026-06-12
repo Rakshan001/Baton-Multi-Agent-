@@ -91,6 +91,34 @@ export interface Meta {
   branch: string;
   writeEnabled: boolean;
   version: string;
+  /** Interactive-terminal capability (tmux on the daemon's PATH). */
+  terminals?: { available: boolean; hint?: string };
+  /** Which agents each launch mode supports — single source of truth is the
+   *  daemon (src/spawn.ts LAUNCHERS / src/terminals.ts INTERACTIVE_LAUNCHERS). */
+  agents?: { headless: string[]; interactive: string[] };
+}
+
+/** One live interactive terminal — GET /api/terminals (src/terminals.ts). */
+export interface TerminalInfo {
+  slug: string;
+  agent: string;
+  sessionName: string;
+  startedAt: string;
+}
+
+/** One project-memory fact with evidence-checked freshness — GET /api/memory (src/memory.ts). */
+export interface MemoryFactStatus {
+  id: string;
+  type: "decision" | "gotcha" | "convention" | "reference" | "preference";
+  fact: string;
+  agent: string | null;
+  task: string | null;
+  createdAt: string;
+  anchors: { commit: string | null; files: { path: string; hash: string }[] };
+  supersedes: string | null;
+  freshness: "fresh" | "aging" | "stale";
+  staleReason: string | null;
+  commitsBehind: number | null;
 }
 
 /** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */
