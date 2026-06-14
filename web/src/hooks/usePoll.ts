@@ -25,25 +25,28 @@ export function usePoll<T>(
   });
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const mounted = useRef(true);
+  const generation = useRef(0); // bumped per run + per effect re-run; stale responses are discarded
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
 
   const run = useCallback(async () => {
     if (!mounted.current) return;
+    const gen = ++generation.current;
     setState((s) => ({ ...s, isFetching: true }));
     try {
       const data = await fetcherRef.current();
-      if (!mounted.current) return;
+      if (!mounted.current || gen !== generation.current) return;
       setState({ data, error: null, isLoading: false, isFetching: false });
       setLastUpdated(Date.now());
     } catch (error) {
-      if (!mounted.current) return;
+      if (!mounted.current || gen !== generation.current) return;
       setState((s) => ({ data: s.data, error, isLoading: false, isFetching: false }));
     }
   }, []);
 
   useEffect(() => {
     mounted.current = true;
+    generation.current++; // invalidate any response still in flight from the previous deps
     if (!enabled) return;
     run();
     let id: ReturnType<typeof setInterval> | null = null;

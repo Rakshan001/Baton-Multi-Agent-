@@ -67,6 +67,17 @@ export async function branchExists(branch: string, cwd?: string): Promise<boolea
   return r.ok;
 }
 
+/** All local `baton/*` branch names (e.g. `baton/fix-login`). For orphan detection. */
+export async function listBatonBranches(cwd?: string): Promise<string[]> {
+  const r = await gitTry(['for-each-ref', '--format=%(refname:short)', 'refs/heads/baton/'], cwd);
+  return r.ok && r.stdout ? r.stdout.split('\n').filter(Boolean) : [];
+}
+
+/** Delete a local branch (force). Best-effort, never throws. */
+export async function deleteBranch(branch: string, cwd?: string): Promise<boolean> {
+  return (await gitTry(['branch', '-D', branch], cwd)).ok;
+}
+
 /** All registered worktrees, parsed from `git worktree list --porcelain`. */
 export async function listWorktrees(cwd?: string): Promise<WorktreeEntry[]> {
   const r = await gitTry(['worktree', 'list', '--porcelain'], cwd);

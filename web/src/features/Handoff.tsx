@@ -10,7 +10,17 @@ import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
 import { BatonAPI, branchFor } from "../lib/api";
 import { showToast } from "../lib/toast";
-import type { StatusRow, AgentId, RoutingSuggestion } from "../types";
+import type { StatusRow, AgentId, RouteSuggestion } from "../types";
+
+/** One-line explanation of why routing picked this agent (chip tooltip). */
+function suggestionWhy(s: RouteSuggestion): string {
+  switch (s.source) {
+    case "rule": return `Routing rule matched: ${s.matched.join(", ")}`;
+    case "severity": return `Severity ${s.severity}/100 → ${s.tier} tier`;
+    case "single": return "Single-agent mode";
+    default: return "Default route (baton.config.json)";
+  }
+}
 
 export function HandoffDialog({
   slug, session, onClose, writeEnabled,
@@ -26,7 +36,7 @@ export function HandoffDialog({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [doneInfo, setDoneInfo] = useState<{ toAgent: AgentId; estTokens?: number; estCostUsd?: number; briefPath?: string } | null>(null);
-  const [suggestion, setSuggestion] = useState<RoutingSuggestion | null>(null);
+  const [suggestion, setSuggestion] = useState<RouteSuggestion | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const hasPending = (task?.filesChanged || 0) > 0;
   const options = AGENT_REGISTRY.filter((a) => a.id !== task?.agent);
@@ -38,6 +48,8 @@ export function HandoffDialog({
     BatonAPI.getRouting(task.task).then((r) => {
       if (!on || !r.suggestion) return;
       setSuggestion(r.suggestion);
+      // Manual mode = advisory only — show the chip, never preselect.
+      if (r.suggestion.mode === "manual") return;
       const valid = options.some((a) => a.id === r.suggestion!.agent);
       if (valid) setTarget((cur) => cur ?? (r.suggestion!.agent as AgentId));
     }).catch(() => undefined);
@@ -135,8 +147,8 @@ export function HandoffDialog({
                       <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", display: "block" }}>{a.short}</span>
                       {suggested && (
                         <span style={{ fontSize: 9.5, color: "var(--accent-text)", display: "block" }}
-                          data-tip={suggestion?.source === "rule" ? `Routing rule matched: ${suggestion.matched.join(", ")}` : "Default route (baton.config.json)"}>
-                          suggested{suggestion?.matched.length ? ` · '${suggestion.matched[0]}'` : ""}{suggestion?.model ? ` · ${suggestion.model}` : ""}
+                          data-tip={suggestion ? suggestionWhy(suggestion) : undefined}>
+                          suggested{suggestion?.matched.length ? ` · '${suggestion.matched[0]}'` : ""}{suggestion?.model ? ` · ${suggestion.model}` : ""}{suggestion?.confidence === "low" ? " · low confidence" : ""}
                         </span>
                       )}
                     </div>

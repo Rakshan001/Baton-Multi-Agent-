@@ -35,7 +35,7 @@ import { HandoffDialog } from "./features/Handoff";
 import { LaunchSession } from "./features/Launch";
 import { LiveSession } from "./features/Live";
 import { MemoryScreen } from "./features/Memory";
-import type { Meta, AgentId, Project } from "./types";
+import type { Meta, AgentId, Project, AgentRosterEntry } from "./types";
 
 interface NavItem { id: string; label: string; icon: IconName }
 const NAV: NavItem[] = [
@@ -392,6 +392,7 @@ export default function App() {
   const status = useStatus(events.live);
   const history = useHistory(events.live);
   const meta = usePoll<Meta>(() => BatonAPI.getMeta(), { interval: 30000, deps: [connectionId] });
+  const agents = usePoll<AgentRosterEntry[]>(() => BatonAPI.getAgents(), { interval: 8000, deps: [connectionId] });
   const isMobile = useMediaQuery("(max-width: 860px)");
 
   // Real mode: the UI's write capability follows the daemon (`baton serve --write`)
@@ -488,7 +489,7 @@ export default function App() {
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} />;
       case "history": return <HistoryScreen history={history} onOpen={onOpen} />;
-      case "agents": return <AgentsScreen status={status} history={history} onOpen={onOpen} onLaunch={onLaunch} />;
+      case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
       default: return <CommandCenter status={status} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} />;
     }
