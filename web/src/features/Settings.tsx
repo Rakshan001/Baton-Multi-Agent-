@@ -12,7 +12,16 @@ import { showToast } from "../lib/toast";
 import { BatonAPI } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
-import type { AgentId, RoutingInfo } from "../types";
+import type { AgentId, RoutingInfo, RoutingMode, TierEntry } from "../types";
+
+const MODE_HINTS: Record<RoutingMode, string> = {
+  auto: "Rules first, then severity picks a tier automatically.",
+  manual: "Suggestions are advisory only — you always pick the agent.",
+  single: "Every task routes to one agent.",
+};
+
+/** "agent(:model) → agent(:model)" rendering of a tier's fallback chain. */
+const chainLabel = (chain: TierEntry[]) => chain.map((e) => (e.model ? `${e.agent}:${e.model}` : e.agent)).join(" → ");
 
 /** Read-only view of baton.config.json routing rules (edit the file to change them). */
 function RoutingSettings() {
@@ -23,6 +32,7 @@ function RoutingSettings() {
     return () => { on = false; };
   }, []);
   if (!info) return null;
+  const mode: RoutingMode = info.config.mode ?? "auto";
   return (
     <SettingsBlock title="Task routing" desc="Which agent gets a handoff, by task keywords. Used when you pass without --to.">
       {info.errors.length > 0 && (
@@ -30,6 +40,22 @@ function RoutingSettings() {
           {info.errors.map((e, i) => <div key={i}>! {e}</div>)}
         </div>
       )}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+        <span className="mono" style={{ flex: "none", fontSize: 11, fontWeight: "var(--fw-semibold)", textTransform: "uppercase", letterSpacing: "var(--ls-caps)", color: "var(--accent-text)", background: "var(--accent-soft)", border: "1px solid var(--accent-border)", borderRadius: 99, padding: "2px 9px" }}>{mode}</span>
+        <span style={{ flex: 1, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{MODE_HINTS[mode]}</span>
+        {mode === "single" && info.config.single && (
+          <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <AgentBadge id={info.config.single.agent as AgentId} size="sm" />
+            {info.config.single.model && <span className="tag" data-tip="Suggested model for the receiving CLI">{info.config.single.model}</span>}
+          </span>
+        )}
+      </div>
+      {info.config.tiers && Object.entries(info.config.tiers).map(([tier, chain]) => (
+        <div key={tier} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+          <span className="mono" style={{ flex: "none", width: 72, fontSize: 11, color: "var(--text-secondary)" }}>{tier}</span>
+          <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 11, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} data-tip="Fallback chain — first available agent wins">{chainLabel(chain)}</span>
+        </div>
+      ))}
       {info.config.rules.map((r, i) => (
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -37,7 +63,9 @@ function RoutingSettings() {
           </div>
           <Icon name="arrowRight" size={13} style={{ color: "var(--text-quaternary)", flex: "none" }} />
           <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <AgentBadge id={r.agent as AgentId} size="sm" />
+            {r.tier
+              ? <span className="mono" style={{ fontSize: 11, color: "var(--text-secondary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "1px 7px" }} data-tip="Routes to this tier's fallback chain">tier:{r.tier}</span>
+              : <AgentBadge id={r.agent as AgentId} size="sm" />}
             {r.model && <span className="tag" data-tip="Suggested model for the receiving CLI">{r.model}</span>}
           </span>
         </div>

@@ -21,27 +21,17 @@ import { probeBinary } from './util/exec.js';
 import { detectTmux, repoPrefix, sessionNameFor, slugFromSession, tmux, tmuxTry } from './util/tmux.js';
 import { bus } from './events.js';
 import { hasHeadlessRun } from './spawn.js';
+import { AGENTS, type InteractiveLauncher } from './agents/registry.js';
 
 // Session naming + tmux exec live in util/tmux.js so spawn.ts and rm.ts can
 // coordinate cross-process through the same deterministic names.
 export { detectTmux, repoPrefix, sessionNameFor, slugFromSession };
+export type { InteractiveLauncher };
 
-export interface InteractiveLauncher {
-  cmd: string;
-  /** argv after the binary; `prompt` seeds the TUI when the CLI supports it. */
-  args: (prompt?: string) => string[];
-}
-
-/** Interactive (TUI) invocations per agent. Unlike spawn.ts these keep stdin. */
-export const INTERACTIVE_LAUNCHERS: Record<string, InteractiveLauncher> = {
-  claude: { cmd: 'claude', args: (p) => (p ? [p] : []) },
-  codex: { cmd: 'codex', args: (p) => (p ? [p] : []) },
-  gemini: { cmd: 'gemini', args: (p) => (p ? ['-i', p] : []) },
-  // `cursor` opens the IDE; Cursor's terminal agent is the separate cursor-agent CLI.
-  cursor: { cmd: 'cursor-agent', args: (p) => (p ? [p] : []) },
-  aider: { cmd: 'aider', args: () => [] },
-  opencode: { cmd: 'opencode', args: () => [] },
-};
+/** Interactive (TUI) invocations per agent (from the registry). Unlike spawn.ts these keep stdin. */
+export const INTERACTIVE_LAUNCHERS: Record<string, InteractiveLauncher> = Object.fromEntries(
+  Object.values(AGENTS).flatMap((a) => (a.interactive ? [[a.id, a.interactive] as const] : [])),
+);
 
 export const INTERACTIVE_AGENTS = Object.keys(INTERACTIVE_LAUNCHERS);
 
@@ -76,8 +66,8 @@ export function shQuote(s: string): string {
 }
 
 /** The shell-command string tmux runs in the new session's pane. */
-export function buildSessionCommand(launcher: InteractiveLauncher, prompt?: string): string {
-  return [launcher.cmd, ...launcher.args(prompt).map(shQuote)].join(' ');
+export function buildSessionCommand(launcher: InteractiveLauncher, prompt?: string, model?: string): string {
+  return [launcher.cmd, ...launcher.args(prompt, model).map(shQuote)].join(' ');
 }
 
 /** Keystroke bytes → `send-keys -H` hex arguments. */
@@ -161,6 +151,9 @@ interface TerminalSession extends TerminalInfo {
   control: ResultPromise;
   scrollback: ScrollbackRing;
   exited: boolean;
+  /** Rapid control-client deaths in a row (reset after a stable attach). */
+  reattempts: number;
+  attachedAt: number;
 }
 
 const terminals = new Map<string, TerminalSession>();
@@ -195,6 +188,7 @@ function attachControl(session: TerminalSession): void {
     env: { ...process.env },
   });
   session.control = child;
+  session.attachedAt = Date.now();
 
   let lineBuf = '';
   let pending: Buffer[] = [];
@@ -230,11 +224,27 @@ function attachControl(session: TerminalSession): void {
   });
 }
 
-/** Control client died: session over (normal) or hiccup (reattach once). */
+const REATTACH_MAX = 5;
+
+/** Control client died: session over (normal) or hiccup (reattach with backoff). */
 async function onControlExit(session: TerminalSession): Promise<void> {
   if (session.exited || terminals.get(session.slug) !== session) return;
   if (await tmuxTry(['has-session', '-t', session.sessionName])) {
-    attachControl(session); // tmux session is alive — control client hiccuped
+    // tmux session is alive — control client hiccuped. A stable attach (>10s)
+    // resets the counter; rapid deaths back off and eventually give up so a
+    // wedged session can't turn into a tmux-spawning CPU spin.
+    if (Date.now() - session.attachedAt > 10_000) session.reattempts = 0;
+    if (session.reattempts >= REATTACH_MAX) {
+      session.exited = true;
+      terminals.delete(session.slug);
+      bus.publish({ type: 'terminal.exited', slug: session.slug, agent: session.agent });
+      return;
+    }
+    session.reattempts += 1;
+    const delay = Math.min(250 * 2 ** session.reattempts, 4000);
+    setTimeout(() => {
+      if (!session.exited && terminals.get(session.slug) === session) attachControl(session);
+    }, delay);
     return;
   }
   session.exited = true;
@@ -248,6 +258,7 @@ async function onControlExit(session: TerminalSession): Promise<void> {
 
 export interface CreateTerminalOpts {
   agent?: string;
+  model?: string;
   prompt?: string;
   cols?: number;
   rows?: number;
@@ -286,7 +297,7 @@ export async function createTerminal(
     '-s', sessionName,
     '-c', task.worktreePath,
     '-x', String(cols), '-y', String(rows),
-    buildSessionCommand(launcher, opts.prompt),
+    buildSessionCommand(launcher, opts.prompt, opts.model),
   ]);
   await tmuxTry(['set-option', '-t', sessionName, 'status', 'off']);
   await tmuxTry(['set-option', '-t', sessionName, 'history-limit', '5000']);
@@ -299,6 +310,8 @@ export async function createTerminal(
     control: undefined as unknown as ResultPromise,
     scrollback: new ScrollbackRing(),
     exited: false,
+    reattempts: 0,
+    attachedAt: 0,
   };
   terminals.set(slug, session);
   attachControl(session);
@@ -365,6 +378,8 @@ async function adoptSession(root: string, sessionName: string): Promise<Terminal
     control: undefined as unknown as ResultPromise,
     scrollback: new ScrollbackRing(),
     exited: false,
+    reattempts: 0,
+    attachedAt: 0,
   };
   // Seed scrollback with the current screen + recent history so reconnecting
   // viewers see where the agent is, not a blank pane (handler.dev's trick).

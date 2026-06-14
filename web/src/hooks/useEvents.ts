@@ -5,7 +5,7 @@
    screen refetches instantly; polling stays as the safety net when
    the stream is down. EventSource reconnects natively.
    ============================================================ */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BatonAPI } from "../lib/api";
 
 export interface BatonEventMsg {
@@ -19,7 +19,7 @@ const EVENT_TYPES = [
   "status.changed", "task.created", "task.removed", "task.merged",
   "commit.created", "agent.started", "agent.stopped", "agent.output",
   "file.edited", "signal.overlap", "kb.rebuilt", "handoff.created",
-  "terminal.started", "terminal.exited", "memory.updated",
+  "agent.connected", "terminal.started", "terminal.exited", "memory.updated",
 ] as const;
 
 export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {
@@ -48,7 +48,10 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
       }
       for (const fn of handlersRef.current.get(msg.type) ?? []) fn(msg);
       for (const fn of handlersRef.current.get("*") ?? []) fn(msg);
-      // Any change on the daemon → refetch everything that polls.
+      // Any change on the daemon → refetch everything that polls. Skip the
+      // high-frequency byte streams (agent output / terminal PTY) — notifying
+      // on every chunk would refetch the whole dashboard per keystroke.
+      if (msg.type === "agent.output" || msg.type.startsWith("terminal.")) return;
       BatonAPI.notify();
     };
     for (const t of EVENT_TYPES) es.addEventListener(t, dispatch);
@@ -59,12 +62,12 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
     };
   }, [enabled, baseUrl, BatonAPI.demo]);
 
-  const subscribe = (type: string, fn: Handler) => {
+  const subscribe = useCallback((type: string, fn: Handler) => {
     const map = handlersRef.current;
     if (!map.has(type)) map.set(type, new Set());
     map.get(type)!.add(fn);
     return () => { map.get(type)?.delete(fn); };
-  };
+  }, []);
 
   return { live, subscribe };
 }

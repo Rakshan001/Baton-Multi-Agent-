@@ -18,6 +18,7 @@ import { historyCmd } from './commands/history.js';
 import { serveCmd } from './commands/serve.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
+import { cleanCmd, doctorCmd } from './commands/doctor.js';
 import { pathCmd } from './commands/path.js';
 import { kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
@@ -83,6 +84,18 @@ program
   .option('-f, --force', 'remove even with uncommitted changes')
   .description("remove a task's worktree + branch")
   .action((slug: string, opts: { force?: boolean }) => run(() => rmCmd(slug, opts)));
+
+program
+  .command('doctor')
+  .description('audit junk: orphaned worktrees, branches, tmux sessions, leaked temp files')
+  .action(() => run(doctorCmd));
+
+program
+  .command('clean')
+  .option('--fix', 'actually delete the audited junk (default: dry-run / suggest)')
+  .option('-f, --force', 'also remove worktrees with uncommitted changes')
+  .description('reclaim junk found by `baton doctor` (dry-run unless --fix)')
+  .action((opts: { fix?: boolean; force?: boolean }) => run(() => cleanCmd(opts)));
 
 const memory = program
   .command('memory')
@@ -163,9 +176,10 @@ program
   .command('start')
   .argument('<slug>', 'task slug')
   .option('--agent <agent>', 'claude | codex | gemini (headless print modes)', 'claude')
+  .option('--model <model>', "model override passed to the agent CLI (e.g. opus, sonnet, gemini-2.5-pro)")
   .option('--prompt <text>', 'override the prompt (default: HANDOFF.md brief, else the task text)')
   .description("run an agent headlessly in the task's worktree, streaming output")
-  .action((slug: string, opts: { agent?: string; prompt?: string }) => run(() => startCmd(slug, opts)));
+  .action((slug: string, opts: { agent?: string; model?: string; prompt?: string }) => run(() => startCmd(slug, opts)));
 
 program
   .command('stop')
@@ -187,13 +201,14 @@ program
 program
   .command('pass')
   .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .option('--to <agent>', 'receiving agent: cursor | codex | gemini | any (omit to auto-route by task type)')
+  .option('--to <agent>', 'receiving agent: cursor | codex | gemini | any (omit to auto-route by task type + severity)')
+  .option('--model <model>', 'model for the receiving CLI (advisory, recorded in the brief)')
   .option('--note <text>', 'extra context for the receiving agent')
   .option('--from <agent>', 'handing-off agent (default claude)')
   .option('--no-commit-pending', 'skip the checkpoint commit of uncommitted changes')
   .option('--auto', 'quiet hook mode: no-op outside a worktree, skip if a fresh brief exists (briefs are routed by task type unless --to is given)')
   .description('package this session into a HANDOFF.md brief for another agent')
-  .action((slug: string | undefined, opts: { to?: string; note?: string; from?: string; commitPending?: boolean; auto?: boolean }) =>
+  .action((slug: string | undefined, opts: { to?: string; model?: string; note?: string; from?: string; commitPending?: boolean; auto?: boolean }) =>
     run(() => passCmd(slug, opts)));
 
 program

@@ -9,8 +9,7 @@ import { deriveColumn, COLUMN_DEFS } from "../lib/derive";
 import { timeAgo } from "../lib/format";
 import { ApiError, BatonAPI } from "../lib/api";
 import { showToast } from "../lib/toast";
-import { getDiff } from "../lib/preview";
-import type { TaskDetail } from "../types";
+import type { TaskDetail, DiffFile } from "../types";
 
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -48,15 +47,17 @@ export function DetailSheet({
   const [busy, setBusy] = useState(false);
   const titleId = "sheet-" + slug;
 
+  const [diffFiles, setDiffFiles] = useState<DiffFile[] | null>(null); // null = loading
+
   useEffect(() => {
-    let on = true; setTask(null); setError(null);
+    let on = true; setTask(null); setError(null); setDiffFiles(null);
     BatonAPI.getTask(slug).then((t) => on && setTask(t)).catch((e) => on && setError(e as Error));
+    BatonAPI.getDiff(slug).then((f) => on && setDiffFiles(f)).catch(() => on && setDiffFiles([]));
     return () => { on = false; };
   }, [slug]);
 
   const agent = task && getAgent(task.agent);
   const col = task && COLUMN_DEFS.find((c) => c.id === deriveColumn(task));
-  const diffFiles = getDiff(slug);
 
   const gate = (fn: () => void) => (writeEnabled ? fn : undefined);
   const readOnlyTip = "Read-only — start `baton serve --write` to enable";
@@ -177,14 +178,13 @@ export function DetailSheet({
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span className="tag">Review &amp; route</span>
-                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "1px 6px" }} data-tip="These surfaces are designed previews — not yet backed by the API.">Preview</span>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="btn fr" onClick={() => onOpenDiff(slug)} disabled={!diffFiles.length}
-                  style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(diffFiles.length ? {} : { opacity: 0.55 }) }}
-                  data-tip={diffFiles.length ? "Open the git diff in a code view" : "No changes on this branch yet"}>
+                <button className="btn fr" onClick={() => onOpenDiff(slug)} disabled={!diffFiles?.length}
+                  style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(diffFiles?.length ? {} : { opacity: 0.55 }) }}
+                  data-tip={diffFiles === null ? "Loading changes…" : diffFiles.length ? "Open the git diff in a code view" : "No changes on this branch yet"}>
                   <Icon name="terminal" size={14} style={{ color: "var(--accent-text)" }} />
-                  <span style={{ textAlign: "left" }}>View changes<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>{diffFiles.length} file{diffFiles.length === 1 ? "" : "s"} · git diff</span></span>
+                  <span style={{ textAlign: "left" }}>View changes<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>{diffFiles === null ? "…" : `${diffFiles.length} file${diffFiles.length === 1 ? "" : "s"}`} · git diff</span></span>
                 </button>
                 <button className="btn fr" onClick={() => onHandoff(slug)} style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9 }} data-tip="Hand this work to another agent">
                   <Icon name="share" size={14} style={{ color: "var(--accent-text)" }} />

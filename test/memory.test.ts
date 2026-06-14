@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import {
-  detectSecret, fingerprintOf, listMemories, memoryBriefSection, parseFactFile,
+  detectSecret, factSimilarity, fingerprintOf, listMemories, memoryBriefSection, parseFactFile,
   recallMemories, renderFactFile, saveMemory, scoreMemory, slugifyId,
   MemoryValidationError, type MemoryFact,
 } from '../src/memory.js';
@@ -21,6 +21,18 @@ describe('fingerprintOf / slugifyId', () => {
 
   it('slugifyId is filename-safe', () => {
     expect(slugifyId('Crazy: chars / here!')).toMatch(/^mem-[a-z0-9-]+$/);
+  });
+});
+
+describe('factSimilarity', () => {
+  it('is high for an updated version of the same fact, low for distinct facts', () => {
+    const update = factSimilarity('Deploys happen from main every friday afternoon.', 'Deploys happen from main every friday at 15:00 UTC, never on holidays.');
+    const distinct = factSimilarity('The authentication middleware validates the JWT signature using RS256 public keys.', 'The authentication middleware validates the JWT expiry and audience claims separately.');
+    expect(update).toBeGreaterThanOrEqual(0.5);
+    expect(distinct).toBeLessThan(0.5);
+  });
+  it('is 0 when either side has no significant words', () => {
+    expect(factSimilarity('', 'anything here')).toBe(0);
   });
 });
 
@@ -137,6 +149,17 @@ describe('memory store (real temp git repo)', () => {
     const all = await listMemories(root);
     expect(all.find((f) => f.id === first.id)).toBeUndefined();
     expect(all.find((f) => f.id === second.id)).toBeDefined();
+  });
+
+  it('does NOT supersede two distinct facts that merely share their opening words', async () => {
+    // Same first-6-word fingerprint, but different knowledge — both must survive.
+    const a = await saveMemory(root, { fact: 'The authentication middleware validates the JWT signature using RS256 public keys.' });
+    const b = await saveMemory(root, { fact: 'The authentication middleware validates the JWT expiry and audience claims separately.' });
+    expect(a.fingerprint).toBe(b.fingerprint); // collision on opening words
+    expect(b.supersedes).toBeNull();            // but not treated as an update
+    const all = await listMemories(root);
+    expect(all.find((f) => f.id === a.id)).toBeDefined();
+    expect(all.find((f) => f.id === b.id)).toBeDefined();
   });
 
   it('rejects secrets and too-short facts', async () => {

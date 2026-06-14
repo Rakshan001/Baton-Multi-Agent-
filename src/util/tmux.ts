@@ -52,6 +52,17 @@ export async function tmuxSessionExists(root: string, slug: string): Promise<boo
   return tmuxTry(['has-session', '-t', sessionNameFor(root, slug)]);
 }
 
+/** All live tmux session names (empty when tmux is missing or no server runs). */
+export async function listSessions(): Promise<string[]> {
+  if (!(await detectTmux())) return [];
+  try {
+    const { stdout } = await tmux(['list-sessions', '-F', '#{session_name}']);
+    return stdout.split('\n').filter(Boolean);
+  } catch {
+    return []; // no server running → no sessions
+  }
+}
+
 /**
  * Cross-process kill: terminate the task's tmux session no matter which
  * process spawned it. Safe when tmux is missing, the server is down, or the

@@ -10,7 +10,7 @@ function serveArgs(graphPath: string): string[] {
   return ['run', '--with', 'graphifyy', '--with', 'mcp', '-m', 'graphify.serve', graphPath];
 }
 
-interface McpServerDef {
+export interface McpServerDef {
   command: string;
   args: string[];
 }

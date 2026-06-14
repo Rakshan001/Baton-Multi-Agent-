@@ -14,20 +14,17 @@ import { execa, type ResultPromise } from 'execa';
 import { gitRoot } from './git.js';
 import { getTask } from './store.js';
 import { readBrief } from './handoff/brief.js';
+import { memoryBriefSection, recallMemories } from './memory.js';
 import { tmuxSessionExists } from './util/tmux.js';
 import { bus } from './events.js';
+import { AGENTS, type HeadlessLauncher } from './agents/registry.js';
 
-export interface Launcher {
-  cmd: string;
-  args: (prompt: string) => string[];
-}
+export type Launcher = HeadlessLauncher;
 
-/** Agents with a non-interactive print/exec mode. Others need a real terminal. */
-export const LAUNCHERS: Record<string, Launcher> = {
-  claude: { cmd: 'claude', args: (p) => ['-p', p] },
-  codex: { cmd: 'codex', args: (p) => ['exec', p] },
-  gemini: { cmd: 'gemini', args: (p) => ['-p', p] },
-};
+/** Agents with a non-interactive print/exec mode (from the registry). Others need a real terminal. */
+export const LAUNCHERS: Record<string, Launcher> = Object.fromEntries(
+  Object.values(AGENTS).flatMap((a) => (a.headless ? [[a.id, a.headless] as const] : [])),
+);
 
 export const HEADLESS_AGENTS = Object.keys(LAUNCHERS);
 
@@ -47,6 +44,7 @@ export class TerminalConflictError extends Error {
 
 interface RunningAgent {
   agent: string;
+  model?: string;
   child: ResultPromise;
   startedAt: string;
   lines: string[]; // ring buffer (last 500) for late joiners
@@ -74,13 +72,14 @@ function pushLines(slug: string, run: RunningAgent, chunk: string, stream: 'out'
 export interface StartResult {
   slug: string;
   agent: string;
+  model?: string;
   pid: number | undefined;
   promptSource: 'handoff' | 'task';
 }
 
 export async function startAgent(
   slug: string,
-  opts: { agent?: string; prompt?: string } = {},
+  opts: { agent?: string; model?: string; prompt?: string } = {},
   root?: string,
 ): Promise<StartResult> {
   const repoRoot = root ?? (await gitRoot());
@@ -97,7 +96,9 @@ export async function startAgent(
   // session name is deterministic, so tmux itself is the shared lock.
   if (await tmuxSessionExists(repoRoot, slug)) throw new TerminalConflictError(slug);
 
-  // Prompt: prefer a HANDOFF.md brief (the curated knowledge pack), else the task.
+  // Prompt: prefer a HANDOFF.md brief (the curated knowledge pack), else the
+  // task plus recalled project memory — a few hundred tokens of verified facts
+  // beats the agent re-exploring the repo.
   let prompt = opts.prompt;
   let promptSource: StartResult['promptSource'] = 'task';
   if (!prompt) {
@@ -106,17 +107,23 @@ export async function startAgent(
       prompt = brief.body;
       promptSource = 'handoff';
     } else {
-      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.`;
+      let memory = '';
+      try {
+        const recalled = await recallMemories(repoRoot, { topic: task.task, limit: 6 });
+        const section = memoryBriefSection(recalled.facts, recalled.staleDropped);
+        if (section) memory = `\n\n${section}`;
+      } catch { /* memory is an enhancement — never block a launch */ }
+      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${memory}`;
     }
   }
 
-  const child = execa(launcher.cmd, launcher.args(prompt), {
+  const child = execa(launcher.cmd, launcher.args(prompt, opts.model), {
     cwd: task.worktreePath,
     buffer: false,
     stdin: 'ignore',
     env: { ...process.env, FORCE_COLOR: '0' },
   });
-  const run: RunningAgent = { agent, child, startedAt: new Date().toISOString(), lines: [] };
+  const run: RunningAgent = { agent, model: opts.model, child, startedAt: new Date().toISOString(), lines: [] };
   running.set(slug, run);
 
   child.stdout?.on('data', (d: Buffer) => pushLines(slug, run, d.toString(), 'out'));
@@ -136,7 +143,7 @@ export async function startAgent(
       bus.publish({ type: 'agent.stopped', slug, agent });
     });
 
-  return { slug, agent, pid: child.pid, promptSource };
+  return { slug, agent, model: opts.model, pid: child.pid, promptSource };
 }
 
 export function stopAgent(slug: string): boolean {
@@ -151,6 +158,7 @@ export function stopAgent(slug: string): boolean {
 export interface RunningInfo {
   slug: string;
   agent: string;
+  model?: string;
   startedAt: string;
   recentLines: string[];
 }
@@ -159,6 +167,7 @@ export function runningHeadless(): RunningInfo[] {
   return [...running.entries()].map(([slug, r]) => ({
     slug,
     agent: r.agent,
+    model: r.model,
     startedAt: r.startedAt,
     recentLines: r.lines.slice(-50),
   }));

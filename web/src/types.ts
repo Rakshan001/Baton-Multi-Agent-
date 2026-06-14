@@ -237,18 +237,31 @@ export interface ImportResult {
   warnings: string[];
 }
 
+/** Routing types — mirror src/routing.ts (routing-parity.test.ts enforces lockstep). */
+export type RoutingMode = "auto" | "manual" | "single";
+
+export interface TierEntry {
+  agent: string;
+  model?: string;
+}
+
 /** Routing rule from baton.config.json (src/routing.ts). */
 export interface RoutingRule {
   match: string[];
-  agent: string;
+  agent?: string;
+  tier?: string;
   model?: string;
 }
 
 export interface RoutingConfig {
   rules: RoutingRule[];
   default: string;
+  mode?: RoutingMode;
+  tiers?: Record<string, TierEntry[]>;
+  single?: TierEntry;
 }
 
+/** Legacy suggestion shape (suggestAgent). */
 export interface RoutingSuggestion {
   agent: string;
   model?: string;
@@ -257,12 +270,67 @@ export interface RoutingSuggestion {
   source: "rule" | "default";
 }
 
+/** Rich suggestion (suggestRoute): severity-ranked, tier-aware, explainable. */
+export interface RouteSuggestion {
+  mode: RoutingMode;
+  agent: string;
+  model?: string;
+  tier: string | null;
+  chain: TierEntry[];
+  severity: number;
+  signals: string[];
+  matched: string[];
+  rule: RoutingRule | null;
+  source: "single" | "rule" | "severity" | "default";
+  confidence: "high" | "low";
+}
+
 /** GET /api/routing[?task=…] */
 export interface RoutingInfo {
   config: RoutingConfig;
   path: string | null;
   errors: string[];
-  suggestion: RoutingSuggestion | null;
+  suggestion: RouteSuggestion | null;
+}
+
+/** Per-agent MCP wiring status (src/agents/connect.ts). */
+export interface McpStatus {
+  agent: string;
+  supported: boolean;
+  scope: "project" | "global" | null;
+  path: string | null;
+  exists: boolean;
+  connected: boolean;
+}
+
+/** One live session attributed to an agent (process scan / headless / terminal). */
+export interface LiveSession {
+  slug: string;
+  kind: "process" | "headless" | "terminal";
+}
+
+/** One row of the agent roster — GET /api/agents (src/agents/roster.ts). */
+export interface AgentRosterEntry {
+  id: AgentId;
+  label: string;
+  binary: string;
+  installed: boolean;
+  headless: boolean;
+  interactive: boolean;
+  mcp: McpStatus;
+  live: LiveSession[];
+  idle: boolean;
+}
+
+/** POST /api/agents/:id/connect result. */
+export interface ConnectResult {
+  agent: string;
+  scope: "project" | "global";
+  path: string;
+  wrote: boolean;
+  needsConfirm: boolean;
+  servers: string[];
+  preview?: string;
 }
 
 /** Agent-blame for one file — GET /api/blame?file=… */
@@ -271,3 +339,10 @@ export interface BlameResult {
   merged: { path: string; slug: string; task: string; agent: string | null; sha: string; message: string; at: string }[];
   live: SignalHolder[];
 }
+
+/** One side-by-side diff line — GET /api/tasks/:slug/diff. */
+export type DiffLineType = "add" | "del" | "ctx";
+export interface DiffLine { t: DiffLineType; o: number | null; n: number | null; s: string }
+export interface DiffHunk { header: string; lines: DiffLine[] }
+export type FileStatus = "added" | "modified" | "deleted";
+export interface DiffFile { path: string; status: FileStatus; hunks: DiffHunk[]; add: number; del: number; lang: string }

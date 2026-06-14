@@ -79,6 +79,27 @@ export function slugifyId(fact: string): string {
   return `mem-${base}`;
 }
 
+const sigWords = (s: string): Set<string> =>
+  new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
+
+/**
+ * Jaccard similarity of two facts' significant-word sets (0..1). The
+ * fingerprint (first 6 words) is only a cheap candidate filter for supersede;
+ * this confirms the bodies are actually the same knowledge before we DELETE the
+ * old fact — otherwise two distinct facts that merely open with the same words
+ * would silently clobber each other.
+ */
+export function factSimilarity(a: string, b: string): number {
+  const A = sigWords(a), B = sigWords(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+/** Min body-similarity before a same-fingerprint save is treated as an update. */
+export const SUPERSEDE_MIN_SIMILARITY = 0.5;
+
 /**
  * Refuse to store anything that looks like a credential. Memories are plain
  * files read by every agent — a pasted key would replicate into every session.
@@ -244,10 +265,14 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   const files: FileAnchor[] = [];
   for (const path of relFiles) files.push({ path, hash: await fileHash(mainRoot, path) });
 
-  // Same fingerprint → the new fact supersedes the old one (updated knowledge).
-  // The new fact always gets a distinct id so the supersede chain stays meaningful.
+  // Same fingerprint → CANDIDATE for supersede (updated knowledge). But the
+  // fingerprint is only the first 6 words; confirm the bodies are actually the
+  // same knowledge before replacing, so two distinct facts that merely share an
+  // opening can't silently delete each other.
   const fingerprint = fingerprintOf(fact);
-  const dup = existing.find((f) => f.fingerprint === fingerprint);
+  const dup = existing.find(
+    (f) => f.fingerprint === fingerprint && factSimilarity(f.fact, fact) >= SUPERSEDE_MIN_SIMILARITY,
+  );
   let id = slugifyId(fact);
   if (existing.some((f) => f.id === id)) {
     id = `${id}-${sha1(fact).slice(0, 4)}`;

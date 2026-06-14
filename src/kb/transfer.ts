@@ -143,8 +143,16 @@ export async function importKb(root: string, source: string): Promise<ImportResu
   await mkdir(tmp, { recursive: true });
   const warnings: string[] = [];
   try {
-    if (fromDir) await cp(source, tmp, { recursive: true });
-    else await execa('tar', ['-xzf', source, '-C', tmp], { timeout: 120_000 });
+    if (fromDir) {
+      await cp(source, tmp, { recursive: true });
+    } else {
+      // A pack is untrusted input ("import someone else's KB"): refuse member
+      // paths that could escape the staging dir before extracting (tar-slip).
+      const { stdout: listing } = await execa('tar', ['-tzf', source], { timeout: 120_000 });
+      const bad = listing.split('\n').find((m) => m.startsWith('/') || m.split('/').includes('..'));
+      if (bad) throw new Error(`refusing to import: pack contains an unsafe path (${bad})`);
+      await execa('tar', ['-xzf', source, '-C', tmp], { timeout: 120_000 });
+    }
     const manifestFile = join(tmp, 'kb-manifest.json');
     if (!existsSync(manifestFile)) throw new Error('not a baton KB pack (kb-manifest.json missing)');
     const manifest = JSON.parse(await readFile(manifestFile, 'utf-8')) as KbManifest;
@@ -157,6 +165,16 @@ export async function importKb(root: string, source: string): Promise<ImportResu
     const imported: KbProject[] = [];
 
     for (const { project, exists } of anchored) {
+      // The manifest is untrusted too: a crafted id must not escape the
+      // staging dir via join(tmp, 'projects', id). Block ONLY path traversal —
+      // legit ids (basename/relative-path slugs) may contain spaces, '@', or
+      // unicode (see kb/projects.ts), so don't restrict the charset.
+      const id = project.id;
+      if (!id.trim() || /[\\/]/.test(id) || id === '.' || id === '..') {
+        results.push({ id, status: 'invalid-graph' });
+        warnings.push(`project '${id}': unsafe project id — skipped`);
+        continue;
+      }
       if (!exists) {
         results.push({ id: project.id, status: 'path-missing' });
         warnings.push(`project '${project.id}': path ${relative(root, project.path) || '.'} does not exist here — skipped`);
