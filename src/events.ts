@@ -23,6 +23,7 @@ export type BatonEvent =
   | { type: 'kb.rebuilt'; project: string }
   | { type: 'handoff.created'; slug: string; toAgent: string }
   | { type: 'agent.connected'; agent: string }
+  | { type: 'skill.installed'; skill: string; agent: string }
   | { type: 'junk.cleaned'; count: number }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }

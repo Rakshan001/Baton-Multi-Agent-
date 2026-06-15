@@ -31,6 +31,10 @@ import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { KNOWN_AGENT_IDS } from './agents/registry.js';
+import {
+  importSkill, installSkill, listSkillStatus, uninstallSkill,
+  SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
+} from './skills/install.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
 import { StatusPoller } from './poller.js';
@@ -556,6 +560,47 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     } catch (e) {
       if (e instanceof McpUnsupportedError) return send(res, 400, { error: e.message }, origin);
       if (e instanceof McpConfigParseError) return send(res, 409, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // GET /api/skills — the catalog (bundled + imported) with per-agent install state
+  if (method === 'GET' && path === '/api/skills') {
+    return send(res, 200, { skills: await listSkillStatus(root), agents: ['claude', 'cursor'] }, origin);
+  }
+
+  // POST /api/skills/import — add a skill from a path or http(s) URL (write-gated)
+  if (method === 'POST' && path === '/api/skills/import') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ source?: string }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    try {
+      const skill = await importSkill(root, body.source ?? '');
+      return send(res, 201, { skill }, origin);
+    } catch (e) {
+      if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // POST/DELETE /api/skills/:id/install — install (write) or uninstall a skill for an agent
+  const skm = path.match(/^\/api\/skills\/([^/]+)\/install$/);
+  if (skm && (method === 'POST' || method === 'DELETE')) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const id = decodeURIComponent(skm[1]);
+    const agent = (method === 'POST'
+      ? (await readJsonBody<{ agent?: string }>(req))?.agent
+      : url.searchParams.get('agent')) ?? '';
+    try {
+      if (method === 'DELETE') {
+        return send(res, 200, await uninstallSkill(root, id, agent), origin);
+      }
+      const result = await installSkill(root, id, agent);
+      bus.publish({ type: 'skill.installed', skill: id, agent });
+      return send(res, 201, result, origin);
+    } catch (e) {
+      if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
+      if (e instanceof SkillAgentUnsupportedError) return send(res, 400, { error: e.message }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
     }
   }

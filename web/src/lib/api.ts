@@ -16,8 +16,9 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, DiffFile, AgentRosterEntry, ConnectResult } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
 import { DEMO_MEMORY } from "./demoMemory";
+import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor } from "./demoKb";
 import {
@@ -383,6 +384,74 @@ class BatonClient {
         live, idle: live.length === 0,
       };
     });
+  }
+
+  /* ---- skills (searchable catalog, install into .claude/.cursor) ---- */
+  private demoSkills: SkillStatus[] | null = null;
+  async getSkills(): Promise<SkillStatus[]> {
+    if (this.demo) {
+      await this.demoGate(70);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      return this.demoSkills;
+    }
+    const r = await this.request<{ skills: SkillStatus[] }>("/api/skills");
+    return r.skills;
+  }
+  async installSkill(id: string, agent: SkillAgent): Promise<SkillInstallResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      const skill = this.demoSkills.find((s) => s.id === id);
+      const inst = skill?.installs.find((i) => i.agent === agent);
+      if (inst) inst.installed = true;
+      this.emit();
+      return { skill: id, agent, rel: inst?.rel ?? "", path: inst?.rel ?? "", wrote: true };
+    }
+    const r = await this.request<SkillInstallResult>(`/api/skills/${encodeURIComponent(id)}/install`, {
+      method: "POST", body: JSON.stringify({ agent }),
+    });
+    this.emit();
+    return r;
+  }
+  async uninstallSkill(id: string, agent: SkillAgent): Promise<{ removed: boolean; rel: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(120);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      const skill = this.demoSkills.find((s) => s.id === id);
+      const inst = skill?.installs.find((i) => i.agent === agent);
+      if (inst) inst.installed = false;
+      this.emit();
+      return { removed: true, rel: inst?.rel ?? "" };
+    }
+    const r = await this.request<{ removed: boolean; rel: string }>(`/api/skills/${encodeURIComponent(id)}/install?agent=${encodeURIComponent(agent)}`, { method: "DELETE" });
+    this.emit();
+    return r;
+  }
+  async importSkill(source: string): Promise<SkillStatus> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(220);
+      const id = this.slugify(source.split(/[/\\]/).pop()?.replace(/\.(md|mdc|txt)$/i, "") || "imported-skill");
+      const skill: SkillStatus = {
+        id, name: id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        description: "Imported skill (demo preview).", tags: [], produces: [], body: `# ${id}\n\nImported from ${source}.\n`,
+        source: "imported",
+        installs: [
+          { agent: "claude", rel: `.claude/skills/${id}/SKILL.md`, installed: false },
+          { agent: "cursor", rel: `.cursor/rules/${id}.mdc`, installed: false },
+        ],
+      };
+      this.demoSkills = [...(this.demoSkills ?? [...DEMO_SKILLS]).filter((s) => s.id !== id), skill];
+      this.emit();
+      return skill;
+    }
+    // The daemon returns the parsed skill without per-agent install state; the
+    // screen refetches the catalog right after, which fills installs in.
+    const r = await this.request<{ skill: Omit<SkillStatus, "installs"> }>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) });
+    this.emit();
+    return { ...r.skill, installs: [] };
   }
 
   /* ---- interactive terminals (tmux-backed, src/terminals.ts) ---- */

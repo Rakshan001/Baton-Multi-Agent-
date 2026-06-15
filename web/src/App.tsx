@@ -27,6 +27,7 @@ import { ActivityScreen } from "./features/Activity";
 import { ConflictsScreen } from "./features/Conflicts";
 import { HistoryScreen } from "./features/History";
 import { AgentsScreen } from "./features/Agents";
+import { SkillsScreen } from "./features/Skills";
 import { SettingsScreen } from "./features/Settings";
 import { Connect } from "./features/Connect";
 import { DetailSheet } from "./features/Detail";
@@ -46,6 +47,7 @@ const NAV: NavItem[] = [
   { id: "memory", label: "Memory", icon: "sparkle" },
   { id: "history", label: "History", icon: "history" },
   { id: "agents", label: "Agents", icon: "bot" },
+  { id: "skills", label: "Skills", icon: "command" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
 
@@ -490,6 +492,7 @@ export default function App() {
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} />;
       case "history": return <HistoryScreen history={history} onOpen={onOpen} />;
       case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
+      case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
       default: return <CommandCenter status={status} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} />;
     }
