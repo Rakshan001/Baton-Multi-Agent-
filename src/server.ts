@@ -575,7 +575,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const body = await readJsonBody<{ source?: string }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
-      const skill = await importSkill(root, body.source ?? '');
+      const s = await importSkill(root, body.source ?? '');
+      // Strip reference content / raw; expose only what the catalog listing carries.
+      const skill = { id: s.id, name: s.name, description: s.description, tags: s.tags, produces: s.produces, body: s.body, source: s.source, references: s.references.map((r) => r.rel) };
       return send(res, 201, { skill }, origin);
     } catch (e) {
       if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);

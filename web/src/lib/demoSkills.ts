@@ -1,37 +1,41 @@
 /* ============================================================
    BATON — demo skill catalog
-   Mirrors src/skills/catalog.ts so the Skills screen is fully
-   explorable in demo mode (no daemon). Bodies are trimmed for the
-   preview; the real daemon serves the full playbooks.
+   Mirrors src/skills (catalog + bundled/bug-fix) so the Skills
+   screen is fully explorable in demo mode (no daemon). Bodies are
+   trimmed for the preview; the real daemon serves the full playbooks
+   and ships the bug-fix reference files alongside each install.
    ============================================================ */
 import type { SkillStatus } from "../types";
 
-const BUG_FIX_BODY = `# Common bug fix
+const BUG_FIX_BODY = `# Bug Fix Skill (portable)
 
-Resolve reported bugs methodically, with Baton's knowledge base and worktrees
-doing the heavy lifting. Don't start editing until you can name the root cause.
+Fix bugs systematically. The order is non-negotiable:
 
-## 1. Map the codebase first
-- Build the repo map if missing: \`baton kb init\` → \`baton kb rebuild\` (graphify
-  graph + a compact CODEBASE.md, ~hundreds of tokens vs. ~hundreds of thousands).
-- Read CODEBASE.md, then AGENTS.md / CLAUDE.md for the conventions you can't break.
-- \`baton memory recall\` — trust only facts marked fresh.
+\`\`\`
+REPRODUCE-FIRST + TRIAGE → SYNC → MAP (audit) → MULTI-AGENT AUDIT → BLAST RADIUS →
+ROOT CAUSE → WRITTEN PLAN → ⛔ CONFIDENCE ≥95% GATE ⛔ → ⛔ WAIT FOR APPROVAL ⛔ →
+TEST → FIX → DRY/PERF QUALITY GATE → RE-VERIFY (symptom gone + skeptic) →
+REPORT → COMMIT (auto) → ⛔ ASK BEFORE PUSH ⛔
+\`\`\`
 
-## 2. Locate the core files for THIS bug
-- Navigate via the knowledge graph, not blind grep. Read the few files that own it.
-- Reproduce the bug; capture the exact failing command/test.
+**Golden rules (excerpt)**
+1. REPRODUCE BEFORE YOU FIX. If it doesn't reproduce on current code → STOP.
+2. SYNC BEFORE YOU AUDIT. Audit the *current* code, not stale code.
+3. AUDIT EVERY FILE THE FIX COULD TOUCH. Don't reason about code you haven't read.
+4. NO FIX WITHOUT ROOT CAUSE. Symptom patches are forbidden.
+5. ⛔ CONFIDENCE ≥ 95% TO EDIT — corroborated by an independent skeptic agent.
+6. WRITE THE PLAN, THEN STOP. Wait for explicit approval before editing any file.
+7. STOP AND WARN on high blast radius.
+8. EDIT ONLY THE FILES IN THE APPROVED PLAN.
+9. CLEAN CODE, NOT JUST CORRECT — DRY, no duplication, no avoidable/N+1 calls.
+10. RE-VERIFY the symptom is gone; a skeptic adversarially re-checks the diff.
+11. COMMIT AUTOMATICALLY when verified — but ⛔ NEVER push without asking.
 
-## 3. Gate on confidence (95%)
-- Write the root cause in one or two sentences. If not ≥95% confident, keep digging.
+> Stack-agnostic: substitute this repo's real test/build/graph commands. Optional
+> phases (shared registry, dependency graph) are skipped if the project lacks them.
 
-## 4. Fix one bug at a time, in isolation
-- \`baton new "fix: <title>"\` → branch + worktree under .baton/wt/<slug>.
-- Check live edit signals before touching a file so you don't collide.
-- Smallest change that fixes the root cause; match surrounding style.
-
-## 5. Verify, record, hand off
-- Build + tests must pass and the repro must stop reproducing.
-- \`baton memory add "…" --files <touched>\`, then \`baton pass <slug>\` or \`baton merge <slug>\`.
+_Ships 3 reference files: a blast-radius checklist, a bugfix report template, and
+a multi-session status schema._
 `;
 
 const MAP_BODY = `# Map this codebase
@@ -56,16 +60,17 @@ const REFACTOR_BODY = `# Safe refactor
 
 export const DEMO_SKILLS: SkillStatus[] = [
   {
-    id: "common-bug-fix",
-    name: "Common bug fix",
-    description: "Map the repo, find the core files, confirm the root cause to 95% confidence, then fix bugs one at a time in isolated worktrees.",
-    tags: ["bug", "fix", "debug", "error", "crash", "regression", "root cause", "worktree"],
-    produces: ["CODEBASE.md", "knowledge graph", "worktree per bug", "memory"],
+    id: "bug-fix",
+    name: "bug-fix",
+    description: "Systematically fix bugs in ANY codebase WITHOUT regressions: reproduce first, audit every file the fix could touch, classify blast radius, find the true root cause, require ≥95% skeptic-corroborated confidence AND an approved plan before editing, re-verify the symptom is gone, then commit automatically but never push without asking.",
+    tags: ["bug", "fix", "debug", "error", "crash", "regression", "root cause", "reproduce", "blast radius", "skeptic", "review", "worktree", "commit"],
+    produces: ["reproduction", "blast-radius audit", "root-cause analysis", "approved plan", "regression re-verify", "bugfix report", "auto-commit (never pushes)"],
     body: BUG_FIX_BODY,
     source: "bundled",
+    references: ["references/blast-radius-checklist.md", "references/report-template.md", "references/status-template.json"],
     installs: [
-      { agent: "claude", rel: ".claude/skills/common-bug-fix/SKILL.md", installed: true },
-      { agent: "cursor", rel: ".cursor/rules/common-bug-fix.mdc", installed: false },
+      { agent: "claude", rel: ".claude/skills/bug-fix/SKILL.md", installed: true },
+      { agent: "cursor", rel: ".cursor/rules/bug-fix.mdc", installed: false },
     ],
   },
   {
@@ -76,6 +81,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["CODEBASE.md", "knowledge graph"],
     body: MAP_BODY,
     source: "bundled",
+    references: [],
     installs: [
       { agent: "claude", rel: ".claude/skills/map-codebase/SKILL.md", installed: false },
       { agent: "cursor", rel: ".cursor/rules/map-codebase.mdc", installed: false },
@@ -89,6 +95,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["worktree", "knowledge graph", "memory"],
     body: REFACTOR_BODY,
     source: "bundled",
+    references: [],
     installs: [
       { agent: "claude", rel: ".claude/skills/safe-refactor/SKILL.md", installed: false },
       { agent: "cursor", rel: ".cursor/rules/safe-refactor.mdc", installed: false },

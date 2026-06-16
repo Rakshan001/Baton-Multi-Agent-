@@ -406,7 +406,7 @@ class BatonClient {
       const inst = skill?.installs.find((i) => i.agent === agent);
       if (inst) inst.installed = true;
       this.emit();
-      return { skill: id, agent, rel: inst?.rel ?? "", path: inst?.rel ?? "", wrote: true };
+      return { skill: id, agent, rel: inst?.rel ?? "", path: inst?.rel ?? "", wrote: true, references: skill?.references.length ?? 0 };
     }
     const r = await this.request<SkillInstallResult>(`/api/skills/${encodeURIComponent(id)}/install`, {
       method: "POST", body: JSON.stringify({ agent }),
@@ -437,7 +437,7 @@ class BatonClient {
       const skill: SkillStatus = {
         id, name: id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
         description: "Imported skill (demo preview).", tags: [], produces: [], body: `# ${id}\n\nImported from ${source}.\n`,
-        source: "imported",
+        source: "imported", references: [],
         installs: [
           { agent: "claude", rel: `.claude/skills/${id}/SKILL.md`, installed: false },
           { agent: "cursor", rel: `.cursor/rules/${id}.mdc`, installed: false },

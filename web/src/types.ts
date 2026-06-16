@@ -366,6 +366,8 @@ export interface SkillStatus {
   produces: string[];
   body: string;
   source: "bundled" | "imported";
+  /** Relative paths of the skill's reference files (content omitted); [] for single-file skills. */
+  references: string[];
   installs: SkillInstallState[];
 }
 
@@ -376,4 +378,6 @@ export interface SkillInstallResult {
   rel: string;
   path: string;
   wrote: boolean;
+  /** Number of reference files written alongside the skill. */
+  references: number;
 }

@@ -114,7 +114,7 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
         showToast({ kind: "info", title: `Removed "${s.name}"`, desc: `from ${getAgent(agent).short}` });
       } else {
         const r = await BatonAPI.installSkill(s.id, agent);
-        showToast({ kind: "ok", title: `Installed "${s.name}"`, desc: r.rel, mono: true });
+        showToast({ kind: "ok", title: `Installed "${s.name}"`, desc: r.references > 0 ? `${r.rel}  (+${r.references} reference file${r.references === 1 ? "" : "s"})` : r.rel, mono: true });
       }
       onChanged();
     } catch (e) {
@@ -135,6 +135,11 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
             <div style={{ fontSize: "var(--fs-15)", fontWeight: "var(--fw-semibold)" }}>{s.name}</div>
             <div className="mono" style={{ fontSize: 10.5, color: "var(--text-quaternary)" }}>{s.id}</div>
           </div>
+          {s.references.length > 0 && (
+            <span data-tip={s.references.join("\n")} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-11)", fontWeight: "var(--fw-semibold)", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "2px 8px", flex: "none" }}>
+              <Icon name="folder" size={10} /> {s.references.length} file{s.references.length === 1 ? "" : "s"}
+            </span>
+          )}
           <span style={{ fontSize: "var(--fs-11)", fontWeight: "var(--fw-semibold)", color: s.source === "imported" ? "var(--accent-text)" : "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "2px 8px", flex: "none" }}>{s.source}</span>
         </div>
         <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.55, color: "var(--text-secondary)" }}>{s.description}</p>
@@ -143,6 +148,16 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
             {s.produces.map((p) => (
               <span key={p} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-11)", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "2px 8px" }}>
                 <Icon name="layers" size={10} /> {p}
+              </span>
+            ))}
+          </div>
+        )}
+        {s.references.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
+            <span style={{ fontSize: 10.5, color: "var(--text-quaternary)" }}>references</span>
+            {s.references.map((r) => (
+              <span key={r} className="mono" data-tip="Installed alongside the skill, loaded on demand" style={{ fontSize: 10.5, color: "var(--text-tertiary)", background: "var(--bg-base)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "1px 6px" }}>
+                {r.replace(/^references\//, "")}
               </span>
             ))}
           </div>

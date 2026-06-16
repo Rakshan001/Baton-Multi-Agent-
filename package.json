@@ -7,7 +7,7 @@
     "baton": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.mjs",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "lint": "tsc --noEmit"

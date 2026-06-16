@@ -1,14 +1,31 @@
 /**
- * Bundled skill catalog — the curated, searchable set of reusable agent
- * workflows Baton ships with. A "skill" is a named, self-contained markdown
- * playbook (objective + step-by-step instructions) that any agent can install
- * into its own config dir and invoke; install.ts renders each one into the
- * format a given CLI understands (.claude/skills/<id>/SKILL.md, .cursor/rules).
+ * Skill catalog — the curated, searchable set of reusable agent workflows Baton
+ * ships with. A "skill" is a named markdown playbook (objective + steps) that an
+ * agent can install into its own config dir and invoke. There are two kinds:
  *
- * Adding a bundled skill is a one-entry change here. Imported skills (from a
- * path or URL) live alongside these at runtime via install.ts's import path,
- * read out of <repo>/.baton/skills, and carry source: 'imported'.
+ *   - File-backed skills under ./bundled/<id>/ — a real SKILL.md (with YAML
+ *     frontmatter) plus an optional references/ folder of supporting files
+ *     loaded on demand. These can be multi-KB and multi-file; we keep them as
+ *     editable files rather than embedding them as strings. (The build copies
+ *     ./bundled into dist/skills/bundled — see scripts/copy-assets.mjs.)
+ *   - Inline skills — short single-file playbooks defined right here.
+ *
+ * install.ts renders each into the format a given CLI understands
+ * (.claude/skills/<id>/SKILL.md + references/, or .cursor/rules/<id>.mdc).
+ * Imported skills (from a path/URL) live alongside these at runtime, read out of
+ * <repo>/.baton/skills, and carry source: 'imported'.
  */
+import matter from 'gray-matter';
+import { existsSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+
+export interface SkillReference {
+  /** Path relative to the skill dir, e.g. "references/blast-radius-checklist.md". */
+  rel: string;
+  content: string;
+}
 
 export interface SkillDef {
   id: string;
@@ -20,65 +37,36 @@ export interface SkillDef {
   tags: string[];
   /** Baton artifacts the skill reads or produces, surfaced as chips in the UI. */
   produces: string[];
-  /** The full playbook body rendered into each agent's skill file. */
+  /** The playbook body (no frontmatter). */
   body: string;
+  /** Supporting files installed alongside the skill (loaded on demand by the agent). */
+  references: SkillReference[];
   source: 'bundled' | 'imported';
+  /**
+   * Verbatim SKILL.md (frontmatter + body) for skills authored as files. When
+   * present and the on-disk `name` already matches the id, Claude installs get
+   * this byte-for-byte so a hand-tuned skill isn't reflowed. Inline/imported
+   * skills leave this undefined and are re-rendered.
+   */
+  raw?: string;
 }
 
-const BUG_FIX_BODY = `# Common bug fix
+/** Where file-backed skills live, both compiled (dist/skills/bundled) and in dev (src/skills/bundled). */
+const BUNDLED_DIR = fileURLToPath(new URL('./bundled', import.meta.url));
 
-Resolve reported bugs in this repository methodically, with Baton's knowledge
-base and worktrees doing the heavy lifting. Do **not** start editing until you
-can name the root cause with high confidence.
+/**
+ * Tags/produces for file-backed skills whose SKILL.md frontmatter doesn't carry
+ * them (so the source file stays a clean, portable Claude skill). Frontmatter
+ * `tags:` / `produces:` arrays, if present, take precedence over these.
+ */
+const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
+  'bug-fix': {
+    tags: ['bug', 'fix', 'debug', 'error', 'crash', 'regression', 'root cause', 'reproduce', 'blast radius', 'skeptic', 'review', 'worktree', 'commit'],
+    produces: ['reproduction', 'blast-radius audit', 'root-cause analysis', 'approved plan', 'regression re-verify', 'bugfix report', 'auto-commit (never pushes)'],
+  },
+};
 
-## 1. Map the codebase first
-
-- If \`CODEBASE.md\` is missing or stale, build the repo map: \`baton kb init\`
-  then \`baton kb rebuild\`. This produces the graphify knowledge graph and a
-  compact \`CODEBASE.md\` (~hundreds of tokens) instead of reading every file
-  (~hundreds of thousands).
-- Read \`CODEBASE.md\`, then \`AGENTS.md\` / \`CLAUDE.md\` if present, to learn the
-  conventions you must not break.
-- Recall what past sessions already learned: \`baton memory recall\` (or the
-  \`recall_memory\` MCP tool). Trust only facts marked fresh.
-
-## 2. Locate the core files for THIS bug
-
-- Use the knowledge graph to navigate to the symbols involved rather than
-  grepping blindly. Read the handful of files that actually own the behaviour.
-- Reproduce the bug. Capture the exact failing command / test / input.
-
-## 3. Gate on confidence (95%)
-
-- Write down the root cause in one or two sentences. If you are **not ≥95%
-  confident**, keep investigating — add logging, read callers, check git blame.
-- Only proceed to a fix once the root cause is certain. A plausible guess is not
-  a root cause.
-
-## 4. Fix one bug at a time, in isolation
-
-For each bug, work in its own isolated git worktree so parallel fixes never
-clobber one another:
-
-- \`baton new "fix: <short bug title>"\` creates a branch + worktree under
-  \`.baton/wt/<slug>\`. Do the fix there.
-- Before editing a file, check Baton's live edit signals (the \`check_files\`
-  MCP tool, or \`baton signals\`) so you don't collide with another agent on the
-  same file. Conflicts are surfaced before they happen, not after.
-- Make the smallest change that fixes the root cause. Match the surrounding
-  code's style.
-
-## 5. Verify, record, hand off
-
-- Run the build and the test suite. The fix is not done until they pass and the
-  original reproduction no longer reproduces.
-- Save what you learned with \`baton memory add "…" --files <touched files>\` so
-  the next agent doesn't rediscover it.
-- When the worktree is green, hand it back: \`baton pass <slug>\` writes a
-  HANDOFF.md (objective, what changed, remaining risk) and routes it on, or
-  merge it: \`baton merge <slug>\`.
-- Then move to the next bug and repeat from step 2.
-`;
+/* ---- inline single-file skills (short, no references) ---- */
 
 const MAP_BODY = `# Map this codebase
 
@@ -123,16 +111,7 @@ graph to stay safe.
   or \`baton merge\` the worktree once tests pass.
 `;
 
-export const BUNDLED_SKILLS: SkillDef[] = [
-  {
-    id: 'common-bug-fix',
-    name: 'Common bug fix',
-    description: 'Map the repo, find the core files, confirm the root cause to 95% confidence, then fix bugs one at a time in isolated worktrees.',
-    tags: ['bug', 'fix', 'debug', 'error', 'crash', 'regression', 'root cause', 'worktree'],
-    produces: ['CODEBASE.md', 'knowledge graph', 'worktree per bug', 'memory'],
-    body: BUG_FIX_BODY,
-    source: 'bundled',
-  },
+const INLINE_SKILLS: SkillDef[] = [
   {
     id: 'map-codebase',
     name: 'Map this codebase',
@@ -140,6 +119,7 @@ export const BUNDLED_SKILLS: SkillDef[] = [
     tags: ['map', 'graphify', 'knowledge graph', 'codebase', 'index', 'navigate', 'onboarding'],
     produces: ['CODEBASE.md', 'knowledge graph'],
     body: MAP_BODY,
+    references: [],
     source: 'bundled',
   },
   {
@@ -149,6 +129,80 @@ export const BUNDLED_SKILLS: SkillDef[] = [
     tags: ['refactor', 'cleanup', 'restructure', 'rename', 'move', 'worktree', 'tests'],
     produces: ['worktree', 'knowledge graph', 'memory'],
     body: REFACTOR_BODY,
+    references: [],
     source: 'bundled',
   },
 ];
+
+/* ---- file-backed loader (cached — bundled skills never change at runtime) ---- */
+
+let fileBackedCache: SkillDef[] | null = null;
+
+function asStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : [];
+}
+
+async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
+  const skillPath = join(BUNDLED_DIR, id, 'SKILL.md');
+  if (!existsSync(skillPath)) return null;
+  const raw = await readFile(skillPath, 'utf-8');
+  const parsed = matter(raw);
+  const data = parsed.data as Record<string, unknown>;
+  const name = String(data.name ?? id).trim() || id;
+  // Folded/multiline YAML descriptions arrive as one string with newlines — flatten.
+  const description = String(data.description ?? '').replace(/\s+/g, ' ').trim();
+
+  const references: SkillReference[] = [];
+  const refDir = join(BUNDLED_DIR, id, 'references');
+  if (existsSync(refDir)) {
+    let files: string[] = [];
+    try { files = await readdir(refDir); } catch { files = []; }
+    for (const f of files.sort()) {
+      try {
+        references.push({ rel: `references/${f}`, content: await readFile(join(refDir, f), 'utf-8') });
+      } catch { /* skip unreadable reference */ }
+    }
+  }
+
+  const meta = BUNDLED_META[id] ?? { tags: [], produces: [] };
+  const fmTags = asStringArray(data.tags);
+  const fmProduces = asStringArray(data.produces);
+  // raw is byte-faithful only when the on-disk name already equals the id.
+  const nameMatchesId = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') === id;
+
+  return {
+    id,
+    name,
+    description: description || `The ${id} skill.`,
+    tags: fmTags.length ? fmTags : meta.tags,
+    produces: fmProduces.length ? fmProduces : meta.produces,
+    body: parsed.content.trim() + '\n',
+    references,
+    source: 'bundled',
+    raw: nameMatchesId ? raw : undefined,
+  };
+}
+
+async function loadFileBackedSkills(): Promise<SkillDef[]> {
+  if (fileBackedCache) return fileBackedCache;
+  const out: SkillDef[] = [];
+  if (existsSync(BUNDLED_DIR)) {
+    let entries: { name: string; isDirectory(): boolean }[] = [];
+    try { entries = await readdir(BUNDLED_DIR, { withFileTypes: true }); } catch { entries = []; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      try {
+        const skill = await loadOneFileSkill(e.name);
+        if (skill) out.push(skill);
+      } catch { /* skip a malformed bundled skill rather than break the catalog */ }
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  fileBackedCache = out;
+  return out;
+}
+
+/** All skills Baton ships: file-backed (./bundled) + inline. */
+export async function bundledSkills(): Promise<SkillDef[]> {
+  return [...(await loadFileBackedSkills()), ...INLINE_SKILLS];
+}
