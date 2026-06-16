@@ -68,20 +68,49 @@ async function appendAgentGuide(root: string): Promise<string | null> {
   return 'AGENTS.md';
 }
 
+const GRAPHIFY_IGNORE_MARKER = '# baton: generated knowledge-base files (do not index)';
+const GRAPHIFY_IGNORE_ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
+
 /**
- * Keep graphify away from our own generated files: with an LLM key set, it
- * would semantically re-extract CODEBASE.md/AGENTS.md/kb/ on every rebuild —
- * wasted tokens and self-referential graph nodes. Idempotent merge.
+ * Compose `.graphifyignore` contents (pure, unit-tested). Returns null when the
+ * file already carries our managed block (nothing to do).
+ *
+ * Subtlety: graphify reads, per directory, `.graphifyignore` *or else* that
+ * dir's `.gitignore` — not both. So the moment Baton creates a `.graphifyignore`
+ * at the repo root, graphify stops honouring the root `.gitignore`. graphify's
+ * built-in skip list still drops node_modules/dist/.venv/coverage/etc., but a
+ * repo's *custom* root ignores (secrets/, data/, generated/) would slip into the
+ * graph. So when we have to create the file, we mirror the existing `.gitignore`
+ * in first, then append our generated-file block.
+ */
+export function composeGraphifyIgnore(existing: string, gitignore: string | null): string | null {
+  if (existing.includes(GRAPHIFY_IGNORE_MARKER)) return null;
+  let base = existing.trimEnd();
+  if (!base && gitignore && gitignore.trim()) {
+    base = `# mirrored from .gitignore so graphify keeps honouring it\n${gitignore.replace(/\r\n/g, '\n').trimEnd()}`;
+  }
+  return `${base}\n\n${GRAPHIFY_IGNORE_MARKER}\n${GRAPHIFY_IGNORE_ENTRIES.join('\n')}\n`.replace(/^\n+/, '');
+}
+
+/**
+ * Keep graphify away from our own generated files (CODEBASE.md/AGENTS.md/kb/) —
+ * with an LLM key it would re-extract them every rebuild (wasted tokens,
+ * self-referential nodes). When creating the file fresh, preserve the repo's
+ * own root `.gitignore` (see composeGraphifyIgnore). Idempotent.
  */
 async function ensureGraphifyIgnore(root: string): Promise<void> {
   const file = join(root, '.graphifyignore');
-  const MARKER = '# baton: generated knowledge-base files (do not index)';
-  const ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
-  let current = '';
-  if (existsSync(file)) current = await readFile(file, 'utf-8');
-  if (current.includes(MARKER)) return;
-  const block = `${current.trimEnd()}\n\n${MARKER}\n${ENTRIES.join('\n')}\n`.replace(/^\n+/, '');
-  await writeFile(file, block, 'utf-8');
+  const existing = existsSync(file) ? await readFile(file, 'utf-8') : '';
+  let gitignore: string | null = null;
+  if (!existing) {
+    const gi = join(root, '.gitignore');
+    if (existsSync(gi)) {
+      try { gitignore = await readFile(gi, 'utf-8'); } catch { gitignore = null; }
+    }
+  }
+  const next = composeGraphifyIgnore(existing, gitignore);
+  if (next === null) return;
+  await writeFile(file, next, 'utf-8');
 }
 
 /** Interactive share-or-local question (TTY only; non-TTY defaults to local). */
