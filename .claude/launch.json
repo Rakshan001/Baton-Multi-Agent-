@@ -6,6 +6,13 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["dist/cli.js", "serve", "--write", "-p", "7077"],
       "port": 7077
+    },
+    {
+      "name": "baton-web",
+      "runtimeExecutable": "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5173", "--strictPort"],
+      "cwd": "web",
+      "port": 5173
     }
   ]
 }
