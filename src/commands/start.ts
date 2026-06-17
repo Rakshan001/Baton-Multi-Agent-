@@ -6,7 +6,7 @@
 import { bus } from '../events.js';
 import { HEADLESS_AGENTS, startAgent, stopAgent, waitForAgent } from '../spawn.js';
 
-export async function startCmd(slug: string, opts: { agent?: string; prompt?: string }): Promise<void> {
+export async function startCmd(slug: string, opts: { agent?: string; model?: string; prompt?: string }): Promise<void> {
   const unsub = bus.onType('agent.output', (e) => {
     if (e.event.type === 'agent.output' && e.event.slug === slug) {
       (e.event.stream === 'err' ? process.stderr : process.stdout).write(e.event.line + '\n');
@@ -14,7 +14,7 @@ export async function startCmd(slug: string, opts: { agent?: string; prompt?: st
   });
   try {
     const r = await startAgent(slug, opts);
-    console.log(`▶ ${r.agent} started in worktree (pid ${r.pid ?? '?'}) · prompt: ${r.promptSource === 'handoff' ? 'HANDOFF.md brief' : 'task description'}`);
+    console.log(`▶ ${r.agent}${r.model ? ` (model: ${r.model})` : ''} started in worktree (pid ${r.pid ?? '?'}) · prompt: ${r.promptSource === 'handoff' ? 'HANDOFF.md brief' : 'task description'}`);
     console.log('  Ctrl+C stops the agent\n');
     process.on('SIGINT', () => {
       stopAgent(slug);

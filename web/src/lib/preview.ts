@@ -8,13 +8,11 @@
    honesty boundary explicit.
    ============================================================ */
 import type { DemoSession } from "./demoData";
-import type { TaskHistory, Project } from "../types";
+import type { TaskHistory, Project, DiffFile, DiffHunk, DiffLine, FileStatus } from "../types";
 
-export type DiffLineType = "add" | "del" | "ctx";
-export interface DiffLine { t: DiffLineType; o: number | null; n: number | null; s: string }
-export interface DiffHunk { header: string; lines: DiffLine[] }
-export type FileStatus = "added" | "modified" | "deleted";
-export interface DiffFile { path: string; status: FileStatus; hunks: DiffHunk[]; add: number; del: number; lang: string }
+// Diff shapes live in ../types now (GET /api/tasks/:slug/diff is a real
+// endpoint); re-exported here so demo fixtures keep compiling.
+export type { DiffFile, DiffHunk, DiffLine, FileStatus, DiffLineType } from "../types";
 
 export interface Usage { input: number; output: number; requests: number; contextPct: number; spark: number[] }
 

@@ -17,6 +17,7 @@ import {
 } from '../kb/state.js';
 import { jsonSnippet, snippetFor } from '../kb/mcp.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
+import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 
 const AGENT_GUIDE = `
@@ -68,22 +69,6 @@ async function appendAgentGuide(root: string): Promise<string | null> {
   return 'AGENTS.md';
 }
 
-/**
- * Keep graphify away from our own generated files: with an LLM key set, it
- * would semantically re-extract CODEBASE.md/AGENTS.md/kb/ on every rebuild —
- * wasted tokens and self-referential graph nodes. Idempotent merge.
- */
-async function ensureGraphifyIgnore(root: string): Promise<void> {
-  const file = join(root, '.graphifyignore');
-  const MARKER = '# baton: generated knowledge-base files (do not index)';
-  const ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
-  let current = '';
-  if (existsSync(file)) current = await readFile(file, 'utf-8');
-  if (current.includes(MARKER)) return;
-  const block = `${current.trimEnd()}\n\n${MARKER}\n${ENTRIES.join('\n')}\n`.replace(/^\n+/, '');
-  await writeFile(file, block, 'utf-8');
-}
-
 /** Interactive share-or-local question (TTY only; non-TTY defaults to local). */
 async function askShare(): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
@@ -97,8 +82,41 @@ async function askShare(): Promise<boolean> {
   }
 }
 
+/**
+ * Single-choice menu (TTY only; non-TTY returns `fallback`). Accepts the choice
+ * number or its key. Same style as askShare; exported for `baton setup`.
+ */
+export async function askChoice<T extends string>(
+  question: string,
+  choices: Array<{ key: T; label: string }>,
+  fallback: T,
+): Promise<T> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return fallback;
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const menu = choices.map((c, i) => `  ${i + 1}) ${c.label}`).join('\n');
+    const def = choices.findIndex((c) => c.key === fallback) + 1;
+    const answer = (await rl.question(`${question}\n${menu}\nChoose [1-${choices.length}] (default ${def}): `)).trim().toLowerCase();
+    if (!answer) return fallback;
+    const n = parseInt(answer, 10);
+    if (Number.isInteger(n) && n >= 1 && n <= choices.length) return choices[n - 1].key;
+    return choices.find((c) => c.key === answer)?.key ?? fallback;
+  } finally {
+    rl.close();
+  }
+}
+
 export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  let root: string;
+  try {
+    root = await gitRoot(path ? resolve(path) : undefined);
+  } catch {
+    console.error('baton kb init must run inside a git repository.');
+    console.error('  Setting up a folder that holds several separate repos? Run: baton setup');
+    process.exitCode = 1;
+    return;
+  }
   const target = resolve(path ?? root);
 
   const det = await detectGraphify();
@@ -118,7 +136,11 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   console.log(`detected ${projects.length} project${projects.length === 1 ? '' : 's'}:`);
   for (const p of projects) console.log(`  • ${p.id}  (${p.path})`);
 
-  await ensureGraphifyIgnore(root);
+  // Seed a gitignore-mirroring .graphifyignore at the hub root AND every scanned
+  // project, so graphify indexes code — not deps/build output — even when a
+  // project root grows a .graphifyignore that would otherwise shadow its .gitignore.
+  const seeded = await ensureGraphifyIgnores([root, ...projects.map((p) => p.path)]);
+  if (seeded.length) console.log(`✓ .graphifyignore ×${seeded.length} (mirrors .gitignore + excludes generated docs)`);
 
   for (const p of projects) {
     console.log(`\n→ extracting ${p.id} ...`);
@@ -224,6 +246,11 @@ export async function kbRebuildCmd(
     process.exitCode = 1;
     return;
   }
+  // Self-heal ignores before rebuilding: upgrades any stale bare .graphifyignore
+  // (pre-mirror format) to honour the project's .gitignore again.
+  const seeded = await ensureGraphifyIgnores([root, ...targets.map((p) => p.path)]);
+  if (seeded.length) console.log(`✓ refreshed .graphifyignore ×${seeded.length}`);
+
   for (const p of targets) {
     console.log(`→ ${opts.full ? 'full extract' : 'incremental update'}: ${p.id}`);
     if (opts.full) await buildGraph(p.path, { onOutput: (l) => console.log(`    ${l}`) });

@@ -14,8 +14,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { extname, join, normalize, sep } from 'node:path';
+import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus } from './board.js';
+import { collectDiff } from './diff.js';
 import { currentBranch, gitRoot } from './git.js';
 import { listHistory } from './history.js';
 import { loadTasks, TaskNotFoundError } from './store.js';
@@ -25,8 +26,16 @@ import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './com
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
+import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, kbStatus, loadKb, saveKb } from './kb/state.js';
 import { allSnippets } from './kb/mcp.js';
+import { collectAgents } from './agents/roster.js';
+import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
+import { KNOWN_AGENT_IDS } from './agents/registry.js';
+import {
+  importSkill, installSkill, listSkillStatus, uninstallSkill,
+  SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
+} from './skills/install.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
 import { StatusPoller } from './poller.js';
@@ -37,7 +46,7 @@ import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
 import { getTask } from './store.js';
 import { refreshCodebaseDocs } from './kb/codebasemd.js';
-import { loadRouting, suggestAgent } from './routing.js';
+import { loadRouting, suggestRoute } from './routing.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
@@ -47,11 +56,17 @@ import {
   reattachOrphans, resizeTerminal, writeInput,
   HeadlessConflictError, TerminalRunningError, TerminalUnavailableError, INTERACTIVE_AGENTS,
 } from './terminals.js';
-import { gcMemories, listMemories, mainRepoRoot, memoryDir, MemoryValidationError, removeMemory, saveMemory } from './memory.js';
+import {
+  bulkRemoveMemory, gcMemories, listMemories, loadRetention, mainRepoRoot, memoryDir,
+  MemoryValidationError, pruneMemories, removeMemory, retentionActive, saveMemory, saveRetention,
+  type ProjectRel, type RetentionPolicy,
+} from './memory.js';
+import { storageUsage } from './storage.js';
 import { watch } from 'node:fs';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, rmdir } from 'node:fs/promises';
+import { auditJunk, cleanJunk, sweepTmpFiles } from './cleanup.js';
 import { basename } from 'node:path';
 
 const require = createRequire(import.meta.url);
@@ -244,6 +259,19 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   });
 }
 
+/** kb sub-projects as (id, path-relative-to-main-root) for per-server memory scoping.
+ *  Returns [] for a single-project repo (nothing to scope). */
+async function kbProjectRels(root: string): Promise<ProjectRel[]> {
+  try {
+    const mainRoot = await mainRepoRoot(root);
+    const kb = await loadKb(mainRoot);
+    if (!kb || kb.projects.length < 2) return [];
+    return kb.projects.map((p) => ({ id: p.id, rel: relative(mainRoot, p.path) || '.' }));
+  } catch {
+    return [];
+  }
+}
+
 async function handle(req: IncomingMessage, res: ServerResponse, root: string, opts: ServeOptions): Promise<void> {
   const origin = corsOrigin(req);
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -287,7 +315,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, await usageForRepo(root, await loadTasks(root)), origin);
   }
 
-  // GET /api/routing[?task=…] — routing config + suggestion for a task text
+  // GET /api/routing[?task=…] — routing config + severity-ranked suggestion
   if (method === 'GET' && path === '/api/routing') {
     const { config, path: configPath, errors } = await loadRouting(root);
     const taskText = url.searchParams.get('task');
@@ -295,7 +323,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       config,
       path: configPath,
       errors,
-      suggestion: taskText ? suggestAgent(taskText, config) : null,
+      suggestion: taskText ? suggestRoute(taskText, config) : null,
     }, origin);
   }
 
@@ -369,6 +397,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     const targets = body.project ? state.projects.filter((p) => p.id === body.project) : state.projects;
     if (body.project && targets.length === 0) return send(res, 404, { error: `no project '${body.project}'` }, origin);
+    // Self-heal .graphifyignore (mirror .gitignore) before rebuilding.
+    await ensureGraphifyIgnores([root, ...targets.map((p) => p.path)]);
     for (const p of targets) {
       buildQueue.enqueue(p.id, () => (body.full ? buildGraph(p.path) : update(p.path)), (err) => {
         if (!err) bus.publish({ type: 'kb.rebuilt', project: p.id });
@@ -439,7 +469,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     } catch (e) {
       return send(res, 400, { error: (e as Error).message }, origin);
     } finally {
-      void rm(upload, { force: true });
+      // Remove the upload, then the now-empty tmp dir (non-recursive: harmless
+      // failure if a concurrent upload is mid-flight). The startup sweep is the
+      // backstop for files a crashed request never reached this finally for.
+      void rm(upload, { force: true }).then(() => rmdir(tmpDir).catch(() => undefined));
     }
   }
 
@@ -512,14 +545,107 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     }
   }
 
+  // GET /api/tasks/:slug/diff — real changes vs the task's base (commits + working tree)
+  const mDiff = path.match(/^\/api\/tasks\/([^/]+)\/diff$/);
+  if (mDiff && method === 'GET') {
+    const slug = decodeURIComponent(mDiff[1]);
+    const task = (await loadTasks(root)).find((t) => t.slug === slug);
+    if (!task) return send(res, 404, { error: `no task '${slug}'` }, origin);
+    return send(res, 200, { files: await collectDiff(task) }, origin);
+  }
+
+  // GET /api/agents — the roster: installed? drivable? MCP wired? live sessions?
+  if (method === 'GET' && path === '/api/agents') {
+    return send(res, 200, { agents: await collectAgents(root) }, origin);
+  }
+
   // GET /api/agents/running — baton-managed headless agent runs
   if (method === 'GET' && path === '/api/agents/running') {
     return send(res, 200, { running: runningHeadless() }, origin);
   }
 
-  // GET /api/memory — all facts with evidence-checked freshness
+  // POST /api/agents/:id/connect — wire an agent's MCP config (write-gated).
+  // Project files write immediately; global files need { confirmGlobal: true }
+  // and otherwise return a preview the UI confirms first.
+  const acm = path.match(/^\/api\/agents\/([^/]+)\/connect$/);
+  if (acm && method === 'POST') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const agent = decodeURIComponent(acm[1]);
+    if (!KNOWN_AGENT_IDS.includes(agent)) return send(res, 404, { error: `unknown agent '${agent}'` }, origin);
+    const body = (await readJsonBody<{ confirmGlobal?: boolean }>(req)) ?? {};
+    try {
+      const state = await loadKb(root);
+      const result = await connectAgentMcp(agent, root, state, { confirmGlobal: body.confirmGlobal === true });
+      if (result.wrote) bus.publish({ type: 'agent.connected', agent });
+      return send(res, 200, result, origin);
+    } catch (e) {
+      if (e instanceof McpUnsupportedError) return send(res, 400, { error: e.message }, origin);
+      if (e instanceof McpConfigParseError) return send(res, 409, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // GET /api/skills — the catalog (bundled + imported) with per-agent install state
+  if (method === 'GET' && path === '/api/skills') {
+    return send(res, 200, { skills: await listSkillStatus(root), agents: ['claude', 'cursor'] }, origin);
+  }
+
+  // POST /api/skills/import — add a skill from a path or http(s) URL (write-gated)
+  if (method === 'POST' && path === '/api/skills/import') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ source?: string }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    try {
+      const s = await importSkill(root, body.source ?? '');
+      // Strip reference content / raw; expose only what the catalog listing carries.
+      const skill = { id: s.id, name: s.name, description: s.description, tags: s.tags, produces: s.produces, body: s.body, source: s.source, references: s.references.map((r) => r.rel) };
+      return send(res, 201, { skill }, origin);
+    } catch (e) {
+      if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // POST/DELETE /api/skills/:id/install — install (write) or uninstall a skill for an agent
+  const skm = path.match(/^\/api\/skills\/([^/]+)\/install$/);
+  if (skm && (method === 'POST' || method === 'DELETE')) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const id = decodeURIComponent(skm[1]);
+    const agent = (method === 'POST'
+      ? (await readJsonBody<{ agent?: string }>(req))?.agent
+      : url.searchParams.get('agent')) ?? '';
+    try {
+      if (method === 'DELETE') {
+        return send(res, 200, await uninstallSkill(root, id, agent), origin);
+      }
+      const result = await installSkill(root, id, agent);
+      bus.publish({ type: 'skill.installed', skill: id, agent });
+      return send(res, 201, result, origin);
+    } catch (e) {
+      if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
+      if (e instanceof SkillAgentUnsupportedError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // GET /api/doctor — audit junk (orphaned worktrees/branches/tmux/temp files). Read-only.
+  if (method === 'GET' && path === '/api/doctor') {
+    return send(res, 200, await auditJunk(root), origin);
+  }
+  // POST /api/doctor/clean — reclaim junk (write-gated). Dry-run unless { apply: true }.
+  if (method === 'POST' && path === '/api/doctor/clean') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = (await readJsonBody<{ apply?: boolean; force?: boolean }>(req)) ?? {};
+    const report = await auditJunk(root);
+    const result = await cleanJunk(root, report, { apply: body.apply === true, force: body.force === true });
+    if (result.applied && result.removed.length) bus.publish({ type: 'junk.cleaned', count: result.removed.length });
+    return send(res, 200, result, origin);
+  }
+
+  // GET /api/memory — all facts with evidence-checked freshness + per-server scoping
   if (method === 'GET' && path === '/api/memory') {
-    return send(res, 200, { facts: await listMemories(root) }, origin);
+    const projects = await kbProjectRels(root);
+    return send(res, 200, { facts: await listMemories(root, { projects }), projects }, origin);
   }
   // POST /api/memory — quick-add from the dashboard (write-gated)
   if (method === 'POST' && path === '/api/memory') {
@@ -542,6 +668,37 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (removed.length) bus.publish({ type: 'memory.updated' });
     return send(res, 200, { removed }, origin);
   }
+  // POST /api/memory/bulk-delete — delete many facts at once (write-gated)
+  if (method === 'POST' && path === '/api/memory/bulk-delete') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ ids?: unknown }>(req);
+    const ids = Array.isArray(body?.ids) ? body!.ids.filter((x): x is string => typeof x === 'string') : null;
+    if (!ids) return send(res, 400, { error: 'pass { ids: string[] }' }, origin);
+    const removed = await bulkRemoveMemory(root, ids);
+    if (removed.length) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, { removed }, origin);
+  }
+  // POST /api/memory/prune — apply a retention policy now (write-gated)
+  if (method === 'POST' && path === '/api/memory/prune') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = (await readJsonBody<RetentionPolicy>(req)) ?? {};
+    const removed = await pruneMemories(root, body);
+    if (removed.length) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, { removed }, origin);
+  }
+  // GET/POST /api/memory/retention — read or set the auto-retention policy (POST write-gated)
+  if (path === '/api/memory/retention') {
+    if (method === 'GET') return send(res, 200, await loadRetention(root), origin);
+    if (method === 'POST') {
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
+      const body = (await readJsonBody<RetentionPolicy>(req)) ?? {};
+      const saved = await saveRetention(root, body);
+      // Apply immediately so the user sees the effect; future runs apply on daemon start.
+      const removed = retentionActive(saved) ? await pruneMemories(root, saved) : [];
+      if (removed.length) bus.publish({ type: 'memory.updated' });
+      return send(res, 200, { policy: saved, removed }, origin);
+    }
+  }
   // DELETE /api/memory/:id (write-gated)
   const memDel = path.match(/^\/api\/memory\/([^/]+)$/);
   if (memDel && method === 'DELETE') {
@@ -549,6 +706,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const ok = await removeMemory(root, decodeURIComponent(memDel[1]));
     if (ok) bus.publish({ type: 'memory.updated' });
     return send(res, ok ? 200 : 404, ok ? { removed: true } : { error: 'no such memory' }, origin);
+  }
+
+  // GET /api/storage — disk footprint (memory / history / reports / graphs)
+  if (method === 'GET' && path === '/api/storage') {
+    return send(res, 200, await storageUsage(root), origin);
   }
 
   // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
@@ -572,7 +734,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
     if (!sub && method === 'POST') {
       if (!opts.writeEnabled) return denyReadOnly(res, origin);
-      const body = await readJsonBody<{ agent?: string; prompt?: string; cols?: number; rows?: number }>(req);
+      const body = await readJsonBody<{ agent?: string; model?: string; prompt?: string; cols?: number; rows?: number }>(req);
       if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
       try {
         return send(res, 201, await createTerminal(slug, body, root), origin);
@@ -619,7 +781,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (hasTerminal(slug)) {
       return send(res, 409, { error: `an interactive terminal is already open for '${slug}' — close it before starting a headless run` }, origin);
     }
-    const body = await readJsonBody<{ agent?: string; prompt?: string }>(req);
+    const body = await readJsonBody<{ agent?: string; model?: string; prompt?: string }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
       return send(res, 201, await startAgent(slug, body, root), origin);
@@ -635,16 +797,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (hm && method === 'POST') {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const slug = decodeURIComponent(hm[1]);
-    const body = await readJsonBody<{ toAgent?: string; note?: string; commitPending?: boolean }>(req);
+    const body = await readJsonBody<{ toAgent?: string; model?: string; note?: string; commitPending?: boolean }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
-      // toAgent absent or "auto" → routed by baton.config.json rules
-      const result = await passTask(slug, { to: body.toAgent, note: body.note, commitPending: body.commitPending }, root);
+      // toAgent absent or "auto" → routed by baton.config.json rules + severity
+      const result = await passTask(slug, { to: body.toAgent, model: body.model, note: body.note, commitPending: body.commitPending }, root);
       if (!result) return send(res, 404, { error: `no task '${slug}'` }, origin);
-      const { brief, routed } = result;
+      const { brief, routed, skipped } = result;
       return send(res, 201, {
         slug, toAgent: brief.meta.to, model: brief.meta.model ?? null,
         routed: routed !== null, matched: routed?.matched ?? [],
+        severity: routed?.severity ?? null, tier: routed?.tier ?? null,
+        signals: routed?.signals ?? [], confidence: routed?.confidence ?? null,
+        skipped,
         estTokens: brief.meta.est_tokens, estCostUsd: brief.meta.est_cost_usd,
         briefPath: brief.path, markdown: brief.markdown,
       }, origin);
@@ -692,6 +857,15 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const watcher = new WorktreeWatcher(root);
   await watcher.start();
   new SignalTracker(root).start();
+  // Conservative startup sweep: delete only provably-dead temp files + stale
+  // uploads (never worktrees/branches/tmux). Best-effort, like the watcher below.
+  void sweepTmpFiles(root).catch(() => undefined);
+  // Apply any saved memory-retention policy once at startup (best-effort).
+  void loadRetention(root)
+    .then((p) => (retentionActive(p) ? pruneMemories(root, p) : []))
+    .then((removed) => { if (removed.length) bus.publish({ type: 'memory.updated' }); })
+    .catch(() => undefined);
+
   // Interactive terminals survive daemon restarts (tmux owns the PTY) — adopt
   // any that belong to this repo, and kill them when their task goes away.
   void detectTmux().then((ok) => (ok ? reattachOrphans(root) : undefined)).catch(() => undefined);
@@ -730,5 +904,5 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   } else {
     console.log(`baton serve → http://localhost:${opts.port}  (dashboard not built — run: npm run build --prefix web)`);
   }
-  console.log('  API: /api/status · /api/history · /api/meta · /api/tasks/:slug · /api/events (SSE) · /api/kb   (Ctrl+C to stop)');
+  console.log('  API: /api/status · /api/history · /api/meta · /api/tasks/:slug · /api/events (SSE) · /api/kb · /api/doctor   (Ctrl+C to stop)');
 }

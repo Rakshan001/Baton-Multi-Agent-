@@ -2,7 +2,7 @@
  * Tiny JSON store for Baton tasks, kept at <repo>/.baton/tasks.json (gitignored).
  * One file, no database — sufficient at this scale.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export interface Task {
@@ -46,7 +46,19 @@ export async function loadTasks(gitRoot: string): Promise<Task[]> {
 export async function saveTasks(gitRoot: string, tasks: Task[]): Promise<void> {
   const file = tasksFile(gitRoot);
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify(tasks, null, 2) + '\n', 'utf-8');
+  // tmp + rename: readers never observe a half-written file.
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(tasks, null, 2) + '\n', 'utf-8');
+  await rename(tmp, file);
+}
+
+// Mutations are serialized per process so two concurrent addTask/removeTask
+// calls (e.g. two POST /api/tasks) can't read-modify-write over each other.
+let writeQueue: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const next = writeQueue.then(fn, fn);
+  writeQueue = next.catch(() => undefined);
+  return next;
 }
 
 export async function getTask(gitRoot: string, slug: string): Promise<Task | undefined> {
@@ -54,14 +66,18 @@ export async function getTask(gitRoot: string, slug: string): Promise<Task | und
 }
 
 export async function addTask(gitRoot: string, task: Task): Promise<void> {
-  const tasks = await loadTasks(gitRoot);
-  tasks.push(task);
-  await saveTasks(gitRoot, tasks);
+  await serialized(async () => {
+    const tasks = await loadTasks(gitRoot);
+    tasks.push(task);
+    await saveTasks(gitRoot, tasks);
+  });
 }
 
 export async function removeTask(gitRoot: string, slug: string): Promise<void> {
-  const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
-  await saveTasks(gitRoot, tasks);
+  await serialized(async () => {
+    const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
+    await saveTasks(gitRoot, tasks);
+  });
 }
 
 /** kebab-case slug from free text, made unique against `taken`. */

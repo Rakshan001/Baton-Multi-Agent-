@@ -4,8 +4,14 @@
  * silent divergence impossible.
  */
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_ROUTING as serverConfig, suggestAgent as serverSuggest } from '../src/routing.js';
-import { BUILTIN_ROUTING as webConfig, suggestAgent as webSuggest } from '../web/src/lib/routing.js';
+import {
+  BUILTIN_ROUTING as serverConfig, scoreSeverity as serverSeverity,
+  suggestAgent as serverSuggest, suggestRoute as serverRoute,
+} from '../src/routing.js';
+import {
+  BUILTIN_ROUTING as webConfig, scoreSeverity as webSeverity,
+  suggestAgent as webSuggest, suggestRoute as webRoute,
+} from '../web/src/lib/routing.js';
 
 const TASKS = [
   'fix the crash on login',
@@ -30,5 +36,17 @@ describe('web routing mirror parity', () => {
     expect(b.model).toBe(a.model);
     expect(b.matched).toEqual(a.matched);
     expect(b.source).toBe(a.source);
+  });
+
+  it.each(TASKS)('severity + rich route agree on: %s', (task) => {
+    expect(webSeverity(task)).toEqual(serverSeverity(task));
+    expect(webRoute(task, webConfig)).toEqual(serverRoute(task, serverConfig));
+  });
+
+  it.each(TASKS)('rich route agrees in manual and single modes: %s', (task) => {
+    const manual = { mode: 'manual' as const };
+    const single = { mode: 'single' as const, single: { agent: 'claude', model: 'opus' } };
+    expect(webRoute(task, { ...webConfig, ...manual })).toEqual(serverRoute(task, { ...serverConfig, ...manual }));
+    expect(webRoute(task, { ...webConfig, ...single })).toEqual(serverRoute(task, { ...serverConfig, ...single }));
   });
 });

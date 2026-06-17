@@ -16,15 +16,16 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus } from "../types";
-import { DEMO_MEMORY } from "./demoMemory";
-import { BUILTIN_ROUTING, suggestAgent } from "./routing";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
+import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
+import { DEMO_SKILLS } from "./demoSkills";
+import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor } from "./demoKb";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
 } from "./demoData";
-import { WORKSPACE, type DemoProject } from "./preview";
+import { WORKSPACE, getDiff as demoDiff, type DemoProject } from "./preview";
 import { loadConnections, type Connection } from "./connections";
 import { ls } from "./storage";
 
@@ -92,6 +93,7 @@ class BatonClient {
   setConnection(conn: Connection) {
     this.connectionId = conn.id;
     this.baseUrl = conn.baseUrl || import.meta.env.VITE_BATON_API || "";
+    this.agentOverride.clear(); // overlays belong to the previous daemon
     ls.set("baton:connection", conn.id);
     this.emit(); // every poll hook refetches against the new daemon
   }
@@ -200,7 +202,11 @@ class BatonClient {
       return statusFrom(this.demoSessions);
     }
     const rows = await this.request<StatusRow[]>("/api/status");
-    return rows.map((r) => (this.agentOverride.has(r.slug) ? { ...r, agent: this.agentOverride.get(r.slug)! } : r));
+    return rows.map((r) => {
+      if (!this.agentOverride.has(r.slug)) return r;
+      if (r.agent) { this.agentOverride.delete(r.slug); return r; } // agent attached — overlay no longer needed
+      return { ...r, agent: this.agentOverride.get(r.slug)! };
+    });
   }
   async getHistory(): Promise<TaskHistory[]> {
     if (this.demo) {
@@ -290,7 +296,7 @@ class BatonClient {
   }
 
   /* ---- headless agent control ---- */
-  async startAgentRun(slug: string, opts: { agent?: AgentId; prompt?: string } = {}): Promise<{ slug: string; agent: string; promptSource: string }> {
+  async startAgentRun(slug: string, opts: { agent?: AgentId; model?: string; prompt?: string } = {}): Promise<{ slug: string; agent: string; promptSource: string }> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(200);
@@ -314,6 +320,140 @@ class BatonClient {
     return r;
   }
 
+  /* ---- agent roster (installed? drivable? MCP wired? live?) ---- */
+  async getAgents(): Promise<AgentRosterEntry[]> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return this.demoRoster();
+    }
+    const r = await this.request<{ agents: AgentRosterEntry[] }>("/api/agents");
+    return r.agents;
+  }
+  // Demo MCP targets — mirror src/agents/connect.ts mcpTargetFor exactly so the
+  // showcase shows the real config paths the daemon would write.
+  private demoMcpTarget(id: AgentId): { scope: ConnectResult["scope"]; path: string } | null {
+    switch (id) {
+      case "claude": return { scope: "project", path: ".mcp.json" };
+      case "cursor": return { scope: "project", path: ".cursor/mcp.json" };
+      case "gemini": return { scope: "global", path: "~/.gemini/settings.json" };
+      case "codex": return { scope: "global", path: "~/.codex/config.toml" };
+      default: return null; // aider, opencode — no MCP wiring
+    }
+  }
+
+  /** Wire an agent's MCP config. Global files need confirmGlobal (server returns a preview otherwise). */
+  async connectAgent(id: AgentId, confirmGlobal = false): Promise<ConnectResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(160);
+      const target = this.demoMcpTarget(id) ?? { scope: "project" as const, path: ".mcp.json" };
+      if (target.scope === "global" && !confirmGlobal) {
+        return { agent: id, scope: target.scope, path: target.path, wrote: false, needsConfirm: true, servers: ["baton"], preview: `{\n  "mcpServers": {\n    "baton": { "command": "baton", "args": ["mcp"] }\n  }\n}` };
+      }
+      this.demoConnected.add(id);
+      this.emit();
+      return { agent: id, scope: target.scope, path: target.path, wrote: true, needsConfirm: false, servers: ["baton"] };
+    }
+    const r = await this.request<ConnectResult>(`/api/agents/${encodeURIComponent(id)}/connect`, {
+      method: "POST", body: JSON.stringify({ confirmGlobal }),
+    });
+    if (r.wrote) this.emit();
+    return r;
+  }
+
+  // Demo roster: every CLI "installed", MCP pre-wired for claude/cursor, live
+  // sessions read from the active demo scenario. Mirrors the real shape.
+  private demoConnected = new Set<AgentId>(["claude", "cursor"]);
+  private demoRoster(): AgentRosterEntry[] {
+    const defs: { id: AgentId; label: string; binary: string; headless: boolean; interactive: boolean; mcp: boolean }[] = [
+      { id: "claude", label: "Claude Code", binary: "claude", headless: true, interactive: true, mcp: true },
+      { id: "cursor", label: "Cursor", binary: "cursor-agent", headless: false, interactive: true, mcp: true },
+      { id: "codex", label: "Codex", binary: "codex", headless: true, interactive: true, mcp: true },
+      { id: "gemini", label: "Gemini", binary: "gemini", headless: true, interactive: true, mcp: true },
+      { id: "aider", label: "Aider", binary: "aider", headless: false, interactive: true, mcp: false },
+      { id: "opencode", label: "OpenCode", binary: "opencode", headless: false, interactive: true, mcp: false },
+    ];
+    return defs.map((d) => {
+      const live = this.demoSessions.filter((s) => s.agent === d.id).map((s) => ({ slug: s.slug, kind: "process" as const }));
+      const connected = d.mcp && this.demoConnected.has(d.id);
+      const target = this.demoMcpTarget(d.id);
+      return {
+        id: d.id, label: d.label, binary: d.binary, installed: true,
+        headless: d.headless, interactive: d.interactive,
+        mcp: { agent: d.id, supported: d.mcp, scope: target?.scope ?? null, path: target?.path ?? null, exists: connected, connected },
+        live, idle: live.length === 0,
+      };
+    });
+  }
+
+  /* ---- skills (searchable catalog, install into .claude/.cursor) ---- */
+  private demoSkills: SkillStatus[] | null = null;
+  async getSkills(): Promise<SkillStatus[]> {
+    if (this.demo) {
+      await this.demoGate(70);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      return this.demoSkills;
+    }
+    const r = await this.request<{ skills: SkillStatus[] }>("/api/skills");
+    return r.skills;
+  }
+  async installSkill(id: string, agent: SkillAgent): Promise<SkillInstallResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      const skill = this.demoSkills.find((s) => s.id === id);
+      const inst = skill?.installs.find((i) => i.agent === agent);
+      if (inst) inst.installed = true;
+      this.emit();
+      return { skill: id, agent, rel: inst?.rel ?? "", path: inst?.rel ?? "", wrote: true, references: skill?.references.length ?? 0 };
+    }
+    const r = await this.request<SkillInstallResult>(`/api/skills/${encodeURIComponent(id)}/install`, {
+      method: "POST", body: JSON.stringify({ agent }),
+    });
+    this.emit();
+    return r;
+  }
+  async uninstallSkill(id: string, agent: SkillAgent): Promise<{ removed: boolean; rel: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(120);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      const skill = this.demoSkills.find((s) => s.id === id);
+      const inst = skill?.installs.find((i) => i.agent === agent);
+      if (inst) inst.installed = false;
+      this.emit();
+      return { removed: true, rel: inst?.rel ?? "" };
+    }
+    const r = await this.request<{ removed: boolean; rel: string }>(`/api/skills/${encodeURIComponent(id)}/install?agent=${encodeURIComponent(agent)}`, { method: "DELETE" });
+    this.emit();
+    return r;
+  }
+  async importSkill(source: string): Promise<SkillStatus> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(220);
+      const id = this.slugify(source.split(/[/\\]/).pop()?.replace(/\.(md|mdc|txt)$/i, "") || "imported-skill");
+      const skill: SkillStatus = {
+        id, name: id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        description: "Imported skill (demo preview).", tags: [], produces: [], body: `# ${id}\n\nImported from ${source}.\n`,
+        source: "imported", references: [],
+        installs: [
+          { agent: "claude", rel: `.claude/skills/${id}/SKILL.md`, installed: false },
+          { agent: "cursor", rel: `.cursor/rules/${id}.mdc`, installed: false },
+        ],
+      };
+      this.demoSkills = [...(this.demoSkills ?? [...DEMO_SKILLS]).filter((s) => s.id !== id), skill];
+      this.emit();
+      return skill;
+    }
+    // The daemon returns the parsed skill without per-agent install state; the
+    // screen refetches the catalog right after, which fills installs in.
+    const r = await this.request<{ skill: Omit<SkillStatus, "installs"> }>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) });
+    this.emit();
+    return { ...r.skill, installs: [] };
+  }
+
   /* ---- interactive terminals (tmux-backed, src/terminals.ts) ---- */
   async getTerminals(): Promise<{ available: boolean; hint?: string; terminals: TerminalInfo[] }> {
     if (this.demo) {
@@ -322,7 +462,7 @@ class BatonClient {
     }
     return this.request("/api/terminals");
   }
-  async createTerminal(slug: string, opts: { agent?: AgentId; prompt?: string; cols?: number; rows?: number } = {}): Promise<TerminalInfo> {
+  async createTerminal(slug: string, opts: { agent?: AgentId; model?: string; prompt?: string; cols?: number; rows?: number } = {}): Promise<TerminalInfo> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(200);
@@ -364,14 +504,17 @@ class BatonClient {
 
   /* ---- project memory (evidence-anchored facts, src/memory.ts) ---- */
   private demoMemory: MemoryFactStatus[] | null = null;
-  async getMemories(): Promise<MemoryFactStatus[]> {
+  private demoRetention: RetentionPolicy = {};
+  private demoFacts(): MemoryFactStatus[] {
+    return (this.demoMemory ??= JSON.parse(JSON.stringify(DEMO_MEMORY)) as MemoryFactStatus[]);
+  }
+  async getMemories(): Promise<{ facts: MemoryFactStatus[]; projects: MemoryProject[] }> {
     if (this.demo) {
       await this.demoGate(60);
-      this.demoMemory ??= JSON.parse(JSON.stringify(DEMO_MEMORY)) as MemoryFactStatus[];
-      return this.demoMemory;
+      return { facts: this.demoFacts(), projects: DEMO_MEMORY_PROJECTS };
     }
-    const r = await this.request<{ facts: MemoryFactStatus[] }>("/api/memory");
-    return r.facts;
+    const r = await this.request<{ facts: MemoryFactStatus[]; projects: MemoryProject[] }>("/api/memory");
+    return { facts: r.facts, projects: r.projects ?? [] };
   }
   async addMemory(input: { fact: string; type?: string; files?: string[]; task?: string }): Promise<MemoryFactStatus> {
     this.assertWrite();
@@ -381,15 +524,83 @@ class BatonClient {
         id: `mem-${this.slugify(input.fact)}`, type: (input.type as MemoryFactStatus["type"]) ?? "reference",
         fact: input.fact, agent: "dashboard", task: input.task ?? null, createdAt: new Date().toISOString(),
         anchors: { commit: "demo", files: (input.files ?? []).map((p) => ({ path: p, hash: "demo" })) },
-        supersedes: null, freshness: "fresh", staleReason: null, commitsBehind: 0,
+        supersedes: null, freshness: "fresh", staleReason: null, commitsBehind: 0, project: null,
       };
-      this.demoMemory = [fact, ...(this.demoMemory ?? [...DEMO_MEMORY])];
+      this.demoMemory = [fact, ...this.demoFacts()];
       this.emit();
       return fact;
     }
     const r = await this.request<MemoryFactStatus>("/api/memory", { method: "POST", body: JSON.stringify(input) });
     this.emit();
     return r;
+  }
+  async bulkDeleteMemories(ids: string[]): Promise<{ removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(160);
+      const set = new Set(ids);
+      this.demoMemory = this.demoFacts().filter((f) => !set.has(f.id));
+      this.emit();
+      return { removed: ids };
+    }
+    const r = await this.request<{ removed: string[] }>("/api/memory/bulk-delete", { method: "POST", body: JSON.stringify({ ids }) });
+    this.emit();
+    return r;
+  }
+  async pruneMemories(policy: RetentionPolicy): Promise<{ removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      const removed = this.applyDemoRetention(policy);
+      this.emit();
+      return { removed };
+    }
+    const r = await this.request<{ removed: string[] }>("/api/memory/prune", { method: "POST", body: JSON.stringify(policy) });
+    this.emit();
+    return r;
+  }
+  async getRetention(): Promise<RetentionPolicy> {
+    if (this.demo) { await delay(40); return this.demoRetention; }
+    return this.request<RetentionPolicy>("/api/memory/retention");
+  }
+  async setRetention(policy: RetentionPolicy): Promise<{ policy: RetentionPolicy; removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(150);
+      this.demoRetention = policy;
+      const removed = this.applyDemoRetention(policy);
+      this.emit();
+      return { policy, removed };
+    }
+    const r = await this.request<{ policy: RetentionPolicy; removed: string[] }>("/api/memory/retention", { method: "POST", body: JSON.stringify(policy) });
+    this.emit();
+    return r;
+  }
+  /** Demo-only: apply a retention policy to the in-memory facts (mirrors factsToPrune). */
+  private applyDemoRetention(policy: RetentionPolicy): string[] {
+    const now = Date.now();
+    const cutoff = policy.maxAgeDays && policy.maxAgeDays > 0 ? now - policy.maxAgeDays * 86_400_000 : null;
+    const keep: MemoryFactStatus[] = [], removed: string[] = [];
+    for (const f of this.demoFacts()) {
+      const tooOld = cutoff !== null && Date.parse(f.createdAt) < cutoff;
+      const drop = tooOld || (policy.dropStale && f.freshness === "stale") || (policy.dropAging && f.freshness === "aging");
+      if (drop) removed.push(f.id); else keep.push(f);
+    }
+    this.demoMemory = keep;
+    return removed;
+  }
+  async getStorage(): Promise<StorageBreakdown> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return {
+        root: "/demo/orbit",
+        memory: { bytes: this.demoFacts().length * 480, facts: this.demoFacts().length },
+        history: { bytes: 86_016 }, reports: { bytes: 12_400, count: 4 },
+        graphs: [{ id: "api", label: "api", bytes: 1_180_000, count: 3 }, { id: "web", label: "web", bytes: 940_000, count: 3 }],
+        graphsTotal: 2_120_000, total: 2_120_000 + 86_016 + 12_400 + this.demoFacts().length * 480,
+      };
+    }
+    return this.request<StorageBreakdown>("/api/storage");
   }
   async deleteMemory(id: string): Promise<void> {
     this.assertWrite();
@@ -430,7 +641,7 @@ class BatonClient {
   async getRouting(task?: string): Promise<RoutingInfo> {
     if (this.demo) {
       await delay(60); // suggestion must feel instant; no offline gate needed
-      return { config: BUILTIN_ROUTING, path: null, errors: [], suggestion: task ? suggestAgent(task) : null };
+      return { config: BUILTIN_ROUTING, path: null, errors: [], suggestion: task ? suggestRoute(task) : null };
     }
     const q = task ? `?task=${encodeURIComponent(task)}` : "";
     return this.request<RoutingInfo>(`/api/routing${q}`);
@@ -475,6 +686,15 @@ class BatonClient {
       if (e instanceof ApiError && e.code === "NOT_FOUND") return null;
       throw e;
     }
+  }
+  /** Full diff vs the task's base — GET /api/tasks/:slug/diff (demo: scripted fixtures). */
+  async getDiff(slug: string): Promise<DiffFile[]> {
+    if (this.demo) {
+      await this.demoGate(120);
+      return demoDiff(slug);
+    }
+    const r = await this.request<{ files: DiffFile[] }>(`/api/tasks/${encodeURIComponent(slug)}/diff`);
+    return r.files;
   }
   async getBlame(file: string): Promise<BlameResult> {
     if (this.demo) {

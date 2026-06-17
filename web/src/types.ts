@@ -119,6 +119,30 @@ export interface MemoryFactStatus {
   freshness: "fresh" | "aging" | "stale";
   staleReason: string | null;
   commitsBehind: number | null;
+  /** Which kb sub-project this fact's files belong to (hub scoping); null = shared. */
+  project: string | null;
+}
+
+/** A kb sub-project for per-server memory scoping (GET /api/memory.projects). */
+export interface MemoryProject { id: string; rel: string }
+
+/** Auto-retention policy — GET/POST /api/memory/retention. */
+export interface RetentionPolicy {
+  maxAgeDays?: number;
+  dropStale?: boolean;
+  dropAging?: boolean;
+}
+
+/** Disk footprint — GET /api/storage (src/storage.ts). */
+export interface StorageBucket { id: string; label: string; bytes: number; count?: number }
+export interface StorageBreakdown {
+  root: string;
+  memory: { bytes: number; facts: number };
+  history: { bytes: number };
+  reports: { bytes: number; count: number };
+  graphs: StorageBucket[];
+  graphsTotal: number;
+  total: number;
 }
 
 /** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */
@@ -237,18 +261,31 @@ export interface ImportResult {
   warnings: string[];
 }
 
+/** Routing types — mirror src/routing.ts (routing-parity.test.ts enforces lockstep). */
+export type RoutingMode = "auto" | "manual" | "single";
+
+export interface TierEntry {
+  agent: string;
+  model?: string;
+}
+
 /** Routing rule from baton.config.json (src/routing.ts). */
 export interface RoutingRule {
   match: string[];
-  agent: string;
+  agent?: string;
+  tier?: string;
   model?: string;
 }
 
 export interface RoutingConfig {
   rules: RoutingRule[];
   default: string;
+  mode?: RoutingMode;
+  tiers?: Record<string, TierEntry[]>;
+  single?: TierEntry;
 }
 
+/** Legacy suggestion shape (suggestAgent). */
 export interface RoutingSuggestion {
   agent: string;
   model?: string;
@@ -257,12 +294,67 @@ export interface RoutingSuggestion {
   source: "rule" | "default";
 }
 
+/** Rich suggestion (suggestRoute): severity-ranked, tier-aware, explainable. */
+export interface RouteSuggestion {
+  mode: RoutingMode;
+  agent: string;
+  model?: string;
+  tier: string | null;
+  chain: TierEntry[];
+  severity: number;
+  signals: string[];
+  matched: string[];
+  rule: RoutingRule | null;
+  source: "single" | "rule" | "severity" | "default";
+  confidence: "high" | "low";
+}
+
 /** GET /api/routing[?task=…] */
 export interface RoutingInfo {
   config: RoutingConfig;
   path: string | null;
   errors: string[];
-  suggestion: RoutingSuggestion | null;
+  suggestion: RouteSuggestion | null;
+}
+
+/** Per-agent MCP wiring status (src/agents/connect.ts). */
+export interface McpStatus {
+  agent: string;
+  supported: boolean;
+  scope: "project" | "global" | null;
+  path: string | null;
+  exists: boolean;
+  connected: boolean;
+}
+
+/** One live session attributed to an agent (process scan / headless / terminal). */
+export interface LiveSession {
+  slug: string;
+  kind: "process" | "headless" | "terminal";
+}
+
+/** One row of the agent roster — GET /api/agents (src/agents/roster.ts). */
+export interface AgentRosterEntry {
+  id: AgentId;
+  label: string;
+  binary: string;
+  installed: boolean;
+  headless: boolean;
+  interactive: boolean;
+  mcp: McpStatus;
+  live: LiveSession[];
+  idle: boolean;
+}
+
+/** POST /api/agents/:id/connect result. */
+export interface ConnectResult {
+  agent: string;
+  scope: "project" | "global";
+  path: string;
+  wrote: boolean;
+  needsConfirm: boolean;
+  servers: string[];
+  preview?: string;
 }
 
 /** Agent-blame for one file — GET /api/blame?file=… */
@@ -270,4 +362,46 @@ export interface BlameResult {
   file: string;
   merged: { path: string; slug: string; task: string; agent: string | null; sha: string; message: string; at: string }[];
   live: SignalHolder[];
+}
+
+/** One side-by-side diff line — GET /api/tasks/:slug/diff. */
+export type DiffLineType = "add" | "del" | "ctx";
+export interface DiffLine { t: DiffLineType; o: number | null; n: number | null; s: string }
+export interface DiffHunk { header: string; lines: DiffLine[] }
+export type FileStatus = "added" | "modified" | "deleted";
+export interface DiffFile { path: string; status: FileStatus; hunks: DiffHunk[]; add: number; del: number; lang: string }
+
+/** Agent CLIs Baton can install a skill into (have a skill/rule directory). */
+export type SkillAgent = "claude" | "cursor";
+
+/** Per-agent install state for one skill. */
+export interface SkillInstallState {
+  agent: SkillAgent;
+  rel: string;
+  installed: boolean;
+}
+
+/** One catalog entry — GET /api/skills (src/skills). */
+export interface SkillStatus {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  produces: string[];
+  body: string;
+  source: "bundled" | "imported";
+  /** Relative paths of the skill's reference files (content omitted); [] for single-file skills. */
+  references: string[];
+  installs: SkillInstallState[];
+}
+
+/** POST /api/skills/:id/install result. */
+export interface SkillInstallResult {
+  skill: string;
+  agent: SkillAgent;
+  rel: string;
+  path: string;
+  wrote: boolean;
+  /** Number of reference files written alongside the skill. */
+  references: number;
 }

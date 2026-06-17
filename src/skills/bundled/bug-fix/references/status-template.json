@@ -1,0 +1,17 @@
+{
+  "bug_name": "kebab-case-bug-name",
+  "title": "Exact bug title as reported",
+  "repo": "repo-or-package-name",
+  "routes": ["/the-page-or-route", "/another-if-any"],
+  "fingerprint": "slug-of-title::/normalized-route",
+  "status": "investigating",
+  "branch": "bugfix/kebab-case-bug-name",
+  "commits": [],
+  "report": "report.md",
+  "session": "sess-YYYYMMDDThhmmssZ",
+  "ticket": null,
+  "created_at": "YYYY-MM-DD",
+  "updated_at": "YYYY-MM-DDThh:mm:ssZ",
+  "cross_repo": [],
+  "notes": "One-line state: what's done, what's pending, any warning for other sessions."
+}

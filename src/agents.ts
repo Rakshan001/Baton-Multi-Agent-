@@ -9,16 +9,13 @@
  */
 import { sep } from 'node:path';
 import { execa } from 'execa';
+import { AGENTS } from './agents/registry.js';
 
-/** Agent CLIs we recognise, matched against process command lines. */
-const AGENT_PATTERNS: Array<{ id: string; re: RegExp }> = [
-  { id: 'claude', re: /(^|\/|\s)claude(\s|$)/ },
-  { id: 'codex', re: /(^|\/|\s)codex(\s|$)/ },
-  { id: 'cursor', re: /cursor-agent/ },
-  { id: 'gemini', re: /(^|\/|\s)gemini(\s|$)/ },
-  { id: 'aider', re: /(^|\/|\s)aider(\s|$)/ },
-  { id: 'opencode', re: /(^|\/|\s)opencode(\s|$)/ },
-];
+/** Agent CLIs we recognise (from the registry), matched against process command lines. */
+const AGENT_PATTERNS: Array<{ id: string; re: RegExp }> = Object.values(AGENTS).map((a) => ({
+  id: a.id,
+  re: a.detect,
+}));
 
 /** True if `cwd` is the worktree path or nested inside it. Pure → unit-tested. */
 export function matchAgentToWorktree(cwd: string, worktreePath: string): boolean {

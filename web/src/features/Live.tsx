@@ -285,7 +285,7 @@ export function LiveSession({
     }
   };
 
-  useEffect(() => { const t = setInterval(() => setElapsed((e) => e + 1), 1000); return () => clearInterval(t); }, [slug]);
+  useEffect(() => { setElapsed(0); const t = setInterval(() => setElapsed((e) => e + 1), 1000); return () => clearInterval(t); }, [slug]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
@@ -328,7 +328,7 @@ export function LiveSession({
         {streaming && <div style={{ display: "flex", gap: 9, alignItems: "center", padding: "3px 0 3px 53px" }}><span style={{ width: 7, height: 14, background: accent, animation: "blink 1s steps(2) infinite", borderRadius: 1 }} /></div>}
       </div>
       <div style={{ flex: "none", padding: "8px 13px", borderTop: "1px solid var(--border-subtle)", background: "var(--bg-surface)", display: "flex", alignItems: "center", gap: 8 }}>
-        {demo && getDiff(slug).length > 0 && <button className="btn btn-sm fr" onClick={() => onOpenDiff(slug)}><Icon name="terminal" size={12} /> View diff</button>}
+        {(demo ? getDiff(slug).length > 0 : true) && <button className="btn btn-sm fr" onClick={() => onOpenDiff(slug)}><Icon name="terminal" size={12} /> View diff</button>}
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-quaternary)" }}>
           {events.filter((e) => e.t === "edit" || e.t === "create" || e.t === "delete").length} file edit{events.filter((e) => e.t === "edit" || e.t === "create" || e.t === "delete").length === 1 ? "" : "s"} · {events.filter((e) => e.t === "commit").length} commit{events.filter((e) => e.t === "commit").length === 1 ? "" : "s"} this session
         </span>

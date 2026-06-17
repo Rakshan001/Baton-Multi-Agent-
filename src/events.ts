@@ -22,6 +22,9 @@ export type BatonEvent =
   | { type: 'signal.overlap'; path: string; slugs: string[] }
   | { type: 'kb.rebuilt'; project: string }
   | { type: 'handoff.created'; slug: string; toAgent: string }
+  | { type: 'agent.connected'; agent: string }
+  | { type: 'skill.installed'; skill: string; agent: string }
+  | { type: 'junk.cleaned'; count: number }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
   | { type: 'terminal.output'; slug: string; data: string /* base64 */ }

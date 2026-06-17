@@ -46,6 +46,18 @@ describe('git worktree lifecycle', () => {
     expect(await headCommit(root)).not.toBeNull();
   });
 
+  it('currentBranch tolerates an unborn HEAD (fresh git init, no commits)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'baton-unborn-'));
+    try {
+      await git(['init', '-q'], dir);
+      await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], dir);
+      expect(await currentBranch(dir)).toBe('main'); // does not throw
+      expect(await headCommit(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('creates a worktree, tracks status, merges, and removes', async () => {
     const wt = join(root, '.baton', 'wt', 'feat');
     await createWorktree(wt, 'baton/feat', 'HEAD', root);

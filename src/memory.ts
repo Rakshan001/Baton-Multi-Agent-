@@ -42,11 +42,34 @@ export interface MemoryFact {
 
 export type Freshness = 'fresh' | 'aging' | 'stale';
 
+/** A kb sub-project, path relative to the main root ('.' = the root itself). */
+export interface ProjectRel { id: string; rel: string }
+
 export interface MemoryStatus extends MemoryFact {
   freshness: Freshness;
   /** Why the fact is not fresh (file changed / commits behind). */
   staleReason: string | null;
   commitsBehind: number | null;
+  /** Which sub-project this fact's files belong to (hub scoping); null = shared/unscoped. */
+  project: string | null;
+}
+
+/**
+ * Map a fact to ONE sub-project by its anchored file paths (pure, unit-tested).
+ * Returns null when there are no sub-projects, no files, a file falls outside
+ * every project, or the files span more than one project (i.e. shared/hub-level).
+ */
+export function deriveProject(files: string[], projects: ProjectRel[]): string | null {
+  const scoped = projects.filter((p) => p.rel && p.rel !== '.');
+  if (!scoped.length || !files.length) return null;
+  let found: string | null = null;
+  for (const f of files) {
+    const owner = scoped.find((p) => f === p.rel || f.startsWith(`${p.rel}/`));
+    if (!owner) return null;                       // outside every sub-project → unscoped
+    if (found && found !== owner.id) return null;  // spans projects → unscoped
+    found = owner.id;
+  }
+  return found;
 }
 
 export class MemoryValidationError extends Error {
@@ -78,6 +101,27 @@ export function slugifyId(fact: string): string {
   const base = fact.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').split('-').slice(0, 6).join('-') || 'fact';
   return `mem-${base}`;
 }
+
+const sigWords = (s: string): Set<string> =>
+  new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
+
+/**
+ * Jaccard similarity of two facts' significant-word sets (0..1). The
+ * fingerprint (first 6 words) is only a cheap candidate filter for supersede;
+ * this confirms the bodies are actually the same knowledge before we DELETE the
+ * old fact — otherwise two distinct facts that merely open with the same words
+ * would silently clobber each other.
+ */
+export function factSimilarity(a: string, b: string): number {
+  const A = sigWords(a), B = sigWords(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+/** Min body-similarity before a same-fingerprint save is treated as an update. */
+export const SUPERSEDE_MIN_SIMILARITY = 0.5;
 
 /**
  * Refuse to store anything that looks like a credential. Memories are plain
@@ -244,10 +288,14 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   const files: FileAnchor[] = [];
   for (const path of relFiles) files.push({ path, hash: await fileHash(mainRoot, path) });
 
-  // Same fingerprint → the new fact supersedes the old one (updated knowledge).
-  // The new fact always gets a distinct id so the supersede chain stays meaningful.
+  // Same fingerprint → CANDIDATE for supersede (updated knowledge). But the
+  // fingerprint is only the first 6 words; confirm the bodies are actually the
+  // same knowledge before replacing, so two distinct facts that merely share an
+  // opening can't silently delete each other.
   const fingerprint = fingerprintOf(fact);
-  const dup = existing.find((f) => f.fingerprint === fingerprint);
+  const dup = existing.find(
+    (f) => f.fingerprint === fingerprint && factSimilarity(f.fact, fact) >= SUPERSEDE_MIN_SIMILARITY,
+  );
   let id = slugifyId(fact);
   if (existing.some((f) => f.id === id)) {
     id = `${id}-${sha1(fact).slice(0, 4)}`;
@@ -272,7 +320,7 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   await rename(tmp, target);
   if (dup && dup.id !== id) await rm(join(dir, `${dup.id}.md`), { force: true });
 
-  return { ...record, freshness: 'fresh', staleReason: null, commitsBehind: 0 };
+  return { ...record, freshness: 'fresh', staleReason: null, commitsBehind: 0, project: null };
 }
 
 /** Parsed facts cached by file mtime — repeated polls re-parse only changes. */
@@ -311,10 +359,13 @@ async function listMemoryFacts(mainRoot: string): Promise<MemoryFact[]> {
 /** rev-list counts cached per (anchor, HEAD) — stable until a new commit lands. */
 const behindCache = new Map<string, number | null>();
 
-/** Re-check every fact's evidence anchors and report freshness. */
-export async function listMemories(root: string): Promise<MemoryStatus[]> {
+/** Re-check every fact's evidence anchors and report freshness.
+ *  `projects` (kb sub-projects, paths relative to the main root) enable per-server
+ *  scoping in a hub; omit for a plain single-repo (every fact is unscoped). */
+export async function listMemories(root: string, opts: { projects?: ProjectRel[] } = {}): Promise<MemoryStatus[]> {
   const mainRoot = await resolveRoot(root);
   const facts = await listMemoryFacts(mainRoot);
+  const projects = opts.projects ?? [];
   let head: string | null = null;
   try {
     head = await git(['rev-parse', 'HEAD'], mainRoot);
@@ -344,7 +395,7 @@ export async function listMemories(root: string): Promise<MemoryStatus[]> {
       commitsBehind = behindCache.get(key) ?? null;
     }
     const freshness: Freshness = staleReason ? 'stale' : commitsBehind && commitsBehind > 0 ? 'aging' : 'fresh';
-    statuses.push({ ...f, freshness, staleReason, commitsBehind });
+    statuses.push({ ...f, freshness, staleReason, commitsBehind, project: deriveProject(f.anchors.files.map((a) => a.path), projects) });
   }
   return statuses;
 }
@@ -395,6 +446,83 @@ export async function gcMemories(root: string): Promise<string[]> {
     }
   }
   return removed;
+}
+
+/** Delete many facts by id at once. Returns the ids actually removed. */
+export async function bulkRemoveMemory(root: string, ids: string[]): Promise<string[]> {
+  const removed: string[] = [];
+  for (const id of [...new Set(ids)]) {
+    if (await removeMemory(root, id)) removed.push(id);
+  }
+  return removed;
+}
+
+export interface RetentionPolicy {
+  /** Drop facts older than this many days (by createdAt). 0/undefined = off. */
+  maxAgeDays?: number;
+  /** Drop facts whose anchored files changed (same as gc). */
+  dropStale?: boolean;
+  /** Drop "aging" facts (repo moved on but files unchanged). */
+  dropAging?: boolean;
+}
+
+/** Pure: which fact ids a policy would remove from `facts`, given `now` (ms). */
+export function factsToPrune(facts: MemoryStatus[], policy: RetentionPolicy, now: number): string[] {
+  const cutoff = policy.maxAgeDays && policy.maxAgeDays > 0 ? now - policy.maxAgeDays * 86_400_000 : null;
+  const out: string[] = [];
+  for (const f of facts) {
+    const tooOld = cutoff !== null && Date.parse(f.createdAt) < cutoff;
+    if (tooOld || (policy.dropStale && f.freshness === 'stale') || (policy.dropAging && f.freshness === 'aging')) {
+      out.push(f.id);
+    }
+  }
+  return out;
+}
+
+/** Apply a retention policy now. Returns removed ids. */
+export async function pruneMemories(root: string, policy: RetentionPolicy, now = Date.now()): Promise<string[]> {
+  const ids = factsToPrune(await listMemories(root), policy, now);
+  return bulkRemoveMemory(root, ids);
+}
+
+/* ---- persisted retention policy (.baton/memory/retention.json) ---- */
+
+function retentionFile(mainRoot: string): string {
+  return join(mainRoot, '.baton', 'memory', 'retention.json');
+}
+
+export async function loadRetention(root: string): Promise<RetentionPolicy> {
+  const mainRoot = await resolveRoot(root);
+  const file = retentionFile(mainRoot);
+  if (!existsSync(file)) return {};
+  try {
+    const p = JSON.parse(await readFile(file, 'utf-8')) as RetentionPolicy;
+    return {
+      maxAgeDays: typeof p.maxAgeDays === 'number' && p.maxAgeDays > 0 ? Math.floor(p.maxAgeDays) : undefined,
+      dropStale: p.dropStale === true,
+      dropAging: p.dropAging === true,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export async function saveRetention(root: string, policy: RetentionPolicy): Promise<RetentionPolicy> {
+  const mainRoot = await resolveRoot(root);
+  const clean: RetentionPolicy = {
+    maxAgeDays: typeof policy.maxAgeDays === 'number' && policy.maxAgeDays > 0 ? Math.floor(policy.maxAgeDays) : undefined,
+    dropStale: policy.dropStale === true,
+    dropAging: policy.dropAging === true,
+  };
+  const file = retentionFile(mainRoot);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(clean, null, 2) + '\n', 'utf-8');
+  return clean;
+}
+
+/** True when a policy would actually remove something (used to gate auto-apply). */
+export function retentionActive(p: RetentionPolicy): boolean {
+  return !!(p.maxAgeDays || p.dropStale || p.dropAging);
 }
 
 /** Compact index block for handoff briefs (~token-cheap, fresh facts only). */

@@ -26,10 +26,14 @@ export const tmuxTry = async (args: string[]): Promise<boolean> => {
   }
 };
 
-let tmuxProbe: Promise<boolean> | null = null;
-export function detectTmux(): Promise<boolean> {
-  tmuxProbe ??= probeBinary('tmux', ['-V']);
-  return tmuxProbe;
+// Cache only a POSITIVE result: once tmux is found it never disappears, but a
+// negative must be re-probed — otherwise installing tmux (or fixing PATH) while
+// the daemon runs would never take effect until a restart.
+let tmuxFound = false;
+export async function detectTmux(): Promise<boolean> {
+  if (tmuxFound) return true;
+  tmuxFound = await probeBinary('tmux', ['-V']);
+  return tmuxFound;
 }
 
 /** Stable per-repo prefix so two repos' daemons can never collide on a slug. */
@@ -50,6 +54,17 @@ export function slugFromSession(root: string, sessionName: string): string | nul
 export async function tmuxSessionExists(root: string, slug: string): Promise<boolean> {
   if (!(await detectTmux())) return false;
   return tmuxTry(['has-session', '-t', sessionNameFor(root, slug)]);
+}
+
+/** All live tmux session names (empty when tmux is missing or no server runs). */
+export async function listSessions(): Promise<string[]> {
+  if (!(await detectTmux())) return [];
+  try {
+    const { stdout } = await tmux(['list-sessions', '-F', '#{session_name}']);
+    return stdout.split('\n').filter(Boolean);
+  } catch {
+    return []; // no server running → no sessions
+  }
 }
 
 /**

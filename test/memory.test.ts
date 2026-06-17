@@ -4,10 +4,48 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import {
-  detectSecret, fingerprintOf, listMemories, memoryBriefSection, parseFactFile,
+  detectSecret, factSimilarity, fingerprintOf, listMemories, memoryBriefSection, parseFactFile,
   recallMemories, renderFactFile, saveMemory, scoreMemory, slugifyId,
-  MemoryValidationError, type MemoryFact,
+  deriveProject, factsToPrune,
+  MemoryValidationError, type MemoryFact, type MemoryStatus,
 } from '../src/memory.js';
+
+describe('deriveProject (per-server scoping)', () => {
+  const projects = [{ id: 'api', rel: 'fatfox-api-server' }, { id: 'web', rel: 'fatfox-website' }];
+  it('maps a fact to the project owning all its files', () => {
+    expect(deriveProject(['fatfox-api-server/src/x.ts'], projects)).toBe('api');
+  });
+  it('is unscoped when files span projects or fall outside', () => {
+    expect(deriveProject(['fatfox-api-server/a.ts', 'fatfox-website/b.ts'], projects)).toBeNull();
+    expect(deriveProject(['shared/c.ts'], projects)).toBeNull();
+    expect(deriveProject([], projects)).toBeNull();
+  });
+  it('is unscoped when there are no real sub-projects (single repo)', () => {
+    expect(deriveProject(['src/x.ts'], [{ id: 'root', rel: '.' }])).toBeNull();
+  });
+});
+
+describe('factsToPrune (retention policy)', () => {
+  const NOW = Date.parse('2026-06-17T00:00:00Z');
+  const mk = (id: string, days: number, freshness: MemoryStatus['freshness']): MemoryStatus => ({
+    id, type: 'reference', fact: id, agent: null, task: null,
+    createdAt: new Date(NOW - days * 86_400_000).toISOString(),
+    anchors: { commit: null, files: [] }, supersedes: null, fingerprint: id,
+    freshness, staleReason: null, commitsBehind: null, project: null,
+  });
+  const facts = [mk('old-fresh', 40, 'fresh'), mk('new-fresh', 1, 'fresh'), mk('aging', 5, 'aging'), mk('stale', 2, 'stale')];
+
+  it('prunes by max age', () => {
+    expect(factsToPrune(facts, { maxAgeDays: 30 }, NOW)).toEqual(['old-fresh']);
+  });
+  it('prunes stale and/or aging when asked', () => {
+    expect(factsToPrune(facts, { dropStale: true }, NOW)).toEqual(['stale']);
+    expect(factsToPrune(facts, { dropAging: true, dropStale: true }, NOW).sort()).toEqual(['aging', 'stale']);
+  });
+  it('removes nothing for an empty policy', () => {
+    expect(factsToPrune(facts, {}, NOW)).toEqual([]);
+  });
+});
 
 describe('fingerprintOf / slugifyId', () => {
   it('same opening words → same fingerprint (supersede trigger)', () => {
@@ -21,6 +59,18 @@ describe('fingerprintOf / slugifyId', () => {
 
   it('slugifyId is filename-safe', () => {
     expect(slugifyId('Crazy: chars / here!')).toMatch(/^mem-[a-z0-9-]+$/);
+  });
+});
+
+describe('factSimilarity', () => {
+  it('is high for an updated version of the same fact, low for distinct facts', () => {
+    const update = factSimilarity('Deploys happen from main every friday afternoon.', 'Deploys happen from main every friday at 15:00 UTC, never on holidays.');
+    const distinct = factSimilarity('The authentication middleware validates the JWT signature using RS256 public keys.', 'The authentication middleware validates the JWT expiry and audience claims separately.');
+    expect(update).toBeGreaterThanOrEqual(0.5);
+    expect(distinct).toBeLessThan(0.5);
+  });
+  it('is 0 when either side has no significant words', () => {
+    expect(factSimilarity('', 'anything here')).toBe(0);
   });
 });
 
@@ -137,6 +187,17 @@ describe('memory store (real temp git repo)', () => {
     const all = await listMemories(root);
     expect(all.find((f) => f.id === first.id)).toBeUndefined();
     expect(all.find((f) => f.id === second.id)).toBeDefined();
+  });
+
+  it('does NOT supersede two distinct facts that merely share their opening words', async () => {
+    // Same first-6-word fingerprint, but different knowledge — both must survive.
+    const a = await saveMemory(root, { fact: 'The authentication middleware validates the JWT signature using RS256 public keys.' });
+    const b = await saveMemory(root, { fact: 'The authentication middleware validates the JWT expiry and audience claims separately.' });
+    expect(a.fingerprint).toBe(b.fingerprint); // collision on opening words
+    expect(b.supersedes).toBeNull();            // but not treated as an update
+    const all = await listMemories(root);
+    expect(all.find((f) => f.id === a.id)).toBeDefined();
+    expect(all.find((f) => f.id === b.id)).toBeDefined();
   });
 
   it('rejects secrets and too-short facts', async () => {

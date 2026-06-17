@@ -1,16 +1,15 @@
 /* ============================================================
    BATON — Git diff viewer (ported from diff.jsx)
-   PREVIEW: live diffs aren't reported by the API yet; renders
-   illustrative changes per session so the experience is real.
+   Real mode streams GET /api/tasks/:slug/diff (commits + working
+   tree vs the task's base); demo mode renders scripted fixtures.
    ============================================================ */
-import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { Icon } from "../components/Icon";
 import { AgentBadge, SegmentedControl, EmptyState, CopyButton } from "../components/primitives";
 import { getAgent } from "../lib/registry";
-import { branchFor } from "../lib/api";
-import { getDiff, type DiffHunk, type DiffLine, type FileStatus, type DiffFile } from "../lib/preview";
+import { branchFor, BatonAPI } from "../lib/api";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import type { StatusRow } from "../types";
+import type { StatusRow, DiffHunk, DiffLine, FileStatus, DiffFile } from "../types";
 
 const SYN = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*)|(`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(import|export|from|const|let|var|return|async|await|function|new|type|interface|enum|if|else|for|while|do|switch|case|class|extends|implements|default|true|false|null|undefined|void|public|private|protected|readonly|this|in|of|as|CREATE|INDEX|ON|TABLE|SELECT|FROM|WHERE)\b|\b([A-Z][A-Za-z0-9_]*)\b|\b(\d[\d_.]*)\b/g;
 function highlight(code: string): ReactNode[] {
@@ -134,28 +133,38 @@ export function DiffViewer({
   onHandoff: (slug: string) => void;
   writeEnabled: boolean;
 }) {
-  const files = useMemo<DiffFile[]>(() => getDiff(slug), [slug]);
+  const [files, setFiles] = useState<DiffFile[] | null>(null); // null = loading
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
+  useEffect(() => {
+    let on = true;
+    setFiles(null); setLoadError(null); setActive(0);
+    BatonAPI.getDiff(slug)
+      .then((f) => { if (on) setFiles(f); })
+      .catch((e) => { if (on) { setFiles([]); setLoadError((e as Error).message); } });
+    return () => { on = false; };
+  }, [slug]);
   const [mode, setMode] = useState<"unified" | "split">("unified");
   const isWide = useMediaQuery("(min-width: 980px)");
   const ref = useRef<HTMLDivElement>(null);
   const agentId = session?.agent ?? null;
   const taskTitle = session?.task || slug;
-  const totals = files.reduce((a, f) => ({ add: a.add + f.add, del: a.del + f.del }), { add: 0, del: 0 });
+  const list = files ?? [];
+  const totals = list.reduce((a, f) => ({ add: a.add + f.add, del: a.del + f.del }), { add: 0, del: 0 });
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); onClose(); }
       else if (e.key === "[" && active > 0) setActive((a) => a - 1);
-      else if (e.key === "]" && active < files.length - 1) setActive((a) => a + 1);
+      else if (e.key === "]" && active < list.length - 1) setActive((a) => a + 1);
     };
     document.addEventListener("keydown", onKey, true);
     setTimeout(() => ref.current?.focus(), 40);
     return () => { document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
-  }, [active, files.length, onClose]);
+  }, [active, list.length, onClose]);
 
-  const f = files[active];
+  const f = list[active];
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: "min(4vh, 32px) min(4vw, 40px)" }}>
@@ -173,7 +182,7 @@ export function DiffViewer({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{taskTitle}</span>
-              <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="Diffs aren't reported by the API yet — illustrative preview.">Preview</span>
+              {BatonAPI.demo && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="Demo mode — this diff is illustrative.">Preview</span>}
             </div>
             <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
               <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <DiffStat add={totals.add} del={totals.del} size="sm" />
@@ -184,19 +193,25 @@ export function DiffViewer({
           <button className="btn btn-ghost btn-icon fr" onClick={onClose} aria-label="Close diff · Esc" data-tip="Close · Esc" data-tip-side="bottom"><Icon name="x" size={16} /></button>
         </div>
 
-        {files.length === 0 ? (
+        {files === null ? (
           <div style={{ flex: 1, display: "grid", placeItems: "center" }}>
-            <EmptyState icon="gitCommit" title="No changes on this branch" desc="This session hasn't produced any file changes yet." />
+            <div className="skeleton" style={{ width: 320, height: 14 }} aria-label="Loading diff…" />
+          </div>
+        ) : list.length === 0 ? (
+          <div style={{ flex: 1, display: "grid", placeItems: "center" }}>
+            {loadError
+              ? <EmptyState icon="gitCommit" title="Couldn't load the diff" desc={loadError} />
+              : <EmptyState icon="gitCommit" title="No changes on this branch" desc="This session hasn't produced any file changes yet." />}
           </div>
         ) : (
           <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
             <div style={{ width: 256, flex: "none", borderRight: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", background: "var(--bg-surface)" }}>
               <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 7 }}>
                 <Icon name="folder" size={13} style={{ color: "var(--text-tertiary)" }} />
-                <span className="tag">{files.length} changed file{files.length === 1 ? "" : "s"}</span>
+                <span className="tag">{list.length} changed file{list.length === 1 ? "" : "s"}</span>
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: 6 }}>
-                {files.map((file, i) => {
+                {list.map((file, i) => {
                   const st = FILE_STATUS[file.status]; const on = i === active;
                   return (
                     <button key={file.path} className="fr" onClick={() => setActive(i)} aria-current={on} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", borderRadius: "var(--r-sm)", border: "none", cursor: "pointer", textAlign: "left", background: on ? "var(--bg-active)" : "transparent", marginBottom: 1 }}
