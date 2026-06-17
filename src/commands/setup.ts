@@ -25,6 +25,39 @@ export interface SetupOpts {
   docs?: boolean;
   share?: boolean;
   local?: boolean;
+  /** Force the dashboard path (skip the prompt). */
+  serve?: boolean;
+  /** Force the headless / MCP-only path (skip the prompt). */
+  headless?: boolean;
+}
+
+type UseMode = 'dashboard' | 'headless';
+
+/** Dashboard vs headless: --serve / --headless flags win, else ask (default dashboard). */
+async function chooseUseMode(opts: SetupOpts): Promise<UseMode> {
+  if (opts.serve) return 'dashboard';
+  if (opts.headless) return 'headless';
+  return askChoice(
+    '\nHow will agents use this knowledge base?',
+    [
+      { key: 'dashboard', label: 'With the dashboard — realtime UI on localhost (baton serve)' },
+      { key: 'headless', label: 'Headless — agents read it over MCP, no dashboard' },
+    ],
+    'dashboard',
+  );
+}
+
+/** Closing next-steps for a single-root setup (single repo or hub), per chosen mode. */
+async function finishSingle(root: string, opts: SetupOpts, headline: string): Promise<void> {
+  if ((await chooseUseMode(opts)) === 'dashboard') {
+    const port = await nextFreePort(7077, new Set());
+    console.log(`\n✓ ${headline}. Open the dashboard:`);
+    console.log(`    cd ${root} && baton serve -p ${port} --write   →  http://localhost:${port}`);
+  } else {
+    console.log(`\n✓ ${headline}. Agents read it over MCP — no dashboard needed.`);
+    console.log('    (Run `baton serve` here anytime to open the dashboard.)');
+  }
+  printOtherAgentMcp();
 }
 
 /** Forwarded to kbInitCmd (strip the setup-only flags). */
@@ -96,11 +129,13 @@ export async function setupCmd(path: string | undefined, opts: SetupOpts = {}): 
   switch (t.kind) {
     case 'single-repo':
       console.log(`✓ ${basename(t.root)} is a git repo — setting up Baton here.`);
-      return kbInitCmd(t.root, kbOpts(opts));
+      await kbInitCmd(t.root, kbOpts(opts));
+      return finishSingle(t.root, opts, `${basename(t.root)} is ready`);
 
     case 'single-subrepo':
       console.log(`found one git repo (${t.repo.name}) under ${basename(root)} — setting it up.`);
-      return kbInitCmd(t.repo.path, kbOpts(opts));
+      await kbInitCmd(t.repo.path, kbOpts(opts));
+      return finishSingle(t.repo.path, opts, `${t.repo.name} is ready`);
 
     case 'bare-project': {
       console.log(`${basename(root)} has project files but is not a git repo.`);
@@ -110,7 +145,8 @@ export async function setupCmd(path: string | undefined, opts: SetupOpts = {}): 
             [{ key: 'yes', label: 'Yes — git init here, then set up' }, { key: 'no', label: 'Cancel' }], 'yes');
       if (go !== 'yes') return void console.log('cancelled.');
       await gitInit(root);
-      return kbInitCmd(root, kbOpts(opts));
+      await kbInitCmd(root, kbOpts(opts));
+      return finishSingle(root, opts, `${basename(root)} is ready`);
     }
 
     case 'multi-repo': {
@@ -153,22 +189,24 @@ async function setupHub(root: string, repos: SubProject[], opts: SetupOpts): Pro
     }
   }
   await kbInitCmd(root, kbOpts(opts));
-  const port = await nextFreePort(7077, new Set());
-  console.log('\n✓ centralized hub ready. Next:');
-  console.log(`    cd ${root} && baton serve -p ${port} --write   →  http://localhost:${port}`);
-  printOtherAgentMcp();
+  return finishSingle(root, opts, 'centralized hub ready');
 }
 
 /** Per-repo setup: run kb init inside each repo; suggest a port per repo. */
 async function setupIndividual(repos: SubProject[], opts: SetupOpts): Promise<void> {
   const used = new Set<number>();
+  const built: { path: string; port: number }[] = [];
   for (const r of repos) {
     console.log(`\n=== ${r.name} ===`);
     await kbInitCmd(r.path, kbOpts(opts));
-    const port = await nextFreePort(7077, used); // skip ports already taken by a running daemon
-    console.log(`    serve: cd ${r.path} && baton serve -p ${port} --write`);
+    built.push({ path: r.path, port: await nextFreePort(7077, used) }); // skip taken ports
   }
-  console.log('\n✓ all repos set up. Add each port as a connection in one dashboard (top-left → Add connection…).');
+  if ((await chooseUseMode(opts)) === 'dashboard') {
+    console.log('\n✓ all repos set up. Start each daemon, then add the ports as connections (top-left → Add connection…):');
+    for (const b of built) console.log(`    cd ${b.path} && baton serve -p ${b.port} --write`);
+  } else {
+    console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP — no dashboard needed.');
+  }
   printOtherAgentMcp();
 }
 
