@@ -119,6 +119,30 @@ export interface MemoryFactStatus {
   freshness: "fresh" | "aging" | "stale";
   staleReason: string | null;
   commitsBehind: number | null;
+  /** Which kb sub-project this fact's files belong to (hub scoping); null = shared. */
+  project: string | null;
+}
+
+/** A kb sub-project for per-server memory scoping (GET /api/memory.projects). */
+export interface MemoryProject { id: string; rel: string }
+
+/** Auto-retention policy — GET/POST /api/memory/retention. */
+export interface RetentionPolicy {
+  maxAgeDays?: number;
+  dropStale?: boolean;
+  dropAging?: boolean;
+}
+
+/** Disk footprint — GET /api/storage (src/storage.ts). */
+export interface StorageBucket { id: string; label: string; bytes: number; count?: number }
+export interface StorageBreakdown {
+  root: string;
+  memory: { bytes: number; facts: number };
+  history: { bytes: number };
+  reports: { bytes: number; count: number };
+  graphs: StorageBucket[];
+  graphsTotal: number;
+  total: number;
 }
 
 /** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */

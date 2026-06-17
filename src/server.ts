@@ -14,7 +14,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { extname, join, normalize, sep } from 'node:path';
+import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus } from './board.js';
 import { collectDiff } from './diff.js';
 import { currentBranch, gitRoot } from './git.js';
@@ -56,7 +56,12 @@ import {
   reattachOrphans, resizeTerminal, writeInput,
   HeadlessConflictError, TerminalRunningError, TerminalUnavailableError, INTERACTIVE_AGENTS,
 } from './terminals.js';
-import { gcMemories, listMemories, mainRepoRoot, memoryDir, MemoryValidationError, removeMemory, saveMemory } from './memory.js';
+import {
+  bulkRemoveMemory, gcMemories, listMemories, loadRetention, mainRepoRoot, memoryDir,
+  MemoryValidationError, pruneMemories, removeMemory, retentionActive, saveMemory, saveRetention,
+  type ProjectRel, type RetentionPolicy,
+} from './memory.js';
+import { storageUsage } from './storage.js';
 import { watch } from 'node:fs';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
@@ -252,6 +257,19 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
     req.on('end', () => resolve(data));
     req.on('error', reject);
   });
+}
+
+/** kb sub-projects as (id, path-relative-to-main-root) for per-server memory scoping.
+ *  Returns [] for a single-project repo (nothing to scope). */
+async function kbProjectRels(root: string): Promise<ProjectRel[]> {
+  try {
+    const mainRoot = await mainRepoRoot(root);
+    const kb = await loadKb(mainRoot);
+    if (!kb || kb.projects.length < 2) return [];
+    return kb.projects.map((p) => ({ id: p.id, rel: relative(mainRoot, p.path) || '.' }));
+  } catch {
+    return [];
+  }
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, root: string, opts: ServeOptions): Promise<void> {
@@ -624,9 +642,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, result, origin);
   }
 
-  // GET /api/memory — all facts with evidence-checked freshness
+  // GET /api/memory — all facts with evidence-checked freshness + per-server scoping
   if (method === 'GET' && path === '/api/memory') {
-    return send(res, 200, { facts: await listMemories(root) }, origin);
+    const projects = await kbProjectRels(root);
+    return send(res, 200, { facts: await listMemories(root, { projects }), projects }, origin);
   }
   // POST /api/memory — quick-add from the dashboard (write-gated)
   if (method === 'POST' && path === '/api/memory') {
@@ -649,6 +668,37 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (removed.length) bus.publish({ type: 'memory.updated' });
     return send(res, 200, { removed }, origin);
   }
+  // POST /api/memory/bulk-delete — delete many facts at once (write-gated)
+  if (method === 'POST' && path === '/api/memory/bulk-delete') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ ids?: unknown }>(req);
+    const ids = Array.isArray(body?.ids) ? body!.ids.filter((x): x is string => typeof x === 'string') : null;
+    if (!ids) return send(res, 400, { error: 'pass { ids: string[] }' }, origin);
+    const removed = await bulkRemoveMemory(root, ids);
+    if (removed.length) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, { removed }, origin);
+  }
+  // POST /api/memory/prune — apply a retention policy now (write-gated)
+  if (method === 'POST' && path === '/api/memory/prune') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = (await readJsonBody<RetentionPolicy>(req)) ?? {};
+    const removed = await pruneMemories(root, body);
+    if (removed.length) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, { removed }, origin);
+  }
+  // GET/POST /api/memory/retention — read or set the auto-retention policy (POST write-gated)
+  if (path === '/api/memory/retention') {
+    if (method === 'GET') return send(res, 200, await loadRetention(root), origin);
+    if (method === 'POST') {
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
+      const body = (await readJsonBody<RetentionPolicy>(req)) ?? {};
+      const saved = await saveRetention(root, body);
+      // Apply immediately so the user sees the effect; future runs apply on daemon start.
+      const removed = retentionActive(saved) ? await pruneMemories(root, saved) : [];
+      if (removed.length) bus.publish({ type: 'memory.updated' });
+      return send(res, 200, { policy: saved, removed }, origin);
+    }
+  }
   // DELETE /api/memory/:id (write-gated)
   const memDel = path.match(/^\/api\/memory\/([^/]+)$/);
   if (memDel && method === 'DELETE') {
@@ -656,6 +706,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const ok = await removeMemory(root, decodeURIComponent(memDel[1]));
     if (ok) bus.publish({ type: 'memory.updated' });
     return send(res, ok ? 200 : 404, ok ? { removed: true } : { error: 'no such memory' }, origin);
+  }
+
+  // GET /api/storage — disk footprint (memory / history / reports / graphs)
+  if (method === 'GET' && path === '/api/storage') {
+    return send(res, 200, await storageUsage(root), origin);
   }
 
   // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
@@ -805,6 +860,11 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // Conservative startup sweep: delete only provably-dead temp files + stale
   // uploads (never worktrees/branches/tmux). Best-effort, like the watcher below.
   void sweepTmpFiles(root).catch(() => undefined);
+  // Apply any saved memory-retention policy once at startup (best-effort).
+  void loadRetention(root)
+    .then((p) => (retentionActive(p) ? pruneMemories(root, p) : []))
+    .then((removed) => { if (removed.length) bus.publish({ type: 'memory.updated' }); })
+    .catch(() => undefined);
 
   // Interactive terminals survive daemon restarts (tmux owns the PTY) — adopt
   // any that belong to this repo, and kill them when their task goes away.

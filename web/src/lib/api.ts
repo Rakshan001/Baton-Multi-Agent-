@@ -16,8 +16,8 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
-import { DEMO_MEMORY } from "./demoMemory";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
+import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor } from "./demoKb";
@@ -504,14 +504,17 @@ class BatonClient {
 
   /* ---- project memory (evidence-anchored facts, src/memory.ts) ---- */
   private demoMemory: MemoryFactStatus[] | null = null;
-  async getMemories(): Promise<MemoryFactStatus[]> {
+  private demoRetention: RetentionPolicy = {};
+  private demoFacts(): MemoryFactStatus[] {
+    return (this.demoMemory ??= JSON.parse(JSON.stringify(DEMO_MEMORY)) as MemoryFactStatus[]);
+  }
+  async getMemories(): Promise<{ facts: MemoryFactStatus[]; projects: MemoryProject[] }> {
     if (this.demo) {
       await this.demoGate(60);
-      this.demoMemory ??= JSON.parse(JSON.stringify(DEMO_MEMORY)) as MemoryFactStatus[];
-      return this.demoMemory;
+      return { facts: this.demoFacts(), projects: DEMO_MEMORY_PROJECTS };
     }
-    const r = await this.request<{ facts: MemoryFactStatus[] }>("/api/memory");
-    return r.facts;
+    const r = await this.request<{ facts: MemoryFactStatus[]; projects: MemoryProject[] }>("/api/memory");
+    return { facts: r.facts, projects: r.projects ?? [] };
   }
   async addMemory(input: { fact: string; type?: string; files?: string[]; task?: string }): Promise<MemoryFactStatus> {
     this.assertWrite();
@@ -521,15 +524,83 @@ class BatonClient {
         id: `mem-${this.slugify(input.fact)}`, type: (input.type as MemoryFactStatus["type"]) ?? "reference",
         fact: input.fact, agent: "dashboard", task: input.task ?? null, createdAt: new Date().toISOString(),
         anchors: { commit: "demo", files: (input.files ?? []).map((p) => ({ path: p, hash: "demo" })) },
-        supersedes: null, freshness: "fresh", staleReason: null, commitsBehind: 0,
+        supersedes: null, freshness: "fresh", staleReason: null, commitsBehind: 0, project: null,
       };
-      this.demoMemory = [fact, ...(this.demoMemory ?? [...DEMO_MEMORY])];
+      this.demoMemory = [fact, ...this.demoFacts()];
       this.emit();
       return fact;
     }
     const r = await this.request<MemoryFactStatus>("/api/memory", { method: "POST", body: JSON.stringify(input) });
     this.emit();
     return r;
+  }
+  async bulkDeleteMemories(ids: string[]): Promise<{ removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(160);
+      const set = new Set(ids);
+      this.demoMemory = this.demoFacts().filter((f) => !set.has(f.id));
+      this.emit();
+      return { removed: ids };
+    }
+    const r = await this.request<{ removed: string[] }>("/api/memory/bulk-delete", { method: "POST", body: JSON.stringify({ ids }) });
+    this.emit();
+    return r;
+  }
+  async pruneMemories(policy: RetentionPolicy): Promise<{ removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      const removed = this.applyDemoRetention(policy);
+      this.emit();
+      return { removed };
+    }
+    const r = await this.request<{ removed: string[] }>("/api/memory/prune", { method: "POST", body: JSON.stringify(policy) });
+    this.emit();
+    return r;
+  }
+  async getRetention(): Promise<RetentionPolicy> {
+    if (this.demo) { await delay(40); return this.demoRetention; }
+    return this.request<RetentionPolicy>("/api/memory/retention");
+  }
+  async setRetention(policy: RetentionPolicy): Promise<{ policy: RetentionPolicy; removed: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(150);
+      this.demoRetention = policy;
+      const removed = this.applyDemoRetention(policy);
+      this.emit();
+      return { policy, removed };
+    }
+    const r = await this.request<{ policy: RetentionPolicy; removed: string[] }>("/api/memory/retention", { method: "POST", body: JSON.stringify(policy) });
+    this.emit();
+    return r;
+  }
+  /** Demo-only: apply a retention policy to the in-memory facts (mirrors factsToPrune). */
+  private applyDemoRetention(policy: RetentionPolicy): string[] {
+    const now = Date.now();
+    const cutoff = policy.maxAgeDays && policy.maxAgeDays > 0 ? now - policy.maxAgeDays * 86_400_000 : null;
+    const keep: MemoryFactStatus[] = [], removed: string[] = [];
+    for (const f of this.demoFacts()) {
+      const tooOld = cutoff !== null && Date.parse(f.createdAt) < cutoff;
+      const drop = tooOld || (policy.dropStale && f.freshness === "stale") || (policy.dropAging && f.freshness === "aging");
+      if (drop) removed.push(f.id); else keep.push(f);
+    }
+    this.demoMemory = keep;
+    return removed;
+  }
+  async getStorage(): Promise<StorageBreakdown> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return {
+        root: "/demo/orbit",
+        memory: { bytes: this.demoFacts().length * 480, facts: this.demoFacts().length },
+        history: { bytes: 86_016 }, reports: { bytes: 12_400, count: 4 },
+        graphs: [{ id: "api", label: "api", bytes: 1_180_000, count: 3 }, { id: "web", label: "web", bytes: 940_000, count: 3 }],
+        graphsTotal: 2_120_000, total: 2_120_000 + 86_016 + 12_400 + this.demoFacts().length * 480,
+      };
+    }
+    return this.request<StorageBreakdown>("/api/storage");
   }
   async deleteMemory(id: string): Promise<void> {
     this.assertWrite();
