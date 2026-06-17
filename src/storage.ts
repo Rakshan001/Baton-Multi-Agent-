@@ -9,7 +9,6 @@
  *
  * Read-only and best-effort: a missing/locked path contributes 0, never throws.
  */
-import { existsSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { memoryDir, mainRepoRoot } from './memory.js';
@@ -50,7 +49,8 @@ async function dirSize(dir: string): Promise<{ bytes: number; files: number }> {
 }
 
 async function fileSize(path: string): Promise<number> {
-  try { return existsSync(path) ? (await stat(path)).size : 0; } catch { return 0; }
+  // stat-and-catch (matches dirSize) — one syscall, and a raced delete → 0.
+  try { return (await stat(path)).size; } catch { return 0; }
 }
 
 export async function storageUsage(root: string): Promise<StorageBreakdown> {

@@ -20,11 +20,13 @@ export interface SubProject {
   path: string; // absolute
 }
 
+const isGitDir = (dir: string): boolean => existsSync(join(dir, '.git'));
 function isProjectDir(dir: string): boolean {
-  return PROJECT_MARKERS.some((m) => existsSync(join(dir, m))) || existsSync(join(dir, '.git'));
+  return PROJECT_MARKERS.some((m) => existsSync(join(dir, m))) || isGitDir(dir);
 }
 
-async function walk(dir: string, root: string, depth: number, found: string[]): Promise<void> {
+/** Depth-limited DFS collecting directories where `isStop` holds (and not descending into them). */
+async function walk(dir: string, depth: number, found: string[], isStop: (d: string) => boolean): Promise<void> {
   if (depth > MAX_DEPTH) return;
   let entries;
   try {
@@ -35,13 +37,37 @@ async function walk(dir: string, root: string, depth: number, found: string[]): 
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
     const child = join(dir, e.name);
-    if (isProjectDir(child)) {
+    if (isStop(child)) {
       found.push(child);
       // Don't descend into a detected project — its own nested packages belong to it.
       continue;
     }
-    await walk(child, root, depth + 1, found);
+    await walk(child, depth + 1, found, isStop);
   }
+}
+
+/** Assign stable, unique slug ids to discovered project paths (relative to `root`). */
+function toSubProjects(root: string, paths: string[]): SubProject[] {
+  const taken = new Set<string>();
+  return paths.map((p) => {
+    let id = relative(root, p).replace(/[\\/]+/g, '-').toLowerCase() || basename(p);
+    while (taken.has(id)) id = `${id}-2`;
+    taken.add(id);
+    return { id, name: basename(p), path: p };
+  });
+}
+
+/**
+ * Find separate git repositories nested under `root` (depth-limited), regardless
+ * of whether `root` itself carries a project marker. `detectProjects` and
+ * `baton setup` use this so a container that holds several repos AND a root
+ * `package.json` (shared workspace tooling) is still recognised as a multi-repo
+ * hub instead of being collapsed into one project.
+ */
+export async function findNestedGitRepos(root: string): Promise<SubProject[]> {
+  const found: string[] = [];
+  await walk(root, 1, found, isGitDir);
+  return toSubProjects(root, found);
 }
 
 /**
@@ -50,6 +76,13 @@ async function walk(dir: string, root: string, depth: number, found: string[]): 
  * marker-bearing directory).
  */
 export async function detectProjects(root: string): Promise<SubProject[]> {
+  // A container holding ≥2 separate git repos is split per-repo even when the
+  // container ALSO has its own marker (a shared root package.json / workspace
+  // config) — those repos are independent projects, not one monorepo. This must
+  // be checked before the root-marker short-circuit below.
+  const gitRepos = await findNestedGitRepos(root);
+  if (gitRepos.length >= 2) return gitRepos;
+
   // A marker at the root means the folder IS a project (possibly a monorepo) —
   // index it as one graph. Per-sub-project splitting is for plain container
   // folders holding several independent servers/repos side by side.
@@ -57,15 +90,9 @@ export async function detectProjects(root: string): Promise<SubProject[]> {
     return [{ id: basename(root), name: basename(root), path: root }];
   }
   const found: string[] = [];
-  await walk(root, root, 1, found);
+  await walk(root, 1, found, isProjectDir);
   if (found.length === 0) {
     return [{ id: basename(root), name: basename(root), path: root }];
   }
-  const taken = new Set<string>();
-  return found.map((p) => {
-    let id = relative(root, p).replace(/[\\/]+/g, '-').toLowerCase();
-    while (taken.has(id)) id = `${id}-2`;
-    taken.add(id);
-    return { id, name: basename(p), path: p };
-  });
+  return toSubProjects(root, found);
 }

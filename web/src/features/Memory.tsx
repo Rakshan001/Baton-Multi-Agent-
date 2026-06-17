@@ -119,7 +119,7 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
     } catch (e) { showToast({ kind: "error", title: "GC failed", desc: (e as Error).message }); }
   };
 
-  const projLabel = (id: string | null) => id === null ? "shared" : projects.find((p) => p.id === id)?.id ?? id;
+  const projLabel = (id: string | null) => id ?? "shared";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
