@@ -15,12 +15,26 @@ import { usePoll } from "../hooks/usePoll";
 import { showToast } from "../lib/toast";
 import type { SkillAgent, SkillStatus } from "../types";
 
+/* The curated "efficiency & traceability" pack — surfaced as a showcase band so these
+   high-leverage skills are discoverable on the empty/landing state of the screen. */
+const FEATURED_PACK: { id: string; blurb: string }[] = [
+  { id: "token-efficient-coding", blurb: "Read the map, not the repo. Minimal diffs, no re-reads." },
+  { id: "traceable-changes", blurb: "One atomic commit per change. Blame & bisect just work." },
+  { id: "memory-light", blurb: "Recall before exploring. State to disk, not the chat." },
+  { id: "verify-before-done", blurb: "Skeptic re-checks the diff before anything ships." },
+];
+
 export function SkillsScreen({ writeEnabled }: { writeEnabled: boolean }) {
   const skills = usePoll<SkillStatus[]>(() => BatonAPI.getSkills(), { interval: 30000 });
   const [q, setQ] = useState("");
   const [importing, setImporting] = useState(false);
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const featured = useMemo(() => {
+    const byId = new Map((skills.data ?? []).map((s) => [s.id, s]));
+    return FEATURED_PACK.map((f) => ({ ...f, skill: byId.get(f.id) })).filter((f) => f.skill);
+  }, [skills.data]);
 
   const list = useMemo(() => {
     const all = skills.data ?? [];
@@ -75,6 +89,36 @@ export function SkillsScreen({ writeEnabled }: { writeEnabled: boolean }) {
               style={!source.trim() || busy ? { opacity: 0.55, cursor: "not-allowed" } : {}}>
               {busy ? "Importing…" : "Import"}
             </button>
+          </div>
+        )}
+
+        {!q && featured.length > 0 && (
+          <div className="card" style={{ padding: "15px 16px", display: "flex", flexDirection: "column", gap: 12, background: "var(--accent-soft)", border: "1px solid var(--accent-border)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", flex: "none", background: "var(--bg-base)", border: "1px solid var(--accent-border)", color: "var(--accent-text)" }}>
+                <Icon name="zap" size={15} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Efficiency &amp; traceability pack</div>
+                <div style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
+                  Cut token cost and make every change traceable — so multi-agent work stays cheap and auditable.
+                </div>
+              </div>
+              <span style={{ fontSize: "var(--fs-11)", fontWeight: "var(--fw-semibold)", color: "var(--accent-text)", background: "var(--bg-base)", border: "1px solid var(--accent-border)", borderRadius: 99, padding: "2px 9px", flex: "none" }}>New</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 8 }}>
+              {featured.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setQ(f.id)}
+                  data-tip="Show this skill"
+                  style={{ textAlign: "left", display: "flex", flexDirection: "column", gap: 3, padding: "9px 11px", background: "var(--bg-base)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", cursor: "pointer", color: "inherit" }}
+                >
+                  <span className="mono" style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", color: "var(--accent-text)" }}>{f.id}</span>
+                  <span style={{ fontSize: 11.5, color: "var(--text-tertiary)", lineHeight: 1.45 }}>{f.blurb}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
