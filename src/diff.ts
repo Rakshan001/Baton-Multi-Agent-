@@ -35,6 +35,29 @@ const MAX_UNTRACKED_EXPANDED = 50;
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
+/**
+ * Best-effort path from a `diff --git a/X b/X` header body ("a/X b/X"). Lets
+ * files with no `---`/`+++` lines (binary files, pure mode changes) still
+ * resolve a path. Handles the symmetric non-rename form even when the path
+ * contains spaces; otherwise splits on the first " b/".
+ */
+function gitHeaderPath(body: string): string {
+  if (!body.startsWith('a/')) return '';
+  const rest = body.slice(2); // "X b/X"
+  const marker = ' b/';
+  if ((rest.length - marker.length) % 2 === 0) {
+    const plen = (rest.length - marker.length) / 2;
+    if (
+      rest.slice(plen, plen + marker.length) === marker &&
+      rest.slice(0, plen) === rest.slice(plen + marker.length)
+    ) {
+      return rest.slice(0, plen);
+    }
+  }
+  const idx = rest.indexOf(marker);
+  return idx >= 0 ? rest.slice(0, idx) : rest;
+}
+
 /** Parse `git diff` unified output into the dashboard's DiffFile shape. Pure; exported for tests. */
 export function parseUnifiedDiff(text: string): DiffFile[] {
   const files: DiffFile[] = [];
@@ -83,8 +106,11 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
     if (line.startsWith('diff --git ')) {
       flush();
       cur = { path: '', status: 'modified', hunks: [], add: 0, del: 0, lang: '' };
-      oldPath = '';
-      newPath = '';
+      // Seed from the header so binary / mode-only files (no ---/+++) still get
+      // a path; any later ---/+++/rename line overrides this.
+      const seed = gitHeaderPath(line.slice('diff --git '.length));
+      oldPath = seed;
+      newPath = seed;
       continue;
     }
     if (!cur) continue;
