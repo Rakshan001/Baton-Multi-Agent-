@@ -82,8 +82,41 @@ async function askShare(): Promise<boolean> {
   }
 }
 
+/**
+ * Single-choice menu (TTY only; non-TTY returns `fallback`). Accepts the choice
+ * number or its key. Same style as askShare; exported for `baton setup`.
+ */
+export async function askChoice<T extends string>(
+  question: string,
+  choices: Array<{ key: T; label: string }>,
+  fallback: T,
+): Promise<T> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return fallback;
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const menu = choices.map((c, i) => `  ${i + 1}) ${c.label}`).join('\n');
+    const def = choices.findIndex((c) => c.key === fallback) + 1;
+    const answer = (await rl.question(`${question}\n${menu}\nChoose [1-${choices.length}] (default ${def}): `)).trim().toLowerCase();
+    if (!answer) return fallback;
+    const n = parseInt(answer, 10);
+    if (Number.isInteger(n) && n >= 1 && n <= choices.length) return choices[n - 1].key;
+    return choices.find((c) => c.key === answer)?.key ?? fallback;
+  } finally {
+    rl.close();
+  }
+}
+
 export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  let root: string;
+  try {
+    root = await gitRoot(path ? resolve(path) : undefined);
+  } catch {
+    console.error('baton kb init must run inside a git repository.');
+    console.error('  Setting up a folder that holds several separate repos? Run: baton setup');
+    process.exitCode = 1;
+    return;
+  }
   const target = resolve(path ?? root);
 
   const det = await detectGraphify();

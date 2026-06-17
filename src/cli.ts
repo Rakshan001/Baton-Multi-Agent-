@@ -11,6 +11,8 @@
  */
 import './util/quiet.js'; // FIRST: suppress node:sqlite experimental warning before any sqlite load
 import { Command } from 'commander';
+import { ensureBinPath } from './util/path-env.js';
+import { setupCmd } from './commands/setup.js';
 import { newCmd } from './commands/new.js';
 import { lsCmd } from './commands/ls.js';
 import { statusCmd } from './commands/status.js';
@@ -31,12 +33,30 @@ import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './commands/memory.js';
 
+// Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
+// even when launched from a GUI/non-login shell with a thin PATH.
+ensureBinPath();
+
 const program = new Command();
 
 program
   .name('baton')
   .description('Tiny worktree orchestration for multiple AI coding agents')
   .version('0.0.1');
+
+program
+  .command('setup')
+  .argument('[path]', 'folder to set up (default: current directory)')
+  .option('--hub', 'multi-repo: one centralized hub (merged graph + one dashboard)')
+  .option('--individual', 'multi-repo: set up each repo on its own')
+  .option('--yes', 'accept the recommended defaults without prompting')
+  .option('--no-mcp', 'skip writing graphify MCP servers to .mcp.json')
+  .option('--no-docs', 'skip adding the coordination guide to AGENTS.md/CLAUDE.md')
+  .option('--share', 'commit the KB to git so teammates skip re-indexing')
+  .option('--local', 'keep the KB local-only (skip the share question)')
+  .description('set up Baton for a repo — or a folder of several repos (hub vs individual)')
+  .action((path: string | undefined, opts: { hub?: boolean; individual?: boolean; yes?: boolean; mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean }) =>
+    run(() => setupCmd(path, opts)));
 
 program
   .command('new')

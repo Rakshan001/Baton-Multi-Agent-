@@ -50,9 +50,23 @@ export async function gitRoot(cwd?: string): Promise<string> {
   }
 }
 
-/** Current branch name (e.g. "main"), or "HEAD" if detached. */
+/**
+ * Current branch name (e.g. "main"), or "HEAD" if detached. Tolerant of an
+ * unborn HEAD (a fresh `git init` with no commits yet): `rev-parse` fails there,
+ * so fall back to `symbolic-ref` which still reports the pending branch ("main").
+ */
 export async function currentBranch(cwd?: string): Promise<string> {
-  return git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+  const r = await gitTry(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+  if (r.ok && r.stdout && r.stdout !== 'HEAD') return r.stdout;
+  const s = await gitTry(['symbolic-ref', '--short', 'HEAD'], cwd);
+  if (s.ok && s.stdout) return s.stdout;
+  return r.ok && r.stdout ? r.stdout : 'HEAD';
+}
+
+/** True if `cwd` is inside a git work tree. Never throws. */
+export async function isGitRepo(cwd?: string): Promise<boolean> {
+  const r = await gitTry(['rev-parse', '--is-inside-work-tree'], cwd);
+  return r.ok && r.stdout === 'true';
 }
 
 /** Short HEAD commit hash, or null if the repo has no commits yet. */
