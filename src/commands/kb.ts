@@ -17,6 +17,7 @@ import {
 } from '../kb/state.js';
 import { jsonSnippet, snippetFor } from '../kb/mcp.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
+import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 
 const AGENT_GUIDE = `
@@ -68,51 +69,6 @@ async function appendAgentGuide(root: string): Promise<string | null> {
   return 'AGENTS.md';
 }
 
-const GRAPHIFY_IGNORE_MARKER = '# baton: generated knowledge-base files (do not index)';
-const GRAPHIFY_IGNORE_ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
-
-/**
- * Compose `.graphifyignore` contents (pure, unit-tested). Returns null when the
- * file already carries our managed block (nothing to do).
- *
- * Subtlety: graphify reads, per directory, `.graphifyignore` *or else* that
- * dir's `.gitignore` — not both. So the moment Baton creates a `.graphifyignore`
- * at the repo root, graphify stops honouring the root `.gitignore`. graphify's
- * built-in skip list still drops node_modules/dist/.venv/coverage/etc., but a
- * repo's *custom* root ignores (secrets/, data/, generated/) would slip into the
- * graph. So when we have to create the file, we mirror the existing `.gitignore`
- * in first, then append our generated-file block.
- */
-export function composeGraphifyIgnore(existing: string, gitignore: string | null): string | null {
-  if (existing.includes(GRAPHIFY_IGNORE_MARKER)) return null;
-  let base = existing.trimEnd();
-  if (!base && gitignore && gitignore.trim()) {
-    base = `# mirrored from .gitignore so graphify keeps honouring it\n${gitignore.replace(/\r\n/g, '\n').trimEnd()}`;
-  }
-  return `${base}\n\n${GRAPHIFY_IGNORE_MARKER}\n${GRAPHIFY_IGNORE_ENTRIES.join('\n')}\n`.replace(/^\n+/, '');
-}
-
-/**
- * Keep graphify away from our own generated files (CODEBASE.md/AGENTS.md/kb/) —
- * with an LLM key it would re-extract them every rebuild (wasted tokens,
- * self-referential nodes). When creating the file fresh, preserve the repo's
- * own root `.gitignore` (see composeGraphifyIgnore). Idempotent.
- */
-async function ensureGraphifyIgnore(root: string): Promise<void> {
-  const file = join(root, '.graphifyignore');
-  const existing = existsSync(file) ? await readFile(file, 'utf-8') : '';
-  let gitignore: string | null = null;
-  if (!existing) {
-    const gi = join(root, '.gitignore');
-    if (existsSync(gi)) {
-      try { gitignore = await readFile(gi, 'utf-8'); } catch { gitignore = null; }
-    }
-  }
-  const next = composeGraphifyIgnore(existing, gitignore);
-  if (next === null) return;
-  await writeFile(file, next, 'utf-8');
-}
-
 /** Interactive share-or-local question (TTY only; non-TTY defaults to local). */
 async function askShare(): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
@@ -147,7 +103,11 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   console.log(`detected ${projects.length} project${projects.length === 1 ? '' : 's'}:`);
   for (const p of projects) console.log(`  • ${p.id}  (${p.path})`);
 
-  await ensureGraphifyIgnore(root);
+  // Seed a gitignore-mirroring .graphifyignore at the hub root AND every scanned
+  // project, so graphify indexes code — not deps/build output — even when a
+  // project root grows a .graphifyignore that would otherwise shadow its .gitignore.
+  const seeded = await ensureGraphifyIgnores([root, ...projects.map((p) => p.path)]);
+  if (seeded.length) console.log(`✓ .graphifyignore ×${seeded.length} (mirrors .gitignore + excludes generated docs)`);
 
   for (const p of projects) {
     console.log(`\n→ extracting ${p.id} ...`);
@@ -253,6 +213,11 @@ export async function kbRebuildCmd(
     process.exitCode = 1;
     return;
   }
+  // Self-heal ignores before rebuilding: upgrades any stale bare .graphifyignore
+  // (pre-mirror format) to honour the project's .gitignore again.
+  const seeded = await ensureGraphifyIgnores([root, ...targets.map((p) => p.path)]);
+  if (seeded.length) console.log(`✓ refreshed .graphifyignore ×${seeded.length}`);
+
   for (const p of targets) {
     console.log(`→ ${opts.full ? 'full extract' : 'incremental update'}: ${p.id}`);
     if (opts.full) await buildGraph(p.path, { onOutput: (l) => console.log(`    ${l}`) });

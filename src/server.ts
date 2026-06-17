@@ -26,6 +26,7 @@ import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './com
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
+import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, kbStatus, loadKb, saveKb } from './kb/state.js';
 import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
@@ -378,6 +379,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     const targets = body.project ? state.projects.filter((p) => p.id === body.project) : state.projects;
     if (body.project && targets.length === 0) return send(res, 404, { error: `no project '${body.project}'` }, origin);
+    // Self-heal .graphifyignore (mirror .gitignore) before rebuilding.
+    await ensureGraphifyIgnores([root, ...targets.map((p) => p.path)]);
     for (const p of targets) {
       buildQueue.enqueue(p.id, () => (body.full ? buildGraph(p.path) : update(p.path)), (err) => {
         if (!err) bus.publish({ type: 'kb.rebuilt', project: p.id });
