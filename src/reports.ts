@@ -35,9 +35,23 @@ function getDb(root: string): DatabaseSync {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
     db.exec(SCHEMA);
+    // Match history.ts: WAL persists in the file header; synchronous is per-handle,
+    // and this is a separate connection to the same .baton/history.db.
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
     conns.set(path, db);
   }
   return db;
+}
+
+/** Close + forget this module's handle to history.db (purge). Pairs with
+ *  closeHistoryDb — both must release before the file can be deleted. */
+export function closeReportsDb(root: string): void {
+  const path = join(batonDir(root), 'history.db');
+  const db = conns.get(path);
+  if (db) {
+    try { db.close(); } catch { /* already closed */ }
+    conns.delete(path);
+  }
 }
 
 export interface CompletionReport {

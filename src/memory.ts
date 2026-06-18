@@ -19,6 +19,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { git } from './util/exec.js';
+import { escapeRegExp } from './util/regex.js';
 
 export type MemoryType = 'decision' | 'gotcha' | 'convention' | 'reference' | 'preference';
 export const MEMORY_TYPES: MemoryType[] = ['decision', 'gotcha', 'convention', 'reference', 'preference'];
@@ -143,7 +144,6 @@ export function detectSecret(text: string): string | null {
 }
 
 /** Word-boundary relevance scoring against a topic (same approach as routing.ts). */
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function scoreMemory(fact: MemoryFact, topic: string): number {
   const words = [...new Set(topic.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2))];
   if (!words.length) return 0;
@@ -239,7 +239,9 @@ async function fileHash(mainRoot: string, relPath: string): Promise<string> {
     const hit = hashCache.get(abs);
     if (hit && hit.mtimeMs === st.mtimeMs) return hit.hash;
     const hash = sha1(await readFile(abs));
-    if (hashCache.size > 4096) hashCache.clear();
+    // FIFO single-entry eviction (Map keeps insertion order) — a blanket clear()
+    // would force the next /api/memory poll to cold re-hash every anchored file.
+    if (hashCache.size >= 4096) hashCache.delete(hashCache.keys().next().value!);
     hashCache.set(abs, { mtimeMs: st.mtimeMs, hash });
     return hash;
   } catch {
@@ -385,7 +387,9 @@ export async function listMemories(root: string, opts: { projects?: ProjectRel[]
     if (f.anchors.commit && head) {
       const key = `${f.anchors.commit}..${head}`;
       if (!behindCache.has(key)) {
-        if (behindCache.size > 2048) behindCache.clear();
+        // FIFO single-entry eviction — clear() here would re-spawn up to FACT_CAP
+        // `git rev-list` subprocesses on the next poll (a re-scan stampede).
+        if (behindCache.size >= 2048) behindCache.delete(behindCache.keys().next().value!);
         try {
           behindCache.set(key, Number(await git(['rev-list', '--count', key], mainRoot)));
         } catch {

@@ -15,7 +15,8 @@ import { detectProjects } from '../kb/projects.js';
 import {
   graphPathFor, kbStatus, loadKb, mergedGraphFile, saveKb, type KbState,
 } from '../kb/state.js';
-import { jsonSnippet, snippetFor } from '../kb/mcp.js';
+import { mcpServers, snippetFor } from '../kb/mcp.js';
+import { mergeJsonConfig, McpConfigParseError } from '../agents/connect.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
 import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
@@ -180,8 +181,15 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   // Project-scoped .mcp.json is picked up by Claude Code in every worktree.
   const mcpPath = join(root, '.mcp.json');
   if (opts.mcp !== false) {
-    await writeMcpJson(mcpPath, state);
-    console.log(`✓ wrote graphify + baton MCP servers to .mcp.json`);
+    const existing = existsSync(mcpPath) ? await readFile(mcpPath, 'utf-8') : '';
+    try {
+      await writeFile(mcpPath, mergeJsonConfig(existing, mcpServers(state), mcpPath), 'utf-8');
+      console.log(`✓ wrote graphify + baton MCP servers to .mcp.json`);
+    } catch (e) {
+      // Don't clobber a .mcp.json we can't parse — preserve the user's other servers.
+      if (e instanceof McpConfigParseError) console.warn(`⚠ ${e.message} — skipped wiring .mcp.json`);
+      else throw e;
+    }
   }
   if (opts.docs !== false) {
     const wrote = await appendAgentGuide(root);
@@ -189,21 +197,6 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   }
   console.log('\nnext: baton serve  → dashboard “Knowledge Graph” page');
   console.log('      baton kb mcp --agent codex|gemini|cursor  → config for other agents');
-}
-
-/** Merge graphify servers into an existing .mcp.json without clobbering other entries. */
-async function writeMcpJson(mcpPath: string, state: KbState): Promise<void> {
-  let existing: { mcpServers?: Record<string, unknown> } = {};
-  if (existsSync(mcpPath)) {
-    try {
-      existing = JSON.parse(await readFile(mcpPath, 'utf-8'));
-    } catch {
-      existing = {};
-    }
-  }
-  const ours = JSON.parse(jsonSnippet(state)) as { mcpServers: Record<string, unknown> };
-  const merged = { ...existing, mcpServers: { ...existing.mcpServers, ...ours.mcpServers } };
-  await writeFile(mcpPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
 }
 
 export async function kbStatusCmd(): Promise<void> {

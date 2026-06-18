@@ -365,3 +365,39 @@ export async function archiveBranch(
   const r = await gitTry(['update-ref', `refs/baton/archive/${slug}`, branch], cwd);
   return r.ok;
 }
+
+/** Hidden archive refs (refs/baton/archive/*) created by merges. These keep merged
+ *  branch objects reachable forever, so a plain `git gc` won't reclaim them. */
+export async function listArchiveRefs(cwd?: string): Promise<string[]> {
+  const r = await gitTry(['for-each-ref', '--format=%(refname)', 'refs/baton/archive/'], cwd);
+  if (!r.ok) return [];
+  return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+/** Delete a single ref by full name (e.g. refs/baton/archive/<slug>). Best-effort. */
+export async function deleteRef(ref: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['update-ref', '-d', ref], cwd);
+  return r.ok;
+}
+
+/** Prune detached worktree metadata, then garbage-collect unreachable objects.
+ *  This is what actually reclaims disk after branches/archive-refs are removed —
+ *  deleting a branch alone leaves its objects packed until a gc prunes them. */
+export async function gitGc(cwd?: string): Promise<boolean> {
+  await gitTry(['worktree', 'prune'], cwd);
+  const r = await gitTry(['gc', '--prune=now', '--quiet'], cwd);
+  return r.ok;
+}
+
+/** Bytes held by the git object store (loose + packed), via `git count-objects -v`.
+ *  Used to report how much a gc reclaimed (before/after delta). 0 on any error. */
+export async function objectStoreBytes(cwd?: string): Promise<number> {
+  const r = await gitTry(['count-objects', '-v'], cwd);
+  if (!r.ok) return 0;
+  let kib = 0;
+  for (const line of r.stdout.split('\n')) {
+    const m = /^(size|size-pack):\s+(\d+)/.exec(line.trim());
+    if (m) kib += Number(m[2]); // both fields are in KiB
+  }
+  return kib * 1024;
+}

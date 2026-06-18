@@ -16,7 +16,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
@@ -601,6 +601,38 @@ class BatonClient {
       };
     }
     return this.request<StorageBreakdown>("/api/storage");
+  }
+  async getPurgePreview(): Promise<PurgePreview> {
+    if (this.demo) {
+      await this.demoGate(90);
+      const facts = this.demoFacts().length;
+      return {
+        root: "/demo/orbit", repo: "orbit", confirmPhrase: "purge orbit", gitObjectBytes: 18_400_000,
+        items: [
+          { category: "archives", label: "Completed-task git history", bytes: 18_400_000, count: 7, destructive: true, detail: "5 archived merge ref(s) + 2 orphan branch(es), then git gc to reclaim packed objects" },
+          { category: "history", label: "History index (history.db)", bytes: 86_016, count: 1, destructive: true, detail: "queryable merge/commit index — rebuildable from git history" },
+          { category: "reports", label: "Completion reports", bytes: 12_400, count: 4, destructive: true, detail: "4 merged-task report file(s)" },
+          { category: "graphs", label: "Knowledge graphs", bytes: 2_120_000, count: 2, destructive: false, detail: "graphify graphs — rebuildable with `baton kb rebuild`" },
+          { category: "tmp", label: "Temp / upload staging", bytes: 4_096, count: 1, destructive: false, detail: "leftover upload + atomic-write temp files" },
+          { category: "memory", label: "Shared memory (knowledge base)", bytes: facts * 480, count: facts, destructive: true, detail: `${facts} evidence-anchored fact(s)`, warning: "This is your shared knowledge base — agents lose every saved fact. There is no undo." },
+        ],
+      };
+    }
+    return this.request<PurgePreview>("/api/storage/purge");
+  }
+  async purgeStorage(categories: PurgeCategory[], confirm: string): Promise<PurgeResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(260);
+      const prev = await this.getPurgePreview();
+      const freed = prev.items.filter((i) => categories.includes(i.category)).reduce((n, i) => n + i.bytes, 0);
+      if (categories.includes("memory")) this.demoMemory = [];
+      this.emit();
+      return { deleted: categories.map((c) => ({ category: c, count: 1 })), freedBytes: freed, gcRan: categories.includes("archives") };
+    }
+    const r = await this.request<PurgeResult>("/api/storage/purge", { method: "POST", body: JSON.stringify({ categories, confirm }) });
+    this.emit();
+    return r;
   }
   async deleteMemory(id: string): Promise<void> {
     this.assertWrite();

@@ -51,6 +51,37 @@ Tests: 228 vitest tests at root green (routing v2 + MCP-connect + roster + skill
 references, file-backed bundled loading, and the efficiency & traceability pack's load +
 faithful raw + BUNDLED_META tags/produces). Both workspaces strict TS, both builds clean.
 
+**Hardening pass (2026-06-17, audit-driven).** Verified multi-agent code review →
+fixed: (1) HTTP response pipes now attach `'error'` handlers (static asset, graph.json,
+kb-export tar) so a cancelled download / mid-stream IO error can no longer crash the
+zero-dep daemon; (2) the memory `fs.watch` gets an `'error'` handler (matches watch.ts);
+(3) `BatonBus` lifts the EventEmitter cap (`setMaxListeners(0)`) — no more spurious
+warning past 10 SSE connections; (4) `baton kb init` reuses `mergeJsonConfig` (refuses to
+clobber an unparseable `.mcp.json` instead of silently wiping the user's other MCP
+servers); (5) `escapeRegExp` deduped into `src/util/regex.ts` (was copied in routing/
+memory/connect); (6) SQLite history/reports DBs open `WAL` + `synchronous=NORMAL` and
+`recordMerge` batches inserts in one transaction; (7) `listHistory` collapsed its 1+N
+query into one grouped read; (8) memory hash/behind caches evict FIFO instead of a
+blanket `clear()` (no re-scan stampede); (9) `SignalTracker.clear` re-derives overlap
+announcements from live rows instead of wiping all (no duplicate overlap alerts).
+
+**Security review + permanent storage purge (2026-06-18).** Inline security pass (the
+multi-agent run stalled, so reviewed directly): daemon binds **127.0.0.1 only**, CORS is
+**loopback-only**, kb-import tar extraction already guards tar-slip, JSON bodies cap at
+1 MB — all good. Added a **loopback-Origin CSRF guard** (`isLoopbackOrigin`) on the new
+destructive endpoint. **New: permanent data purge** (`src/purge.ts`, `GET/POST
+/api/storage/purge`). Root cause of "disk keeps filling after deletes": deleting a task
+removes the worktree but its commits stay reachable via the hidden `refs/baton/archive/*`
+refs, so a plain gc can't reclaim them. The purge drops those refs + orphan `baton/*`
+branches and runs `git gc --prune=now` (new `git.ts` helpers: `listArchiveRefs`,
+`deleteRef`, `gitGc`, `objectStoreBytes`; `closeHistoryDb`/`closeReportsDb` release the
+sqlite handle before unlinking history.db). Categories: archives, history, reports,
+graphs, tmp, memory. **Triple-guarded**: `--write` + loopback Origin + a typed
+`purge <repo>` phrase; the **Memory → Storage → Danger Zone** UI adds a 3-step flow
+(select → review with sizes → type-to-confirm) and an extra acknowledgement for the
+knowledge base. Never touches source, main, non-`baton/*` branches, or live worktrees.
+`test/purge.test.ts` (7 tests) covers it; 235 tests green.
+
 ## Pending / next 🔜
 
 1. **Headless one-shot runs still aren't shown as "active" on the status board**

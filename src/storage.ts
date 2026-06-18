@@ -26,7 +26,7 @@ export interface StorageBreakdown {
 }
 
 /** Recursive directory size (bytes) + file count. Symlinks are not followed. */
-async function dirSize(dir: string): Promise<{ bytes: number; files: number }> {
+export async function dirSize(dir: string): Promise<{ bytes: number; files: number }> {
   let bytes = 0, files = 0;
   let entries;
   try {

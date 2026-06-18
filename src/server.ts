@@ -62,6 +62,7 @@ import {
   type ProjectRel, type RetentionPolicy,
 } from './memory.js';
 import { storageUsage } from './storage.js';
+import { purgePreview, purgeStorage, sanitizeCategories } from './purge.js';
 import { watch } from 'node:fs';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
@@ -139,7 +140,13 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: s
     'Cache-Control': isIndex ? 'no-cache' : 'public, max-age=31536000, immutable',
   });
   if (req.method === 'HEAD') return void res.end();
-  createReadStream(file).pipe(res);
+  // Headers are already sent, so an error mid-stream (file truncated/deleted after
+  // stat, EIO, or the client disconnecting) can only be answered by tearing down the
+  // socket — never let it become an uncaught exception that kills the daemon.
+  const rs = createReadStream(file);
+  rs.on('error', () => res.destroy());
+  res.on('error', () => rs.destroy());
+  rs.pipe(res);
 }
 
 /**
@@ -235,6 +242,18 @@ function send(res: ServerResponse, status: number, body: unknown, origin: string
 /** Single definition of the write-gate response — every mutating route uses it. */
 function denyReadOnly(res: ServerResponse, origin: string): void {
   send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+}
+
+/**
+ * Anti-CSRF for irreversible endpoints. A "simple" cross-origin POST (text/plain
+ * body) skips the CORS preflight, so its side effect would run even though the
+ * response is blocked — a site you visit could fire it at localhost. Browsers
+ * always attach an Origin header to such POSTs, so we require it to be loopback.
+ * A missing Origin (curl / same-origin) is allowed.
+ */
+function isLoopbackOrigin(req: IncomingMessage): boolean {
+  const o = req.headers.origin;
+  return !o || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(o);
 }
 
 /** Parse a JSON request body; null = malformed (route replies 400). */
@@ -384,7 +403,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       return;
     }
     res.writeHead(200, { ...headers, 'Content-Type': 'application/json', 'Content-Length': st.size });
-    createReadStream(graphPath).pipe(res);
+    const rs = createReadStream(graphPath);
+    rs.on('error', () => res.destroy());
+    res.on('error', () => rs.destroy());
+    rs.pipe(res);
     return;
   }
 
@@ -430,6 +452,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       'Vary': 'Origin',
     });
     const child = execa('tar', ['-czf', '-', '-C', staging, '.'], { buffer: false });
+    // Client cancelling the download makes res emit EPIPE/ECONNRESET; without a
+    // listener that crashes the daemon. Tear down the other side on either error.
+    child.stdout?.on('error', () => res.destroy());
+    res.on('error', () => child.kill());
     child.stdout?.pipe(res);
     const cleanup = () => void rm(staging, { recursive: true, force: true });
     child.once('exit', cleanup);
@@ -713,6 +739,29 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, await storageUsage(root), origin);
   }
 
+  // GET /api/storage/purge — preview what a purge would permanently delete (read-only)
+  if (method === 'GET' && path === '/api/storage/purge') {
+    return send(res, 200, await purgePreview(root), origin);
+  }
+
+  // POST /api/storage/purge — permanently delete selected data + reclaim git objects.
+  // Triple-guarded: --write, a loopback Origin (anti-CSRF), and a typed confirm phrase.
+  if (method === 'POST' && path === '/api/storage/purge') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    if (!isLoopbackOrigin(req)) return send(res, 403, { error: 'cross-origin request refused' }, origin);
+    const body = await readJsonBody<{ categories?: unknown; confirm?: string }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    const categories = sanitizeCategories(body.categories);
+    if (!categories.length) return send(res, 400, { error: 'no valid categories selected' }, origin);
+    const preview = await purgePreview(root);
+    if ((body.confirm ?? '').trim() !== preview.confirmPhrase) {
+      return send(res, 400, { error: `confirmation mismatch — type "${preview.confirmPhrase}" exactly to proceed` }, origin);
+    }
+    const result = await purgeStorage(root, categories);
+    if (categories.includes('memory')) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, result, origin);
+  }
+
   // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
   if (method === 'GET' && path === '/api/terminals') {
     const available = await detectTmux();
@@ -878,10 +927,13 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     const memDirPath = memoryDir(await mainRepoRoot(root));
     await mkdir(memDirPath, { recursive: true });
     let memTimer: ReturnType<typeof setTimeout> | null = null;
-    watch(memDirPath, () => {
+    const memWatcher = watch(memDirPath, () => {
       if (memTimer) clearTimeout(memTimer);
       memTimer = setTimeout(() => bus.publish({ type: 'memory.updated' }), 300);
     });
+    // FSWatcher emits 'error' asynchronously (dir removed/recreated, EMFILE); an
+    // unhandled one crashes the daemon. Swallow it, matching watch.ts's idiom.
+    memWatcher.on('error', () => undefined);
   } catch { /* memory watching is best-effort */ }
   // Keep CODEBASE.md in step with graph rebuilds. A multi-project rebuild
   // fires several kb.rebuilt events — debounce so we regenerate once.

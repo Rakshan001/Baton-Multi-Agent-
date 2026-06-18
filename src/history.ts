@@ -58,9 +58,24 @@ function getDb(root: string): DatabaseSync {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
     db.exec(SCHEMA);
+    // WAL (persisted in the file header) + NORMAL sync keep merge-time writes from
+    // fsync-stalling the daemon's single event loop. synchronous is per-connection,
+    // so reports.ts (a separate handle to this same file) sets it too.
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
     conns.set(path, db);
   }
   return db;
+}
+
+/** Close + forget the history.db handle so the file can be deleted (purge). The
+ *  next getDb() reopens it. reports.ts holds a separate handle to the same file. */
+export function closeHistoryDb(root: string): void {
+  const path = join(batonDir(root), 'history.db');
+  const db = conns.get(path);
+  if (db) {
+    try { db.close(); } catch { /* already closed */ }
+    conns.delete(path);
+  }
 }
 
 export interface TaskRecord {
@@ -106,9 +121,18 @@ export function recordMerge(
      ON CONFLICT(sha) DO NOTHING`,
   );
   const insFile = db.prepare(`INSERT INTO commit_files (sha, slug, path) VALUES (?, ?, ?)`);
-  for (const c of args.commits) {
-    insCommit.run(c.sha, args.slug, c.message, c.at);
-    for (const f of c.files) insFile.run(c.sha, args.slug, f);
+  // One transaction for the whole commit/file batch: a single fsync instead of one
+  // per INSERT, so a large merge can't block other in-flight requests for long.
+  db.exec('BEGIN');
+  try {
+    for (const c of args.commits) {
+      insCommit.run(c.sha, args.slug, c.message, c.at);
+      for (const f of c.files) insFile.run(c.sha, args.slug, f);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
   }
 }
 
@@ -151,11 +175,15 @@ export function listHistory(root: string): TaskHistory[] {
   const tasks = db
     .prepare(`SELECT slug, task, agent, merged_at AS mergedAt FROM tasks ORDER BY created_at DESC`)
     .all() as unknown as Array<{ slug: string; task: string; agent: string | null; mergedAt: string | null }>;
-  const commitStmt = db.prepare(
-    `SELECT sha, message, at FROM commits WHERE slug = ? ORDER BY at DESC`,
-  );
-  return tasks.map((t) => ({
-    ...t,
-    commits: commitStmt.all(t.slug) as unknown as { sha: string; message: string; at: string }[],
-  }));
+  // One grouped read instead of a per-task query (was 1+N on a polled endpoint).
+  const rows = db
+    .prepare(`SELECT slug, sha, message, at FROM commits ORDER BY at DESC`)
+    .all() as unknown as Array<{ slug: string; sha: string; message: string; at: string }>;
+  const bySlug = new Map<string, { sha: string; message: string; at: string }[]>();
+  for (const r of rows) {
+    let list = bySlug.get(r.slug);
+    if (!list) bySlug.set(r.slug, (list = []));
+    list.push({ sha: r.sha, message: r.message, at: r.at });
+  }
+  return tasks.map((t) => ({ ...t, commits: bySlug.get(t.slug) ?? [] }));
 }
