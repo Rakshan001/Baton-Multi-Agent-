@@ -21,7 +21,8 @@ Open the URL it prints in your browser:
 
 ```text
 $ baton serve --write
-Baton daemon on http://localhost:7077  (write enabled)
+baton serve → dashboard http://localhost:7077
+  API: /api/status · /api/history · /api/meta · /api/tasks/:slug · /api/events (SSE) · /api/kb · /api/doctor   (Ctrl+C to stop)
 ```
 
 | Flag | Effect |
