@@ -38,13 +38,16 @@
     scroll-behavior: smooth;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* Clip horizontal overflow on the root without turning <body> into its own
+       scroll container (overflow-x: hidden on body forces overflow-y: auto,
+       which breaks window scrolling and scroll-linked animations). */
+    overflow-x: clip;
   }
 
   body {
     background-color: var(--color-ink);
     color: var(--color-fg);
     font-family: var(--font-display);
-    overflow-x: hidden;
   }
 
   ::selection {
@@ -197,4 +200,27 @@ footer {
 @keyframes marquee {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
+}
+
+/* Scroll-reveal (driven by <Reveal>) — additive, never traps content. */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.6s cubic-bezier(0.21, 0.6, 0.35, 1),
+    transform 0.6s cubic-bezier(0.21, 0.6, 0.35, 1);
+  will-change: opacity, transform;
+}
+.reveal[data-shown="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No JS dependency for visibility when motion is reduced. */
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }

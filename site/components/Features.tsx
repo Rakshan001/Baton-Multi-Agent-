@@ -3,6 +3,7 @@
 import { motion, useInView } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import Section from "./Section";
+import Reveal from "./Reveal";
 
 export default function Features() {
   return (
@@ -57,12 +58,8 @@ function Card({
   children?: React.ReactNode;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 24 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: "-60px" }}
-      transition={{ duration: 0.5, ease: "easeOut" }}
-      className={`group relative flex flex-col overflow-hidden rounded-2xl border border-line bg-panel/60 p-6 transition-all duration-300 hover:-translate-y-1 hover:border-line-strong ${className}`}
+    <Reveal
+      className={`group relative flex flex-col overflow-hidden rounded-2xl border border-line bg-panel/60 p-6 transition-[transform,border-color] duration-300 hover:-translate-y-1 hover:border-line-strong ${className}`}
     >
       {/* hover glow */}
       <div
@@ -78,7 +75,7 @@ function Card({
         <p className="mt-2 text-pretty text-sm leading-relaxed text-muted">{body}</p>
       </div>
       {children && <div className="relative mt-auto pt-6">{children}</div>}
-    </motion.div>
+    </Reveal>
   );
 }
 
@@ -109,9 +106,8 @@ function GraphMini() {
           cy={n.y}
           r={n.key % 5 === 0 ? 3.5 : 2}
           fill={n.key % 5 === 0 ? "#ff9d2e" : "#36d1dc"}
-          initial={{ opacity: 0.4 }}
-          whileInView={{ opacity: [0.4, 1, 0.6] }}
-          viewport={{ once: true }}
+          initial={{ opacity: 0.5 }}
+          animate={{ opacity: [0.4, 1, 0.6] }}
           transition={{ duration: 2, delay: (n.key % 6) * 0.15, repeat: Infinity, repeatType: "reverse" }}
         />
       ))}
@@ -124,8 +120,16 @@ function CostCounter() {
   const inView = useInView(ref, { once: true });
   const [val, setVal] = useState(0);
 
+  // Fail-safe: count up when the card is in view, or shortly after mount if the
+  // viewport observer never reports (keeps the figure from sitting at zero).
+  const [forced, setForced] = useState(false);
   useEffect(() => {
-    if (!inView) return;
+    const t = window.setTimeout(() => setForced(true), 800);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    if (!inView && !forced) return;
     let raf = 0;
     const start = performance.now();
     const tick = (t: number) => {
@@ -135,7 +139,7 @@ function CostCounter() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [inView]);
+  }, [inView, forced]);
 
   return (
     <div ref={ref} className="font-mono text-sm">

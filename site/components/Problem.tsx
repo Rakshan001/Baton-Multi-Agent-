@@ -1,6 +1,4 @@
-"use client";
-
-import { motion } from "framer-motion";
+import Reveal from "./Reveal";
 
 const LINES = [
   {
@@ -31,16 +29,14 @@ export default function Problem() {
 
       <div className="space-y-10">
         {LINES.map((line, i) => (
-          <motion.p
+          <Reveal
             key={i}
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: "-80px" }}
-            transition={{ duration: 0.6, delay: i * 0.12, ease: "easeOut" }}
+            as="p"
+            delay={i * 0.12}
             className="text-display text-2xl leading-tight text-faint sm:text-3xl lg:text-4xl"
           >
             {line.lead} <span className="text-fg">{line.tail}</span>
-          </motion.p>
+          </Reveal>
         ))}
       </div>
     </section>

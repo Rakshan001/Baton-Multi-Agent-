@@ -1,7 +1,5 @@
-"use client";
-
-import { motion } from "framer-motion";
 import CopyChip from "./CopyChip";
+import Reveal from "./Reveal";
 import { REPO_URL, LICENSE_URL, GOOD_FIRST_ISSUES_URL } from "./site";
 
 export default function OpenSourceCTA() {
@@ -18,13 +16,7 @@ export default function OpenSourceCTA() {
         style={{ background: "radial-gradient(ellipse, #ff9d2e22, transparent 70%)" }}
       />
 
-      <motion.div
-        initial={{ opacity: 0, y: 24 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: "-80px" }}
-        transition={{ duration: 0.6, ease: "easeOut" }}
-        className="relative"
-      >
+      <Reveal className="relative">
         <p className="eyebrow mb-5">{"// open source"}</p>
         <h2 id="open-source-title" className="text-display text-balance text-4xl sm:text-5xl lg:text-6xl">
           Baton is <span className="amber-gradient">open source.</span>
@@ -87,7 +79,7 @@ export default function OpenSourceCTA() {
             MIT © Rakshan Shetty
           </a>
         </p>
-      </motion.div>
+      </Reveal>
     </section>
   );
 }

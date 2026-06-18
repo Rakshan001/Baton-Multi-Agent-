@@ -13,6 +13,13 @@
       "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5173", "--strictPort"],
       "cwd": "web",
       "port": 5173
+    },
+    {
+      "name": "baton-site",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "site",
+      "port": 3000
     }
   ]
 }
