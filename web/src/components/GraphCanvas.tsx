@@ -27,6 +27,15 @@ function cssVar(name: string, fallback: string): string {
   return v || fallback;
 }
 
+// force-graph renders nodeLabel HTML via innerHTML. Node fields (label,
+// source_file, source_location) come from graph.json, which can arrive from an
+// imported KB pack (untrusted) — escape them so a crafted label can't inject
+// script into the same-origin dashboard (which has full access to the daemon API).
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function esc(s: string | undefined | null): string {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+}
+
 const nodeId = (v: string | GraphNode | undefined): string => (typeof v === "string" ? v : v?.id ?? "");
 
 export function GraphCanvas({ data, communityColor, selectedId, highlightIds, onNodeClick }: GraphCanvasProps) {
@@ -50,7 +59,7 @@ export function GraphCanvas({ data, communityColor, selectedId, highlightIds, on
       .backgroundColor("rgba(0,0,0,0)")
       .nodeId("id")
       .nodeLabel((n) =>
-        `<div style="font: 12px ui-sans-serif; max-width: 280px"><b>${n.label}</b>${n.source_file ? `<br/><span style="opacity:.7">${n.source_file}${n.source_location ? ":" + n.source_location : ""}</span>` : ""}</div>`)
+        `<div style="font: 12px ui-sans-serif; max-width: 280px"><b>${esc(n.label)}</b>${n.source_file ? `<br/><span style="opacity:.7">${esc(n.source_file)}${n.source_location ? ":" + esc(n.source_location) : ""}</span>` : ""}</div>`)
       .linkColor(() => linkColor)
       .linkDirectionalArrowLength(3)
       .linkDirectionalArrowRelPos(1)

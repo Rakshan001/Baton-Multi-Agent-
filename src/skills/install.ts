@@ -254,6 +254,83 @@ export async function uninstallSkill(root: string, id: string, agent: string): P
 }
 
 const MAX_IMPORT_BYTES = 256 * 1024;
+const IMPORT_FETCH_TIMEOUT_MS = 10_000;
+const IMPORT_MAX_REDIRECTS = 4;
+
+/**
+ * SSRF guard: refuse to fetch private / loopback / link-local / reserved hosts.
+ * `fetch` from the daemon would otherwise let a caller (or a redirect target)
+ * reach cloud-metadata (169.254.169.254), internal services, or other loopback
+ * ports — the response is unreadable cross-origin, but the request still lands.
+ * Literal-IP based; hostnames are checked as-is (DNS rebinding is a residual,
+ * lower risk for a tool a user points at a URL they chose). Pure; unit-tested.
+ */
+export function isBlockedFetchHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+  if (!h || h === 'localhost' || h.endsWith('.localhost')) return true;
+  // IPv6 loopback / unspecified / unique-local / link-local
+  if (h === '::1' || h === '::' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80')) return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 0 || a === 127 || a === 10) return true;          // unspecified / loopback / private
+    if (a === 169 && b === 254) return true;                    // link-local incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;           // private
+    if (a === 192 && b === 168) return true;                    // private
+    if (a === 100 && b >= 64 && b <= 127) return true;          // CGNAT
+  }
+  return false;
+}
+
+/** Read a fetch Response body, aborting if it exceeds `max` bytes (no full buffer first). */
+async function readBodyCapped(res: Response, max: number): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const t = await res.text();
+    if (Buffer.byteLength(t) > max) throw new SkillImportError('skill file is too large (256KB max)');
+    return t;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new SkillImportError('skill file is too large (256KB max)');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
+/** Fetch skill text over http(s) with SSRF blocking, a timeout, manual redirect
+ *  re-validation, and a streamed size cap. */
+async function fetchSkillText(startUrl: string): Promise<string> {
+  let current = startUrl;
+  for (let hop = 0; hop <= IMPORT_MAX_REDIRECTS; hop++) {
+    let u: URL;
+    try { u = new URL(current); } catch { throw new SkillImportError(`invalid URL: ${current}`); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new SkillImportError('only http(s) URLs can be imported');
+    if (isBlockedFetchHost(u.hostname)) throw new SkillImportError(`refusing to fetch a private/loopback address (${u.hostname})`);
+    let res: Response;
+    try {
+      res = await fetch(current, { redirect: 'manual', signal: AbortSignal.timeout(IMPORT_FETCH_TIMEOUT_MS) });
+    } catch (e) {
+      throw new SkillImportError(`couldn't fetch ${current}: ${(e as Error).message}`);
+    }
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      if (!loc) throw new SkillImportError(`couldn't fetch ${current}: HTTP ${res.status} with no redirect target`);
+      current = new URL(loc, current).toString(); // re-validate the hop on the next iteration
+      continue;
+    }
+    if (!res.ok) throw new SkillImportError(`couldn't fetch ${current}: HTTP ${res.status}`);
+    return readBodyCapped(res, MAX_IMPORT_BYTES);
+  }
+  throw new SkillImportError('too many redirects while importing skill');
+}
 
 /**
  * Import a skill from a local file path or http(s) URL into <repo>/.baton/skills.
@@ -268,14 +345,7 @@ export async function importSkill(root: string, source: string): Promise<SkillDe
   let text: string;
   let fallbackId = 'imported-skill';
   if (/^https?:\/\//i.test(src)) {
-    let res: Response;
-    try {
-      res = await fetch(src, { redirect: 'follow' });
-    } catch (e) {
-      throw new SkillImportError(`couldn't fetch ${src}: ${(e as Error).message}`);
-    }
-    if (!res.ok) throw new SkillImportError(`couldn't fetch ${src}: HTTP ${res.status}`);
-    text = await res.text();
+    text = await fetchSkillText(src);
     fallbackId = slugifySkillId(new URL(src).pathname.split('/').filter(Boolean).pop()?.replace(/\.(md|mdc|txt)$/i, '') || 'imported-skill');
   } else {
     if (!existsSync(src)) throw new SkillImportError(`no such file: ${src}`);

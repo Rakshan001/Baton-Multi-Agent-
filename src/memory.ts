@@ -132,7 +132,7 @@ const SECRET_PATTERNS: Array<{ re: RegExp; what: string }> = [
   { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, what: 'private key block' },
   { re: /\bAKIA[0-9A-Z]{16}\b/, what: 'AWS access key id' },
   { re: /\bsk-[A-Za-z0-9_-]{20,}\b/, what: 'API secret key (sk-…)' },
-  { re: /\bgh[pousr]_[A-Za-z0-9]{30,}\b/, what: 'GitHub token' },
+  { re: /\bgh[pousr]_[A-Za-z0-9]{28,}\b/, what: 'GitHub token' },
   { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, what: 'Slack token' },
   { re: /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, what: 'JWT' },
   { re: /\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*['"][^'"]{8,}['"]/i, what: 'inline credential assignment' },

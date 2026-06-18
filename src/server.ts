@@ -69,6 +69,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { auditJunk, cleanJunk, sweepTmpFiles } from './cleanup.js';
 import { basename } from 'node:path';
+import { isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
 
 const require = createRequire(import.meta.url);
 const VERSION = BATON_VERSION;
@@ -222,7 +223,7 @@ function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: s
 /** Echo a loopback Origin so the Vite dev server (any localhost port) works; deny others. */
 function corsOrigin(req: IncomingMessage): string {
   const origin = req.headers.origin;
-  if (origin && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) return origin;
+  if (origin && isLoopbackOrigin(origin)) return origin;
   return 'http://localhost:5173';
 }
 
@@ -242,18 +243,6 @@ function send(res: ServerResponse, status: number, body: unknown, origin: string
 /** Single definition of the write-gate response — every mutating route uses it. */
 function denyReadOnly(res: ServerResponse, origin: string): void {
   send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
-}
-
-/**
- * Anti-CSRF for irreversible endpoints. A "simple" cross-origin POST (text/plain
- * body) skips the CORS preflight, so its side effect would run even though the
- * response is blocked — a site you visit could fire it at localhost. Browsers
- * always attach an Origin header to such POSTs, so we require it to be loopback.
- * A missing Origin (curl / same-origin) is allowed.
- */
-function isLoopbackOrigin(req: IncomingMessage): boolean {
-  const o = req.headers.origin;
-  return !o || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(o);
 }
 
 /** Parse a JSON request body; null = malformed (route replies 400). */
@@ -306,6 +295,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     });
     res.end();
     return;
+  }
+
+  // Anti-CSRF (applies to EVERY state-changing /api request, not just one route).
+  // The daemon is loopback-bound and its CORS policy never lets a third-party
+  // site READ a response — but a browser still SENDS a cross-origin "simple"
+  // POST (a text/plain body the JSON parser still accepts), and that side effect
+  // would run before CORS blocks the unreadable reply. So a malicious page you
+  // visit could fire e.g. POST /api/tasks/:slug/agent/start (launch an agent with
+  // an attacker prompt) at localhost. Require a loopback Origin for all mutating
+  // methods; the legit dashboard (same-origin or :5173) and curl (no Origin) pass.
+  if (isMutatingMethod(method) && path.startsWith('/api/') && !isLoopbackOrigin(req.headers.origin)) {
+    return send(res, 403, { error: 'cross-origin request refused' }, origin);
   }
 
   if (method === 'GET' && path === '/api/events') return handleEvents(req, res, origin);
@@ -745,10 +746,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   // POST /api/storage/purge — permanently delete selected data + reclaim git objects.
-  // Triple-guarded: --write, a loopback Origin (anti-CSRF), and a typed confirm phrase.
+  // Triple-guarded: --write, a loopback Origin (anti-CSRF, also enforced globally
+  // above — kept here as explicit defense-in-depth), and a typed confirm phrase.
   if (method === 'POST' && path === '/api/storage/purge') {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
-    if (!isLoopbackOrigin(req)) return send(res, 403, { error: 'cross-origin request refused' }, origin);
+    if (!isLoopbackOrigin(req.headers.origin)) return send(res, 403, { error: 'cross-origin request refused' }, origin);
     const body = await readJsonBody<{ categories?: unknown; confirm?: string }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     const categories = sanitizeCategories(body.categories);
@@ -765,7 +767,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
   if (method === 'GET' && path === '/api/terminals') {
     const available = await detectTmux();
-    if (available) await reattachOrphans(root);
+    // Adopting tmux orphans spawns control clients — a state change. A read GET
+    // shouldn't let a cross-origin page trigger it; only do it for loopback callers.
+    if (available && isLoopbackOrigin(req.headers.origin)) await reattachOrphans(root);
     return send(res, 200, {
       available,
       ...(available ? {} : { hint: process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux' }),
@@ -779,7 +783,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const slug = decodeURIComponent(tm[1]);
     const sub = tm[2];
     // After a daemon restart the tmux session may outlive the in-memory map.
-    if (!hasTerminal(slug) && (await detectTmux())) await reattachOrphans(root);
+    // Mutating methods already passed the loopback-Origin gate above; for the
+    // read-only stream GET, only adopt orphans for loopback callers (not a
+    // cross-origin page that merely opened the EventSource).
+    if (!hasTerminal(slug) && isLoopbackOrigin(req.headers.origin) && (await detectTmux())) await reattachOrphans(root);
 
     if (!sub && method === 'POST') {
       if (!opts.writeEnabled) return denyReadOnly(res, origin);
