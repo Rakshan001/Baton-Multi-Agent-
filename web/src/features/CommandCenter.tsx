@@ -43,7 +43,7 @@ function MiniStat({ label, value, tone, icon, sub, onClick, active }: {
 }
 
 export function CommandCenter({
-  status, view, setView, onOpen, writeEnabled, filter, setFilter, project,
+  status, view, setView, onOpen, writeEnabled, filter, setFilter, project, onNewSession,
 }: {
   status: PollState<StatusRow[]>;
   view: View;
@@ -53,6 +53,7 @@ export function CommandCenter({
   filter: Filter;
   setFilter: (f: Filter) => void;
   project: Project;
+  onNewSession?: () => void;
 }) {
   const sessions = status.data || [];
   const loading = status.isLoading;
@@ -162,7 +163,7 @@ export function CommandCenter({
       <div style={{ flex: 1, minHeight: 0 }}>
         {view === "board"
           ? <Board sessions={filter ? sessions.filter((s) => (filter === "conflict" ? s.status === "conflict" : deriveColumn(s) === filter)) : sessions}
-              loading={loading} error={status.error && !sessions.length ? status.error : null} onOpen={onOpen} writeEnabled={writeEnabled} onRetry={status.refetch} />
+              loading={loading} error={status.error && !sessions.length ? status.error : null} onOpen={onOpen} writeEnabled={writeEnabled} onRetry={status.refetch} onNewSession={onNewSession} />
           : <CanvasView sessions={sessions} loading={loading} onOpen={onOpen} />}
       </div>
     </div>

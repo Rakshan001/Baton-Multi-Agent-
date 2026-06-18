@@ -82,6 +82,44 @@ graphs, tmp, memory. **Triple-guarded**: `--write` + loopback Origin + a typed
 knowledge base. Never touches source, main, non-`baton/*` branches, or live worktrees.
 `test/purge.test.ts` (7 tests) covers it; 235 tests green.
 
+**Security hardening pass (2026-06-18, multi-agent audit-driven).** A 35-agent
+audit (find → adversarially-verify → completeness-critic) found the loopback-Origin
+CSRF guard was only on `/api/storage/purge`, leaving every other mutating endpoint
+exploitable by a malicious site you visit while `baton serve --write` runs (a
+"simple" `text/plain` POST skips CORS preflight and the body parser ignores
+Content-Type). Worst case: `POST /api/tasks/:slug/agent/start` launches an agent
+with an **attacker-chosen prompt** under your creds, and `…/terminal/input` injects
+keystrokes into a live agent. **Fixes:** (1) **centralized anti-CSRF guard** —
+`src/util/origin.ts` (`isLoopbackOrigin`/`isMutatingMethod`), enforced in
+`handle()` for *every* mutating `/api/*` request, so new endpoints are covered by
+default (loopback dashboard + curl still pass; verified end-to-end with curl).
+(2) **SSRF hardening** of `POST /api/skills/import` (`fetchSkillText`): block
+private/loopback/link-local/metadata hosts, re-validate each redirect hop, 10s
+timeout, streamed 256KB cap (was: arbitrary URL, follow-redirects, no timeout,
+buffer-then-check). (3) **DOM XSS** fix — `web/.../GraphCanvas.tsx` HTML-escapes
+node label/source fields (untrusted imported `graph.json` → force-graph `innerHTML`).
+(4) **graphify perf** — `readStats` now memoizes by (path, mtime, size); the polled
+`/api/kb` no longer re-parses every `graph.json` each tick. (5) tightened the
+GitHub-token secret pattern. New tests: `test/origin.test.ts`,
+`test/skill-import-url.test.ts`, `test/graphify-stats.test.ts`. **249 tests green**,
+both workspaces build clean. (Refuted as non-issues: SQL is fully parameterized,
+tar-slip already guarded, git is shell-free, slugs sanitized.)
+
+**Docs, landing page & marketing site (2026-06-19).** Turned the repo front door into a
+proper product surface. (1) **README** rewritten as an accurate landing page (was stale
+"planned API / WIP" — the product is built). (2) **`docs/` documentation section** — a
+hub (`docs/README.md`) + 14 user-facing pages: installation, quickstart, cli-reference,
+dashboard, knowledge-graph, session-handoff, skills, memory, mcp-tools, agent-routing,
+configuration, security, architecture, troubleshooting (research notes preserved). All
+cross-links verified resolving; no invented commands/flags. (3) **Dashboard onboarding**
+— the zero-sessions board now shows a `FirstRun` panel (Baton mark, 3 getting-started
+steps, "New session" CTA, copyable command, docs link) instead of a bare empty state;
+verified in-browser. (4) **Marketing site** — a runnable Next.js 15 + Tailwind v4 +
+framer-motion app under `site/` (dark, amber-accent, relay-baton hero animation; sections
+per `docs/landing-page-prompt.md`; SVG hero instead of R3F for build reliability — see the
+in-code upgrade note). `npm run build` in `site/` passes (6 static routes incl.
+sitemap/robots). 249 tests still green; web + site builds clean.
+
 ## Pending / next 🔜
 
 1. **Headless one-shot runs still aren't shown as "active" on the status board**

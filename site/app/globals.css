@@ -1,0 +1,200 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* Design tokens — Baton dark theme                                    */
+/* near-black base, ONE amber accent (the baton in the dark),          */
+/* subtle cyan as the secondary data color.                            */
+/* ------------------------------------------------------------------ */
+@theme {
+  --color-ink: #0a0a0b;
+  --color-ink-2: #0e0e10;
+  --color-panel: #121214;
+  --color-line: #ffffff14;
+  --color-line-strong: #ffffff26;
+
+  --color-fg: #f4f4f5;
+  --color-muted: #a1a1aa;
+  --color-faint: #71717a;
+
+  --color-amber: #ff9d2e;
+  --color-amber-bright: #ffb454;
+  --color-amber-deep: #f97316;
+  --color-cyan: #36d1dc;
+
+  --font-display: var(--font-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-display);
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-amber) 35%, transparent);
+    color: #fff;
+  }
+
+  /* Visible, on-brand focus ring for keyboard users */
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  /* Honor reduced-motion globally as a safety net.
+     Components also branch on it for richer static fallbacks. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Tight, premium display type */
+  .text-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.04em;
+    line-height: 0.98;
+    font-weight: 600;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  /* Mono section eyebrow, e.g. // SESSION HANDOFF */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  /* Glassy 1px-border panel */
+  .panel {
+    background: color-mix(in oklab, var(--color-panel) 70%, transparent);
+    border: 1px solid var(--color-line);
+    border-radius: 1rem;
+    backdrop-filter: blur(12px);
+  }
+
+  .amber-text {
+    color: var(--color-amber);
+  }
+
+  /* Soft amber glow used behind hero / dashboard */
+  .glow-amber {
+    box-shadow:
+      0 0 80px -20px color-mix(in oklab, var(--color-amber) 60%, transparent),
+      0 0 30px -10px color-mix(in oklab, var(--color-amber) 40%, transparent);
+  }
+
+  .text-gradient {
+    background: linear-gradient(
+      180deg,
+      var(--color-fg) 0%,
+      color-mix(in oklab, var(--color-fg) 70%, transparent) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .amber-gradient {
+    background: linear-gradient(
+      100deg,
+      var(--color-amber-bright) 0%,
+      var(--color-amber) 50%,
+      var(--color-amber-deep) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Background texture — subtle grid + film grain overlay.             */
+/* Lives behind everything via fixed pseudo-layers on body.           */
+/* ------------------------------------------------------------------ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--color-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(ellipse 100% 60% at 50% 0%, #000 0%, transparent 75%);
+  mask-image: radial-gradient(ellipse 100% 60% at 50% 0%, #000 0%, transparent 75%);
+  opacity: 0.5;
+}
+
+/* Film grain — a tiny inline SVG noise, tiled, very low opacity. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Keep real content above the texture layers */
+main,
+nav,
+footer {
+  position: relative;
+  z-index: 2;
+}
+
+/* Keyframes shared across components */
+@keyframes baton-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes baton-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.caret::after {
+  content: "▋";
+  margin-left: 1px;
+  color: var(--color-amber);
+  animation: baton-caret 1.05s step-end infinite;
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
