@@ -9,7 +9,7 @@
  */
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { gitTry } from '../util/exec.js';
 import { isGitRepo } from '../git.js';
@@ -178,7 +178,7 @@ async function setupHub(root: string, repos: SubProject[], opts: SetupOpts): Pro
     console.log('\n→ git init (hub root) ...');
     await gitInit(root);
   }
-  await ensureHubGitignore(root, repos);
+  await ensureHubGitignore(root);
   // Give the daemon a HEAD to read (currentBranch tolerates an unborn HEAD too,
   // but a real commit keeps `git status` and tooling happy). Best-effort.
   if (!(await gitTry(['rev-parse', '--verify', 'HEAD'], root)).ok) {
@@ -216,19 +216,26 @@ async function gitInit(root: string): Promise<void> {
 }
 
 /**
- * Hub root only hosts .baton/ + the merged KB — keep the embedded sub-repos and
- * generated artifacts untracked. Idempotent (skips lines already present).
+ * The hub root is almost always an existing folder full of the user's own files
+ * — the embedded sub-repos, plus loose docs/READMEs/notes. This git repo exists
+ * ONLY for Baton's coordination scaffolding; it must not claim any of those as
+ * tracked content (otherwise every unrelated file shows up as "untracked" noise).
+ * So: ignore everything by default, then un-ignore just what Baton manages — the
+ * shareable `kb/` directory (present only in --share mode) and this file itself.
+ * `.baton/` stays ignored (per-machine local state). Idempotent.
  */
-async function ensureHubGitignore(root: string, repos: SubProject[]): Promise<void> {
+async function ensureHubGitignore(root: string): Promise<void> {
   const file = join(root, '.gitignore');
-  const want = [
-    ...repos.map((r) => `${relative(root, r.path)}/`),
-    'node_modules/', '.baton/', 'graphify-out/', '.DS_Store',
-  ];
+  const desired =
+    [
+      '# Baton hub root — this git repo exists only for Baton coordination,',
+      "# not to version your project files. Everything is ignored by default;",
+      '# Baton un-ignores only the paths it manages (the shareable KB).',
+      '/*',
+      '!/.gitignore',
+      '!/kb/',
+    ].join('\n') + '\n';
   const current = existsSync(file) ? await readFile(file, 'utf-8') : '';
-  const have = new Set(current.split('\n').map((l) => l.trim()));
-  const missing = want.filter((w) => !have.has(w));
-  if (missing.length === 0) return;
-  const block = `${current.trimEnd()}\n\n# baton hub: keep sub-repos + generated files untracked\n${missing.join('\n')}\n`.replace(/^\n+/, '');
-  await writeFile(file, block, 'utf-8');
+  if (current === desired) return;
+  await writeFile(file, desired, 'utf-8');
 }
