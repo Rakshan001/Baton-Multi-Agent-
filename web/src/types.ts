@@ -88,9 +88,14 @@ export interface Project {
 /** Daemon metadata — GET /api/meta (repo root + current branch + capabilities). */
 export interface Meta {
   repo: string;
-  branch: string;
+  branch: string | null;
   writeEnabled: boolean;
   version: string;
+  /** True when the root is a multi-repo hub (not a git repo) — new tasks must
+   *  target one of `projects`. False/undefined for a plain single repo. */
+  hub?: boolean;
+  /** The hub's sub-projects a task can target (empty for a single repo). */
+  projects?: { id: string; name: string }[];
   /** Interactive-terminal capability (tmux on the daemon's PATH). */
   terminals?: { available: boolean; hint?: string };
   /** Which agents each launch mode supports — single source of truth is the

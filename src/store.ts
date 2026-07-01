@@ -2,8 +2,9 @@
  * Tiny JSON store for Baton tasks, kept at <repo>/.baton/tasks.json (gitignored).
  * One file, no database — sufficient at this scale.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { gitRoot } from './git.js';
 
 export interface Task {
   slug: string;
@@ -13,6 +14,11 @@ export interface Task {
   baseBranch: string;
   baseCommit: string | null;
   createdAt: string; // ISO
+  /** In a multi-repo hub: which sub-project this task targets. Undefined for a plain single repo. */
+  projectId?: string;
+  /** The git repo the worktree/branch belongs to. Equals the sub-project dir in a hub,
+   *  or the repo root in a single repo. Older records omit it — fall back to the served root. */
+  repoRoot?: string;
 }
 
 /** Thrown when a slug doesn't resolve to a recorded task. */
@@ -27,6 +33,26 @@ export class TaskNotFoundError extends Error {
 
 export function batonDir(gitRoot: string): string {
   return join(gitRoot, '.baton');
+}
+
+/**
+ * The Baton root — the directory that owns `.baton/` (tasks, kb, memory). For a
+ * single repo this is the git root; for a multi-repo hub it's the (non-git)
+ * container folder. Walk up from `cwd` for the nearest `.baton/`; if there is
+ * none yet, fall back to the enclosing git repo (a fresh repo not set up yet).
+ * Throws only when we're neither inside a Baton project nor a git repo.
+ */
+export async function resolveBatonRoot(cwd: string = process.cwd()): Promise<string> {
+  let dir = cwd;
+  for (;;) {
+    try {
+      if ((await stat(join(dir, '.baton'))).isDirectory()) return dir;
+    } catch { /* no .baton here — keep walking up */ }
+    const parent = dirname(dir);
+    if (parent === dir) break; // reached the filesystem root
+    dir = parent;
+  }
+  return gitRoot(cwd); // not set up yet → the git repo is the Baton root
 }
 
 export function tasksFile(gitRoot: string): string {

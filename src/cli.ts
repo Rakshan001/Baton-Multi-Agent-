@@ -63,8 +63,9 @@ program
 program
   .command('new')
   .argument('<task...>', 'task description')
+  .option('--project <id>', 'in a multi-repo hub: which sub-project the task targets')
   .description('scaffold a branch + worktree for a task')
-  .action((task: string[]) => run(() => newCmd(task.join(' '))));
+  .action((task: string[], opts: { project?: string }) => run(() => newCmd(task.join(' '), opts)));
 
 program
   .command('ls')

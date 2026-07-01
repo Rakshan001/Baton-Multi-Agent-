@@ -746,13 +746,14 @@ class BatonClient {
   /** Launch a new session. Creating the worktree + branch is REAL (POST /api/tasks);
    *  "attaching" the agent process is a labelled preview — you start the agent in the
    *  worktree yourself. `agent` is recorded as the intended owner only. */
-  async launchSession({ task, agent }: { task: string; agent: AgentId; attach?: boolean }): Promise<{ slug: string; agent: AgentId | null }> {
-    const created = await this.createTask(task);
+  async launchSession({ task, agent, project }: { task: string; agent: AgentId; attach?: boolean; project?: string }): Promise<{ slug: string; agent: AgentId | null }> {
+    const created = await this.createTask(task, project);
     return { slug: created.slug, agent };
   }
 
   /* ---- WRITE: create (real Phase-1 endpoint, or demo store) ---- */
-  async createTask(task: string): Promise<Task> {
+  /** @param project in a multi-repo hub, which sub-project the task targets. */
+  async createTask(task: string, project?: string): Promise<Task> {
     const t = task.trim();
     if (!t) throw new ApiError("BAD_REQUEST", "Task description is required");
     if (this.demo) {
@@ -770,7 +771,7 @@ class BatonClient {
     }
     const created = await this.request<Task>("/api/tasks", {
       method: "POST",
-      body: JSON.stringify({ task: t }),
+      body: JSON.stringify(project ? { task: t, project } : { task: t }),
     });
     this.emit(); // trigger an immediate refetch so the new session appears
     return created;

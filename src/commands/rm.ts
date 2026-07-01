@@ -2,8 +2,8 @@
  * `baton rm <slug>` — remove a task's worktree + branch and drop it from the store.
  */
 import { resolve } from 'node:path';
-import { gitRoot, removeWorktree, worktreeStatus } from '../git.js';
-import { getTask, removeTask, TaskNotFoundError } from '../store.js';
+import { removeWorktree, worktreeStatus } from '../git.js';
+import { getTask, removeTask, resolveBatonRoot, TaskNotFoundError } from '../store.js';
 import { killSessionFor } from '../util/tmux.js';
 import { bus } from '../events.js';
 
@@ -34,9 +34,11 @@ export async function removeTaskWorktree(
   opts: { force?: boolean } = {},
   root?: string,
 ): Promise<{ removed: string; branch: string }> {
-  const repoRoot = root ?? (await gitRoot());
+  const repoRoot = root ?? (await resolveBatonRoot());
   const task = await getTask(repoRoot, slug);
   if (!task) throw new TaskNotFoundError(slug);
+  // In a hub the worktree/branch belong to the sub-project's repo, not the hub root.
+  const gitRepo = task.repoRoot ?? repoRoot;
 
   // Defense-in-depth: never remove the main worktree (the repo root itself).
   if (resolve(task.worktreePath) === resolve(repoRoot)) throw new MainWorktreeError(repoRoot);
@@ -52,7 +54,7 @@ export async function removeTaskWorktree(
   // owning daemon's control client sees the session die and cleans itself up.
   await killSessionFor(repoRoot, slug);
 
-  await removeWorktree(task.worktreePath, task.branch, repoRoot);
+  await removeWorktree(task.worktreePath, task.branch, gitRepo);
   await removeTask(repoRoot, slug);
   bus.publish({ type: 'task.removed', slug });
   return { removed: slug, branch: task.branch };
