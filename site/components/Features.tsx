@@ -26,7 +26,7 @@ export default function Features() {
           <HandoffSnippet />
         </Card>
 
-        <Card eyebrow="worktree isolation" title="Every agent gets its own git worktree." body="No clobbered branches, ever. Each task is a branch under baton/<slug>.">
+        <Card eyebrow="worktree isolation" title="Every agent gets its own git worktree." body="No clobbered branches, ever. Each task is a branch under baton/<slug> — in a single repo, or across a hub of several repos where each task branches off its own sub-project.">
           <BranchMini />
         </Card>
 

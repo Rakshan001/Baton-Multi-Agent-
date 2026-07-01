@@ -46,6 +46,12 @@ The new session appears live on the dashboard's Command Center. You can also lau
 baton start refactor-the-auth-middleware --agent claude
 ```
 
+> **Multi-repo hub?** If you ran `baton setup` on a folder of several repos, run `baton serve` from the hub root and tell each task which sub-project it targets — the worktree branches off that repo:
+> ```bash
+> baton new "fix the checkout crash" --project fatfox-api-server
+> ```
+> In the dashboard the **Launch** / **New session** dialogs show a project picker instead. List project ids with `baton kb status`.
+
 ## 4. Coordinate
 
 While agents work, Baton streams what's happening:

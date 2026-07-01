@@ -63,6 +63,12 @@ baton new "refactor the auth middleware"   # → branch baton/… + worktree und
 cd .baton/wt/refactor-the-auth-middleware  # start claude / cursor / codex here
 ```
 
+**Working across several repos?** Run `baton setup` on the folder that holds them to create one **hub** — a single dashboard + merged knowledge graph over all of them. `baton serve` runs from the hub root (which needn't be a git repo); each task just names its sub-project, and the worktree branches off that repo:
+
+```bash
+baton new "fix the checkout crash" --project api-server   # or pick it in the dashboard
+```
+
 ## What you get
 
 | | Feature | What it does |
