@@ -10,10 +10,9 @@ function serveArgs(graphPath: string): string[] {
   return ['run', '--with', 'graphifyy', '--with', 'mcp', '-m', 'graphify.serve', graphPath];
 }
 
-export interface McpServerDef {
-  command: string;
-  args: string[];
-}
+export type McpServerDef =
+  | { command: string; args: string[] }
+  | { type: 'http'; url: string };
 
 export function mcpServers(state: KbState): Record<string, McpServerDef> {
   const servers: Record<string, McpServerDef> = {};
@@ -38,8 +37,12 @@ export function codexSnippet(state: KbState): string {
   const lines: string[] = [];
   for (const [name, def] of Object.entries(mcpServers(state))) {
     lines.push(`[mcp_servers."${name}"]`);
-    lines.push(`command = "${def.command}"`);
-    lines.push(`args = [${def.args.map((a) => `"${a}"`).join(', ')}]`);
+    if ('url' in def) {
+      lines.push(`url = "${def.url}"`);
+    } else {
+      lines.push(`command = "${def.command}"`);
+      lines.push(`args = [${def.args.map((a) => `"${a}"`).join(', ')}]`);
+    }
     lines.push('');
   }
   return lines.join('\n').trimEnd() + '\n';
