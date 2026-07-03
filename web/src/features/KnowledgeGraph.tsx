@@ -13,6 +13,7 @@ import { usePoll } from "../hooks/usePoll";
 import { BatonAPI } from "../lib/api";
 import { showToast } from "../lib/toast";
 import type { KbStatus, KbProjectStat, GraphData, GraphNode, GraphLink } from "../types";
+import { ContextPackModal } from "./ContextPackModal";
 
 /** Fixed 12-color community palette (works on dark + light surfaces). */
 const PALETTE = [
@@ -42,6 +43,7 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const onImportFile = async (file: File | undefined) => {
@@ -180,6 +182,11 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
                 ? ` · map ≈ ${active.mapTokens.toLocaleString()} tokens vs ≈ ${(active.repoTokens / 1000).toFixed(0)}k reading the project (~${Math.round(active.repoTokens / active.mapTokens)}× cheaper)`
                 : ""}`
           : "Code graph built by graphify"}>
+        <button className="btn fr" onClick={() => setShareOpen(true)}
+          data-tip="Markdown brief of this project for any external chatbot"
+          style={{ height: 30 }}>
+          <Icon name="share" size={14} /> Share context
+        </button>
         {BatonAPI.kbExportUrl() ? (
           <a className="btn fr" href={BatonAPI.kbExportUrl()!} download data-tip="Download the KB as a shareable .tar.gz pack" style={{ height: 30, textDecoration: "none" }}>
             <Icon name="arrowRight" size={14} style={{ transform: "rotate(90deg)" }} /> Export
@@ -299,6 +306,11 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
           </aside>
         )}
       </div>
+      {shareOpen && (
+        <ContextPackModal
+          project={activeId === "merged" ? null : activeId}
+          onClose={() => setShareOpen(false)} />
+      )}
     </div>
   );
 }

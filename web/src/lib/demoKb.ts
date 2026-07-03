@@ -3,7 +3,7 @@
    Small deterministic graphs so the Knowledge Graph page is fully
    explorable in demo mode (search, communities, inspect, switcher).
    ============================================================ */
-import type { KbStatus, GraphData, GraphNode, GraphLink } from "../types";
+import type { KbStatus, GraphData, GraphNode, GraphLink, ContextPackResponse } from "../types";
 
 export const DEMO_KB: KbStatus = {
   initialized: true,
@@ -75,3 +75,66 @@ export function demoGraphFor(project: string): GraphData {
   // deep-copy: force-graph mutates nodes/links (adds x/y, resolves ids to refs)
   return JSON.parse(JSON.stringify(g)) as GraphData;
 }
+
+const DEMO_PACK_MD = `# shop — project context pack
+
+Generated 2026-07-04 · commit demo123 · by \`baton kb context\`
+
+> **Note for the assistant reading this:** this is a generated context pack.
+> Full source code is NOT included. If you need the contents of a specific
+> file, ask the user to paste it.
+
+## How the repos relate
+
+- **api** — \`api/\` (node · express) — REST backend for the shop.
+- **web** — \`web/\` (node · react · vite) — Customer-facing storefront.
+
+## api
+
+### Overview
+
+REST backend for the shop: orders, payments, inventory.
+
+### Stack & commands
+
+**Stack:** node · express
+
+- \`dev\` → \`nodemon src/index.ts\`
+- \`test\` → \`vitest run\`
+
+### Folder structure
+
+\`\`\`
+src/
+  routes/
+    orders.ts
+    payments.ts
+  db/
+    schema.ts
+\`\`\`
+
+### Key code symbols (most connected in the code graph)
+
+- \`createOrder\` — src/routes/orders.ts:12 (14 connections)
+- \`chargeCard\` — src/routes/payments.ts:8 (9 connections)
+
+## Project memory (evidence-checked)
+
+- [decision] Payments retry at most twice, then park the order.
+
+---
+
+_~640 tokens (approximate, chars/4). Pastes into: ChatGPT free · Grok free · DeepSeek._
+`;
+
+export const DEMO_CONTEXT_PACK: ContextPackResponse = {
+  markdown: DEMO_PACK_MD,
+  tokens: 640,
+  redactions: 0,
+  omitted: [],
+  fits: [
+    { id: 'chatgpt-free', label: 'ChatGPT free', limit: 8000, ok: true },
+    { id: 'grok-free', label: 'Grok free', limit: 32000, ok: true },
+    { id: 'deepseek', label: 'DeepSeek', limit: 128000, ok: true },
+  ],
+};

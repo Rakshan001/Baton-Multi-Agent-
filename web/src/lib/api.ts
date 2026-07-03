@@ -16,11 +16,11 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
-import { DEMO_KB, demoGraphFor } from "./demoKb";
+import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -245,6 +245,15 @@ class BatonClient {
       return DEMO_KB;
     }
     return this.request<KbStatus>("/api/kb");
+  }
+  /** The shareable context pack (markdown + metadata) for a project or the whole hub. */
+  async getKbContext(project?: string): Promise<ContextPackResponse> {
+    if (this.demo) {
+      await this.demoGate(150);
+      return DEMO_CONTEXT_PACK;
+    }
+    const q = project ? `?format=json&project=${encodeURIComponent(project)}` : '?format=json';
+    return this.request<ContextPackResponse>(`/api/kb/context${q}`);
   }
   async getKbGraph(project: string): Promise<GraphData> {
     if (this.demo) {

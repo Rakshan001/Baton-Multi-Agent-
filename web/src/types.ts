@@ -434,3 +434,12 @@ export interface SkillInstallResult {
   /** Number of reference files written alongside the skill. */
   references: number;
 }
+
+/** GET /api/kb/context?format=json — the shareable context pack. */
+export interface ContextPackResponse {
+  markdown: string;
+  tokens: number;
+  redactions: number;
+  omitted: string[];
+  fits: { id: string; label: string; limit: number; ok: boolean }[];
+}
