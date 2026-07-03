@@ -133,6 +133,21 @@ automatically (pass `--no-rebuild` to skip). `kb share` mirrors the shareable
 artifacts into a committed `kb/` directory so teammates clone the graph instead
 of re-indexing from scratch.
 
+## Share the project with any chatbot (context pack)
+
+Hit a usage limit on your coding agent and want to continue in ChatGPT, Grok,
+or DeepSeek? `baton kb context` renders everything Baton knows about the
+project into one paste-able markdown brief — overview, stack, annotated folder
+tree, the graph's most-connected symbols, and fresh (evidence-checked) memory
+facts. No file contents are included, secret-looking strings are redacted, and
+the output is capped at a token budget (default 8k, ChatGPT-free-tier sized —
+the footer says which chatbots it fits).
+
+In the dashboard: **Knowledge Graph → Share context** → Copy to clipboard or
+Download `.md`. Over HTTP: `GET /api/kb/context?project=<id|all>&format=json`
+(read-only). The pack works even before `baton kb init` — it just degrades to
+README + structure until a graph exists.
+
 ## The CODEBASE.md map and token savings
 
 Every project gets a deterministic `CODEBASE.md` (< ~2k tokens): detected stack,
