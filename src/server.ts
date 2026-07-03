@@ -47,6 +47,7 @@ import { readBrief } from './handoff/brief.js';
 import { getTask } from './store.js';
 import { refreshCodebaseDocs } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
+import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from './kb/contextpack.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
@@ -469,6 +470,33 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     res.on('error', () => rs.destroy());
     rs.pipe(res);
     return;
+  }
+
+  // GET /api/kb/context?project=<id|all>&tokens=<n>&format=<md|json> —
+  // the shareable markdown pack for external chatbots. Read-only; works
+  // without an initialized KB (degrades to README + stack + tree).
+  if (method === 'GET' && path === '/api/kb/context') {
+    const state = await loadKb(root);
+    const projectParam = url.searchParams.get('project');
+    const project = projectParam && projectParam !== 'all' ? projectParam : undefined;
+    const tokensRaw = Number(url.searchParams.get('tokens') ?? 8000);
+    const maxTokens = Math.max(1000, Math.min(200_000, Number.isFinite(tokensRaw) ? tokensRaw : 8000));
+    try {
+      const pack = await buildContextPack(root, state, { project, maxTokens });
+      if (url.searchParams.get('format') === 'json') return send(res, 200, pack, origin);
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Access-Control-Allow-Origin': origin,
+        'Vary': 'Origin',
+      });
+      res.end(pack.markdown);
+      return;
+    } catch (e) {
+      if (e instanceof UnknownKbProjectError) {
+        return send(res, 404, { error: `no project '${project}'`, projects: e.projects }, origin);
+      }
+      throw e;
+    }
   }
 
   // POST /api/kb/rebuild — queue an incremental (or full) rebuild (write-gated)
