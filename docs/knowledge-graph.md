@@ -144,7 +144,7 @@ the output is capped at a token budget (default 8k, ChatGPT-free-tier sized —
 the footer says which chatbots it fits).
 
 In the dashboard: **Knowledge Graph → Share context** → Copy to clipboard or
-Download `.md`. Over HTTP: `GET /api/kb/context?project=<id|all>&format=json`
+Download `.md`. Over HTTP: `GET /api/kb/context?project=<id|all>&tokens=<n>&format=<md|json>`
 (read-only). The pack works even before `baton kb init` — it just degrades to
 README + structure until a graph exists.
 
