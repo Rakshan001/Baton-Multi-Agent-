@@ -17,10 +17,10 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus } from './board.js';
 import { collectDiff } from './diff.js';
-import { currentBranch, gitRoot } from './git.js';
+import { currentBranch, isGitRepo } from './git.js';
 import { listHistory } from './history.js';
-import { loadTasks, TaskNotFoundError } from './store.js';
-import { createTask, EmptyTaskError } from './commands/new.js';
+import { loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
+import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
 import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './commands/rm.js';
 import { createReadStream } from 'node:fs';
@@ -52,7 +52,7 @@ import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
 import { AgentRunningError, HEADLESS_AGENTS, runningHeadless, startAgent, stopAgent, TerminalConflictError } from './spawn.js';
 import {
-  createTerminal, detectTmux, getScrollback, hasTerminal, killTerminal, listTerminals,
+  captureScreen, createTerminal, detectTmux, getScrollback, hasTerminal, killTerminal, listTerminals,
   reattachOrphans, resizeTerminal, writeInput,
   HeadlessConflictError, TerminalRunningError, TerminalUnavailableError, INTERACTIVE_AGENTS,
 } from './terminals.js';
@@ -191,7 +191,7 @@ function handleEvents(req: IncomingMessage, res: ServerResponse, origin: string)
  * One snapshot frame (the scrollback ring) so late joiners see the current
  * screen, then live terminal.output frames. Readable on a read-only daemon.
  */
-function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: string, origin: string): void {
+async function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: string, origin: string): Promise<void> {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-store',
@@ -204,13 +204,16 @@ function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: s
 
   const write = (type: string, data: unknown) =>
     res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
-  const snapshot = getScrollback(slug);
-  write('terminal.snapshot', { slug, data: (snapshot ?? Buffer.alloc(0)).toString('base64') });
 
+  // Subscribe first and buffer live frames until the snapshot is sent, so the
+  // async capture below can't let a delta arrive before its base screen.
+  let ready = false;
+  const queued: Array<() => void> = [];
+  const emit = (fn: () => void) => (ready ? fn() : queued.push(fn));
   const unsub = bus.onAny((e) => {
     const ev = e.event;
     if ((ev.type === 'terminal.output' || ev.type === 'terminal.exited' || ev.type === 'terminal.started') && ev.slug === slug) {
-      write(ev.type, ev);
+      emit(() => write(ev.type, ev));
     }
   });
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
@@ -218,6 +221,13 @@ function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: s
     clearInterval(heartbeat);
     unsub();
   });
+
+  // A fresh capture beats the stored ring: it shows the current screen even when
+  // the agent's first paint was missed by control mode (the blank-terminal bug).
+  const snapshot = (await captureScreen(slug)) ?? getScrollback(slug);
+  write('terminal.snapshot', { slug, data: (snapshot ?? Buffer.alloc(0)).toString('base64') });
+  ready = true;
+  for (const fn of queued.splice(0)) fn();
 }
 
 /** Echo a loopback Origin so the Vite dev server (any localhost port) works; deny others. */
@@ -513,8 +523,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (method === 'GET' && path === '/api/history') return send(res, 200, listHistory(root), origin);
   if (method === 'GET' && path === '/api/meta') {
     const tmuxOk = await detectTmux();
+    // A multi-repo hub root isn't a git repo; tasks must target a sub-project.
+    const rootIsRepo = await isGitRepo(root);
+    const kb = rootIsRepo ? null : await loadKb(root);
+    const hubProjects = kb?.projects.map((p) => ({ id: p.id, name: p.name })) ?? [];
     return send(res, 200, {
-      repo: root, branch: await currentBranch(root), writeEnabled: !!opts.writeEnabled, version: VERSION,
+      repo: root, branch: rootIsRepo ? await currentBranch(root) : null,
+      writeEnabled: !!opts.writeEnabled, version: VERSION,
+      // In a hub, the dashboard must ask which project a new task targets.
+      hub: !rootIsRepo, projects: hubProjects,
       agents: { headless: HEADLESS_AGENTS, interactive: INTERACTIVE_AGENTS },
       terminals: tmuxOk
         ? { available: true }
@@ -523,18 +540,22 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'POST' && path === '/api/tasks') {
-    let parsed: { task?: unknown };
+    let parsed: { task?: unknown; project?: unknown };
     try {
       parsed = JSON.parse((await readBody(req)) || '{}');
     } catch {
       return send(res, 400, { error: 'invalid JSON body' }, origin);
     }
     const text = typeof parsed.task === 'string' ? parsed.task : '';
+    const project = typeof parsed.project === 'string' && parsed.project ? parsed.project : undefined;
     try {
-      const task = await createTask(text, root);
+      const task = await createTask(text, root, project);
       return send(res, 201, task, origin);
     } catch (e) {
       if (e instanceof EmptyTaskError) return send(res, 400, { error: e.message }, origin);
+      // A hub needs a chosen sub-project — 400 with the valid ids so the UI can prompt.
+      if (e instanceof ProjectRequiredError) return send(res, 400, { error: e.message, projects: e.projects }, origin);
+      if (e instanceof UnknownProjectError) return send(res, 400, { error: e.message }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
     }
   }
@@ -908,7 +929,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
 export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const opts: ServeOptions = typeof portOrOpts === 'number' ? { port: portOrOpts } : portOrOpts;
-  const root = await gitRoot();
+  // The Baton root owns `.baton/` — a single git repo OR a (non-git) multi-repo hub.
+  const root = await resolveBatonRoot();
   poller = new StatusPoller(root);
   const watcher = new WorktreeWatcher(root);
   await watcher.start();

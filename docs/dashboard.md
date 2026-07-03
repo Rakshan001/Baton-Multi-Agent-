@@ -87,6 +87,16 @@ its branch, repo, and a **live** / **unreachable** badge. Selecting a connection
 re-points every screen at that daemon. The default connection (the origin that
 served the page) cannot be removed.
 
+## Multi-repo hubs
+
+A **hub** (`baton setup` on a folder of several repos) is one daemon over many
+sub-projects — distinct from the switcher above, which points at separate
+daemons. When the daemon is serving a hub, the **Launch** and **New session**
+dialogs show a **Project** picker: choose which sub-project a task belongs to,
+and its worktree branches off that repo. The picker is hidden for a single repo.
+The daemon reports this via `/api/meta` (`hub: true` + the project list), so the
+UI never guesses.
+
 ## Realtime updates
 
 The dashboard is live over Server-Sent Events, not polling-only and not

@@ -152,12 +152,11 @@ export function mergeTomlConfig(existing: string, servers: Record<string, McpSer
   const blocks: string[] = [];
   for (const [name, def] of Object.entries(servers)) {
     if (tomlTableRe(name).test(existing)) continue;
-    blocks.push(
-      `[mcp_servers.${tomlStr(name)}]`,
-      `command = ${tomlStr(def.command)}`,
-      `args = [${def.args.map(tomlStr).join(', ')}]`,
-      '',
-    );
+    const block = 'url' in def
+      ? [`[mcp_servers.${tomlStr(name)}]`, `url = ${tomlStr(def.url)}`, '']
+      : [`[mcp_servers.${tomlStr(name)}]`, `command = ${tomlStr(def.command)}`,
+         `args = [${def.args.map(tomlStr).join(', ')}]`, ''];
+    blocks.push(...block);
   }
   if (!blocks.length) return existing.endsWith('\n') || !existing ? existing : existing + '\n';
   const base = existing.trim() ? existing.replace(/\n*$/, '\n\n') : '';

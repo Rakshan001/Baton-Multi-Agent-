@@ -29,6 +29,9 @@ export function LaunchSession({
   const [suggestion, setSuggestion] = useState<RouteSuggestion | null>(null);
   const [startMode, setStartMode] = useState<"none" | "headless" | "terminal">("none");
   const [terminals, setTerminals] = useState<{ available: boolean; hint?: string } | null>(null);
+  // Multi-repo hub: a task must target one sub-project (its own git repo). null = single repo.
+  const [hubProjects, setHubProjects] = useState<{ id: string; name: string }[] | null>(null);
+  const [project, setProject] = useState<string | null>(null);
   const [headlessAgents, setHeadlessAgents] = useState<string[]>(["claude", "codex", "gemini"]); // fallback until meta loads
   const [interactiveAgents, setInteractiveAgents] = useState<string[] | null>(null); // null = any agent
   const userPickedAgent = useRef(initialAgent !== null);
@@ -44,6 +47,10 @@ export function LaunchSession({
       setTerminals(m.terminals ?? { available: false });
       if (m.agents?.headless) setHeadlessAgents(m.agents.headless);
       if (m.agents?.interactive) setInteractiveAgents(m.agents.interactive);
+      if (m.hub && m.projects?.length) {
+        setHubProjects(m.projects);
+        setProject((p) => p ?? m.projects![0].id); // default to the first sub-project
+      }
     }).catch(() => { if (alive.current) setTerminals({ available: false }); });
   }, []);
 
@@ -59,7 +66,8 @@ export function LaunchSession({
   }, [task]);
   const a = getAgent(agent);
   const slug = useMemo(() => BatonAPI.slugify(task || ""), [task]);
-  const valid = task.trim().length >= 3;
+  // In a hub, a task can't be created without choosing which sub-project it targets.
+  const valid = task.trim().length >= 3 && (!hubProjects || !!project);
 
   useEffect(() => {
     alive.current = true;
@@ -89,7 +97,7 @@ export function LaunchSession({
   const launch = async () => {
     if (!valid) return;
     setPhase("provisioning"); setStep(0);
-    const apiP = BatonAPI.launchSession({ task: task.trim(), agent }).then(
+    const apiP = BatonAPI.launchSession({ task: task.trim(), agent, project: project ?? undefined }).then(
       (r) => ({ ok: true as const, r }),
       (e: Error) => ({ ok: false as const, e }),
     );
@@ -147,6 +155,24 @@ export function LaunchSession({
 
         {phase === "form" ? (
           <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 18 }}>
+            {hubProjects && (
+              <div>
+                <div className="tag" style={{ marginBottom: 8 }}>Project</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
+                  {hubProjects.map((pr) => {
+                    const on = project === pr.id;
+                    return (
+                      <button key={pr.id} className="fr" onClick={() => setProject(pr.id)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--bg-surface)", border: `1px solid ${on ? "color-mix(in srgb, var(--accent) 45%, transparent)" : "var(--border-subtle)"}`, boxShadow: on ? "0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent) inset" : "none", transition: "border-color var(--dur-1), background var(--dur-1)" }}>
+                        <Icon name="folder" size={14} style={{ color: on ? "var(--accent)" : "var(--text-tertiary)", flex: "none" }} />
+                        <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pr.name}</span>
+                        {on && <Icon name="check" size={14} style={{ color: "var(--accent)", flex: "none" }} />}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p style={{ margin: "7px 0 0", fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>This hub holds several repos — the worktree branches off the one you pick.</p>
+              </div>
+            )}
             <div>
               <div className="tag" style={{ marginBottom: 8 }}>Agent</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>

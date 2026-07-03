@@ -6,10 +6,10 @@
  * (refs/baton/archive/<slug>) — preserved, never pushed, bisectable. Also
  * records the task's commits/files into the local history index for tracing.
  */
-import { archiveBranch, branchCommits, currentBranch, gitRoot, mergeBranch, type ConflictEntry } from '../git.js';
+import { archiveBranch, branchCommits, currentBranch, mergeBranch, type ConflictEntry } from '../git.js';
 import { detectAgents } from '../agents.js';
 import { recordMerge } from '../history.js';
-import { getTask, loadTasks, TaskNotFoundError } from '../store.js';
+import { getTask, loadTasks, resolveBatonRoot, TaskNotFoundError } from '../store.js';
 import { computeConflicts } from '../conflicts.js';
 import { update } from '../kb/graphify.js';
 import { buildQueue, loadKb } from '../kb/state.js';
@@ -47,16 +47,18 @@ export async function mergeTaskBranch(
   opts: { squash?: boolean; archive?: boolean } = {},
   root?: string,
 ): Promise<MergeResult> {
-  const repoRoot = root ?? (await gitRoot());
+  const repoRoot = root ?? (await resolveBatonRoot());
   const task = await getTask(repoRoot, slug);
   if (!task) throw new TaskNotFoundError(slug);
+  // In a hub the branch lives in the sub-project's repo, not the (non-git) hub root.
+  const gitRepo = task.repoRoot ?? repoRoot;
 
   const squash = opts.squash !== false; // default true
   const archive = opts.archive !== false; // default true
-  const into = await currentBranch(repoRoot);
+  const into = await currentBranch(gitRepo);
 
   // Capture the branch's commits BEFORE merging (squash would otherwise hide them).
-  const commits = await branchCommits(task.branch, task.baseBranch, repoRoot);
+  const commits = await branchCommits(task.branch, task.baseBranch, gitRepo);
   const agents = await detectAgents([task.worktreePath]);
   // Overlap snapshot before the merge — who else is touching the same files.
   const allTasks = await loadTasks(repoRoot);
@@ -66,12 +68,12 @@ export async function mergeTaskBranch(
     .filter((t) => t.slug !== slug && (overlapMap.get(t.slug) ?? []).some((f) => myOverlapFiles.has(f)))
     .map((t) => t.slug);
 
-  const { success, conflicts } = await mergeBranch(task.branch, task.task, { squash }, repoRoot);
+  const { success, conflicts } = await mergeBranch(task.branch, task.task, { squash }, gitRepo);
   if (!success) throw new MergeConflictError(task.branch, into, conflicts);
 
   let archivedRef: string | null = null;
   if (archive) {
-    const ok = await archiveBranch(slug, task.branch, repoRoot);
+    const ok = await archiveBranch(slug, task.branch, gitRepo);
     if (ok) archivedRef = `refs/baton/archive/${slug}`;
   }
   recordMerge(repoRoot, {

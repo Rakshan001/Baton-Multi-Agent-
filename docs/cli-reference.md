@@ -33,7 +33,14 @@ Scaffold a branch (`baton/<slug>`) + git worktree (under `.baton/wt/<slug>`) for
 
 ```bash
 baton new "<task description>"
+baton new "<task description>" --project <id>   # multi-repo hub: which sub-project
 ```
+
+| Flag | Effect |
+|---|---|
+| `--project <id>` | In a **multi-repo hub**, the sub-project whose git repo the worktree branches off. Required in a hub (the hub root isn't a git repo); omit in a single repo. List ids with `baton kb status`. |
+
+In a hub the branch and worktree live in the chosen sub-project's repo, while the task record, history, and reports stay at the hub root. In the dashboard the **Launch** and **New session** dialogs show a project picker instead.
 
 ### `ls`
 List tasks with git status, ahead/behind counts, and age.
@@ -88,7 +95,7 @@ Show live edit signals — which files are being edited by which session right n
 ## The daemon & dashboard
 
 ### `serve`
-Start the local daemon: JSON API + SSE + the built web dashboard.
+Start the local daemon: JSON API + SSE + the built web dashboard. Run it from a single repo **or** from a multi-repo hub root — the daemon finds the `.baton/` dir either way (the hub root doesn't need to be a git repo).
 
 ```bash
 baton serve [-p|--port <port>] [--write]

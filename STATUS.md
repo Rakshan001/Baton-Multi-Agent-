@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-06-17 (session 5: efficiency & traceability skill pack)** (branch: `feat/worktree-orchestration`)
+> Last updated: **2026-07-01 (session 6: multi-repo hub launcher + blank-terminal fix)** (branch: `feat/worktree-orchestration`)
 
 ## What this project is
 
@@ -119,6 +119,31 @@ framer-motion app under `site/` (dark, amber-accent, relay-baton hero animation;
 per `docs/landing-page-prompt.md`; SVG hero instead of R3F for build reliability — see the
 in-code upgrade note). `npm run build` in `site/` passes (6 static routes incl.
 sitemap/robots). 249 tests still green; web + site builds clean.
+
+**Multi-repo hub launcher + blank-terminal fix (2026-07-01).** The launcher only
+worked in a single git repo; on a **multi-repo hub** (`baton setup` on a folder of
+separate repos — the hub root isn't a git repo, e.g. a real FAT_FOX setup) every
+launch path was broken. Root causes, all verified against the real hub: (1)
+`serve()` called `gitRoot()` and **crashed** at the non-git hub root → new
+`resolveBatonRoot()` (`src/store.ts`, walks up to the nearest `.baton/`, falls back
+to `gitRoot`); serve/merge/rm now use it. (2) `createTask` ran `git worktree add`
+at the hub root → **failed**; now takes a `projectId`, resolves the sub-project from
+`kb.json`, branches the worktree off **that** repo, and stores `projectId` +
+`repoRoot` on the Task. Merge/remove do git ops on `task.repoRoot` while keeping
+tasks/history/reports at the hub root. `/api/meta` now returns `hub` + `projects`;
+`POST /api/tasks` accepts `project`; `baton new --project <id>` for the CLI. (3)
+**Blank interactive terminal** — a freshly-launched TUI (claude's Ink UI) paints its
+first frame during the control-client attach gap, which tmux control mode never
+replays, so the pane looked dead. Fix: the terminal stream seeds a fresh
+`capture-pane` on connect (+ a delayed seed at launch), mirroring `adoptSession`.
+Dashboard **Launch** + **New session** dialogs gained a **Project picker** (shown
+only for a hub, driven by `/api/meta`). Docs updated (README, quickstart,
+cli-reference, dashboard) + the marketing site's worktree card. `test/hub.test.ts`
+(6 tests) covers resolveBatonRoot + hub create/merge/remove; **255 tests green**,
+all three workspaces build clean. Verified end-to-end on the real FAT_FOX hub
+(daemon boots, `/api/meta` hub:true + 5 projects, create→worktree-in-sub-repo→
+merge→remove, self-cleaned). Still to do: live browser click-through of the picker
++ blank-terminal fix with a real `claude` session.
 
 ## Pending / next 🔜
 

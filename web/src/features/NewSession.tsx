@@ -15,6 +15,9 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   const [task, setTask] = useState("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Task | null>(null);
+  // Multi-repo hub: a task must target one sub-project (its own git repo). null = single repo.
+  const [hubProjects, setHubProjects] = useState<{ id: string; name: string }[] | null>(null);
+  const [project, setProject] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -25,12 +28,18 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
     return () => { document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
   }, [onClose, busy]);
 
+  useEffect(() => {
+    void BatonAPI.getMeta().then((m) => {
+      if (m.hub && m.projects?.length) { setHubProjects(m.projects); setProject((p) => p ?? m.projects![0].id); }
+    }).catch(() => undefined);
+  }, []);
+
   const submit = async () => {
     const t = task.trim();
-    if (!t || busy) return;
+    if (!t || busy || (hubProjects && !project)) return;
     setBusy(true);
     try {
-      const result = await BatonAPI.createTask(t);
+      const result = await BatonAPI.createTask(t, project ?? undefined);
       setCreated(result);
       showToast({ kind: "ok", title: "Session created", desc: result.branch, mono: true });
     } catch (e) {
@@ -77,6 +86,24 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
           </div>
         ) : (
           <>
+            {hubProjects && (
+              <div style={{ padding: "16px 20px 4px", display: "flex", flexDirection: "column", gap: 8 }}>
+                <span className="tag">Project</span>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
+                  {hubProjects.map((pr) => {
+                    const on = project === pr.id;
+                    return (
+                      <button key={pr.id} className="fr" onClick={() => setProject(pr.id)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--bg-surface)", border: `1px solid ${on ? "color-mix(in srgb, var(--accent) 45%, transparent)" : "var(--border-subtle)"}` }}>
+                        <Icon name="folder" size={14} style={{ color: on ? "var(--accent)" : "var(--text-tertiary)", flex: "none" }} />
+                        <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pr.name}</span>
+                        {on && <Icon name="check" size={14} style={{ color: "var(--accent)", flex: "none" }} />}
+                      </button>
+                    );
+                  })}
+                </div>
+                <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>This hub holds several repos — the worktree branches off the one you pick.</span>
+              </div>
+            )}
             <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 8 }}>
               <span className="tag">Task description</span>
               <textarea ref={inputRef} value={task} onChange={(e) => setTask(e.target.value)} rows={3}
@@ -88,7 +115,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
             <div style={{ padding: "12px 20px", borderTop: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ flex: 1, fontSize: "var(--fs-12)", color: "var(--text-quaternary)" }}><span className="kbd">⌘</span> <span className="kbd">↵</span> to create</span>
               <button className="btn fr" onClick={onClose} disabled={busy}>Cancel</button>
-              <button className="btn btn-primary fr" onClick={submit} disabled={!task.trim() || busy}>
+              <button className="btn btn-primary fr" onClick={submit} disabled={!task.trim() || busy || (!!hubProjects && !project)}>
                 {busy ? <><Icon name="refresh" size={13} style={{ animation: "spin 0.8s linear infinite" }} /> Creating…</> : <><Icon name="plus" size={14} /> Create session</>}
               </button>
             </div>

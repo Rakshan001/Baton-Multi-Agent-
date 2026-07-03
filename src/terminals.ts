@@ -172,6 +172,33 @@ export function getScrollback(slug: string): Buffer | null {
   return terminals.get(slug)?.scrollback.snapshot() ?? null;
 }
 
+/**
+ * Grab the pane's current screen (with colours) straight from tmux. Control mode
+ * only streams output produced AFTER the control client attaches, so a TUI that
+ * paints its first frame during the attach gap (e.g. claude's Ink UI, which
+ * paints lazily) is otherwise invisible until the next repaint — the pane looks
+ * blank. A fresh capture recovers that already-painted screen for a new viewer.
+ */
+export async function captureScreen(slug: string): Promise<Buffer | null> {
+  const session = terminals.get(slug);
+  if (!session || session.exited) return null;
+  try {
+    const { stdout } = await tmux(['capture-pane', '-p', '-e', '-q', '-t', session.sessionName, '-S', '-2000']);
+    if (!stdout) return null;
+    return Buffer.from(stdout.replace(/\n/g, '\r\n') + '\r\n', 'utf8');
+  } catch {
+    return null; // best-effort — the live stream still fills in
+  }
+}
+
+/** Seed the scrollback ring from the live screen once, if it's still ~empty. */
+async function seedScreen(session: TerminalSession): Promise<void> {
+  if (session.exited || terminals.get(session.slug) !== session) return;
+  if (session.scrollback.snapshot().length > 0) return; // live output already arrived
+  const snap = await captureScreen(session.slug);
+  if (snap?.length) session.scrollback.push(snap);
+}
+
 /* ------------------------------------------------------------------ */
 /* Control client: one per session, owns output + input                */
 /* ------------------------------------------------------------------ */
@@ -315,6 +342,10 @@ export async function createTerminal(
   };
   terminals.set(slug, session);
   attachControl(session);
+  // The agent's TUI may paint its first frame before/around the control-client
+  // attach, and control mode won't replay it — so the pane can look blank until
+  // the user types. Seed the scrollback from the live screen once it settles.
+  setTimeout(() => { void seedScreen(session); }, 500);
   bus.publish({ type: 'terminal.started', slug, agent });
   return { slug, agent, sessionName, startedAt: session.startedAt };
 }
