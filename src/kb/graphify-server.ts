@@ -40,7 +40,18 @@ async function waitReady(port: number, timeoutMs = 15_000): Promise<void> {
   throw new Error(`graphify backend on :${port} did not become ready`);
 }
 
-interface Live extends Backend { proc: ResultPromise; }
+interface Live extends Backend { proc: ResultPromise; exited: boolean; }
+
+/**
+ * Send SIGTERM, then SIGKILL after 5 s if the process hasn't exited.
+ * The timer is unref'd so it doesn't keep the event loop alive.
+ */
+function killHard(entry: Live): void {
+  if (entry.exited) return;
+  entry.proc.kill('SIGTERM');
+  const t = setTimeout(() => { if (!entry.exited) entry.proc.kill('SIGKILL'); }, 5_000);
+  if (typeof t === 'object' && t !== null && 'unref' in t) (t as NodeJS.Timeout).unref();
+}
 
 export class GraphifyPool {
   private live = new Map<string, Live>();
@@ -64,19 +75,28 @@ export class GraphifyPool {
     const graph = this.graphFor(projectId);
     if (!graph) throw new Error(`no graph for project '${projectId}'`);
     const port = await freePort();
+    // Create the entry object before attaching the finally so the identity
+    // guard in finally can compare against it (fixes stale-deletion race).
+    const entry: Live = { projectId, port, lastAccess: Date.now(), proc: null!, exited: false };
     const proc = execa('uv', [
       'run', '--with', 'graphifyy', '--with', 'mcp', '-m', 'graphify.serve',
       '--transport', 'http', '--host', '127.0.0.1', '--port', String(port),
       '--stateless', '--json-response', graph,
     ], { stdout: 'ignore', stderr: 'ignore', env: { ...process.env } });
-    proc.catch(() => undefined).finally(() => { this.live.delete(projectId); });
+    entry.proc = proc;
+    proc.catch(() => undefined).finally(() => {
+      entry.exited = true;
+      // Only delete our own entry — guards against a reap+respawn of the same
+      // projectId arriving before this finally fires (identity check).
+      if (this.live.get(projectId) === entry) this.live.delete(projectId);
+    });
     try {
       await waitReady(port);
     } catch (e) {
-      proc.kill('SIGTERM');
+      killHard(entry);
       throw e;
     }
-    this.live.set(projectId, { projectId, port, lastAccess: Date.now(), proc });
+    this.live.set(projectId, entry);
     return port;
   }
 
@@ -89,7 +109,7 @@ export class GraphifyPool {
     const reaped: string[] = [];
     for (const [id, b] of this.live) {
       if (now - b.lastAccess >= this.idleMs) {
-        b.proc.kill('SIGTERM');
+        killHard(b);
         this.live.delete(id);
         reaped.push(id);
       }
@@ -98,7 +118,8 @@ export class GraphifyPool {
   }
 
   async shutdown(): Promise<void> {
-    for (const b of this.live.values()) b.proc.kill('SIGTERM');
+    // Fire-and-forget: daemon is exiting, so we don't await process termination.
+    for (const b of this.live.values()) killHard(b);
     this.live.clear();
   }
 
