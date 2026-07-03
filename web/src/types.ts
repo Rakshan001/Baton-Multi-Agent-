@@ -145,6 +145,30 @@ export interface StorageBreakdown {
   total: number;
 }
 
+/** Permanent purge — GET/POST /api/storage/purge (src/purge.ts). */
+export type PurgeCategory = "archives" | "history" | "reports" | "graphs" | "tmp" | "memory";
+export interface PurgeItem {
+  category: PurgeCategory;
+  label: string;
+  bytes: number;
+  count: number;
+  destructive: boolean;
+  detail: string;
+  warning?: string;
+}
+export interface PurgePreview {
+  root: string;
+  repo: string;
+  confirmPhrase: string;
+  gitObjectBytes: number;
+  items: PurgeItem[];
+}
+export interface PurgeResult {
+  deleted: { category: PurgeCategory; count: number }[];
+  freedBytes: number;
+  gcRan: boolean;
+}
+
 /** One knowledge-base project — GET /api/kb (src/kb/state.ts via src/server.ts). */
 export interface KbProjectStat {
   id: string;

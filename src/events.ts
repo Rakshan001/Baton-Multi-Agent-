@@ -50,6 +50,15 @@ class BatonBus extends EventEmitter {
   private nextId = 1;
   private ring: StampedEvent[] = [];
 
+  constructor() {
+    super();
+    // Each SSE connection (dashboard tabs + per-terminal streams) adds one 'event'
+    // listener; this is intentional unbounded fan-out, not a leak (onAny returns an
+    // unsubscribe that fires on client disconnect). Lift the default cap of 10 so
+    // normal multi-tab use doesn't print a spurious MaxListenersExceededWarning.
+    this.setMaxListeners(0);
+  }
+
   publish(event: BatonEvent): StampedEvent {
     const stamped: StampedEvent = { id: this.nextId++, event };
     if (!TRANSIENT_TYPES.has(event.type)) {

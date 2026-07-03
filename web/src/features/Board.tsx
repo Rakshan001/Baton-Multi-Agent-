@@ -4,9 +4,10 @@
    (write-gated, optimistic + rollback), localStorage priority.
    ============================================================ */
 import { useState, useRef, useMemo, useEffect, Fragment, type ReactNode } from "react";
-import { Icon } from "../components/Icon";
+import { Icon, type IconName } from "../components/Icon";
+import { BatonMark } from "../components/BatonMark";
 import { SessionCard } from "../components/SessionCard";
-import { CardSkeleton, EmptyState, ErrorState, ConfirmDialog } from "../components/primitives";
+import { CardSkeleton, CommandLine, ErrorState, ConfirmDialog } from "../components/primitives";
 import { getAgent } from "../lib/registry";
 import { deriveColumn, COLUMN_DEFS, type ColumnDef } from "../lib/derive";
 import { BatonAPI, branchFor } from "../lib/api";
@@ -43,7 +44,7 @@ interface ConfirmState {
 }
 
 export function Board({
-  sessions, loading, error, onOpen, writeEnabled, onRetry,
+  sessions, loading, error, onOpen, writeEnabled, onRetry, onNewSession,
 }: {
   sessions: StatusRow[] | null;
   loading: boolean;
@@ -51,6 +52,8 @@ export function Board({
   onOpen: (slug: string) => void;
   writeEnabled: boolean;
   onRetry?: () => void;
+  /** Open the New-session dialog from the first-run empty state. */
+  onNewSession?: () => void;
 }) {
   const [priority, setPriority] = useState<Record<string, string[]>>(loadPriority);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -202,13 +205,7 @@ export function Board({
   if (error) return <div className="card" style={{ margin: 16 }}><ErrorState onRetry={onRetry} /></div>;
 
   const isEmpty = !loading && sessions && sessions.length === 0;
-  if (isEmpty) return (
-    <div className="card" style={{ margin: 16 }}>
-      <EmptyState icon="columns" title="No sessions yet"
-        desc="Create an isolated worktree for an agent to start working. Each session gets its own branch."
-        command='baton new "Refactor auth middleware"' />
-    </div>
-  );
+  if (isEmpty) return <FirstRun onNewSession={onNewSession} />;
 
   return (
     <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -326,6 +323,56 @@ function BoardColumn({
 
 function DropPlaceholder({ h }: { h: number }) {
   return <div aria-hidden="true" style={{ height: Math.min(h || 120, 140), borderRadius: "var(--r-lg)", border: "1.5px dashed var(--accent-border)", background: "var(--accent-soft)", animation: "fade-in var(--dur-1)" }} />;
+}
+
+/* ---------- FirstRun (zero-sessions onboarding / in-app landing) ---------- */
+function FirstRun({ onNewSession }: { onNewSession?: () => void }) {
+  const steps: { icon: IconName; title: string; desc: string }[] = [
+    { icon: "plus", title: "Create a session", desc: "Each task gets its own git worktree on a baton/ branch — agents never clobber each other." },
+    { icon: "bot", title: "Point an agent at it", desc: "Run Claude, Cursor, Codex or Gemini in the worktree, or launch one headlessly from here." },
+    { icon: "gitMerge", title: "Coordinate & merge", desc: "Watch live edit signals, hand work off with a HANDOFF.md brief, then merge when it's ready." },
+  ];
+  return (
+    <div style={{ height: "100%", overflowY: "auto", display: "grid", placeItems: "center", padding: "32px 20px" }}>
+      <div style={{ width: "min(680px, 100%)", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 18, animation: "fade-up var(--dur-4) var(--ease-out)" }}>
+        <BatonMark size={40} withWord />
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, maxWidth: 460 }}>
+          <h2 style={{ margin: 0, fontSize: "var(--fs-21)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-tight)" }}>Start your first session</h2>
+          <p style={{ margin: 0, fontSize: "var(--fs-14)", color: "var(--text-secondary)", lineHeight: "var(--lh-snug)" }}>
+            No sessions yet. Baton runs each task in an isolated git worktree, so several AI agents can work the same repo without stepping on each other.
+          </p>
+        </div>
+
+        <div style={{ width: "100%", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, textAlign: "left" }}>
+          {steps.map((s, i) => (
+            <div key={s.title} style={{ background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-lg)", padding: "13px 14px", display: "flex", flexDirection: "column", gap: 7 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 26, height: 26, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--accent-soft)", border: "1px solid var(--accent-border)", color: "var(--accent-text)" }}><Icon name={s.icon} size={14} /></span>
+                <span className="mono" style={{ fontSize: 11, color: "var(--text-quaternary)" }}>{`0${i + 1}`}</span>
+              </div>
+              <div style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>{s.title}</div>
+              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", lineHeight: "var(--lh-snug)" }}>{s.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 2 }}>
+          {onNewSession && (
+            <button className="btn btn-primary btn-lg fr" onClick={onNewSession} style={{ minWidth: 168 }}>
+              <Icon name="plus" size={15} /> New session
+            </button>
+          )}
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--text-quaternary)" }}>or from your terminal:</span>
+          <CommandLine command={'baton new "Refactor auth middleware"'} />
+        </div>
+
+        <a className="fr" href="https://github.com/Rakshan001/Baton-Multi-Agent-/tree/main/docs" target="_blank" rel="noreferrer"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-13)", color: "var(--text-tertiary)", textDecoration: "none" }}>
+          <Icon name="externalLink" size={14} /> Read the documentation
+        </a>
+      </div>
+    </div>
+  );
 }
 
 function ColumnEmpty({ def }: { def: ColumnDef }) {

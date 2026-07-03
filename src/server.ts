@@ -62,12 +62,14 @@ import {
   type ProjectRel, type RetentionPolicy,
 } from './memory.js';
 import { storageUsage } from './storage.js';
+import { purgePreview, purgeStorage, sanitizeCategories } from './purge.js';
 import { watch } from 'node:fs';
 import { execa } from 'execa';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { auditJunk, cleanJunk, sweepTmpFiles } from './cleanup.js';
 import { basename } from 'node:path';
+import { isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
 
 const require = createRequire(import.meta.url);
 const VERSION = BATON_VERSION;
@@ -139,7 +141,13 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: s
     'Cache-Control': isIndex ? 'no-cache' : 'public, max-age=31536000, immutable',
   });
   if (req.method === 'HEAD') return void res.end();
-  createReadStream(file).pipe(res);
+  // Headers are already sent, so an error mid-stream (file truncated/deleted after
+  // stat, EIO, or the client disconnecting) can only be answered by tearing down the
+  // socket — never let it become an uncaught exception that kills the daemon.
+  const rs = createReadStream(file);
+  rs.on('error', () => res.destroy());
+  res.on('error', () => rs.destroy());
+  rs.pipe(res);
 }
 
 /**
@@ -215,7 +223,7 @@ function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: s
 /** Echo a loopback Origin so the Vite dev server (any localhost port) works; deny others. */
 function corsOrigin(req: IncomingMessage): string {
   const origin = req.headers.origin;
-  if (origin && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) return origin;
+  if (origin && isLoopbackOrigin(origin)) return origin;
   return 'http://localhost:5173';
 }
 
@@ -287,6 +295,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     });
     res.end();
     return;
+  }
+
+  // Anti-CSRF (applies to EVERY state-changing /api request, not just one route).
+  // The daemon is loopback-bound and its CORS policy never lets a third-party
+  // site READ a response — but a browser still SENDS a cross-origin "simple"
+  // POST (a text/plain body the JSON parser still accepts), and that side effect
+  // would run before CORS blocks the unreadable reply. So a malicious page you
+  // visit could fire e.g. POST /api/tasks/:slug/agent/start (launch an agent with
+  // an attacker prompt) at localhost. Require a loopback Origin for all mutating
+  // methods; the legit dashboard (same-origin or :5173) and curl (no Origin) pass.
+  if (isMutatingMethod(method) && path.startsWith('/api/') && !isLoopbackOrigin(req.headers.origin)) {
+    return send(res, 403, { error: 'cross-origin request refused' }, origin);
   }
 
   if (method === 'GET' && path === '/api/events') return handleEvents(req, res, origin);
@@ -384,7 +404,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       return;
     }
     res.writeHead(200, { ...headers, 'Content-Type': 'application/json', 'Content-Length': st.size });
-    createReadStream(graphPath).pipe(res);
+    const rs = createReadStream(graphPath);
+    rs.on('error', () => res.destroy());
+    res.on('error', () => rs.destroy());
+    rs.pipe(res);
     return;
   }
 
@@ -430,6 +453,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       'Vary': 'Origin',
     });
     const child = execa('tar', ['-czf', '-', '-C', staging, '.'], { buffer: false });
+    // Client cancelling the download makes res emit EPIPE/ECONNRESET; without a
+    // listener that crashes the daemon. Tear down the other side on either error.
+    child.stdout?.on('error', () => res.destroy());
+    res.on('error', () => child.kill());
     child.stdout?.pipe(res);
     const cleanup = () => void rm(staging, { recursive: true, force: true });
     child.once('exit', cleanup);
@@ -713,10 +740,36 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, await storageUsage(root), origin);
   }
 
+  // GET /api/storage/purge — preview what a purge would permanently delete (read-only)
+  if (method === 'GET' && path === '/api/storage/purge') {
+    return send(res, 200, await purgePreview(root), origin);
+  }
+
+  // POST /api/storage/purge — permanently delete selected data + reclaim git objects.
+  // Triple-guarded: --write, a loopback Origin (anti-CSRF, also enforced globally
+  // above — kept here as explicit defense-in-depth), and a typed confirm phrase.
+  if (method === 'POST' && path === '/api/storage/purge') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    if (!isLoopbackOrigin(req.headers.origin)) return send(res, 403, { error: 'cross-origin request refused' }, origin);
+    const body = await readJsonBody<{ categories?: unknown; confirm?: string }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    const categories = sanitizeCategories(body.categories);
+    if (!categories.length) return send(res, 400, { error: 'no valid categories selected' }, origin);
+    const preview = await purgePreview(root);
+    if ((body.confirm ?? '').trim() !== preview.confirmPhrase) {
+      return send(res, 400, { error: `confirmation mismatch — type "${preview.confirmPhrase}" exactly to proceed` }, origin);
+    }
+    const result = await purgeStorage(root, categories);
+    if (categories.includes('memory')) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, result, origin);
+  }
+
   // GET /api/terminals — capability + live interactive sessions (adopts tmux orphans)
   if (method === 'GET' && path === '/api/terminals') {
     const available = await detectTmux();
-    if (available) await reattachOrphans(root);
+    // Adopting tmux orphans spawns control clients — a state change. A read GET
+    // shouldn't let a cross-origin page trigger it; only do it for loopback callers.
+    if (available && isLoopbackOrigin(req.headers.origin)) await reattachOrphans(root);
     return send(res, 200, {
       available,
       ...(available ? {} : { hint: process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux' }),
@@ -730,7 +783,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const slug = decodeURIComponent(tm[1]);
     const sub = tm[2];
     // After a daemon restart the tmux session may outlive the in-memory map.
-    if (!hasTerminal(slug) && (await detectTmux())) await reattachOrphans(root);
+    // Mutating methods already passed the loopback-Origin gate above; for the
+    // read-only stream GET, only adopt orphans for loopback callers (not a
+    // cross-origin page that merely opened the EventSource).
+    if (!hasTerminal(slug) && isLoopbackOrigin(req.headers.origin) && (await detectTmux())) await reattachOrphans(root);
 
     if (!sub && method === 'POST') {
       if (!opts.writeEnabled) return denyReadOnly(res, origin);
@@ -878,10 +934,13 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     const memDirPath = memoryDir(await mainRepoRoot(root));
     await mkdir(memDirPath, { recursive: true });
     let memTimer: ReturnType<typeof setTimeout> | null = null;
-    watch(memDirPath, () => {
+    const memWatcher = watch(memDirPath, () => {
       if (memTimer) clearTimeout(memTimer);
       memTimer = setTimeout(() => bus.publish({ type: 'memory.updated' }), 300);
     });
+    // FSWatcher emits 'error' asynchronously (dir removed/recreated, EMFILE); an
+    // unhandled one crashes the daemon. Swallow it, matching watch.ts's idiom.
+    memWatcher.on('error', () => undefined);
   } catch { /* memory watching is best-effort */ }
   // Keep CODEBASE.md in step with graph rebuilds. A multi-project rebuild
   // fires several kb.rebuilt events — debounce so we regenerate once.

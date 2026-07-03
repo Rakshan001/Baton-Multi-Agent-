@@ -139,11 +139,29 @@ export interface GraphStats {
   builtAtCommit: string | null;
 }
 
+/**
+ * Memoize parsed stats by (path, mtimeMs, size). The dashboard polls /api/kb,
+ * and kbStatus() calls readStats() for every project on each poll — without this
+ * cache a multi-MB graph.json is re-read and JSON.parse'd on every poll even
+ * when nothing changed. A rebuild bumps mtime, so the cache self-invalidates.
+ */
+const statsCache = new Map<string, { mtimeMs: number; size: number; stats: GraphStats }>();
+const STATS_CACHE_CAP = 256;
+
 /** Cheap stats from a graph.json without holding the whole parse around.
  *  The ONE place that knows graph.json's envelope shape — extend here, not ad hoc. */
 export async function readStats(graphJsonPath: string): Promise<GraphStats | null> {
+  let st;
   try {
-    const [raw, st] = await Promise.all([readFile(graphJsonPath, 'utf-8'), stat(graphJsonPath)]);
+    st = await stat(graphJsonPath);
+  } catch {
+    statsCache.delete(graphJsonPath);
+    return null;
+  }
+  const hit = statsCache.get(graphJsonPath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.stats;
+  try {
+    const raw = await readFile(graphJsonPath, 'utf-8');
     const g = JSON.parse(raw) as {
       nodes?: Array<{ community?: number }>;
       links?: unknown[];
@@ -151,14 +169,20 @@ export async function readStats(graphJsonPath: string): Promise<GraphStats | nul
     };
     const nodes = g.nodes ?? [];
     const communities = new Set(nodes.map((n) => n.community).filter((c) => c !== undefined));
-    return {
+    const stats: GraphStats = {
       nodes: nodes.length,
       edges: g.links?.length ?? 0,
       communities: communities.size,
       builtAt: st.mtime.toISOString(),
       builtAtCommit: g.built_at_commit ?? null,
     };
+    // FIFO single-entry eviction (Map keeps insertion order) — bounded across
+    // many sub-projects without a re-scan stampede on the next poll.
+    if (statsCache.size >= STATS_CACHE_CAP) statsCache.delete(statsCache.keys().next().value!);
+    statsCache.set(graphJsonPath, { mtimeMs: st.mtimeMs, size: st.size, stats });
+    return stats;
   } catch {
+    statsCache.delete(graphJsonPath);
     return null;
   }
 }

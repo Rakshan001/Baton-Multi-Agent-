@@ -120,7 +120,18 @@ export class SignalTracker {
 
   clear(slug: string): void {
     getDb(this.root).prepare(`DELETE FROM edit_signals WHERE slug = ?`).run(slug);
-    this.announced.clear(); // re-derive overlap announcements from live data
+    // Re-derive overlap announcements from what's still live: keep a path announced
+    // only while 2+ distinct sessions hold it. A blanket clear() would let an
+    // UNRELATED slug clearing re-fire signal.overlap for overlaps that never ended.
+    const bySlug = new Map<string, Set<string>>();
+    for (const r of liveRows(this.root)) {
+      let s = bySlug.get(r.path);
+      if (!s) bySlug.set(r.path, (s = new Set()));
+      s.add(r.slug);
+    }
+    for (const p of [...this.announced]) {
+      if ((bySlug.get(p)?.size ?? 0) < 2) this.announced.delete(p);
+    }
   }
 }
 

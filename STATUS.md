@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-06-11 (session 4: UI verification pass)** (branch: `feat/worktree-orchestration`, merged to `main`)
+> Last updated: **2026-06-17 (session 5: efficiency & traceability skill pack)** (branch: `feat/worktree-orchestration`)
 
 ## What this project is
 
@@ -43,14 +43,82 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **Headless agent launch** | `baton start <slug> [--agent claude\|codex\|gemini]` runs the agent's print mode in the worktree (prompt = HANDOFF.md brief when present), output streamed as `agent.output` SSE events into the Live screen; `baton stop`; Detail "Start agent" button; Launch dialog "start headless after create" (its Preview badge disappears on that path); 409 on double-start; never adds permission-bypass flags. Prior art: Rover | `baton start <slug> --prompt "say hi"` |
 | **Interactive agent terminals** | Real PTY sessions in the dashboard: tmux hosts each session (`baton-<repoHash>-<slug>`, zero new daemon deps, survives daemon restarts), driven via one control-mode client per session; output → per-session SSE stream (`/api/tasks/:slug/terminal/stream`, snapshot+live), input/resize → POST (hex-encoded send-keys, injection-proof); xterm.js panel in the Live screen (Terminal tab, auto-selected when live), Launch dialog 3-way start mode (worktree only / interactive / headless), Detail "Open terminal" button; mutual 409 with headless runs; kill-on-task-remove; tmux-missing → capability flag + install hint; demo mode plays a canned transcript. All six agents launchable (`cursor-agent` for cursor; aider/opencode bare). Prior art: handler.dev (tmux+capture-pane), claude-squad | Launch → "Open interactive terminal" → type into the live claude TUI; `tmux ls`; kill daemon, restart → session reattaches |
 | **Write mode follows the daemon** | The dashboard's write capability auto-follows `/api/meta.writeEnabled` in real mode (fresh browsers get terminals/merge out of the box when the daemon runs `--write`); an explicit toggle choice still wins, a read-only daemon always forces read-only; read-only/demo states explain themselves (`baton serve --write` hints in Launch, Live terminal tab, TerminalPanel footer) instead of hiding options | clear localStorage → open :7077 → Launch shows all 3 start modes with no toggle |
-| **Skills (catalog + install)** | Searchable catalog of reusable agent playbooks. **File-backed** multi-file skills live under `src/skills/bundled/<id>/` — a real `SKILL.md` (gray-matter frontmatter, incl. folded multi-line descriptions) + an optional `references/` folder; the flagship `bug-fix` skill (reproduce-first → audit → blast radius → root cause → ≥95% skeptic-corroborated confidence + approved plan → fix → re-verify → auto-commit, never push) ships 3 reference files. Plus short **inline** skills (`map-codebase`, `safe-refactor`) and **imported** skills read from `.baton/skills/*.md`. Bundled skills are cached + copied into `dist/` at build (`scripts/copy-assets.mjs`). `GET /api/skills` returns each skill with per-agent install state + reference paths (content/raw never serialized); `POST/DELETE /api/skills/:id/install` writes/removes in the agent's own format — Claude → `.claude/skills/<id>/SKILL.md` (+ `references/`, hand-authored SKILL.md written verbatim when faithful), Cursor → `.cursor/rules/<id>.mdc` (`alwaysApply:false`) with references copied to a sibling `<id>/` folder the rule points at; other CLIs unsupported. `POST /api/skills/import` adds from a path/http(s) URL (256KB cap, can't shadow a bundled id). All writes gated on `--write`. Dashboard **Skills** screen: search, source/produces/reference chips + multi-file badge, per-agent install toggles, playbook preview, import; demo mirror (`web/src/lib/demoSkills.ts`). | dashboard → Skills; `curl -XPOST localhost:7077/api/skills/bug-fix/install -d '{"agent":"claude"}'` writes `.claude/skills/bug-fix/SKILL.md` + `references/` |
+| **Skills (catalog + install)** | Searchable catalog of reusable agent playbooks. **File-backed** multi-file skills live under `src/skills/bundled/<id>/` — a real `SKILL.md` (gray-matter frontmatter, incl. folded multi-line descriptions) + an optional `references/` folder; the flagship `bug-fix` skill (reproduce-first → audit → blast radius → root cause → ≥95% skeptic-corroborated confidence + approved plan → fix → re-verify → auto-commit, never push) ships 3 reference files. The **efficiency & traceability pack** adds four more file-backed skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) — each a portable SKILL.md + one `references/` cheat-sheet, with optional "Baton boost" sections (CODEBASE.md/query_graph/recall_memory/who_touched). Tags/produces for file-backed skills live in `BUNDLED_META` (catalog.ts) so the source SKILL.md stays a clean name+description-only Claude skill. Plus short **inline** skills (`map-codebase`, `safe-refactor`) and **imported** skills read from `.baton/skills/*.md`. Bundled skills are cached + copied into `dist/` at build (`scripts/copy-assets.mjs`). `GET /api/skills` returns each skill with per-agent install state + reference paths (content/raw never serialized); `POST/DELETE /api/skills/:id/install` writes/removes in the agent's own format — Claude → `.claude/skills/<id>/SKILL.md` (+ `references/`, hand-authored SKILL.md written verbatim when faithful), Cursor → `.cursor/rules/<id>.mdc` (`alwaysApply:false`) with references copied to a sibling `<id>/` folder the rule points at; other CLIs unsupported. `POST /api/skills/import` adds from a path/http(s) URL (256KB cap, can't shadow a bundled id). All writes gated on `--write`. Dashboard **Skills** screen: search, source/produces/reference chips + multi-file badge, per-agent install toggles, playbook preview, import; an **"Efficiency & traceability pack"** showcase band highlights the four pack skills on the unsearched landing state (click a chip to filter to it); demo mirror (`web/src/lib/demoSkills.ts`). | dashboard → Skills; `curl -XPOST localhost:7077/api/skills/bug-fix/install -d '{"agent":"claude"}'` writes `.claude/skills/bug-fix/SKILL.md` + `references/` |
 | **Project memory** | Evidence-anchored shared memory at `.baton/memory/facts/` (one md file per fact, atomic writes, always the MAIN repo even from worktrees): every fact stores the commit + content-hashes of the files it describes; on every read the anchors are re-checked — changed file ⇒ fact served as `stale` with the reason and **withheld from agents** (anti-hallucination). Agents write via `save_memory` / read via `recall_memory` MCP tools (keyword-ranked, stale-filtered); supersede-by-fingerprint dedup; secret-pattern rejection (keys/tokens/JWTs refused); 1.2k-char + 500-fact caps; handoff briefs embed a token-cheap "Project memory" section; daemon watches the store → `memory.updated` SSE; dashboard Memory page (search, fresh/aging/stale badges, quick-add, GC, delete; demo facts in demo mode); `baton memory list\|add\|rm\|gc` CLI; AGENTS.md guide tells agents to recall-before-exploring and save-after-learning | `baton memory add "…" --files src/x.ts` → edit src/x.ts → `baton memory list` shows STALE → `baton memory gc`; dashboard → Memory |
 
-Tests: 197 vitest tests at root green (routing v2 + MCP-connect + roster + skills covered;
+Tests: 228 vitest tests at root green (routing v2 + MCP-connect + roster + skills covered;
 `test/skills.test.ts` covers render/parse/target helpers, folded-YAML parsing, multi-file
-references, and file-backed bundled loading). Both workspaces strict TS,
-both builds clean. (2 known failures in `test/diff.test.ts` come from unrelated in-flight
-`src/diff.ts` binary-file parsing — separate concurrent work, not skills.)
+references, file-backed bundled loading, and the efficiency & traceability pack's load +
+faithful raw + BUNDLED_META tags/produces). Both workspaces strict TS, both builds clean.
+
+**Hardening pass (2026-06-17, audit-driven).** Verified multi-agent code review →
+fixed: (1) HTTP response pipes now attach `'error'` handlers (static asset, graph.json,
+kb-export tar) so a cancelled download / mid-stream IO error can no longer crash the
+zero-dep daemon; (2) the memory `fs.watch` gets an `'error'` handler (matches watch.ts);
+(3) `BatonBus` lifts the EventEmitter cap (`setMaxListeners(0)`) — no more spurious
+warning past 10 SSE connections; (4) `baton kb init` reuses `mergeJsonConfig` (refuses to
+clobber an unparseable `.mcp.json` instead of silently wiping the user's other MCP
+servers); (5) `escapeRegExp` deduped into `src/util/regex.ts` (was copied in routing/
+memory/connect); (6) SQLite history/reports DBs open `WAL` + `synchronous=NORMAL` and
+`recordMerge` batches inserts in one transaction; (7) `listHistory` collapsed its 1+N
+query into one grouped read; (8) memory hash/behind caches evict FIFO instead of a
+blanket `clear()` (no re-scan stampede); (9) `SignalTracker.clear` re-derives overlap
+announcements from live rows instead of wiping all (no duplicate overlap alerts).
+
+**Security review + permanent storage purge (2026-06-18).** Inline security pass (the
+multi-agent run stalled, so reviewed directly): daemon binds **127.0.0.1 only**, CORS is
+**loopback-only**, kb-import tar extraction already guards tar-slip, JSON bodies cap at
+1 MB — all good. Added a **loopback-Origin CSRF guard** (`isLoopbackOrigin`) on the new
+destructive endpoint. **New: permanent data purge** (`src/purge.ts`, `GET/POST
+/api/storage/purge`). Root cause of "disk keeps filling after deletes": deleting a task
+removes the worktree but its commits stay reachable via the hidden `refs/baton/archive/*`
+refs, so a plain gc can't reclaim them. The purge drops those refs + orphan `baton/*`
+branches and runs `git gc --prune=now` (new `git.ts` helpers: `listArchiveRefs`,
+`deleteRef`, `gitGc`, `objectStoreBytes`; `closeHistoryDb`/`closeReportsDb` release the
+sqlite handle before unlinking history.db). Categories: archives, history, reports,
+graphs, tmp, memory. **Triple-guarded**: `--write` + loopback Origin + a typed
+`purge <repo>` phrase; the **Memory → Storage → Danger Zone** UI adds a 3-step flow
+(select → review with sizes → type-to-confirm) and an extra acknowledgement for the
+knowledge base. Never touches source, main, non-`baton/*` branches, or live worktrees.
+`test/purge.test.ts` (7 tests) covers it; 235 tests green.
+
+**Security hardening pass (2026-06-18, multi-agent audit-driven).** A 35-agent
+audit (find → adversarially-verify → completeness-critic) found the loopback-Origin
+CSRF guard was only on `/api/storage/purge`, leaving every other mutating endpoint
+exploitable by a malicious site you visit while `baton serve --write` runs (a
+"simple" `text/plain` POST skips CORS preflight and the body parser ignores
+Content-Type). Worst case: `POST /api/tasks/:slug/agent/start` launches an agent
+with an **attacker-chosen prompt** under your creds, and `…/terminal/input` injects
+keystrokes into a live agent. **Fixes:** (1) **centralized anti-CSRF guard** —
+`src/util/origin.ts` (`isLoopbackOrigin`/`isMutatingMethod`), enforced in
+`handle()` for *every* mutating `/api/*` request, so new endpoints are covered by
+default (loopback dashboard + curl still pass; verified end-to-end with curl).
+(2) **SSRF hardening** of `POST /api/skills/import` (`fetchSkillText`): block
+private/loopback/link-local/metadata hosts, re-validate each redirect hop, 10s
+timeout, streamed 256KB cap (was: arbitrary URL, follow-redirects, no timeout,
+buffer-then-check). (3) **DOM XSS** fix — `web/.../GraphCanvas.tsx` HTML-escapes
+node label/source fields (untrusted imported `graph.json` → force-graph `innerHTML`).
+(4) **graphify perf** — `readStats` now memoizes by (path, mtime, size); the polled
+`/api/kb` no longer re-parses every `graph.json` each tick. (5) tightened the
+GitHub-token secret pattern. New tests: `test/origin.test.ts`,
+`test/skill-import-url.test.ts`, `test/graphify-stats.test.ts`. **249 tests green**,
+both workspaces build clean. (Refuted as non-issues: SQL is fully parameterized,
+tar-slip already guarded, git is shell-free, slugs sanitized.)
+
+**Docs, landing page & marketing site (2026-06-19).** Turned the repo front door into a
+proper product surface. (1) **README** rewritten as an accurate landing page (was stale
+"planned API / WIP" — the product is built). (2) **`docs/` documentation section** — a
+hub (`docs/README.md`) + 14 user-facing pages: installation, quickstart, cli-reference,
+dashboard, knowledge-graph, session-handoff, skills, memory, mcp-tools, agent-routing,
+configuration, security, architecture, troubleshooting (research notes preserved). All
+cross-links verified resolving; no invented commands/flags. (3) **Dashboard onboarding**
+— the zero-sessions board now shows a `FirstRun` panel (Baton mark, 3 getting-started
+steps, "New session" CTA, copyable command, docs link) instead of a bare empty state;
+verified in-browser. (4) **Marketing site** — a runnable Next.js 15 + Tailwind v4 +
+framer-motion app under `site/` (dark, amber-accent, relay-baton hero animation; sections
+per `docs/landing-page-prompt.md`; SVG hero instead of R3F for build reliability — see the
+in-code upgrade note). `npm run build` in `site/` passes (6 static routes incl.
+sitemap/robots). 249 tests still green; web + site builds clean.
 
 ## Pending / next 🔜
 

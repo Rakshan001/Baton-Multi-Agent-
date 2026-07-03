@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { KbState } from '../kb/state.js';
 import { mcpServers, type McpServerDef } from '../kb/mcp.js';
+import { escapeRegExp } from '../util/regex.js';
 
 export type McpScope = 'project' | 'global';
 
@@ -98,11 +99,9 @@ export function serversForState(state: KbState | null): Record<string, McpServer
 /* Pure render/merge helpers (unit-tested)                             */
 /* ------------------------------------------------------------------ */
 
-const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 /** Matches a TOML `[mcp_servers.<name>]` table in either quoted or bare-key form. */
 function tomlTableRe(name: string): RegExp {
-  const q = reEscape(name);
+  const q = escapeRegExp(name);
   return new RegExp(`\\[mcp_servers\\.(?:"${q}"|${q})\\]`);
 }
 

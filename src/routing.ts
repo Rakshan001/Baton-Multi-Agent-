@@ -24,6 +24,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { KNOWN_AGENT_IDS } from './agents/registry.js';
+import { escapeRegExp } from './util/regex.js';
 
 export type RoutingMode = 'auto' | 'manual' | 'single';
 
@@ -121,7 +122,6 @@ const LIGHT_HINTS = [
   'padding', 'lint', 'format', 'docstring', 'readme', 'label', 'wording',
 ];
 
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hintHit = (text: string, hint: string) => new RegExp(`\\b${escapeRegExp(hint)}`, 'i').test(text);
 
 export interface SeverityResult {

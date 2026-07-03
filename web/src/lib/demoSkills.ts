@@ -58,6 +58,94 @@ const REFACTOR_BODY = `# Safe refactor
 - \`baton memory add\`, then \`baton pass\` / \`baton merge\` once green.
 `;
 
+const TOKEN_BODY = `# Token-Efficient Coding (portable)
+
+Spend tokens like money — the smallest set of high-signal tokens that still gets it right.
+
+\`\`\`
+ORIENT (map, not repo) → LOCATE (symbol/grep) → READ THE MINIMUM → EDIT MINIMALLY →
+DON'T RE-READ → COMPACT WHEN LONG
+\`\`\`
+
+**Golden rules (excerpt)**
+1. Orient from a map/graph, not a full-repo read (~300× cheaper).
+2. Locate the exact symbol (grep/graph) before opening files.
+3. Read every region you'll edit IN FULL; read nothing else whole.
+4. A file already in context is known — never re-read it.
+5. Minimal diffs: only root-cause lines, reuse existing helpers.
+6. Batch independent reads/edits; compact before context rot.
+7. Quality is never traded for tokens — guessing costs more.
+
+> Baton boost: read CODEBASE.md first, \`query_graph\` for symbols, \`recall_memory\`
+> to avoid re-deriving, \`baton usage\` to measure savings.
+`;
+
+const TRACE_BODY = `# Traceable Changes (portable)
+
+A commit is the smallest immutable unit of knowledge. Small, isolated, well-described
+commits make blame/bisect/revert a one-command answer — even when a different model broke it.
+
+\`\`\`
+ISOLATE (worktree/branch) → ONE LOGICAL CHANGE PER COMMIT → MESSAGE STATES WHY →
+KEEP DIFFS REVIEWABLE → LEAVE A TRAIL → REVERT IS FIRST-CLASS
+\`\`\`
+
+**Golden rules (excerpt)**
+1. Isolate each task in its own worktree/branch — parallel agents on one tree clobber silently.
+2. One logical change per commit; each commit builds on its own.
+3. Message states intent / root cause, not just the diff; link the task.
+4. Stage only that change's files (no \`git add -A\` catch-all).
+5. No reformatting / unrelated churn — it pollutes blame and bisect.
+6. Revert is normal: an atomic commit undoes cleanly.
+
+> Baton boost: \`baton new\` per-task worktrees, \`baton blame\` / who_touched,
+> check_files before shared edits, completion reports on merge.
+`;
+
+const MEMORY_BODY = `# Memory-Light Context Discipline (portable)
+
+Context is finite and degrades as it fills ("context rot"). Treat context like RAM
+and the file system like disk.
+
+\`\`\`
+RECALL FIRST → EXTERNALIZE STATE → SAVE DURABLE FACTS → KEEP CONTEXT HIGH-SIGNAL →
+COMPACT / HAND OFF BEFORE THE CLIFF
+\`\`\`
+
+**Golden rules (excerpt)**
+1. Recall what's already recorded before exploring or re-deriving.
+2. Write knowledge to storage, not the chat (the chat is re-paid every turn).
+3. Externalize task state to a file so it survives compaction/handoff.
+4. Save durable, verifiable, evidence-anchored facts — NEVER secrets.
+5. Keep live context lean; reference \`file:line\`, drop stale output.
+6. Compact or hand off before quality degrades, not after.
+
+> Baton boost: \`recall_memory\` (stale facts withheld), \`save_memory\` (anchored to
+> commit + content-hash), CODEBASE.md, \`baton pass\` handoff brief.
+`;
+
+const VERIFY_BODY = `# Verify Before Done (portable)
+
+"It compiles" and "I'm done" are claims, not facts. LLMs emit confident code that calls
+APIs that don't exist or breaks a caller. Verification + an independent skeptic stops that.
+
+\`\`\`
+RE-READ THE DIFF → CONFIRM EVERY SYMBOL EXISTS → BUILD / TEST / LINT →
+CONFIRM THE GOAL → INDEPENDENT SKEPTIC RE-CHECK → ONLY THEN DONE
+\`\`\`
+
+**Golden rules (excerpt)**
+1. Re-read your actual diff, not your memory of it.
+2. Every referenced symbol/import/API must exist in THIS codebase + version.
+3. Run the real build/tests/lint — don't claim a result you didn't run.
+4. Confirm the goal (symptom gone / feature works), not just green.
+5. Re-read consumers of any changed interface.
+6. The reviewer ≠ the author — a fresh read-only skeptic tries to refute the diff.
+
+> Baton boost: check_files / who_touched, use the bug-fix skill for bugs,
+> completion report on merge. Pairs with traceable-changes.
+`;
+
 export const DEMO_SKILLS: SkillStatus[] = [
   {
     id: "bug-fix",
@@ -71,6 +159,62 @@ export const DEMO_SKILLS: SkillStatus[] = [
     installs: [
       { agent: "claude", rel: ".claude/skills/bug-fix/SKILL.md", installed: true },
       { agent: "cursor", rel: ".cursor/rules/bug-fix.mdc", installed: false },
+    ],
+  },
+  {
+    id: "token-efficient-coding",
+    name: "token-efficient-coding",
+    description: "Work token-efficiently in ANY codebase: navigate a repo map or code graph instead of reading whole files, read the smallest high-signal slice before editing, make minimal surgical diffs, batch tool calls, and never re-read a file already in context. Cuts wasted tokens and cost on every read and edit without lowering quality.",
+    tags: ["token", "tokens", "cost", "context", "efficient", "minimal diff", "context rot", "compaction", "read", "grep", "cheap", "budget"],
+    produces: ["targeted reads", "minimal diffs", "lower token cost", "compaction"],
+    body: TOKEN_BODY,
+    source: "bundled",
+    references: ["references/token-budget-cheatsheet.md"],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/token-efficient-coding/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/token-efficient-coding.mdc", installed: false },
+    ],
+  },
+  {
+    id: "traceable-changes",
+    name: "traceable-changes",
+    description: "Make every change traceable so a bug introduced by ANY agent (Claude, Cursor, Codex, Gemini) is easy to find, attribute, and revert: one logical change per commit, a conventional message that states intent and root cause, isolated git worktrees per task, and a clean bisect/blame trail.",
+    tags: ["traceability", "atomic commit", "commit", "conventional commits", "worktree", "blame", "bisect", "revert", "git history", "audit", "multi-agent"],
+    produces: ["atomic commits", "isolated worktree", "conventional messages", "bisectable history"],
+    body: TRACE_BODY,
+    source: "bundled",
+    references: ["references/commit-conventions.md"],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/traceable-changes/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/traceable-changes.mdc", installed: false },
+    ],
+  },
+  {
+    id: "memory-light",
+    name: "memory-light",
+    description: "Keep working context lean across long or multi-session work so the model stays sharp and cheap: recall what is already known before exploring, write durable facts to the file system or a memory store (not the chat), externalize task state, and compact or hand off before context rot degrades recall.",
+    tags: ["memory", "context window", "context rot", "compaction", "recall", "handoff", "long-horizon", "multi-session", "externalize state", "facts"],
+    produces: ["recall-before-explore", "externalized state", "durable facts", "handoff brief"],
+    body: MEMORY_BODY,
+    source: "bundled",
+    references: ["references/recall-save-patterns.md"],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/memory-light/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/memory-light.mdc", installed: false },
+    ],
+  },
+  {
+    id: "verify-before-done",
+    name: "verify-before-done",
+    description: "Verify a change actually works before claiming it is done, so a hallucinated or careless edit from ANY model doesn't ship a new bug: re-read every changed file and its callers, confirm referenced APIs/symbols actually exist, run the build/tests/linter, confirm the goal is met, and have an independent skeptic adversarially re-check the diff.",
+    tags: ["verify", "verification", "double-check", "hallucination", "regression", "skeptic", "review", "tests", "build", "done", "symbol exists"],
+    produces: ["re-read diff", "symbol-existence check", "build/test/lint run", "independent skeptic re-check"],
+    body: VERIFY_BODY,
+    source: "bundled",
+    references: ["references/verification-checklist.md"],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/verify-before-done/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/verify-before-done.mdc", installed: false },
     ],
   },
   {

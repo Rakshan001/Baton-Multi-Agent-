@@ -16,7 +16,7 @@ import { ScreenHeader, SearchInput } from "./shared";
 import { BatonAPI } from "../lib/api";
 import { usePoll } from "../hooks/usePoll";
 import { showToast } from "../lib/toast";
-import type { MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown } from "../types";
+import type { MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeCategory } from "../types";
 
 type Freshness = MemoryFactStatus["freshness"];
 
@@ -142,6 +142,7 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14, maxWidth: 920 }}>
         {panel === "storage" && <StoragePanel />}
+        {panel === "storage" && writeEnabled && <DangerZone onPurged={data.refetch} />}
         {panel === "retention" && writeEnabled && <RetentionPanel onApplied={data.refetch} />}
 
         {/* filters */}
@@ -318,6 +319,129 @@ function StoragePanel() {
       <p style={{ margin: 0, fontSize: 11.5, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
         Graphs are gitignored and rebuilt on demand. Memory is hard-capped (500 facts). History grows append-only — set a retention policy to keep it tidy.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Danger Zone — permanently delete Baton data and reclaim disk. Three deliberate
+ * steps (select → review → type-to-confirm), collapsed by default, with the
+ * knowledge base (memory) guarded behind an extra explicit acknowledgement.
+ */
+function DangerZone({ onPurged }: { onPurged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [prev, setPrev] = useState<PurgePreview | null>(null);
+  const [sel, setSel] = useState<Set<PurgeCategory>>(new Set());
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [phrase, setPhrase] = useState("");
+  const [kbAck, setKbAck] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => BatonAPI.getPurgePreview().then(setPrev).catch(() => setPrev(null));
+  useEffect(() => { if (open && !prev) void load(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const reset = () => { setStep(1); setSel(new Set()); setPhrase(""); setKbAck(false); };
+  const items = prev?.items ?? [];
+  const chosen = items.filter((i) => sel.has(i.category));
+  const selectedBytes = chosen.reduce((n, i) => n + i.bytes, 0);
+  const memorySelected = sel.has("memory");
+  const phraseOk = !!prev && phrase.trim() === prev.confirmPhrase;
+  const canDelete = phraseOk && (!memorySelected || kbAck) && !busy && chosen.length > 0;
+
+  const toggle = (c: PurgeCategory) => setSel((s) => { const n = new Set(s); n.has(c) ? n.delete(c) : n.add(c); return n; });
+
+  const doPurge = async () => {
+    if (!prev || !canDelete) return;
+    setBusy(true);
+    try {
+      const r = await BatonAPI.purgeStorage([...sel], prev.confirmPhrase);
+      showToast({ kind: "ok", title: `Freed ${fmtBytes(r.freedBytes)}`, desc: r.gcRan ? "Deleted selected data and ran git gc to reclaim packed objects." : "Deleted the selected data.", mono: false });
+      reset();
+      await load();
+      onPurged();
+    } catch (e) {
+      showToast({ kind: "error", title: "Purge failed", desc: (e as Error).message });
+    } finally { setBusy(false); }
+  };
+
+  const RED = "#f87171", REDBG = "color-mix(in srgb, #f87171 12%, transparent)", REDBORDER = "color-mix(in srgb, #f87171 42%, transparent)";
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", flexShrink: 0, border: `1px solid ${REDBORDER}` }}>
+      <button onClick={() => { setOpen((v) => !v); if (open) reset(); }}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "12px 15px", background: REDBG, border: "none", cursor: "pointer", color: "inherit", textAlign: "left" }}>
+        <Icon name="alertTriangle" size={15} style={{ color: RED }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)", color: RED }}>Danger Zone — permanently delete data</div>
+          <div style={{ fontSize: 11.5, color: "var(--text-tertiary)" }}>Free disk by deleting Baton data for good. This cannot be undone.</div>
+        </div>
+        <Icon name={open ? "chevronDown" : "chevronRight"} size={14} style={{ color: "var(--text-tertiary)" }} />
+      </button>
+
+      {open && (
+        <div style={{ padding: 15, display: "flex", flexDirection: "column", gap: 12 }}>
+          {!prev ? (
+            <div style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-13)" }}>Measuring what can be deleted…</div>
+          ) : step === 1 ? (
+            <>
+              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>Step 1 of 3 — choose what to permanently delete:</div>
+              {items.map((it) => (
+                <label key={it.category} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 11px", borderRadius: "var(--r-sm)", cursor: "pointer", background: sel.has(it.category) ? REDBG : "var(--bg-surface-2)", border: `1px solid ${sel.has(it.category) ? REDBORDER : "var(--border-subtle)"}` }}>
+                  <input type="checkbox" checked={sel.has(it.category)} onChange={() => toggle(it.category)} style={{ marginTop: 2 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", color: it.destructive ? RED : "var(--text-primary)" }}>{it.label}</span>
+                      <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", flex: "none" }}>{fmtBytes(it.bytes)}{it.count ? ` · ${it.count}` : ""}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.45 }}>{it.detail}</div>
+                    {it.warning && <div style={{ fontSize: 11, color: RED, marginTop: 3 }}>⚠ {it.warning}</div>}
+                  </div>
+                </label>
+              ))}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button className="btn btn-sm" disabled={!chosen.length} onClick={() => setStep(2)} style={{ opacity: chosen.length ? 1 : 0.5 }}>Review {chosen.length || ""} →</button>
+              </div>
+            </>
+          ) : step === 2 ? (
+            <>
+              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>Step 2 of 3 — review. This permanently deletes:</div>
+              <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+                {chosen.map((it) => (
+                  <li key={it.category} style={{ fontSize: "var(--fs-13)", color: it.destructive ? RED : "var(--text-secondary)" }}>
+                    <b>{it.label}</b> — {fmtBytes(it.bytes)}{it.count ? `, ${it.count} item(s)` : ""}
+                  </li>
+                ))}
+              </ul>
+              <div className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>≈ {fmtBytes(selectedBytes)} reclaimed{sel.has("archives") ? " (after git gc)" : ""}.</div>
+              {memorySelected && <div style={{ fontSize: "var(--fs-12)", color: RED, background: REDBG, border: `1px solid ${REDBORDER}`, borderRadius: "var(--r-sm)", padding: "8px 10px" }}>You are deleting the <b>knowledge base</b>. Every saved memory fact will be gone forever — this is usually a big loss.</div>}
+              <div style={{ fontSize: 11.5, color: "var(--text-tertiary)" }}>This action cannot be undone.</div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <button className="btn btn-sm btn-ghost" onClick={() => setStep(1)}>← Back</button>
+                <button className="btn btn-sm" onClick={() => setStep(3)}>Continue →</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>Step 3 of 3 — type <span className="mono" style={{ color: RED }}>{prev.confirmPhrase}</span> to confirm:</div>
+              <input value={phrase} onChange={(e) => setPhrase(e.target.value)} autoFocus placeholder={prev.confirmPhrase}
+                style={{ width: "100%", height: 36, padding: "0 12px", background: "var(--bg-input)", border: `1px solid ${phraseOk ? REDBORDER : "var(--border-default)"}`, borderRadius: "var(--r-sm)", color: "var(--text-primary)", fontSize: "var(--fs-13)", fontFamily: "var(--font-mono, monospace)", outline: "none" }} />
+              {memorySelected && (
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: "var(--fs-12)", color: RED, cursor: "pointer" }}>
+                  <input type="checkbox" checked={kbAck} onChange={(e) => setKbAck(e.target.checked)} style={{ marginTop: 2 }} />
+                  I understand my knowledge base ({prev.items.find((i) => i.category === "memory")?.count ?? 0} fact(s)) will be permanently deleted.
+                </label>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <button className="btn btn-sm btn-ghost" onClick={() => setStep(2)}>← Back</button>
+                <button className="btn btn-sm fr" disabled={!canDelete} onClick={doPurge}
+                  style={{ background: canDelete ? RED : "var(--bg-surface-2)", borderColor: REDBORDER, color: canDelete ? "#fff" : "var(--text-tertiary)", opacity: canDelete ? 1 : 0.6 }}>
+                  {busy ? "Deleting…" : "Permanently delete"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

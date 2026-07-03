@@ -64,6 +64,22 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     tags: ['bug', 'fix', 'debug', 'error', 'crash', 'regression', 'root cause', 'reproduce', 'blast radius', 'skeptic', 'review', 'worktree', 'commit'],
     produces: ['reproduction', 'blast-radius audit', 'root-cause analysis', 'approved plan', 'regression re-verify', 'bugfix report', 'auto-commit (never pushes)'],
   },
+  'token-efficient-coding': {
+    tags: ['token', 'tokens', 'cost', 'context', 'efficient', 'minimal diff', 'context rot', 'compaction', 'read', 'grep', 'cheap', 'budget'],
+    produces: ['targeted reads', 'minimal diffs', 'lower token cost', 'compaction'],
+  },
+  'traceable-changes': {
+    tags: ['traceability', 'atomic commit', 'commit', 'conventional commits', 'worktree', 'blame', 'bisect', 'revert', 'git history', 'audit', 'multi-agent'],
+    produces: ['atomic commits', 'isolated worktree', 'conventional messages', 'bisectable history'],
+  },
+  'memory-light': {
+    tags: ['memory', 'context window', 'context rot', 'compaction', 'recall', 'handoff', 'long-horizon', 'multi-session', 'externalize state', 'facts'],
+    produces: ['recall-before-explore', 'externalized state', 'durable facts', 'handoff brief'],
+  },
+  'verify-before-done': {
+    tags: ['verify', 'verification', 'double-check', 'hallucination', 'regression', 'skeptic', 'review', 'tests', 'build', 'done', 'symbol exists'],
+    produces: ['re-read diff', 'symbol-existence check', 'build/test/lint run', 'independent skeptic re-check'],
+  },
 };
 
 /* ---- inline single-file skills (short, no references) ---- */

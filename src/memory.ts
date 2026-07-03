@@ -19,6 +19,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { git } from './util/exec.js';
+import { escapeRegExp } from './util/regex.js';
 
 export type MemoryType = 'decision' | 'gotcha' | 'convention' | 'reference' | 'preference';
 export const MEMORY_TYPES: MemoryType[] = ['decision', 'gotcha', 'convention', 'reference', 'preference'];
@@ -131,7 +132,7 @@ const SECRET_PATTERNS: Array<{ re: RegExp; what: string }> = [
   { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, what: 'private key block' },
   { re: /\bAKIA[0-9A-Z]{16}\b/, what: 'AWS access key id' },
   { re: /\bsk-[A-Za-z0-9_-]{20,}\b/, what: 'API secret key (sk-…)' },
-  { re: /\bgh[pousr]_[A-Za-z0-9]{30,}\b/, what: 'GitHub token' },
+  { re: /\bgh[pousr]_[A-Za-z0-9]{28,}\b/, what: 'GitHub token' },
   { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, what: 'Slack token' },
   { re: /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, what: 'JWT' },
   { re: /\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*['"][^'"]{8,}['"]/i, what: 'inline credential assignment' },
@@ -143,7 +144,6 @@ export function detectSecret(text: string): string | null {
 }
 
 /** Word-boundary relevance scoring against a topic (same approach as routing.ts). */
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function scoreMemory(fact: MemoryFact, topic: string): number {
   const words = [...new Set(topic.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2))];
   if (!words.length) return 0;
@@ -239,7 +239,9 @@ async function fileHash(mainRoot: string, relPath: string): Promise<string> {
     const hit = hashCache.get(abs);
     if (hit && hit.mtimeMs === st.mtimeMs) return hit.hash;
     const hash = sha1(await readFile(abs));
-    if (hashCache.size > 4096) hashCache.clear();
+    // FIFO single-entry eviction (Map keeps insertion order) — a blanket clear()
+    // would force the next /api/memory poll to cold re-hash every anchored file.
+    if (hashCache.size >= 4096) hashCache.delete(hashCache.keys().next().value!);
     hashCache.set(abs, { mtimeMs: st.mtimeMs, hash });
     return hash;
   } catch {
@@ -385,7 +387,9 @@ export async function listMemories(root: string, opts: { projects?: ProjectRel[]
     if (f.anchors.commit && head) {
       const key = `${f.anchors.commit}..${head}`;
       if (!behindCache.has(key)) {
-        if (behindCache.size > 2048) behindCache.clear();
+        // FIFO single-entry eviction — clear() here would re-spawn up to FACT_CAP
+        // `git rev-list` subprocesses on the next poll (a re-scan stampede).
+        if (behindCache.size >= 2048) behindCache.delete(behindCache.keys().next().value!);
         try {
           behindCache.set(key, Number(await git(['rev-list', '--count', key], mainRoot)));
         } catch {

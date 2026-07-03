@@ -104,16 +104,23 @@ A 7-cell bento grid, glassy cards with hover glow + slight lift. Cells:
   ~300× cheaper." Animated counter.
 - **Installable skills** — "A searchable catalog of reusable agent playbooks. One
   click writes a skill into the agent's own config — `.claude/skills/<name>/SKILL.md`
-  or `.cursor/rules` — or import your own from a path or URL. e.g. a 'common bug-fix'
-  skill maps the repo, confirms the root cause to 95% confidence, then fixes bugs one
-  at a time in isolated worktrees." Show two tiny config-path chips (Claude / Cursor).
+  or `.cursor/rules` — or import your own from a path or URL. Ships a flagship
+  `bug-fix` skill (reproduce → audit → 95%-confidence gate → approved plan → fix →
+  skeptic re-check) plus an **efficiency & traceability pack**:
+  `token-efficient-coding` (navigate the map, minimal diffs, no re-reads),
+  `traceable-changes` (one atomic commit per change so blame/bisect/revert just work),
+  `memory-light` (recall before exploring, state to disk not the chat), and
+  `verify-before-done` (an independent skeptic re-checks the diff before anything
+  ships). Portable SKILL.md files that work in any repo, with optional Baton boosts."
+  Show two tiny config-path chips (Claude / Cursor) and a row of skill-name pills.
 
 ### 6. Built honest (engineering credibility strip)
 Horizontal scroll-revealed row of small mono facts:
 "Zero-dependency daemon — raw node:http" · "SSE, not socket.io" · "Plain-markdown
 handoffs, no proprietary format" · "tmux-backed agent terminals" · "Git-native: no
 external database" · "MCP tools for every agent" · "Skills install to native config —
-.claude/skills, .cursor/rules".
+.claude/skills, .cursor/rules" · "Portable skills — token-efficient editing, atomic
+traceable commits, lean memory, skeptic-verified diffs".
 
 ### 7. Dashboard showcase
 A large framed screenshot/mock of the Baton dashboard inside a browser chrome, tilted

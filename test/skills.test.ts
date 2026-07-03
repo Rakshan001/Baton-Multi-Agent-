@@ -72,6 +72,30 @@ describe('bundledSkills (file-backed)', () => {
     // the old lightweight skill was replaced
     expect(skills.some((s) => s.id === 'common-bug-fix')).toBe(false);
   });
+
+  it('loads the efficiency & traceability pack with one reference each and faithful raw', async () => {
+    const skills = await bundledSkills();
+    const expected: Record<string, string> = {
+      'token-efficient-coding': 'references/token-budget-cheatsheet.md',
+      'traceable-changes': 'references/commit-conventions.md',
+      'memory-light': 'references/recall-save-patterns.md',
+      'verify-before-done': 'references/verification-checklist.md',
+    };
+    for (const [id, ref] of Object.entries(expected)) {
+      const s = skills.find((sk) => sk.id === id);
+      expect(s, `missing bundled skill: ${id}`).toBeTruthy();
+      // name matches id → installed verbatim for Claude (frontmatter carries the id)
+      expect(s!.raw).toContain(`name: ${id}`);
+      // folded multi-line YAML description flattened to one line
+      expect(s!.description).not.toContain('\n');
+      expect(s!.description.length).toBeGreaterThan(80);
+      // the single reference cheat-sheet ships alongside
+      expect(s!.references.map((r) => r.rel)).toEqual([ref]);
+      // tags/produces come from BUNDLED_META (frontmatter stays name+description only)
+      expect(s!.tags.length).toBeGreaterThan(0);
+      expect(s!.produces.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('parseSkillMarkdown', () => {
