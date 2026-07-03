@@ -42,6 +42,12 @@ Do the expensive thinking where it's powerful (or included in your plan); do the
 
 ## Quick start
 
+> **Prefer to have an agent do this for you?** Paste this repo into Cursor or
+> Claude Code and say "set this up for me" — it'll follow [AGENTS.md](AGENTS.md),
+> ask what it needs to know (which project to wire up, which agents you use,
+> which port), run every command itself, and leave you a personalized
+> `GETTING_STARTED.md` in your project when it's done.
+
 Requires **Node ≥ 20**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
 
 ```bash

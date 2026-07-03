@@ -2,6 +2,11 @@
 
 From zero to the running dashboard in ~10 minutes. (What/why: [STATUS.md](STATUS.md).)
 
+> Setting Baton up on **someone else's** project via an AI agent (Cursor, Claude
+> Code, …) instead of by hand? Point the agent at [AGENTS.md](AGENTS.md) — it
+> walks the agent through the same steps interactively, including wiring up the
+> target project and generating a personalized guide.
+
 ## Prerequisites
 
 - **Node.js ≥ 20** (`node --version`)
