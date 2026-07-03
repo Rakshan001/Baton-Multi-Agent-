@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { KbState } from '../kb/state.js';
-import { mcpServers, type McpServerDef } from '../kb/mcp.js';
+import { mcpServers, type McpOpts, type McpServerDef } from '../kb/mcp.js';
 import { escapeRegExp } from '../util/regex.js';
 
 export type McpScope = 'project' | 'global';
@@ -90,8 +90,8 @@ export function mcpTargetFor(agent: string, root: string, home = homedir()): Age
 }
 
 /** The servers Baton wires: graphify graphs (when the KB exists) + the coordination server. */
-export function serversForState(state: KbState | null): Record<string, McpServerDef> {
-  if (state) return mcpServers(state);
+export function serversForState(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && opts) return mcpServers(state, opts);
   return { baton: { command: 'baton', args: ['mcp'] } };
 }
 
@@ -186,12 +186,12 @@ export async function connectAgentMcp(
   agent: string,
   root: string,
   state: KbState | null,
-  opts: { confirmGlobal?: boolean } = {},
+  opts: { confirmGlobal?: boolean; mcpOpts?: McpOpts } = {},
   home = homedir(),
 ): Promise<ConnectResult> {
   const target = mcpTargetFor(agent, root, home);
   if (!target) throw new McpUnsupportedError(agent);
-  const servers = serversForState(state);
+  const servers = serversForState(state, opts.mcpOpts);
   const serverNames = Object.keys(servers);
 
   const existing = existsSync(target.path) ? await readFile(target.path, 'utf-8') : '';

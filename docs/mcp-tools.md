@@ -7,9 +7,9 @@ Baton speaks [Model Context Protocol](https://modelcontextprotocol.io). It expos
 | Server | Started by | Tools | Answers |
 |--------|-----------|-------|---------|
 | `baton` (coordination) | `baton mcp` | `check_files`, `list_signals`, `get_report`, `who_touched`, `list_tasks`, `save_memory`, `recall_memory` | Live edit signals, completion reports, agent-blame, sessions, shared memory |
-| `graphify-*` (code graph) | `uv run … graphify.serve <graph.json>` | `query_graph`, `get_node` | Code navigation across the knowledge graph |
+| `graphify-*` (code graph) | shared daemon pool (http proxy) | `query_graph`, `get_node` | Code navigation across the knowledge graph |
 
-The coordination server is plain stdio and zero-config: it reads Baton's state from the current git repo. The graphify servers are wired one per sub-project plus a merged cross-project graph (see [knowledge-base.md](./knowledge-graph.md)).
+The coordination server is plain stdio and zero-config: it reads Baton's state from the current git repo. The graphify servers are shared: the daemon runs a single lazily-started pool of graphify backends and proxies agent requests through `POST /mcp/g/<token>/<projectId>`. The token is stored in `.baton/mcp-token` and embedded in the generated config so only holders of that file can reach the graph. Graphify servers are wired one per sub-project plus a merged cross-project graph (see [knowledge-graph.md](./knowledge-graph.md)).
 
 ## Coordination tools (`baton mcp`)
 
@@ -112,18 +112,18 @@ baton kb mcp --agent codex
 
 ### What gets written
 
-For an agent with a knowledge base, the config contains one graphify server per project, a merged graph server, and the coordination server. The JSON shape used by `claude` and `cursor`:
+For an agent with a knowledge base, the config contains one graphify server per project, a merged graph server, and the coordination server. Claude, Cursor, and Gemini get http-based graphify entries that route through the shared daemon proxy; the JSON shape used by `claude` and `cursor`:
 
 ```json
 {
   "mcpServers": {
     "graphify-myrepo": {
-      "command": "uv",
-      "args": ["run", "--with", "graphifyy", "--with", "mcp", "-m", "graphify.serve", "/path/to/graph.json"]
+      "type": "http",
+      "url": "http://127.0.0.1:7077/mcp/g/<token>/myrepo"
     },
     "graphify-merged": {
-      "command": "uv",
-      "args": ["run", "--with", "graphifyy", "--with", "mcp", "-m", "graphify.serve", "/path/to/merged.json"]
+      "type": "http",
+      "url": "http://127.0.0.1:7077/mcp/g/<token>/merged"
     },
     "baton": {
       "command": "baton",
@@ -143,7 +143,7 @@ Without a knowledge base, only the coordination server is wired:
 }
 ```
 
-The Codex TOML form is equivalent, with each server as an `[mcp_servers."<name>"]` table holding `command` and `args`.
+**Codex note:** Codex's TOML MCP format only supports `command` + `args` keys — url-based servers are not part of its config spec. Baton therefore keeps Codex on the per-session `uv` stdio spawn instead of the shared proxy. All other agents (Claude, Cursor, Gemini) use the http route. The Codex TOML form uses one `[mcp_servers."<name>"]` block per server with `command` and `args`.
 
 ### From the dashboard
 

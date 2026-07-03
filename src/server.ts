@@ -566,7 +566,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (method === 'GET' && path === '/api/kb/mcp') {
     const state = await loadKb(root);
     if (!state) return send(res, 404, { error: 'knowledge base not initialized', hint: 'run: baton kb init' }, origin);
-    return send(res, 200, { agents: allSnippets(state) }, origin);
+    const mcpOpts = { baseUrl: `http://127.0.0.1:${opts.port}`, token: getMcpToken(root) };
+    return send(res, 200, { agents: allSnippets(state, mcpOpts) }, origin);
   }
 
   if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
@@ -673,7 +674,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const body = (await readJsonBody<{ confirmGlobal?: boolean }>(req)) ?? {};
     try {
       const state = await loadKb(root);
-      const result = await connectAgentMcp(agent, root, state, { confirmGlobal: body.confirmGlobal === true });
+      const mcpOpts = { baseUrl: `http://127.0.0.1:${opts.port}`, token: getMcpToken(root) };
+      const result = await connectAgentMcp(agent, root, state, { confirmGlobal: body.confirmGlobal === true, mcpOpts });
       if (result.wrote) bus.publish({ type: 'agent.connected', agent });
       return send(res, 200, result, origin);
     } catch (e) {

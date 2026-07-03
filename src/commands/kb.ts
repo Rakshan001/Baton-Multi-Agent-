@@ -15,7 +15,8 @@ import { detectProjects } from '../kb/projects.js';
 import {
   graphPathFor, kbStatus, loadKb, mergedGraphFile, saveKb, type KbState,
 } from '../kb/state.js';
-import { mcpServers, snippetFor } from '../kb/mcp.js';
+import { mcpServers, snippetFor, type McpOpts } from '../kb/mcp.js';
+import { getMcpToken } from '../kb/mcp-token.js';
 import { mergeJsonConfig, McpConfigParseError } from '../agents/connect.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
 import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
@@ -179,11 +180,13 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   console.log(`✓ knowledge base ready (.baton/kb.json)`);
 
   // Project-scoped .mcp.json is picked up by Claude Code in every worktree.
+  // Outside a running daemon, default to port 7077 (the baton serve default).
   const mcpPath = join(root, '.mcp.json');
   if (opts.mcp !== false) {
+    const mcpOpts: McpOpts = { baseUrl: 'http://127.0.0.1:7077', token: getMcpToken(root) };
     const existing = existsSync(mcpPath) ? await readFile(mcpPath, 'utf-8') : '';
     try {
-      await writeFile(mcpPath, mergeJsonConfig(existing, mcpServers(state), mcpPath), 'utf-8');
+      await writeFile(mcpPath, mergeJsonConfig(existing, mcpServers(state, mcpOpts), mcpPath), 'utf-8');
       console.log(`✓ wrote graphify + baton MCP servers to .mcp.json`);
     } catch (e) {
       // Don't clobber a .mcp.json we can't parse — preserve the user's other servers.
@@ -337,6 +340,8 @@ export async function kbMcpCmd(opts: { agent?: string } = {}): Promise<void> {
     codex: '~/.codex/config.toml',
     gemini: '~/.gemini/settings.json',
   };
+  // Outside a running daemon, default to port 7077 (the baton serve default).
+  const mcpOpts: McpOpts = { baseUrl: 'http://127.0.0.1:7077', token: getMcpToken(root) };
   console.log(`# ${agent} → add to ${dest[agent] ?? dest.claude}`);
-  console.log(snippetFor(agent, state));
+  console.log(snippetFor(agent, state, mcpOpts));
 }
