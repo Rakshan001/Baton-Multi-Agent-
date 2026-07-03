@@ -3,7 +3,7 @@
    Fetches /api/kb/context?format=json and offers Copy / Download —
    a paste-able project brief for external chatbots.
    ============================================================ */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { CopyButton } from "../components/primitives";
 import { BatonAPI } from "../lib/api";
@@ -12,6 +12,8 @@ import type { ContextPackResponse } from "../types";
 export function ContextPackModal({ project, onClose }: { project: string | null; onClose: () => void }) {
   const [pack, setPack] = useState<ContextPackResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const lastFocus = useRef<Element | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -22,9 +24,22 @@ export function ContextPackModal({ project, onClose }: { project: string | null;
   }, [project]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    lastFocus.current = document.activeElement;
+    const el = ref.current!;
+    const focusable = () => el.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])');
+    const first = focusable()[0];
+    if (first) setTimeout(() => first.focus(), 40);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      if (e.key === "Tab") {
+        const f = Array.from(focusable()); if (!f.length) return;
+        const i = f.indexOf(document.activeElement as HTMLElement);
+        if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+        else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("keydown", onKey, true); (lastFocus.current as HTMLElement)?.focus?.(); };
   }, [onClose]);
 
   const download = () => {
@@ -33,15 +48,17 @@ export function ContextPackModal({ project, onClose }: { project: string | null;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${project ?? "project"}-context.md`;
+    a.download = `${project ?? "hub"}-context.md`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Share context"
+    <div ref={ref} role="dialog" aria-modal="true" aria-label="Share context"
       onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 60, background: "color-mix(in srgb, var(--bg-base) 62%, transparent)", display: "grid", placeItems: "center", padding: 24 }}>
+      style={{ position: "fixed", inset: 0, zIndex: 60, background: "var(--bg-scrim)", display: "grid", placeItems: "center", padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()}
         style={{ width: "min(760px, 100%)", maxHeight: "84vh", display: "flex", flexDirection: "column", gap: 12, background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 14, padding: 18, boxShadow: "0 24px 64px rgba(0,0,0,.35)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -83,7 +100,7 @@ export function ContextPackModal({ project, onClose }: { project: string | null;
                 Trimmed to fit the budget: {pack.omitted.join(", ")}
               </div>
             )}
-            <pre style={{ flex: 1, minHeight: 0, overflow: "auto", margin: 0, padding: 12, borderRadius: 10, border: "1px solid var(--border-subtle)", background: "var(--bg-base)", fontSize: 11.5, lineHeight: 1.5, whiteSpace: "pre-wrap", userSelect: "text" }}>
+            <pre style={{ flex: 1, minHeight: 0, overflow: "auto", margin: 0, padding: 12, borderRadius: 10, border: "1px solid var(--border-subtle)", background: "var(--bg-base)", fontSize: "var(--fs-12)", lineHeight: 1.5, whiteSpace: "pre-wrap", userSelect: "text" }}>
               {pack.markdown}
             </pre>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
