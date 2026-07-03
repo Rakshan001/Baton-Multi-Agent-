@@ -27,7 +27,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
 import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
-import { buildQueue, kbStatus, loadKb, saveKb } from './kb/state.js';
+import { buildQueue, graphPathFor, kbStatus, loadKb, saveKb } from './kb/state.js';
 import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
@@ -70,6 +70,8 @@ import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { auditJunk, cleanJunk, sweepTmpFiles } from './cleanup.js';
 import { basename } from 'node:path';
 import { isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
+import { GraphifyPool } from './kb/graphify-server.js';
+import { getMcpToken } from './kb/mcp-token.js';
 
 const require = createRequire(import.meta.url);
 const VERSION = BATON_VERSION;
@@ -82,6 +84,9 @@ interface ServeOptions {
 
 /** Lazily-started per-daemon live infrastructure (one per `serve()`). */
 let poller: StatusPoller | null = null;
+
+/** Shared graphify backend pool — started in serve(), null until then. */
+let graphPool: GraphifyPool | null = null;
 
 /**
  * Built dashboard location. Compiled server lives at dist/server.js, so
@@ -277,6 +282,34 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   });
 }
 
+/**
+ * Proxy a POST /mcp/g/<token>/<projectId> request to the lazily-started
+ * graphify backend for that project. Body is forwarded verbatim; the upstream
+ * response (JSON or SSE text) is streamed back. All await paths are caught so
+ * a backend crash can't bring down the daemon.
+ */
+async function proxyGraphify(req: IncomingMessage, res: ServerResponse, projectId: string): Promise<void> {
+  if (!graphPool) return void res.writeHead(503).end('graph pool not started');
+  let port: number;
+  try { port = await graphPool.ensure(projectId); }
+  catch (e) { return void res.writeHead(502).end(String((e as Error).message)); }
+  graphPool.note(projectId);
+  const body = await readBody(req); // reuses the 1MB-capped reader
+  try {
+    const upstream = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: body || '{}',
+      signal: AbortSignal.timeout(30_000),
+    });
+    const text = await upstream.text();
+    res.writeHead(upstream.status, { 'Content-Type': upstream.headers.get('content-type') ?? 'application/json' });
+    res.end(text);
+  } catch (e) {
+    res.writeHead(504).end(String((e as Error).message));
+  }
+}
+
 /** kb sub-projects as (id, path-relative-to-main-root) for per-server memory scoping.
  *  Returns [] for a single-project repo (nothing to scope). */
 async function kbProjectRels(root: string): Promise<ProjectRel[]> {
@@ -305,6 +338,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     });
     res.end();
     return;
+  }
+
+  // Shared graphify proxy: POST /mcp/g/<token>/<projectId> → the lazily-started
+  // backend for that project. Token-gated (a web page can't read .baton/), loopback
+  // only, read-only graph queries. Method must be POST (MCP streamable-http).
+  // Intentionally outside /api/ so the CSRF Origin guard below doesn't apply;
+  // the 32-hex token is the auth gate instead.
+  const gm = path.match(/^\/mcp\/g\/([0-9a-f]{32})\/([A-Za-z0-9._-]+)$/);
+  if (gm) {
+    if (method !== 'POST') return send(res, 405, { error: 'POST only' }, origin);
+    if (gm[1] !== getMcpToken(root)) return send(res, 403, { error: 'bad token' }, origin);
+    return proxyGraphify(req, res, gm[2]);
   }
 
   // Anti-CSRF (applies to EVERY state-changing /api request, not just one route).
@@ -931,6 +976,20 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const opts: ServeOptions = typeof portOrOpts === 'number' ? { port: portOrOpts } : portOrOpts;
   // The Baton root owns `.baton/` — a single git repo OR a (non-git) multi-repo hub.
   const root = await resolveBatonRoot();
+  // Capture KB state at startup for the graphify pool's graph resolver.
+  // Note: adding a new project via `baton kb init` after daemon start requires
+  // a daemon restart for the pool to discover the new project's graph path.
+  const kb0 = await loadKb(root);
+  graphPool = new GraphifyPool((id) => {
+    if (id === 'merged') return kb0?.mergedGraphPath ?? null;
+    const p = kb0?.projects.find((x) => x.id === id);
+    return p ? graphPathFor(p.path) : null;
+  });
+  const reaper = setInterval(() => { void graphPool?.reapIdle(); }, 60_000);
+  reaper.unref?.();
+  const stop = () => { clearInterval(reaper); void graphPool?.shutdown(); process.exit(0); };
+  process.on('SIGINT', stop); process.on('SIGTERM', stop);
+
   poller = new StatusPoller(root);
   const watcher = new WorktreeWatcher(root);
   await watcher.start();
