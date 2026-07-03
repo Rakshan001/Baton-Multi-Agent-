@@ -75,14 +75,16 @@ See [memory.md](./memory.md) for how the evidence-anchored memory store works.
 
 ## Code-graph tools (graphify server)
 
-The graphify MCP server is graphify's own process, run via `uv` (`uv run --with graphifyy --with mcp -m graphify.serve <graph.json>`). Baton wires one server per project (`graphify-<id>`) and a `graphify-merged` server for the cross-project graph.
+The daemon owns a **shared pool** of graphify HTTP backends: one process per touched project, lazily started on first query and reaped after 15 minutes idle. Agents never spawn their own graphify processes — they POST to the daemon's proxy route and the daemon fans out to the right backend.
+
+**Requirement:** graph tools (`query_graph`, `get_node`) require `baton serve` to be running. Without the daemon, no graph queries work.
 
 | Tool | Purpose |
 |------|---------|
 | `query_graph` | Search the code knowledge graph for symbols, files, and relationships. |
 | `get_node` | Fetch a single node (a function, class, file, …) and its edges. |
 
-Reading the repo map via these tools costs roughly 824 tokens versus ~248k to read the files directly — about 300x cheaper. Build the graph with `baton kb init`; it auto-rebuilds via a git hook on commit. See [knowledge-base.md](./knowledge-graph.md).
+Reading the repo map via these tools costs roughly 824 tokens versus ~248k to read the files directly — about 300x cheaper. Build the graph with `baton kb init`; it auto-rebuilds via a git hook on commit. See [knowledge-graph.md](./knowledge-graph.md).
 
 ## Wiring per agent
 

@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-01 (session 6: multi-repo hub launcher + blank-terminal fix)** (branch: `feat/worktree-orchestration`)
+> Last updated: **2026-07-03 (session 7: shared graphify server + daemon dependency)** (branch: `feat/worktree-orchestration`)
 
 ## What this project is
 
@@ -46,7 +46,9 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **Skills (catalog + install)** | Searchable catalog of reusable agent playbooks. **File-backed** multi-file skills live under `src/skills/bundled/<id>/` — a real `SKILL.md` (gray-matter frontmatter, incl. folded multi-line descriptions) + an optional `references/` folder; the flagship `bug-fix` skill (reproduce-first → audit → blast radius → root cause → ≥95% skeptic-corroborated confidence + approved plan → fix → re-verify → auto-commit, never push) ships 3 reference files. The **efficiency & traceability pack** adds four more file-backed skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) — each a portable SKILL.md + one `references/` cheat-sheet, with optional "Baton boost" sections (CODEBASE.md/query_graph/recall_memory/who_touched). Tags/produces for file-backed skills live in `BUNDLED_META` (catalog.ts) so the source SKILL.md stays a clean name+description-only Claude skill. Plus short **inline** skills (`map-codebase`, `safe-refactor`) and **imported** skills read from `.baton/skills/*.md`. Bundled skills are cached + copied into `dist/` at build (`scripts/copy-assets.mjs`). `GET /api/skills` returns each skill with per-agent install state + reference paths (content/raw never serialized); `POST/DELETE /api/skills/:id/install` writes/removes in the agent's own format — Claude → `.claude/skills/<id>/SKILL.md` (+ `references/`, hand-authored SKILL.md written verbatim when faithful), Cursor → `.cursor/rules/<id>.mdc` (`alwaysApply:false`) with references copied to a sibling `<id>/` folder the rule points at; other CLIs unsupported. `POST /api/skills/import` adds from a path/http(s) URL (256KB cap, can't shadow a bundled id). All writes gated on `--write`. Dashboard **Skills** screen: search, source/produces/reference chips + multi-file badge, per-agent install toggles, playbook preview, import; an **"Efficiency & traceability pack"** showcase band highlights the four pack skills on the unsearched landing state (click a chip to filter to it); demo mirror (`web/src/lib/demoSkills.ts`). | dashboard → Skills; `curl -XPOST localhost:7077/api/skills/bug-fix/install -d '{"agent":"claude"}'` writes `.claude/skills/bug-fix/SKILL.md` + `references/` |
 | **Project memory** | Evidence-anchored shared memory at `.baton/memory/facts/` (one md file per fact, atomic writes, always the MAIN repo even from worktrees): every fact stores the commit + content-hashes of the files it describes; on every read the anchors are re-checked — changed file ⇒ fact served as `stale` with the reason and **withheld from agents** (anti-hallucination). Agents write via `save_memory` / read via `recall_memory` MCP tools (keyword-ranked, stale-filtered); supersede-by-fingerprint dedup; secret-pattern rejection (keys/tokens/JWTs refused); 1.2k-char + 500-fact caps; handoff briefs embed a token-cheap "Project memory" section; daemon watches the store → `memory.updated` SSE; dashboard Memory page (search, fresh/aging/stale badges, quick-add, GC, delete; demo facts in demo mode); `baton memory list\|add\|rm\|gc` CLI; AGENTS.md guide tells agents to recall-before-exploring and save-after-learning | `baton memory add "…" --files src/x.ts` → edit src/x.ts → `baton memory list` shows STALE → `baton memory gc`; dashboard → Memory |
 
-Tests: 228 vitest tests at root green (routing v2 + MCP-connect + roster + skills covered;
+| **Shared graphify backend pool** | The daemon owns one graphify HTTP backend per **touched** project (lazy start on first query, reaped after 15 min idle); agents POST to `POST /mcp/g/<token>/<projectId>` and never spawn their own processes. Token-gated (`.baton/mcp-token`, mode 0600, embedded in the config URL); backends bind `127.0.0.1`. Claude/Cursor/Gemini get http-form MCP entries; Codex stays on stdio. Existing setups migrate by re-running `baton kb init` (or the Agents → Connect action). RAM: ~720 MB (3 agents × 6 stdio processes on a 5-project hub) → at most 1 backend per touched project regardless of agent count. | `node dist/cli.js serve --write --port 7079` against FAT_FOX (5 projects): `/api/kb/mcp` → http URLs; POST tools/list to `merged` + `fatfox-api-server` → 2 Python backends started (HTTP 200 both); wrong token → 403; SIGTERM daemon → 0 backends remain |
+
+Tests: 266 vitest tests at root green (routing v2 + MCP-connect + roster + skills + graphify-server + graphify-proxy + mcp-token covered;
 `test/skills.test.ts` covers render/parse/target helpers, folded-YAML parsing, multi-file
 references, file-backed bundled loading, and the efficiency & traceability pack's load +
 faithful raw + BUNDLED_META tags/produces). Both workspaces strict TS, both builds clean.
@@ -144,6 +146,28 @@ all three workspaces build clean. Verified end-to-end on the real FAT_FOX hub
 (daemon boots, `/api/meta` hub:true + 5 projects, create→worktree-in-sub-repo→
 merge→remove, self-cleaned). Still to do: live browser click-through of the picker
 + blank-terminal fix with a real `claude` session.
+
+**Shared graphify server + unified agent proxy (2026-07-03).** Replaced the
+per-agent stdio `uv run graphify.serve` spawning with a daemon-owned shared
+HTTP backend pool. `GraphifyPool` (`src/kb/graphify-server.ts`) lazily starts one
+graphify process per touched project and proxies all agent queries through
+`POST /mcp/g/<token>/<projectId>` — the 32-hex token is stored in
+`.baton/mcp-token` (mode 0600) and embedded in the generated MCP config URLs.
+Backends bind `127.0.0.1` only, run `--stateless --json-response` (no session
+affinity), and are reaped via SIGTERM after 15 min idle (60s poll). Daemon
+SIGTERM/SIGINT fires `graphPool.shutdown()` so backends never outlive the daemon.
+MCP config for Claude, Cursor, Gemini rewritten to `{type:'http', url}` form;
+Codex intentionally stays on stdio (its TOML has no url support). Existing
+setups migrate via `baton kb init` or Agents → Connect. Deliberate trade-off:
+graph queries now require `baton serve` to be running — documented in
+`docs/knowledge-graph.md`, `docs/mcp-tools.md`, `docs/architecture.md`,
+`docs/troubleshooting.md`. Verified live against FAT_FOX (5-project hub, port
+7079): 0 HTTP graphify backends before first query; `merged` query → 2 processes
+(1 uv + 1 Python); `fatfox-api-server` query → 4 total (2 projects × 2 each);
+wrong token → 403; SIGTERM daemon → 0 HTTP backends remain (12 pre-existing
+old-style stdio processes untouched). Tests: `test/graphify-server.test.ts` (3)
++ `test/graphify-proxy.test.ts` (1) + `test/mcp-token.test.ts` (1). **266 tests
+green**, backend build clean.
 
 ## Pending / next 🔜
 

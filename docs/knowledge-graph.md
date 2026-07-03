@@ -166,7 +166,13 @@ Source: [`src/kb/codebasemd.ts`](../src/kb/codebasemd.ts).
 
 `baton kb init` writes graphify's MCP servers into `.mcp.json` (one
 `graphify-<project>` per project, plus `graphify-merged`), alongside the `baton`
-coordination server. Each graphify server runs via `uv` and exposes:
+coordination server.
+
+**The daemon must be running.** Graph queries route through the daemon's shared
+graphify pool (`POST /mcp/g/<token>/<projectId>`). Backends are lazily started
+on first use and reaped after 15 minutes idle, so you pay no cost for projects
+you don't touch. If `baton serve` is not running, `query_graph` / `get_node`
+calls from agents will fail to connect.
 
 | MCP tool | Use |
 |---|---|
@@ -176,13 +182,13 @@ coordination server. Each graphify server runs via `uv` and exposes:
 Print config for any agent:
 
 ```bash
-baton kb mcp --agent claude    # → .mcp.json (repo root) or ~/.claude.json
+baton kb mcp --agent claude    # → .mcp.json (repo root)
 baton kb mcp --agent cursor    # → .cursor/mcp.json
-baton kb mcp --agent codex     # → ~/.codex/config.toml
+baton kb mcp --agent codex     # → ~/.codex/config.toml (stdio; stays local)
 baton kb mcp --agent gemini    # → ~/.gemini/settings.json
 ```
 
-You can also query from the shell:
+You can also query from the shell without the daemon:
 
 ```bash
 graphify query "where is auth handled" --graph graphify-out/graph.json

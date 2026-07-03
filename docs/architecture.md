@@ -160,6 +160,40 @@ KB state, MCP snippets, `CODEBASE.md` generation, export/import). See the docs
 [skills](./skills.md) and [mcp-tools](./mcp-tools.md) pages for adjacent surfaces,
 and [memory](./memory.md) for the evidence-anchored fact store.
 
+## Shared graphify backend pool
+
+Before this feature each connected agent would spawn its own set of graphify
+stdio processes — on a 5-project hub with 3 agents that meant up to 18 `uv run
+graphify.serve` processes (measured ~720 MB RSS). The current model eliminates
+that explosion:
+
+- `GraphifyPool` ([src/kb/graphify-server.ts](../src/kb/graphify-server.ts))
+  owns a map of `projectId → {port, proc, lastAccess}`.
+- `ensure(projectId)` lazily starts a backend on a free loopback port when
+  the first request arrives; a second call returns the same port immediately.
+- A 60-second interval calls `reapIdle()` which SIGTERMs any backend idle
+  for more than 15 minutes (configurable via `idleMs`), with a 5-second
+  SIGKILL fallback.
+- On daemon shutdown (`SIGTERM` / `SIGINT`) `graphPool.shutdown()` fires a
+  SIGTERM at every live backend immediately.
+- Backends bind `127.0.0.1` only and run with `--stateless --json-response`,
+  which means each POST is a standalone request/response (no session affinity
+  needed).
+
+The daemon proxy route (`POST /mcp/g/<token>/<projectId>`) is **outside
+`/api/`** so the regular CSRF Origin guard does not apply; the 32-hex token
+(stored in `.baton/mcp-token`, mode 0600) is the auth gate instead. Agents
+receive the URL with the token embedded via `baton kb init` / the Connect
+action on the Agents screen.
+
+**Deliberate trade-off:** graph queries now **require `baton serve` to be
+running**. Without the daemon, `query_graph` / `get_node` fail. This is the
+documented operating model; the daemon is the coordination hub agents run
+alongside anyway.
+
+**Codex exception:** Codex's TOML MCP format has no `url` key. Codex keeps the
+per-session `uv run graphify.serve` stdio spawn and is unaffected by the pool.
+
 ## Two TypeScript workspaces (no monorepo tool)
 
 Baton is **two separate `package.json`s with no monorepo tool**:
