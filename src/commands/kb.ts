@@ -21,6 +21,8 @@ import { mergeJsonConfig, McpConfigParseError } from '../agents/connect.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
 import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
+import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
+import { resolveBatonRoot } from '../store.js';
 
 const AGENT_GUIDE = `
 <!-- baton:coordination -->
@@ -346,4 +348,36 @@ export async function kbMcpCmd(opts: { agent?: string; port?: string } = {}): Pr
   const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
   console.log(`# ${agent} → add to ${dest[agent] ?? dest.claude}`);
   console.log(snippetFor(agent, state, mcpOpts));
+}
+
+/** `baton kb context` — print/write the shareable markdown pack for external chatbots. */
+export async function kbContextCmd(
+  path: string | undefined,
+  opts: { project?: string; out?: string; tokens?: string } = {},
+): Promise<void> {
+  const root = await resolveBatonRoot(path ? resolve(path) : process.cwd());
+  const state = await loadKb(root);
+  const maxTokens = Math.max(1000, Math.min(200_000, Number(opts.tokens ?? 8000) || 8000));
+  let pack;
+  try {
+    pack = await buildContextPack(root, state, { project: opts.project, maxTokens });
+  } catch (e) {
+    if (e instanceof UnknownProjectError) {
+      console.error(`no project '${opts.project}' — valid: ${e.projects.join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw e;
+  }
+  if (opts.out) {
+    const file = resolve(opts.out);
+    await writeFile(file, pack.markdown, 'utf-8');
+    const extras = [
+      `~${pack.tokens.toLocaleString()} tokens`,
+      ...(pack.redactions ? [`${pack.redactions} secret${pack.redactions === 1 ? '' : 's'} redacted`] : []),
+    ].join(', ');
+    console.error(`✓ context pack → ${file} (${extras})`);
+  } else {
+    process.stdout.write(pack.markdown);
+  }
 }

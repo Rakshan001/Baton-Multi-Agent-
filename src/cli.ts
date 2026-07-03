@@ -22,7 +22,7 @@ import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
 import { pathCmd } from './commands/path.js';
-import { kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
+import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
@@ -196,6 +196,15 @@ kb.command('mcp')
   .option('--port <port>', 'daemon port to embed in the generated MCP config URLs (default 7077)')
   .description('print MCP config so an agent can query the knowledge graph')
   .action((opts: { agent?: string; port?: string }) => run(() => kbMcpCmd(opts)));
+
+kb.command('context')
+  .argument('[path]', 'project or hub root (default: nearest .baton, else git root)')
+  .option('--project <id>', 'hub: render one sub-project instead of the combined pack')
+  .option('--out <file>', 'write to a file instead of stdout')
+  .option('--tokens <n>', 'token budget (default 8000 — fits ChatGPT free tier)')
+  .description('print a shareable markdown context pack for any external chatbot (pipe to pbcopy)')
+  .action((path: string | undefined, opts: { project?: string; out?: string; tokens?: string }) =>
+    run(() => kbContextCmd(path, opts)));
 
 program
   .command('start')
