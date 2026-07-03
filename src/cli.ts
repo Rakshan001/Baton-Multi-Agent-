@@ -160,8 +160,9 @@ kb.command('init')
   .option('--no-docs', 'skip adding the coordination guide to AGENTS.md/CLAUDE.md')
   .option('--share', 'commit the KB to git (kb/ directory) so teammates skip re-indexing')
   .option('--local', 'keep the KB local-only (skip the share question)')
+  .option('--port <port>', 'daemon port to embed in the generated MCP config URLs (default 7077)')
   .description('set up the knowledge base: graph per sub-project + merged graph + git hooks')
-  .action((path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean }) => run(() => kbInitCmd(path, opts)));
+  .action((path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; port?: string }) => run(() => kbInitCmd(path, opts)));
 
 kb.command('export')
   .option('--out <file>', 'output file (default: baton-kb-<repo>-<sha>.tar.gz)')
@@ -192,8 +193,9 @@ kb.command('rebuild')
 
 kb.command('mcp')
   .option('--agent <agent>', 'claude | cursor | codex | gemini', 'claude')
+  .option('--port <port>', 'daemon port to embed in the generated MCP config URLs (default 7077)')
   .description('print MCP config so an agent can query the knowledge graph')
-  .action((opts: { agent?: string }) => run(() => kbMcpCmd(opts)));
+  .action((opts: { agent?: string; port?: string }) => run(() => kbMcpCmd(opts)));
 
 program
   .command('start')

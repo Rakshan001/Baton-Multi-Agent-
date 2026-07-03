@@ -14,7 +14,8 @@ function serveArgs(graphPath: string): string[] {
 
 export type McpServerDef =
   | { command: string; args: string[] }
-  | { type: 'http'; url: string };
+  | { type: 'http'; url: string }
+  | { httpUrl: string };
 
 /** TOML basic-string with `"` and `\` escaped (raw concatenation would emit invalid TOML). */
 function tomlStr(s: string): string {
@@ -71,20 +72,36 @@ export function codexSnippet(state: KbState, opts: McpOpts): string {
   const lines: string[] = [];
   for (const [name, def] of Object.entries(mcpServersCodex(state))) {
     lines.push(`[mcp_servers.${tomlStr(name)}]`);
-    if ('url' in def) {
-      lines.push(`url = ${tomlStr(def.url)}`);
-    } else {
+    if ('command' in def) {
       lines.push(`command = ${tomlStr(def.command)}`);
       lines.push(`args = [${def.args.map(tomlStr).join(', ')}]`);
+    } else if ('httpUrl' in def) {
+      lines.push(`httpUrl = ${tomlStr(def.httpUrl)}`);
+    } else {
+      lines.push(`url = ${tomlStr(def.url)}`);
     }
     lines.push('');
   }
   return lines.join('\n').trimEnd() + '\n';
 }
 
-/** Gemini CLI uses the same mcpServers JSON shape inside ~/.gemini/settings.json. */
+/**
+ * Gemini CLI variant: graphify entries use `{ httpUrl }` (streamable-HTTP form
+ * required by Gemini CLI's settings.json schema) instead of `{ type:'http', url }`.
+ * The baton coordination server stays stdio.
+ */
+export function mcpServersGemini(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
+  const servers: Record<string, McpServerDef> = {};
+  const url = (id: string) => `${opts.baseUrl}/mcp/g/${opts.token}/${id}`;
+  for (const p of state.projects) servers[`graphify-${p.id}`] = { httpUrl: url(p.id) };
+  if (state.mergedGraphPath) servers['graphify-merged'] = { httpUrl: url('merged') };
+  servers['baton'] = { command: 'baton', args: ['mcp'] };
+  return servers;
+}
+
+/** Gemini CLI uses httpUrl (not url) for streamable-HTTP MCP entries in ~/.gemini/settings.json. */
 export function geminiSnippet(state: KbState, opts: McpOpts): string {
-  return jsonSnippet(state, opts);
+  return JSON.stringify({ mcpServers: mcpServersGemini(state, opts) }, null, 2);
 }
 
 export function snippetFor(agent: string, state: KbState, opts: McpOpts): string {

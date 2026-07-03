@@ -68,6 +68,7 @@ baton kb init ./services       # index a specific folder
 | `--no-docs` | Skip adding the coordination guide to `AGENTS.md`/`CLAUDE.md`. |
 | `--share` | Commit the KB to git (`kb/` directory) so teammates skip re-indexing. |
 | `--local` | Keep the KB local-only (skip the interactive share question). |
+| `--port <port>` | Daemon port to embed in the generated MCP config URLs (default 7077). Use this when `baton serve` runs on a non-default port. |
 
 Example output:
 
@@ -206,6 +207,15 @@ all of a repo's worktrees share `.git/hooks`, every task worktree gets the same
 auto-rebuild: when you commit, the affected graph updates and the matching
 `CODEBASE.md` is regenerated. If hook installation fails, run
 `graphify hook install` manually from the repo root.
+
+Graph changes are picked up automatically by agents: graphify's `--stateless`
+backend re-reads the graph file on each request, so a rebuild is reflected in the
+next query with no daemon restart needed.
+
+> **Note:** If you run `baton kb init` while the daemon is already running,
+> restart the daemon so it picks up the newly wired project paths. The graphify
+> pool captures KB state at daemon start time; projects added after startup won't
+> be served until you restart.
 
 ## Dashboard
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mergeJsonConfig, mergeTomlConfig } from '../src/agents/connect.js';
-import { mcpServers, codexSnippet } from '../src/kb/mcp.js';
+import { mcpServers, codexSnippet, geminiSnippet } from '../src/kb/mcp.js';
 
 describe('mergeJsonConfig with an http server def', () => {
   it('writes a { type, url } entry verbatim', () => {
@@ -52,14 +52,45 @@ describe('codexSnippet TOML block headers and escaping', () => {
     expect(toml).not.toContain('url =');
   });
 
-  it('uses toml-escaped url in non-codex snippet (verify escaping helper)', () => {
-    // mergeTomlConfig already has escaping tests; this verifies codexSnippet
-    // uses the same tomlStr-equivalent approach for any url in its server defs
+  it('emits just the baton block when there are no projects', () => {
     const state = { root: '/r', projects: [], mergedGraphPath: null, lastBuiltAt: null } as any;
     const opts = { baseUrl: 'http://127.0.0.1:7077', token: 'b'.repeat(32) };
     const toml = codexSnippet(state, opts);
     // Just baton should appear
     expect(toml).toContain('[mcp_servers."baton"]');
     expect(toml).toContain('command = "baton"');
+  });
+});
+
+describe('geminiSnippet uses httpUrl (not url) for graphify entries', () => {
+  const state = { root: '/r', projects: [{ id: 'api', name: 'api', path: '/r/api', graphPath: '/r/api/g.json' }], mergedGraphPath: '/r/.baton/kb/m.json', lastBuiltAt: null } as any;
+  const opts = { baseUrl: 'http://127.0.0.1:7077', token: 'a'.repeat(32) };
+
+  it('emits httpUrl for graphify entries', () => {
+    const snippet = geminiSnippet(state, opts);
+    expect(snippet).toContain('"httpUrl":');
+    expect(snippet).not.toContain('"url":');
+    expect(snippet).not.toContain('"type": "http"');
+  });
+
+  it('baton entry stays stdio (command/args)', () => {
+    const parsed = JSON.parse(geminiSnippet(state, opts));
+    expect(parsed.mcpServers.baton).toEqual({ command: 'baton', args: ['mcp'] });
+  });
+
+  it('claude/cursor still use type+url form (not httpUrl)', () => {
+    // mcpServers is used by claude/cursor — verify it still uses { type:'http', url }
+    const servers = mcpServers(state, opts);
+    expect(servers['graphify-api']).toEqual({ type: 'http', url: `http://127.0.0.1:7077/mcp/g/${'a'.repeat(32)}/api` });
+    expect(servers['graphify-api']).not.toHaveProperty('httpUrl');
+  });
+});
+
+describe('mcpServers port in URL', () => {
+  it('uses the supplied port in all graphify URLs', () => {
+    const state = { root: '/r', projects: [{ id: 'api', name: 'api', path: '/r/api', graphPath: '/r/api/g.json' }], mergedGraphPath: null, lastBuiltAt: null } as any;
+    const servers = mcpServers(state, { baseUrl: 'http://127.0.0.1:7079', token: 'c'.repeat(32) });
+    const url = (servers['graphify-api'] as { type: 'http'; url: string }).url;
+    expect(url).toContain(':7079');
   });
 });

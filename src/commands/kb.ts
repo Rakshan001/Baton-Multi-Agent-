@@ -109,7 +109,7 @@ export async function askChoice<T extends string>(
   }
 }
 
-export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean } = {}): Promise<void> {
+export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; port?: string } = {}): Promise<void> {
   let root: string;
   try {
     root = await gitRoot(path ? resolve(path) : undefined);
@@ -183,7 +183,8 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   // Outside a running daemon, default to port 7077 (the baton serve default).
   const mcpPath = join(root, '.mcp.json');
   if (opts.mcp !== false) {
-    const mcpOpts: McpOpts = { baseUrl: 'http://127.0.0.1:7077', token: getMcpToken(root) };
+    const port = Number(opts.port ?? 7077);
+    const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
     const existing = existsSync(mcpPath) ? await readFile(mcpPath, 'utf-8') : '';
     try {
       await writeFile(mcpPath, mergeJsonConfig(existing, mcpServers(state, mcpOpts), mcpPath), 'utf-8');
@@ -325,7 +326,7 @@ export async function kbShareCmd(mode?: string): Promise<void> {
   }
 }
 
-export async function kbMcpCmd(opts: { agent?: string } = {}): Promise<void> {
+export async function kbMcpCmd(opts: { agent?: string; port?: string } = {}): Promise<void> {
   const root = await gitRoot();
   const state = await loadKb(root);
   if (!state) {
@@ -341,7 +342,8 @@ export async function kbMcpCmd(opts: { agent?: string } = {}): Promise<void> {
     gemini: '~/.gemini/settings.json',
   };
   // Outside a running daemon, default to port 7077 (the baton serve default).
-  const mcpOpts: McpOpts = { baseUrl: 'http://127.0.0.1:7077', token: getMcpToken(root) };
+  const port = Number(opts.port ?? 7077);
+  const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
   console.log(`# ${agent} → add to ${dest[agent] ?? dest.claude}`);
   console.log(snippetFor(agent, state, mcpOpts));
 }

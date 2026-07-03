@@ -4,6 +4,11 @@
  * spawning their own 6 (the RAM explosion the perf audit measured). --stateless
  * --json-response makes each backend a plain request/response server the daemon
  * can proxy without session affinity or SSE.
+ *
+ * Graph freshness: graphify.serve --stateless re-reads the graph file on every
+ * request (verified empirically: 100-node graph → modify to 10 nodes → next
+ * graph_stats call returns 10). No flush-on-rebuild is needed; agents see updated
+ * graphs immediately after a `baton kb rebuild` without a daemon restart.
  */
 import { createServer } from 'node:net';
 import { execa, type ResultPromise } from 'execa';

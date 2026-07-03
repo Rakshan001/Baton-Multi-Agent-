@@ -23,6 +23,11 @@ describe('serversForState', () => {
   it('wires just the coordination server when there is no KB', () => {
     expect(serversForState(null)).toEqual({ baton: { command: 'baton', args: ['mcp'] } });
   });
+
+  it('throws when state exists but opts is undefined', () => {
+    const state = { root: '/r', projects: [{ id: 'api', name: 'api', path: '/r/api', graphPath: '/r/api/g.json' }], mergedGraphPath: null, lastBuiltAt: null } as any;
+    expect(() => serversForState(state, undefined)).toThrow('mcpOpts required when a KB exists');
+  });
 });
 
 describe('isConnected', () => {

@@ -12,7 +12,8 @@ install steps see [SETUP.md](../SETUP.md).
 | `graphify is not installed` | The knowledge base needs the external `graphify` CLI. Install it with `uv tool install graphifyy` (or `pipx install graphifyy` / `pip install graphifyy`), then re-run your `baton kb` command. |
 | Agent `query_graph` / `get_node` calls fail or timeout | Graph queries route through the daemon's shared graphify pool. `baton serve` must be running. Start it with `baton serve --write` and ensure your agent's MCP config points at the correct daemon port. |
 | Agent `.mcp.json` still has old `uv run` stdio entries for graphify | Re-run `baton kb init` (or use the **Agents → Connect** action in the dashboard) to rewrite the MCP config to the http proxy format. Codex intentionally stays on stdio and does not need re-connecting. |
-| Port `7077` is busy | Start on another port: `baton serve -p 7079`. In the dashboard, add it as a connection (switcher → **Add connection…** → `http://localhost:7079`). |
+| Port `7077` is busy | Start on another port: `baton serve -p 7079`. Then regenerate the MCP config for the new port: `baton kb init --port 7079` (or `baton kb mcp --port 7079`). In the dashboard, add it as a connection (switcher → **Add connection…** → `http://localhost:7079`). |
+| 403 on every graph query on a teammate's machine (committed `.mcp.json`) | Re-run `baton kb init` (regenerates the config with YOUR `.baton/mcp-token`). |
 | Knowledge Graph has nodes but no docs/PDF content | Code-only extraction needs no key, but graphify only summarizes docs/PDFs when an LLM key is set. Export one (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) and run `baton kb rebuild --full`. |
 | Dashboard shows fake **"Orbit"** / demo data | You are on the Vite dev origin (`:5173`), where demo mode defaults **ON**. Turn it off in the Tweaks panel (bottom-right), or just use the real daemon UI at `:7077`. |
 | Interactive terminals say tmux is missing | tmux hosts the in-dashboard agent terminals. Install it (`brew install tmux` / `apt install tmux`) and restart the daemon. Headless runs (`baton start`) work without tmux. |
@@ -43,8 +44,18 @@ those tools:
    need to re-connect Codex.
 
 3. If the daemon is running on a non-default port, make sure the MCP config URL
-   matches (`http://127.0.0.1:<port>/mcp/g/<token>/<id>`). Re-running
-   `baton kb init` while the daemon is on that port writes the correct URL.
+   matches (`http://127.0.0.1:<port>/mcp/g/<token>/<id>`). Regenerate with:
+
+   ```bash
+   baton kb init --port <port>   # rewrites .mcp.json with the correct port
+   # or just print the snippet:
+   baton kb mcp --port <port> --agent gemini
+   ```
+
+4. **If you ran `baton kb init` before starting the daemon** (or before adding a
+   new project), restart the daemon. The graphify pool captures KB state at daemon
+   start time; a KB initialized after the daemon started won't be served until you
+   restart.
 
 ### Knowledge graph: code vs. docs
 

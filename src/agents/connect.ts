@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { KbState } from '../kb/state.js';
-import { mcpServers, type McpOpts, type McpServerDef } from '../kb/mcp.js';
+import { mcpServers, mcpServersGemini, type McpOpts, type McpServerDef } from '../kb/mcp.js';
 import { escapeRegExp } from '../util/regex.js';
 
 export type McpScope = 'project' | 'global';
@@ -91,7 +91,15 @@ export function mcpTargetFor(agent: string, root: string, home = homedir()): Age
 
 /** The servers Baton wires: graphify graphs (when the KB exists) + the coordination server. */
 export function serversForState(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && !opts) throw new Error('mcpOpts required when a KB exists');
   if (state && opts) return mcpServers(state, opts);
+  return { baton: { command: 'baton', args: ['mcp'] } };
+}
+
+/** Gemini variant of serversForState: graphify entries use httpUrl form. */
+export function serversForStateGemini(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && !opts) throw new Error('mcpOpts required when a KB exists');
+  if (state && opts) return mcpServersGemini(state, opts);
   return { baton: { command: 'baton', args: ['mcp'] } };
 }
 
@@ -152,10 +160,15 @@ export function mergeTomlConfig(existing: string, servers: Record<string, McpSer
   const blocks: string[] = [];
   for (const [name, def] of Object.entries(servers)) {
     if (tomlTableRe(name).test(existing)) continue;
-    const block = 'url' in def
-      ? [`[mcp_servers.${tomlStr(name)}]`, `url = ${tomlStr(def.url)}`, '']
-      : [`[mcp_servers.${tomlStr(name)}]`, `command = ${tomlStr(def.command)}`,
-         `args = [${def.args.map(tomlStr).join(', ')}]`, ''];
+    let block: string[];
+    if ('httpUrl' in def) {
+      block = [`[mcp_servers.${tomlStr(name)}]`, `httpUrl = ${tomlStr(def.httpUrl)}`, ''];
+    } else if ('url' in def) {
+      block = [`[mcp_servers.${tomlStr(name)}]`, `url = ${tomlStr(def.url)}`, ''];
+    } else {
+      block = [`[mcp_servers.${tomlStr(name)}]`, `command = ${tomlStr(def.command)}`,
+               `args = [${def.args.map(tomlStr).join(', ')}]`, ''];
+    }
     blocks.push(...block);
   }
   if (!blocks.length) return existing.endsWith('\n') || !existing ? existing : existing + '\n';
@@ -191,7 +204,9 @@ export async function connectAgentMcp(
 ): Promise<ConnectResult> {
   const target = mcpTargetFor(agent, root, home);
   if (!target) throw new McpUnsupportedError(agent);
-  const servers = serversForState(state, opts.mcpOpts);
+  const servers = agent === 'gemini'
+    ? serversForStateGemini(state, opts.mcpOpts)
+    : serversForState(state, opts.mcpOpts);
   const serverNames = Object.keys(servers);
 
   const existing = existsSync(target.path) ? await readFile(target.path, 'utf-8') : '';
