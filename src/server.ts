@@ -294,7 +294,12 @@ async function proxyGraphify(req: IncomingMessage, res: ServerResponse, projectI
   try { port = await graphPool.ensure(projectId); }
   catch (e) { return void res.writeHead(502).end(String((e as Error).message)); }
   graphPool.note(projectId);
-  const body = await readBody(req); // reuses the 1MB-capped reader
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch {
+    return void res.writeHead(413).end('payload too large');
+  }
   try {
     const upstream = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
