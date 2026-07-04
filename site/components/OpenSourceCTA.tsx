@@ -1,6 +1,6 @@
 import CopyChip from "./CopyChip";
 import Reveal from "./Reveal";
-import { REPO_URL, LICENSE_URL, GOOD_FIRST_ISSUES_URL } from "./site";
+import { REPO_URL, LICENSE_URL, GOOD_FIRST_ISSUES_URL, QUICKSTART_CMD } from "./site";
 
 export default function OpenSourceCTA() {
   return (
@@ -55,9 +55,11 @@ export default function OpenSourceCTA() {
           <pre className="overflow-x-auto rounded-xl border border-line bg-ink-2 p-4 font-mono text-sm leading-relaxed text-muted">
             <code>
               <span className="text-faint">$</span> git clone {"\\"}
-              {"\n  "}https://github.com/Rakshan001/Baton-Multi-Agent-.git
+              {"\n  "}https://github.com/Rakshan001/Baton-Multi-Agent-.git baton
               {"\n"}
-              <span className="text-faint">$</span> npm install && npm run build
+              <span className="text-faint">$</span> cd baton && npm install && npm install --prefix web
+              {"\n"}
+              <span className="text-faint">$</span> npm run build && npm run build --prefix web
               {"\n"}
               <span className="text-faint">$</span> node dist/cli.js{" "}
               <span className="text-amber">serve --write</span>
@@ -67,7 +69,8 @@ export default function OpenSourceCTA() {
           </pre>
           <div className="mt-4 flex justify-center">
             <CopyChip
-              command="git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git"
+              command={QUICKSTART_CMD}
+              display="Copy the full quick start"
               prefix="$"
             />
           </div>
