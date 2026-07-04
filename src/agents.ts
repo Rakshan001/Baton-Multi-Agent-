@@ -65,7 +65,7 @@ async function pidCwd(pid: number): Promise<string | null> {
  * inside one of the given worktrees. Only resolves cwd for processes that
  * actually look like an agent (cheap), and skips our own process.
  */
-export async function detectAgents(worktreePaths: string[]): Promise<Map<string, string>> {
+async function scanAgents(worktreePaths: string[]): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   if (worktreePaths.length === 0) return result;
 
@@ -83,5 +83,34 @@ export async function detectAgents(worktreePaths: string[]): Promise<Map<string,
     }),
   );
 
+  return result;
+}
+
+// The process-table sweep (ps + per-pid lsof) is the daemon's most expensive
+// poll-path call and gets hit by the board poller, /api/status and
+// /api/signals concurrently — up to 12×/s measured. One shared 2s cache
+// collapses those bursts; ≤2s staleness is invisible at the board's own 2s tick.
+const DETECT_TTL_MS = 2000;
+let detectCache: { key: string; at: number; result: Map<string, string> } | null = null;
+
+/** Test-only: drop the cache between test cases. */
+export function resetDetectAgentsCache(): void {
+  detectCache = null;
+}
+
+export async function detectAgents(
+  worktreePaths: string[],
+  opts: { now?: () => number; scan?: (paths: string[]) => Promise<Map<string, string>> } = {},
+): Promise<Map<string, string>> {
+  if (worktreePaths.length === 0) return new Map();
+  const now = opts.now ?? Date.now;
+  const scan = opts.scan ?? scanAgents;
+  const key = [...worktreePaths].sort().join('\n');
+  const t = now();
+  if (detectCache && detectCache.key === key && t - detectCache.at < DETECT_TTL_MS) {
+    return new Map(detectCache.result);
+  }
+  const result = await scan(worktreePaths);
+  detectCache = { key, at: t, result: new Map(result) };
   return result;
 }
