@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { SITE_URL } from "@/lib/site-url";
 
 const grotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -13,8 +14,6 @@ const mono = JetBrains_Mono({
   display: "swap",
   variable: "--font-mono",
 });
-
-const SITE_URL = "https://baton.dev";
 const REPO = "https://github.com/Rakshan001/Baton-Multi-Agent-";
 const DESCRIPTION =
   "Baton coordinates multiple AI coding agents — Claude Code, Cursor, Codex, Gemini — on one repo. Isolated git worktrees, a live dashboard, shared memory, installable skills, and one-file session handoff. Open source.";
