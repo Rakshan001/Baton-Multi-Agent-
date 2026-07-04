@@ -64,7 +64,7 @@ don't render them. The verified scope:
 | GitHub API rate-limited at build | star badge hidden, button still links |
 | Repo has 0 stars | badge hidden (no "Star 0") |
 | JS disabled | noscript override keeps all content visible |
-| Daemon dies mid-session | ApiDot shows reconnecting; polling continues |
+| Daemon dies mid-session | ApiDot shows reconnecting while REST still answers; full outage flips to Offline |
 | Memory fetch fails persistently | ErrorState with retry, never the "No memories yet" empty state |
 | Long anchored-file lists on facts | single-line ellipsis, layout intact |
 

@@ -56,6 +56,7 @@ function LiveSignalsSection() {
       <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
         <Icon name="zap" size={14} style={{ color: "var(--text-tertiary)" }} />
         <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Live edit signals</h2>
+        {signals.error != null && rows.length > 0 && (<span style={{ fontSize: "var(--fs-12)", color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>)}
         <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{rows.length ? `${rows.length} file${rows.length === 1 ? "" : "s"}` : ""}</span>
       </div>
       <div style={{ padding: rows.length ? "4px 16px 10px" : 0 }}>

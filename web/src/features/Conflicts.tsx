@@ -30,6 +30,7 @@ function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
         <Icon name="zap" size={14} style={{ color: warnings.length ? "var(--conflict)" : "var(--accent)" }} />
         <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>Editing right now</span>
         <span className="tag">{rows.length} file{rows.length === 1 ? "" : "s"}</span>
+        {signals.error != null && rows.length > 0 && (<span className="tag" style={{ color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>)}
         {warnings.length > 0 && (
           <span style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, padding: "1px 8px" }}>
             {warnings.length} overlapping

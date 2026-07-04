@@ -30,7 +30,7 @@ export default function MobileMenu() {
       <button
         type="button"
         aria-expanded={open}
-        aria-controls="mobile-nav"
+        aria-controls={open ? "mobile-nav" : undefined}
         aria-label={open ? "Close menu" : "Open menu"}
         onClick={() => setOpen((v) => !v)}
         className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-muted transition-colors hover:text-fg"
