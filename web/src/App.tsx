@@ -247,10 +247,10 @@ function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string
   );
 }
 
-function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo, live, connections, onConnectionsChange }: {
+function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo, live, reconnecting, connections, onConnectionsChange }: {
   counts: Counts; apiState: "online" | "fetching" | "offline"; lastUpdated: number | null;
   onRefresh: () => void; onMenu: () => void; onSearch: () => void; onLaunch: (agent: AgentId | null) => void;
-  navigate: (id: string) => void; prefs: Prefs; route: string; project: Project; onProject: (id: string) => void; demo: boolean; live: boolean;
+  navigate: (id: string) => void; prefs: Prefs; route: string; project: Project; onProject: (id: string) => void; demo: boolean; live: boolean; reconnecting: boolean;
   connections: Connection[]; onConnectionsChange: (next: Connection[]) => void;
 }) {
   const isMobile = useMediaQuery("(max-width: 860px)");
@@ -289,7 +289,7 @@ function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, on
           <Icon name="gitMerge" size={13} /> Write
         </span>
       )}
-      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} />
+      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} reconnecting={reconnecting} />
       <ThemeToggle prefs={prefs} />
     </header>
   );
@@ -505,7 +505,7 @@ export default function App() {
       <TopBar counts={counts} apiState={apiState} lastUpdated={status.lastUpdated}
         onRefresh={() => { status.refetch(); history.refetch(); }}
         onMenu={() => setNavOpen(true)} onSearch={() => setCmdOpen(true)} onLaunch={onLaunch} navigate={navigate}
-        prefs={prefs} route={route} project={project} onProject={onProject} demo={demo} live={events.live}
+        prefs={prefs} route={route} project={project} onProject={onProject} demo={demo} live={events.live} reconnecting={events.reconnecting}
         connections={connections} onConnectionsChange={setConnections} />
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         {!isMobile && <Sidebar route={route} navigate={navigate} counts={counts} project={project} />}

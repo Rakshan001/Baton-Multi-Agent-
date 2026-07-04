@@ -158,10 +158,12 @@ export function StatCounter({
 }
 
 /* ---------- ApiDot ---------- */
-export function ApiDot({ state, lastUpdated, onRefresh, live = false }: { state: "online" | "fetching" | "offline"; lastUpdated: number | null; onRefresh: () => void; live?: boolean }) {
+export function ApiDot({ state, lastUpdated, onRefresh, live = false, reconnecting = false }: { state: "online" | "fetching" | "offline"; lastUpdated: number | null; onRefresh: () => void; live?: boolean; reconnecting?: boolean }) {
   const [, force] = useReducer((x) => x + 1, 0);
   useEffect(() => { const t = setInterval(force, 1000); return () => clearInterval(t); }, []);
-  const meta = ({ online: { c: "var(--clean)", t: live ? "Live (push)" : "Connected (polling)" }, fetching: { c: "var(--accent)", t: "Syncing…" }, offline: { c: "var(--conflict)", t: "Offline" } } as const)[state] || { c: "var(--idle)", t: "—" };
+  const meta = state !== "offline" && reconnecting
+    ? { c: "var(--dirty)", t: "Event stream reconnecting — polling keeps data fresh" }
+    : ({ online: { c: "var(--clean)", t: live ? "Live (push)" : "Connected (polling)" }, fetching: { c: "var(--accent)", t: "Syncing…" }, offline: { c: "var(--conflict)", t: "Offline" } } as const)[state] || { c: "var(--idle)", t: "—" };
   const ago = lastUpdated ? timeAgo(lastUpdated) : "—";
   return (
     <button className="fr" onClick={onRefresh} data-tip={`${meta.t} · localhost:7077\nUpdated ${ago} — click to refresh`} data-tip-side="bottom"
@@ -173,7 +175,7 @@ export function ApiDot({ state, lastUpdated, onRefresh, live = false }: { state:
         <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: meta.c, animation: state !== "offline" ? "pulse-dot 2s var(--ease-in-out) infinite" : "none" }} />
       </span>
       <span style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
-        {state === "offline" ? "Offline" : <>updated <span className="mono">{ago === "just now" ? "0s" : timeAgoShort(lastUpdated)}</span></>}
+        {state === "offline" ? "Offline" : reconnecting ? "reconnecting…" : <>updated <span className="mono">{ago === "just now" ? "0s" : timeAgoShort(lastUpdated)}</span></>}
       </span>
     </button>
   );
