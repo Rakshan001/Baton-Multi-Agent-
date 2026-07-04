@@ -2,7 +2,7 @@
  * Tiny JSON store for Baton tasks, kept at <repo>/.baton/tasks.json (gitignored).
  * One file, no database — sufficient at this scale.
  */
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitRoot } from './git.js';
 
@@ -117,19 +117,67 @@ export async function getTask(gitRoot: string, slug: string): Promise<Task | und
   return (await loadTasks(gitRoot)).find((t) => t.slug === slug);
 }
 
+// Cross-process advisory lock: `serialized()` covers concurrent writes inside
+// ONE process, but the CLI (`baton new`) and a running daemon are separate
+// processes writing the same tasks.json — without a lock, simultaneous
+// read-modify-writes lose one side's update (writes stay crash-atomic via
+// tmp+rename either way; this is about lost updates, not torn files).
+const LOCK_RETRY_MS = 25;
+const LOCK_TIMEOUT_MS = 2000;
+const LOCK_STALE_MS = 5000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function withTasksLock<T>(gitRoot: string, fn: () => Promise<T>): Promise<T> {
+  const lock = join(batonDir(gitRoot), 'tasks.lock');
+  await mkdir(batonDir(gitRoot), { recursive: true });
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let acquired = false;
+  while (!acquired) {
+    try {
+      await mkdir(lock); // atomic: only one process can create it
+      acquired = true;
+    } catch {
+      try {
+        const st = await stat(lock);
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          await rm(lock, { recursive: true, force: true }); // crashed holder — break it
+          continue;
+        }
+      } catch {
+        continue; // lock vanished between mkdir and stat — retry immediately
+      }
+      if (Date.now() >= deadline) {
+        // Availability over strictness: a wedged lock must not brick task writes.
+        console.warn(`[baton] tasks.lock busy for ${LOCK_TIMEOUT_MS}ms — proceeding without it`);
+        break;
+      }
+      await sleep(LOCK_RETRY_MS);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (acquired) await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export async function addTask(gitRoot: string, task: Task): Promise<void> {
-  await serialized(async () => {
-    const tasks = await loadTasks(gitRoot);
-    tasks.push(task);
-    await saveTasks(gitRoot, tasks);
-  });
+  await serialized(() =>
+    withTasksLock(gitRoot, async () => {
+      const tasks = await loadTasks(gitRoot);
+      tasks.push(task);
+      await saveTasks(gitRoot, tasks);
+    }),
+  );
 }
 
 export async function removeTask(gitRoot: string, slug: string): Promise<void> {
-  await serialized(async () => {
-    const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
-    await saveTasks(gitRoot, tasks);
-  });
+  await serialized(() =>
+    withTasksLock(gitRoot, async () => {
+      const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
+      await saveTasks(gitRoot, tasks);
+    }),
+  );
 }
 
 /** kebab-case slug from free text, made unique against `taken`. */

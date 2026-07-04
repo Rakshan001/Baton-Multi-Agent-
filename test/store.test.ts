@@ -105,3 +105,41 @@ describe('resolveBatonRoot ownership gate', () => {
     expect(await resolveBatonRoot(base)).toBe(base);
   });
 });
+
+describe('tasks.json cross-process lock', () => {
+  it('breaks a stale lock and still writes', async () => {
+    const { mkdtemp, mkdir, utimes } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = await mkdtemp(join(tmpdir(), 'baton-lock-'));
+    await mkdir(join(root, '.baton'), { recursive: true });
+    // a lock dir left behind by a crashed process, 10s old
+    const lock = join(root, '.baton', 'tasks.lock');
+    await mkdir(lock);
+    const old = (Date.now() - 10_000) / 1000;
+    await utimes(lock, old, old);
+    await addTask(root, {
+      slug: 't1', task: 'T1', branch: 'baton/t1', worktreePath: join(root, 'wt'),
+      baseBranch: 'main', baseCommit: null, createdAt: new Date().toISOString(),
+    });
+    expect((await loadTasks(root)).map((t) => t.slug)).toEqual(['t1']);
+  });
+
+  it('releases the lock after a write (second write is fast)', async () => {
+    const { mkdtemp, mkdir, stat } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = await mkdtemp(join(tmpdir(), 'baton-lock2-'));
+    await mkdir(join(root, '.baton'), { recursive: true });
+    const task = (slug: string) => ({
+      slug, task: slug, branch: `baton/${slug}`, worktreePath: join(root, slug),
+      baseBranch: 'main', baseCommit: null, createdAt: new Date().toISOString(),
+    });
+    await addTask(root, task('a'));
+    await expect(stat(join(root, '.baton', 'tasks.lock'))).rejects.toThrow(); // released
+    const t0 = Date.now();
+    await addTask(root, task('b'));
+    expect(Date.now() - t0).toBeLessThan(500); // no lock contention
+    expect((await loadTasks(root)).map((t) => t.slug)).toEqual(['a', 'b']);
+  });
+});
