@@ -1,6 +1,7 @@
 import Link from "next/link";
 import CopyChip from "./CopyChip";
 import NavShell from "./NavShell";
+import MobileMenu from "./MobileMenu";
 import { NAV_LINKS, REPO_URL, CLONE_CMD } from "./site";
 
 // Fetch the live star count at build time. Falls back gracefully if the
@@ -81,6 +82,7 @@ export default async function Nav() {
               </span>
             )}
           </a>
+          <MobileMenu />
         </div>
       </nav>
     </NavShell>
