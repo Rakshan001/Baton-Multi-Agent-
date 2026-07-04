@@ -35,6 +35,32 @@ export function batonDir(gitRoot: string): string {
   return join(gitRoot, '.baton');
 }
 
+// Warn once per untrusted .baton dir — resolveBatonRoot runs on hot paths.
+const untrustedWarned = new Set<string>();
+
+/**
+ * True if `dir/.baton` exists, is a directory, and is safe to adopt: owned by
+ * the current user and not world-writable. Group-writable is deliberately
+ * allowed (Debian/Ubuntu user-private-group setups run umask 002); the uid
+ * match is the real gate against a .baton planted by another user. On
+ * platforms without getuid (Windows) the ownership check is skipped.
+ */
+async function trustedBatonDir(dir: string): Promise<boolean> {
+  const st = await stat(join(dir, '.baton'));
+  if (!st.isDirectory()) return false;
+  if (typeof process.getuid !== 'function') return true;
+  if (st.uid !== process.getuid() || (st.mode & 0o002) !== 0) {
+    if (!untrustedWarned.has(dir)) {
+      untrustedWarned.add(dir);
+      console.warn(
+        `[baton] ignoring untrusted .baton at ${dir} (uid ${st.uid}, mode ${(st.mode & 0o777).toString(8)}) — continuing upward`,
+      );
+    }
+    return false;
+  }
+  return true;
+}
+
 /**
  * The Baton root — the directory that owns `.baton/` (tasks, kb, memory). For a
  * single repo this is the git root; for a multi-repo hub it's the (non-git)
@@ -46,7 +72,7 @@ export async function resolveBatonRoot(cwd: string = process.cwd()): Promise<str
   let dir = cwd;
   for (;;) {
     try {
-      if ((await stat(join(dir, '.baton'))).isDirectory()) return dir;
+      if (await trustedBatonDir(dir)) return dir;
     } catch { /* no .baton here — keep walking up */ }
     const parent = dirname(dir);
     if (parent === dir) break; // reached the filesystem root
