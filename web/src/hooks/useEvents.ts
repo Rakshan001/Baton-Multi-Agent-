@@ -66,6 +66,7 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
       es.close();
       setLive(false);
       setReconnecting(false);
+      everLive.current = false;
     };
   }, [enabled, baseUrl, BatonAPI.demo]);
 
