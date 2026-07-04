@@ -112,5 +112,5 @@ export async function detectAgents(
   }
   const result = await scan(worktreePaths);
   detectCache = { key, at: t, result: new Map(result) };
-  return result;
+  return new Map(result);
 }
