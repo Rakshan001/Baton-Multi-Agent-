@@ -59,7 +59,13 @@ function LiveSignalsSection() {
         <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{rows.length ? `${rows.length} file${rows.length === 1 ? "" : "s"}` : ""}</span>
       </div>
       <div style={{ padding: rows.length ? "4px 16px 10px" : 0 }}>
-        {rows.length === 0 ? (
+        {signals.error && !signals.data ? (
+          <div style={{ padding: "14px 16px", fontSize: "var(--fs-13)", color: "var(--conflict-text)", display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="alertTriangle" size={13} style={{ flex: "none" }} />
+            Couldn't load live signals.
+            <button className="btn btn-sm fr" onClick={signals.refetch} style={{ marginLeft: "auto" }}>Retry</button>
+          </div>
+        ) : rows.length === 0 ? (
           <div style={{ padding: "14px 16px", fontSize: "var(--fs-13)", color: "var(--text-tertiary)" }}>No files being edited right now.</div>
         ) : rows.slice(0, 10).map((s) => (
           <div key={s.path} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border-subtle)", background: "transparent" }}>

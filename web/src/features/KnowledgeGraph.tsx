@@ -38,6 +38,8 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
   const [projectId, setProjectId] = useState<string | null>(null);
   const [graph, setGraph] = useState<GraphData | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [query, setQuery] = useState("");
   const [community, setCommunity] = useState<number | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
@@ -77,13 +79,20 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
     if (!activeId) return;
     let cancelled = false;
     setGraphLoading(true);
+    setGraphError(null);
     setSelected(null); setQuery(""); setCommunity(null);
     BatonAPI.getKbGraph(activeId)
       .then((g) => { if (!cancelled) setGraph(g); })
-      .catch((e) => { if (!cancelled) { setGraph(null); showToast({ kind: "error", title: "Could not load graph", desc: (e as Error).message }); } })
+      .catch((e) => {
+        if (!cancelled) {
+          setGraph(null);
+          setGraphError((e as Error).message);
+          showToast({ kind: "error", title: "Could not load graph", desc: (e as Error).message });
+        }
+      })
       .finally(() => { if (!cancelled) setGraphLoading(false); });
     return () => { cancelled = true; };
-  }, [activeId]);
+  }, [activeId, retryTick]);
 
   const communities = useMemo(() => {
     if (!graph) return [];
@@ -255,7 +264,16 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
           )}
           {!graph && !graphLoading && (
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-              <EmptyState icon="alertTriangle" title="Graph not built yet" desc="Run `baton kb rebuild` (or the Rebuild button with --write) to build it." />
+              {graphError ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center", maxWidth: 380 }}>
+                  <EmptyState icon="alertTriangle" title="Couldn't load the graph" desc={graphError} />
+                  <button className="btn btn-primary fr" onClick={() => setRetryTick((t) => t + 1)}>
+                    <Icon name="refresh" size={14} /> Retry
+                  </button>
+                </div>
+              ) : (
+                <EmptyState icon="alertTriangle" title="Graph not built yet" desc="Run `baton kb rebuild` (or the Rebuild button with --write) to build it." />
+              )}
             </div>
           )}
         </div>

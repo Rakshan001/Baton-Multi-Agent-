@@ -15,7 +15,14 @@ import type { StatusRow, EditSignal, AgentId } from "../types";
 function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
   const signals = usePoll<EditSignal[]>(() => BatonAPI.getSignals(), { interval: 5000 });
   const rows = signals.data ?? [];
-  if (!rows.length) return null;
+  if (!rows.length) {
+    return (
+      <div className="card" style={{ marginBottom: 16, padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+        <Icon name="zap" size={13} style={{ color: signals.error ? "var(--idle)" : "var(--clean)", flex: "none" }} />
+        {signals.error ? "Live signals unavailable right now." : "No files under live edit — all clear."}
+      </div>
+    );
+  }
   const warnings = rows.filter((s) => s.level === "warning");
   return (
     <div className="card" style={{ marginBottom: 16, padding: 14 }}>
