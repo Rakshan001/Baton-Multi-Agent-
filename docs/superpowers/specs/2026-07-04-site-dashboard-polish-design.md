@@ -39,14 +39,20 @@ presumed tooling artifact; confirm and fix only if real).
 
 ## Workstream 2 — dashboard (`web/`)
 
+Code-verification note (2026-07-04): four audit findings proved already handled
+in code and are dropped — Memory's filtered-to-empty message (Memory.tsx:200),
+write gating on Memory quick-add (Memory.tsx:164) and KnowledgeGraph
+import/rebuild (KnowledgeGraph.tsx:202,209), and Board session-card title clamp
+(SessionCard.tsx:65). `usePoll` already exposes `error`/`refetch`; screens just
+don't render them. The verified scope:
+
 | # | Change | Detail |
 |---|--------|--------|
-| 1 | SSE health indicator | `useEvents` exposes `"live" \| "reconnecting"` (track `onerror`/`onopen`; EventSource already auto-retries). TopBar `ApiDot` gains an amber reconnecting state + tooltip. Client-side only; no new event types. |
-| 2 | Fetch-error retry UI | Memory, Activity signals section, KnowledgeGraph render the existing `ErrorState` + retry pattern (as History/Agents do). Extend `usePoll` to expose `error` and `refetch`. |
-| 3 | Empty states | Conflicts `LiveSignals`: "all clear" line instead of `return null`. Memory: "no facts match your filters" when filtered-to-zero. Activity: use the shared styled empty-state component. |
-| 4 | Loading states | Memory: skeleton cards matching History's. Live: initial loading indicator before first data. |
-| 5 | Write gating | Memory add button and KnowledgeGraph rebuild button disabled + tooltip when `!BatonAPI.writeEnabled` (same pattern as Live's terminal button). |
-| 6 | Overflow | Memory fact row: restructure the `inline-flex` span so `text-overflow: ellipsis` actually applies (block-level, `min-width: 0`). Board session-card titles: two-line clamp. |
+| 1 | SSE health indicator | `useEvents` additionally exposes `reconnecting: boolean` (true after `onerror` once the stream has ever been open; EventSource auto-retries). `ApiDot` shows an amber "reconnecting…" state + tooltip; TopBar/App wire it through. Client-side only; no new event types. |
+| 2 | Fetch-error retry UI | Memory: `ErrorState` + retry when the poll errors with no data (today an error renders as the misleading "No memories yet"). Activity `LiveSignalsSection`: inline error line + retry. KnowledgeGraph: `graphError` state — the graph-blob fetch failure currently falls into the "Graph not built yet" empty state; show an error panel with Retry instead. |
+| 3 | Empty state | Conflicts `LiveSignals`: subtle "all clear" line instead of `return null` (also covers its error case with a "signals unavailable" variant). |
+| 4 | Loading state | Memory: `CardSkeleton` cards while loading (matching History) instead of bare "Loading memory…" text. |
+| 5 | Overflow | Memory fact row's anchored-files span: `inline-flex` + `text-overflow` never ellipsizes — restructure with `min-width: 0` and an inner truncating span. |
 
 ## Edge cases
 
@@ -59,8 +65,8 @@ presumed tooling artifact; confirm and fix only if real).
 | Repo has 0 stars | badge hidden (no "Star 0") |
 | JS disabled | noscript override keeps all content visible |
 | Daemon dies mid-session | ApiDot shows reconnecting; polling continues |
-| Read-only daemon | mutating buttons disabled with tooltip, not error-on-click |
-| Long facts / task titles | ellipsis / two-line clamp, layout intact |
+| Memory fetch fails persistently | ErrorState with retry, never the "No memories yet" empty state |
+| Long anchored-file lists on facts | single-line ellipsis, layout intact |
 
 ## Out of scope (parked)
 
