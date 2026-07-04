@@ -11,6 +11,7 @@
    ============================================================ */
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
+import { ErrorState, CardSkeleton } from "../components/primitives";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader, SearchInput } from "./shared";
 import { BatonAPI } from "../lib/api";
@@ -190,8 +191,15 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
         )}
 
         {/* list */}
-        {data.isLoading ? (
-          <div style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-13)", padding: 24, textAlign: "center" }}>Loading memory…</div>
+        {data.error && !data.data ? (
+          <ErrorState title="Couldn't load memory" desc={(data.error as Error).message}
+            command="baton serve" onRetry={data.refetch} retrying={data.isFetching} />
+        ) : data.isLoading ? (
+          <>
+            <CardSkeleton />
+            <CardSkeleton />
+            <CardSkeleton />
+          </>
         ) : visible.length === 0 ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "48px 24px", textAlign: "center" }}>
             <span style={{ width: 44, height: 44, borderRadius: 12, display: "grid", placeItems: "center", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)" }}>
@@ -274,8 +282,11 @@ function FactCard({ f, writeEnabled, onDelete, projectLabel, selected, onToggle,
         <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "var(--text-quaternary)", flexWrap: "wrap" }}>
           {attribution && <span>{attribution}</span>}
           {f.anchors.files.length > 0 && (
-            <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 5, overflow: "hidden", textOverflow: "ellipsis" }}>
-              <Icon name="folder" size={11} /> {f.anchors.files.map((a) => a.path).join(", ")}
+            <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0, maxWidth: "100%" }}>
+              <Icon name="folder" size={11} style={{ flex: "none" }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {f.anchors.files.map((a) => a.path).join(", ")}
+              </span>
             </span>
           )}
           {f.anchors.commit && <span className="mono">@ {f.anchors.commit.slice(0, 7)}</span>}
