@@ -73,6 +73,7 @@ import { basename } from 'node:path';
 import { isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
 import { GraphifyPool } from './kb/graphify-server.js';
 import { getMcpToken } from './kb/mcp-token.js';
+import { SseGate } from './util/sse-gate.js';
 
 const require = createRequire(import.meta.url);
 const VERSION = BATON_VERSION;
@@ -88,6 +89,12 @@ let poller: StatusPoller | null = null;
 
 /** Shared graphify backend pool — started in serve(), null until then. */
 let graphPool: GraphifyPool | null = null;
+
+// Cap concurrent SSE streams — a stuck or hostile client must not grow the
+// bus fan-out unboundedly. 64 covers any realistic number of dashboard tabs.
+const MAX_SSE_STREAMS = 64;
+const eventsGate = new SseGate(MAX_SSE_STREAMS);
+const terminalGate = new SseGate(MAX_SSE_STREAMS);
 
 /**
  * Built dashboard location. Compiled server lives at dist/server.js, so
@@ -161,6 +168,9 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: s
  * Replays missed events via Last-Event-ID; heartbeats keep proxies open.
  */
 function handleEvents(req: IncomingMessage, res: ServerResponse, origin: string): void {
+  const releaseSlot = eventsGate.tryAcquire();
+  if (!releaseSlot) return send(res, 429, { error: 'too many event streams' }, origin);
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-store',
@@ -189,6 +199,7 @@ function handleEvents(req: IncomingMessage, res: ServerResponse, origin: string)
     clearInterval(heartbeat);
     unsub();
     release();
+    releaseSlot();
   });
 }
 
@@ -198,6 +209,9 @@ function handleEvents(req: IncomingMessage, res: ServerResponse, origin: string)
  * screen, then live terminal.output frames. Readable on a read-only daemon.
  */
 async function handleTerminalStream(req: IncomingMessage, res: ServerResponse, slug: string, origin: string): Promise<void> {
+  const releaseSlot = terminalGate.tryAcquire();
+  if (!releaseSlot) return send(res, 429, { error: 'too many event streams' }, origin);
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-store',
@@ -226,6 +240,7 @@ async function handleTerminalStream(req: IncomingMessage, res: ServerResponse, s
   req.on('close', () => {
     clearInterval(heartbeat);
     unsub();
+    releaseSlot();
   });
 
   // A fresh capture beats the stored ring: it shows the current screen even when
