@@ -44,20 +44,11 @@ export const metadata: Metadata = {
     title: "Baton — coordinate AI coding agents on one repo",
     description: DESCRIPTION,
     siteName: "Baton",
-    images: [
-      {
-        url: "/og.svg",
-        width: 1200,
-        height: 630,
-        alt: "Baton — Plan on your expensive agent. Pass the baton to your cheap one.",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Baton — coordinate AI coding agents on one repo",
     description: DESCRIPTION,
-    images: ["/og.svg"],
   },
   robots: { index: true, follow: true },
 };
