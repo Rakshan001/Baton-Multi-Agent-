@@ -121,7 +121,10 @@ export async function startAgent(
     cwd: task.worktreePath,
     buffer: false,
     stdin: 'ignore',
-    env: { ...process.env, FORCE_COLOR: '0' },
+    // Identity: the agent's `baton mcp` reads these to resolve the hub store
+    // (BATON_ROOT) and to recognize its own edits (BATON_SLUG), instead of
+    // guessing from a worktree cwd.
+    env: { ...process.env, FORCE_COLOR: '0', BATON_ROOT: repoRoot, BATON_SLUG: slug, BATON_TASK: task.task },
   });
   const run: RunningAgent = { agent, model: opts.model, child, startedAt: new Date().toISOString(), lines: [] };
   running.set(slug, run);

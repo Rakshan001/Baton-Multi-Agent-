@@ -16,6 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { collectStatus } from './board.js';
 import { gitRoot } from './git.js';
+import { resolveMcpRoot } from './store.js';
 import { queryFile } from './history.js';
 import { checkFiles, getSignals } from './signals.js';
 import { getReport, listReports } from './reports.js';
@@ -26,7 +27,16 @@ const asText = (data: unknown) => ({
 });
 
 export async function startMcpServer(): Promise<void> {
-  const root = await gitRoot();
+  // Coordination store: an agent runs `baton mcp` from inside its worktree, so
+  // gitRoot() would point at an empty per-worktree shadow store. resolveMcpRoot
+  // finds the real hub/repo .baton (and honors BATON_ROOT for spawned agents).
+  const root = await resolveMcpRoot();
+  // Memory tools resolve the shared main repo themselves (worktree-safe) from a
+  // git path, so give them the git root — unchanged in hub mode.
+  const memRoot = await gitRoot();
+  // The caller's own task, so check_files/who_touched don't report its edits as
+  // "busy" to itself (set by baton when it spawns the agent).
+  const selfSlug = process.env.BATON_SLUG?.trim() || undefined;
   const server = new McpServer({ name: 'baton', version: '0.1.0' });
 
   server.registerTool(
@@ -36,7 +46,7 @@ export async function startMcpServer(): Promise<void> {
         'Check whether files are currently being edited by another Baton session (live edit signals + unmerged branch changes). Call BEFORE editing shared files; if busy, prefer waiting or picking other work, then re-check.',
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths to check') },
     },
-    async ({ paths }) => asText(await checkFiles(root, paths)),
+    async ({ paths }) => asText(await checkFiles(root, paths, selfSlug)),
   );
 
   server.registerTool(
@@ -67,7 +77,7 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { file: z.string().describe('Repo-relative file path') },
     },
     async ({ file }) => {
-      const [merged, live] = [queryFile(root, file), await checkFiles(root, [file])];
+      const [merged, live] = [queryFile(root, file), await checkFiles(root, [file], selfSlug)];
       return asText({ merged, live: live[file] });
     },
   );
@@ -97,7 +107,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ fact, type, files, agent, task }) => {
       try {
         // memory.ts resolves the MAIN repo root internally (worktree-safe).
-        const saved = await saveMemory(root, { fact, type, files, agent, task });
+        const saved = await saveMemory(memRoot, { fact, type, files, agent, task });
         return asText({ saved: saved.id, supersedes: saved.supersedes, anchoredFiles: saved.anchors.files.map((f) => f.path) });
       } catch (e) {
         if (e instanceof MemoryValidationError) return asText({ rejected: e.message });
@@ -117,7 +127,7 @@ export async function startMcpServer(): Promise<void> {
       },
     },
     async ({ topic, limit }) => {
-      const r = await recallMemories(root, { topic, limit });
+      const r = await recallMemories(memRoot, { topic, limit });
       return asText({
         facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
         totalStored: r.total,

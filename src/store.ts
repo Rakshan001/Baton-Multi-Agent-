@@ -4,7 +4,7 @@
  */
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { gitRoot } from './git.js';
+import { gitRoot, mainRepoRoot } from './git.js';
 
 export interface Task {
   slug: string;
@@ -79,6 +79,34 @@ export async function resolveBatonRoot(cwd: string = process.cwd()): Promise<str
     dir = parent;
   }
   return gitRoot(cwd); // not set up yet → the git repo is the Baton root
+}
+
+/**
+ * The Baton root as seen by `baton mcp`, which an agent almost always spawns
+ * from INSIDE its task worktree (`.baton/wt/<slug>`). Two traps to avoid:
+ *
+ *  1. `gitRoot()` would return the worktree, whose `.baton` is an empty shadow
+ *     store — so coordination tools would report no signals and no tasks.
+ *  2. `resolveBatonRoot(worktreeCwd)` alone is also defeated once a worktree has
+ *     been polluted with a shadow `.baton` (older buggy builds created one on
+ *     the first tool call): its upward walk stops at that shadow.
+ *
+ * So: trust an explicit `BATON_ROOT` when a baton-spawned agent carries one;
+ * otherwise escape the worktree via the git common dir FIRST, then walk up from
+ * the main repo root to the owning `.baton` (past sub-repo git boundaries, so
+ * hub mode still resolves to the hub, never a sub-repo).
+ */
+export async function resolveMcpRoot(
+  cwd: string = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const explicit = env.BATON_ROOT?.trim();
+  if (explicit) return explicit;
+  try {
+    return await resolveBatonRoot(await mainRepoRoot(cwd));
+  } catch {
+    return resolveBatonRoot(cwd); // not a git repo — best effort
+  }
 }
 
 export function tasksFile(gitRoot: string): string {

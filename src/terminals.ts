@@ -65,9 +65,20 @@ export function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The shell-command string tmux runs in the new session's pane. */
-export function buildSessionCommand(launcher: InteractiveLauncher, prompt?: string, model?: string): string {
-  return [launcher.cmd, ...launcher.args(prompt, model).map(shQuote)].join(' ');
+/**
+ * The shell-command string tmux runs in the new session's pane. Identity env is
+ * prefixed as `KEY='val' cmd` so the launched agent process inherits it — tmux
+ * `set-environment` runs AFTER the session starts, so the already-running agent
+ * would never see it. Shell env-prefix works on every tmux version.
+ */
+export function buildSessionCommand(
+  launcher: InteractiveLauncher,
+  prompt?: string,
+  model?: string,
+  env?: Record<string, string>,
+): string {
+  const prefix = Object.entries(env ?? {}).map(([k, v]) => `${k}=${shQuote(v)}`);
+  return [...prefix, launcher.cmd, ...launcher.args(prompt, model).map(shQuote)].join(' ');
 }
 
 /** Keystroke bytes → `send-keys -H` hex arguments. */
@@ -324,7 +335,12 @@ export async function createTerminal(
     '-s', sessionName,
     '-c', task.worktreePath,
     '-x', String(cols), '-y', String(rows),
-    buildSessionCommand(launcher, opts.prompt, opts.model),
+    buildSessionCommand(launcher, opts.prompt, opts.model, {
+      BATON_ROOT: repoRoot,
+      BATON_SLUG: slug,
+      BATON_TASK: task.task,
+      BATON_AGENT: agent,
+    }),
   ]);
   await tmuxTry(['set-option', '-t', sessionName, 'status', 'off']);
   await tmuxTry(['set-option', '-t', sessionName, 'history-limit', '5000']);

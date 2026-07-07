@@ -176,7 +176,11 @@ export interface FileCheck {
  * Combines live edit signals (uncommitted, real-time) with each task's
  * committed-but-unmerged divergence from its base branch.
  */
-export async function checkFiles(root: string, paths: string[]): Promise<Record<string, FileCheck>> {
+export async function checkFiles(
+  root: string,
+  paths: string[],
+  excludeSlug?: string,
+): Promise<Record<string, FileCheck>> {
   const signals = await getSignals(root);
   const tasks = await loadTasks(root);
   const agents = await detectAgents(tasks.map((t) => t.worktreePath));
@@ -186,8 +190,11 @@ export async function checkFiles(root: string, paths: string[]): Promise<Record<
 
   const result: Record<string, FileCheck> = {};
   for (const p of paths) {
-    const holders: SignalHolder[] = [...(byPath.get(p) ?? [])];
+    // Drop the caller's own edits: an agent asking "is this busy?" means "busy
+    // by someone ELSE" — its own signals are not a reason to wait.
+    const holders: SignalHolder[] = (byPath.get(p) ?? []).filter((h) => h.slug !== excludeSlug);
     for (const t of tasks) {
+      if (t.slug === excludeSlug) continue;
       if (changed.get(t.slug)?.has(p) && !holders.some((h) => h.slug === t.slug)) {
         holders.push({ slug: t.slug, agent: agents.get(t.worktreePath) ?? null, lastEditAt: '' });
       }

@@ -15,6 +15,7 @@
  * See NOTICE.
  */
 import { stat } from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { git, gitTry } from './util/exec.js';
 
 export type RepoState = 'clean' | 'merging' | 'rebasing' | 'cherry-picking' | 'reverting';
@@ -48,6 +49,18 @@ export async function gitRoot(cwd?: string): Promise<string> {
   } catch {
     throw new Error('Not inside a git repository.');
   }
+}
+
+/**
+ * The MAIN repository root, even when `cwd` is inside a task worktree
+ * (`gitRoot()` would return the worktree). Resolved via `--git-common-dir`,
+ * which points every worktree back at the shared `.git`. Throws if not in a
+ * git repo.
+ */
+export async function mainRepoRoot(cwd?: string): Promise<string> {
+  const common = await git(['rev-parse', '--git-common-dir'], cwd);
+  const abs = isAbsolute(common) ? common : resolve(cwd ?? process.cwd(), common);
+  return dirname(abs);
 }
 
 /**
