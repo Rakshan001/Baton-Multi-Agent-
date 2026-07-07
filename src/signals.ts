@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS edit_signals (
   PRIMARY KEY (slug, path)
 );
 CREATE INDEX IF NOT EXISTS idx_edit_signals_path ON edit_signals(path);
+CREATE TABLE IF NOT EXISTS signal_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `;
 
 const conns = new Map<string, DatabaseSync>();
@@ -64,9 +68,38 @@ export interface EditSignal {
 
 interface SignalRow { slug: string; path: string; at: string }
 
+/** Watcher liveness: heartbeat fresher than this ⇒ "not busy" answers are trustworthy. */
+export const WATCHER_HEARTBEAT_STALE_MS = 2 * 60_000;
+const HEARTBEAT_REFRESH_MS = 60_000;
+const HEARTBEAT_KEY = 'watcher_heartbeat';
+
+function touchHeartbeat(root: string): void {
+  getDb(root)
+    .prepare(`INSERT INTO signal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    .run(HEARTBEAT_KEY, new Date().toISOString());
+}
+
+/**
+ * True if a daemon's watcher+tracker heartbeat is fresh for this root. Lets
+ * callers (the guard hook, check_files) distinguish "all clear" from "nobody
+ * is recording signals" — a stale/no heartbeat means busy:false is unproven.
+ */
+export function isWatcherActive(root: string): boolean {
+  try {
+    const row = getDb(root).prepare(`SELECT value FROM signal_meta WHERE key = ?`).get(HEARTBEAT_KEY) as
+      | { value: string }
+      | undefined;
+    if (!row) return false;
+    return Date.now() - Date.parse(row.value) < WATCHER_HEARTBEAT_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
 export class SignalTracker {
   private root: string;
   private unsubs: Array<() => void> = [];
+  private heartbeat: NodeJS.Timeout | null = null;
   /** paths already announced as overlapping, so we emit signal.overlap once per overlap. */
   private announced = new Set<string>();
 
@@ -75,6 +108,9 @@ export class SignalTracker {
   }
 
   start(): void {
+    touchHeartbeat(this.root);
+    this.heartbeat = setInterval(() => touchHeartbeat(this.root), HEARTBEAT_REFRESH_MS);
+    this.heartbeat.unref?.();
     this.unsubs.push(
       bus.onType('file.edited', (e) => {
         if (e.event.type !== 'file.edited') return;
@@ -94,6 +130,8 @@ export class SignalTracker {
   }
 
   stop(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.heartbeat = null;
     for (const u of this.unsubs) u();
     this.unsubs = [];
   }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SignalTracker, checkFiles } from '../src/signals.js';
+import { SignalTracker, checkFiles, isWatcherActive } from '../src/signals.js';
 import { bus } from '../src/events.js';
 
 describe('checkFiles self-edit exclusion', () => {
@@ -43,5 +43,19 @@ describe('checkFiles self-edit exclusion', () => {
     const res = await checkFiles(root, ['src/y.ts'], 'me');
     expect(res['src/y.ts'].busy).toBe(true);
     expect(res['src/y.ts'].by.map((h) => h.slug)).toEqual(['other']);
+  });
+
+  it('reports the watcher heartbeat: active while a tracker runs, so "not busy" is trustworthy', async () => {
+    // Tracker started in beforeEach → heartbeat is fresh.
+    expect(isWatcherActive(root)).toBe(true);
+  });
+});
+
+describe('isWatcherActive without a tracker', () => {
+  it('is false when no daemon ever monitored this root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'baton-nowatch-'));
+    await mkdir(join(root, '.baton'), { recursive: true });
+    expect(isWatcherActive(root)).toBe(false);
+    await rm(root, { recursive: true, force: true });
   });
 });

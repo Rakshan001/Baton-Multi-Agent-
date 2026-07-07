@@ -32,6 +32,8 @@ import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './commands/memory.js';
+import { connectCmd } from './commands/connect.js';
+import { guardCmd } from './commands/guard.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -59,6 +61,13 @@ program
   .description('set up Baton for a repo — or a folder of several repos (hub vs individual)')
   .action((path: string | undefined, opts: { hub?: boolean; individual?: boolean; yes?: boolean; mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; serve?: boolean; headless?: boolean }) =>
     run(() => setupCmd(path, opts)));
+
+program
+  .command('connect')
+  .option('--agents <list>', 'comma-separated: claude,cursor,codex,gemini (default: all four)')
+  .option('--yes', 'also write global ($HOME) configs for codex/gemini')
+  .description('wire the baton coordination MCP server into every agent, so they can see each other')
+  .action((opts: { agents?: string; yes?: boolean }) => run(() => connectCmd(opts)));
 
 program
   .command('new')
@@ -262,8 +271,13 @@ hooks
   .command('install')
   .argument('<agent>', 'claude')
   .option('--project', 'install into .claude/settings.json in this repo instead of ~/.claude')
-  .description('auto-generate a handoff brief when a Claude Code session ends (Stop/PreCompact)')
+  .description('handoff brief on session end (Stop/PreCompact) + edit-collision guard (PreToolUse)')
   .action((agent: string, opts: { project?: boolean }) => run(() => hooksInstallCmd(agent, opts)));
+
+program
+  .command('guard', { hidden: true }) // invoked by the PreToolUse hook, not by humans
+  .description('read a Claude Code PreToolUse payload on stdin; warn if the file is held by another session')
+  .action(() => run(guardCmd));
 
 program
   .command('mcp')

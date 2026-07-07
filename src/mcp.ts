@@ -18,7 +18,7 @@ import { collectStatus } from './board.js';
 import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
 import { queryFile } from './history.js';
-import { checkFiles, getSignals } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive } from './signals.js';
 import { getReport, listReports } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
 
@@ -43,10 +43,10 @@ export async function startMcpServer(): Promise<void> {
     'check_files',
     {
       description:
-        'Check whether files are currently being edited by another Baton session (live edit signals + unmerged branch changes). Call BEFORE editing shared files; if busy, prefer waiting or picking other work, then re-check.',
+        'Check whether files are currently being edited by another Baton session (live edit signals + unmerged branch changes). Call BEFORE editing shared files; if busy, prefer waiting or picking other work, then re-check. watcherActive:false means live monitoring is off — "not busy" is unproven.',
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths to check') },
     },
-    async ({ paths }) => asText(await checkFiles(root, paths, selfSlug)),
+    async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
   );
 
   server.registerTool(
