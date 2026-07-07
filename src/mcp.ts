@@ -21,6 +21,7 @@ import { queryFile } from './history.js';
 import { checkFiles, getSignals, isWatcherActive } from './signals.js';
 import { getReport, listReports } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
+import { buildOrientation } from './kb/orient.js';
 
 const asText = (data: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
@@ -37,7 +38,20 @@ export async function startMcpServer(): Promise<void> {
   // The caller's own task, so check_files/who_touched don't report its edits as
   // "busy" to itself (set by baton when it spawns the agent).
   const selfSlug = process.env.BATON_SLUG?.trim() || undefined;
-  const server = new McpServer({ name: 'baton', version: '0.1.0' });
+  const server = new McpServer(
+    { name: 'baton', version: '0.1.0' },
+    { instructions: 'New to this repo? Call orient() first for a budgeted project brief (memory, recent work, structure), then recall_memory before exploring, and check_files before editing shared files.' },
+  );
+
+  server.registerTool(
+    'orient',
+    {
+      description:
+        'Get a short project orientation BEFORE exploring: what CODEBASE.md covers, evidence-checked project memory (decisions/gotchas/conventions), recently shipped tasks, and how to coordinate. Call this once at the start of a session so you understand the repo without re-reading it.',
+      inputSchema: { topic: z.string().optional().describe('What you are about to work on — biases the memory facts') },
+    },
+    async ({ topic }) => asText({ orientation: await buildOrientation(root, { topic }) }),
+  );
 
   server.registerTool(
     'check_files',

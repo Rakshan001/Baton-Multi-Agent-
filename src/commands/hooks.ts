@@ -18,6 +18,7 @@ import { gitRoot } from '../git.js';
 const PASS_CMD = 'baton pass --auto';
 const GUARD_CMD = 'baton guard';
 const GUARD_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
+const ORIENT_CMD = 'baton orient --auto';
 
 interface HookEntry { type: string; command: string }
 interface HookMatcher { matcher?: string; hooks: HookEntry[] }
@@ -38,6 +39,7 @@ export function withBatonHooks(settings: ClaudeSettings): number {
     ensureHook(settings, 'Stop', PASS_CMD),
     ensureHook(settings, 'PreCompact', PASS_CMD),
     ensureHook(settings, 'PreToolUse', GUARD_CMD, GUARD_MATCHER),
+    ensureHook(settings, 'SessionStart', ORIENT_CMD),
   ].filter(Boolean).length;
 }
 
@@ -69,7 +71,8 @@ export async function hooksInstallCmd(agent: string, opts: { project?: boolean }
   }
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
-  console.log(`✓ added Stop + PreCompact (${PASS_CMD}) and PreToolUse (${GUARD_CMD}) hooks to ${file}`);
+  console.log(`✓ installed Baton hooks in ${file}: Stop/PreCompact, PreToolUse (${GUARD_CMD}), SessionStart (${ORIENT_CMD}).`);
+  console.log('  Session start → a budgeted project brief (memory, recent work, structure).');
   console.log('  Session end/compact → a HANDOFF.md brief is generated automatically.');
   console.log('  Before each file edit → an advisory note if another session holds that file (never blocks).');
   console.log('  Note: there is no rate-limit hook event — Stop/PreCompact are the closest proxies; `baton pass` is always available manually.');

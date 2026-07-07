@@ -34,6 +34,7 @@ import { startCmd, stopCmd } from './commands/start.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
+import { orientCmd } from './commands/orient.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -278,6 +279,12 @@ program
   .command('guard', { hidden: true }) // invoked by the PreToolUse hook, not by humans
   .description('read a Claude Code PreToolUse payload on stdin; warn if the file is held by another session')
   .action(() => run(guardCmd));
+
+program
+  .command('orient')
+  .option('--auto', 'SessionStart-hook mode: emit as additionalContext, skip if a HANDOFF already oriented the session')
+  .description('print a budgeted project brief (memory, recent work, structure) so a fresh session onboards fast')
+  .action((opts: { auto?: boolean }) => run(() => orientCmd(opts)));
 
 program
   .command('mcp')
