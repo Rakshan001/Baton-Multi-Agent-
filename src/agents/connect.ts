@@ -223,3 +223,57 @@ export async function connectAgentMcp(
   await writeFile(target.path, next, 'utf-8');
   return { agent, scope: target.scope, path: target.path, wrote: true, needsConfirm: false, servers: serverNames };
 }
+
+export type AgentConnectStatus =
+  | 'connected'      // written just now
+  | 'already'        // the baton server was already wired
+  | 'needs-confirm'  // a global ($HOME) file — rerun with confirmGlobal
+  | 'unsupported'    // aider/opencode — no standard MCP config
+  | 'parse-error';   // existing file is unparseable — left untouched
+
+export interface AgentConnectOutcome {
+  agent: string;
+  status: AgentConnectStatus;
+  scope: McpScope | null;
+  path: string | null;
+}
+
+/**
+ * Wire a batch of agents to the `baton` coordination MCP server in one call —
+ * the one-command "every agent can now see the others" step. Passes state=null
+ * so it writes the stdio `baton mcp` server (no running daemon required); an
+ * existing graphify KB config is merged, never clobbered. Never throws: each
+ * agent's outcome (including unsupported / parse-error) is returned so the
+ * caller can report the whole batch.
+ */
+export async function connectAgents(
+  root: string,
+  agents: string[],
+  opts: { confirmGlobal?: boolean } = {},
+  home = homedir(),
+): Promise<AgentConnectOutcome[]> {
+  const out: AgentConnectOutcome[] = [];
+  for (const agent of agents) {
+    const target = mcpTargetFor(agent, root, home);
+    if (!target) {
+      out.push({ agent, status: 'unsupported', scope: null, path: null });
+      continue;
+    }
+    try {
+      const status = await readMcpStatus(agent, root, home);
+      if (status.connected) {
+        out.push({ agent, status: 'already', scope: target.scope, path: target.path });
+        continue;
+      }
+      const r = await connectAgentMcp(agent, root, null, { confirmGlobal: opts.confirmGlobal }, home);
+      out.push({ agent, status: r.wrote ? 'connected' : 'needs-confirm', scope: target.scope, path: target.path });
+    } catch (e) {
+      if (e instanceof McpConfigParseError) {
+        out.push({ agent, status: 'parse-error', scope: target.scope, path: target.path });
+      } else {
+        throw e;
+      }
+    }
+  }
+  return out;
+}
