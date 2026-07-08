@@ -266,6 +266,15 @@ export interface SignalHolder {
   noteAt?: string;
 }
 
+/** Load-aware handoff recommendation — GET /api/tasks/:slug/suggest-handoff. */
+export interface HandoffLoadSuggestion {
+  /** Least-loaded available agent to hand this task to (null = none). */
+  recommended: AgentId | string | null;
+  reason: string;
+  /** Active-task count per agent (dirty/conflict tasks). */
+  loads: Record<string, number>;
+}
+
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
 export interface EditSignal {
   path: string;

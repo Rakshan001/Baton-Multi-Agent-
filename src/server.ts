@@ -47,6 +47,7 @@ import { readBrief } from './handoff/brief.js';
 import { getTask } from './store.js';
 import { refreshCodebaseDocs } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
+import { agentActiveLoads, pickHandoffTarget } from './handoff/workload.js';
 import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from './kb/contextpack.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
@@ -1003,6 +1004,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const brief = await readBrief(task.worktreePath);
     if (!brief) return send(res, 404, { error: 'no handoff brief' }, origin);
     return send(res, 200, { slug, meta: brief.meta, body: brief.body }, origin);
+  }
+
+  // GET /api/tasks/:slug/suggest-handoff — load-aware target recommendation
+  const shm = path.match(/^\/api\/tasks\/([^/]+)\/suggest-handoff$/);
+  if (shm && method === 'GET') {
+    const slug = decodeURIComponent(shm[1]);
+    const rows = await collectStatus(root);
+    const row = rows.find((r) => r.slug === slug);
+    if (!row) return send(res, 404, { error: `no task '${slug}'` }, origin);
+    const loads = agentActiveLoads(rows);
+    const { config } = await loadRouting(root);
+    const routed = suggestRoute(row.task, config);
+    const candidates = routed.chain.map((c) => c.agent);
+    const pick = pickHandoffTarget({ candidates, loads, routingPick: candidates[0] ?? null, exclude: row.agent });
+    return send(res, 200, { recommended: pick.agent, reason: pick.reason, loads }, origin);
   }
 
   // POST /api/tasks/:slug/merge — merge branch into current (write-gated)

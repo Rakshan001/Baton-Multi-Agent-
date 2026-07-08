@@ -16,7 +16,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, HandoffLoadSuggestion, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
@@ -705,6 +705,25 @@ class BatonClient {
     }
     const q = task ? `?task=${encodeURIComponent(task)}` : "";
     return this.request<RoutingInfo>(`/api/routing${q}`);
+  }
+
+  /** Load-aware handoff recommendation: least-loaded available agent for a task. */
+  async suggestHandoff(slug: string): Promise<HandoffLoadSuggestion> {
+    if (this.demo) {
+      await delay(80);
+      // Load = each agent's actively-churning (dirty/conflict) tasks, from the board.
+      const loads: Record<string, number> = {};
+      for (const s of this.demoSessions) {
+        if (s.agent && (s.status === "dirty" || s.status === "conflict")) loads[s.agent] = (loads[s.agent] ?? 0) + 1;
+      }
+      const me = this.demoSessions.find((s) => s.slug === slug);
+      const pool = [...new Set(this.demoSessions.map((s) => s.agent).filter((a): a is AgentId => !!a && a !== me?.agent))];
+      pool.sort((a, b) => (loads[a] ?? 0) - (loads[b] ?? 0));
+      const recommended = pool[0] ?? null;
+      const n = recommended ? loads[recommended] ?? 0 : 0;
+      return { recommended, reason: recommended ? `${recommended} has the lightest load (${n === 0 ? "idle" : `${n} active`})` : "no other agent available", loads };
+    }
+    return this.request<HandoffLoadSuggestion>(`/api/tasks/${encodeURIComponent(slug)}/suggest-handoff`);
   }
 
   /* ---- coordination: signals / reports / blame ---- */
