@@ -45,7 +45,12 @@ const age = (iso: string): string => {
 export function formatGuardMessage(path: string, check: FileCheck): string | null {
   if (!check.busy || check.by.length === 0) return null;
   const holders = check.by
-    .map((h) => `${h.slug}${h.agent ? ` (${h.agent})` : ''}${h.lastEditAt ? `, last edit ${age(h.lastEditAt)}` : ', unmerged branch changes'}`)
+    .map((h) => {
+      const who = `${h.slug}${h.agent ? ` (${h.agent})` : ''}`;
+      const when = h.lastEditAt ? `, last edit ${age(h.lastEditAt)}` : ', unmerged branch changes';
+      const doing = h.note ? ` — "${h.note}"` : '';
+      return `${who}${when}${doing}`;
+    })
     .join('; ');
   return (
     `⚠ baton: ${path} is also being worked on by ${holders}. ` +

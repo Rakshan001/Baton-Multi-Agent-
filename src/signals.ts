@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS signal_meta (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+CREATE TABLE IF NOT EXISTS task_progress (
+  slug TEXT PRIMARY KEY,
+  note TEXT,
+  at TEXT
+);
 `;
 
 const conns = new Map<string, DatabaseSync>();
@@ -58,6 +63,50 @@ export interface SignalHolder {
   slug: string;
   agent: string | null;
   lastEditAt: string;
+  /** Free-text intent the holder reported (report_progress), if fresh. */
+  note?: string;
+  noteAt?: string;
+}
+
+export interface Progress {
+  slug: string;
+  note: string;
+  at: string;
+}
+
+/** Record what a task is working on right now (latest note wins). */
+export function setProgress(root: string, slug: string, note: string): void {
+  getDb(root)
+    .prepare(
+      `INSERT INTO task_progress (slug, note, at) VALUES (?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET note = excluded.note, at = excluded.at`,
+    )
+    .run(slug, note, new Date().toISOString());
+}
+
+/** Fresh progress notes (within the signal window), keyed by slug. */
+export function getProgress(root: string, windowMin = SIGNAL_WINDOW_MIN): Map<string, Progress> {
+  const cutoff = new Date(Date.now() - windowMin * 60_000).toISOString();
+  const rows = getDb(root)
+    .prepare(`SELECT slug, note, at FROM task_progress WHERE at >= ?`)
+    .all(cutoff) as unknown as Progress[];
+  return new Map(rows.map((r) => [r.slug, r]));
+}
+
+export function clearProgress(root: string, slug: string): void {
+  getDb(root).prepare(`DELETE FROM task_progress WHERE slug = ?`).run(slug);
+}
+
+/** Attach each holder's fresh progress note in place (one query, reused). */
+function enrichWithNotes(root: string, holderLists: SignalHolder[][]): void {
+  const progress = getProgress(root);
+  if (progress.size === 0) return;
+  for (const holders of holderLists) {
+    for (const h of holders) {
+      const p = progress.get(h.slug);
+      if (p) { h.note = p.note; h.noteAt = p.at; }
+    }
+  }
 }
 
 export interface EditSignal {
@@ -158,6 +207,8 @@ export class SignalTracker {
 
   clear(slug: string): void {
     getDb(this.root).prepare(`DELETE FROM edit_signals WHERE slug = ?`).run(slug);
+    clearProgress(this.root, slug); // a commit settles the work — its intent note is spent
+
     // Re-derive overlap announcements from what's still live: keep a path announced
     // only while 2+ distinct sessions hold it. A blanket clear() would let an
     // UNRELATED slug clearing re-fire signal.overlap for overlaps that never ended.
@@ -195,6 +246,7 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
     if (!byPath.has(r.path)) byPath.set(r.path, []);
     byPath.get(r.path)!.push({ slug: r.slug, agent: agentFor(r.slug), lastEditAt: r.at });
   }
+  enrichWithNotes(root, [...byPath.values()]);
   return [...byPath.entries()]
     .map(([path, holders]) => ({
       path,
@@ -239,5 +291,6 @@ export async function checkFiles(
     }
     result[p] = { busy: holders.length > 0, by: holders };
   }
+  enrichWithNotes(root, Object.values(result).map((r) => r.by)); // cover committed-but-unmerged holders too
   return result;
 }

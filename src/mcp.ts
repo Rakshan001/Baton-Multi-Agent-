@@ -18,7 +18,7 @@ import { collectStatus } from './board.js';
 import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
 import { queryFile } from './history.js';
-import { checkFiles, getSignals, isWatcherActive } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive, setProgress } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
 import { buildOrientation } from './kb/orient.js';
@@ -105,6 +105,21 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: {},
     },
     async () => asText(await collectStatus(root)),
+  );
+
+  server.registerTool(
+    'report_progress',
+    {
+      description:
+        'Tell the other agents what you are working on RIGHT NOW, in one line (e.g. "refactoring token expiry in auth.ts, ~2 commits left"). Siblings see it on your files via check_files/list_signals, so they can coordinate instead of colliding. Expires in 30 min and clears on your next commit — refresh it as you go.',
+      inputSchema: { note: z.string().describe('One line: what you are doing + rough progress') },
+    },
+    async ({ note }) => {
+      if (!selfSlug) return asText({ error: 'no task identity (BATON_SLUG) — run inside a baton worktree' });
+      const trimmed = note.trim().slice(0, 200);
+      setProgress(root, selfSlug, trimmed);
+      return asText({ reported: trimmed, slug: selfSlug });
+    },
   );
 
   server.registerTool(

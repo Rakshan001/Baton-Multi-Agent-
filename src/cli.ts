@@ -35,6 +35,7 @@ import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './command
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { orientCmd } from './commands/orient.js';
+import { progressCmd } from './commands/progress.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -285,6 +286,12 @@ program
   .option('--auto', 'SessionStart-hook mode: emit as additionalContext, skip if a HANDOFF already oriented the session')
   .description('print a budgeted project brief (memory, recent work, structure) so a fresh session onboards fast')
   .action((opts: { auto?: boolean }) => run(() => orientCmd(opts)));
+
+program
+  .command('progress')
+  .argument('<note...>', 'one line: what you are working on right now')
+  .description('tell other agents your current intent (shown on your files via check_files/list_signals)')
+  .action((note: string[]) => run(() => progressCmd(note.join(' '))));
 
 program
   .command('mcp')

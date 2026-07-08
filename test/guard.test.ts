@@ -39,6 +39,14 @@ describe('formatGuardMessage — the advisory note injected into the agent conte
     expect(msg).toMatch(/check_files|get_report/); // points the agent at the coordination tools
   });
 
+  it('includes the holder\'s progress note when they reported one', () => {
+    const check: FileCheck = {
+      busy: true,
+      by: [{ slug: 'refactor-auth', agent: 'cursor', lastEditAt: new Date().toISOString(), note: 'rewriting the refresh flow' }],
+    };
+    expect(formatGuardMessage('src/auth.ts', check)).toContain('rewriting the refresh flow');
+  });
+
   it('returns null when the file is free (zero happy-path tokens)', () => {
     expect(formatGuardMessage('src/auth.ts', { busy: false, by: [] })).toBeNull();
   });
