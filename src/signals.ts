@@ -12,9 +12,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { batonDir, loadTasks } from './store.js';
+import { batonDir, loadTasks, type Task } from './store.js';
 import { detectAgents } from './agents.js';
 import { changedFiles } from './conflicts.js';
+import { gitTry } from './util/exec.js';
 import { bus } from './events.js';
 
 const nodeRequire = createRequire(import.meta.url);
@@ -231,10 +232,63 @@ function liveRows(root: string, windowMin = SIGNAL_WINDOW_MIN): SignalRow[] {
     .all(cutoff) as unknown as SignalRow[];
 }
 
+/**
+ * Paths still "dirty" in a worktree: tracked modifications vs HEAD plus brand-new
+ * untracked files (which `git diff HEAD` omits, so we must union them in or a
+ * file being freshly created would look settled). Returns null when git can't
+ * answer, so callers fail OPEN — a signal we can't verify is kept, not dropped.
+ */
+async function worktreeDirtyPaths(worktreePath: string): Promise<Set<string> | null> {
+  const diff = await gitTry(['-C', worktreePath, 'diff', '--name-only', 'HEAD']);
+  if (!diff.ok) return null;
+  const paths = new Set(diff.stdout.split('\n').filter(Boolean));
+  const untracked = await gitTry(['-C', worktreePath, 'ls-files', '--others', '--exclude-standard']);
+  if (untracked.ok) for (const f of untracked.stdout.split('\n').filter(Boolean)) paths.add(f);
+  return paths;
+}
+
+function pruneSignals(root: string, rows: SignalRow[]): void {
+  const stmt = getDb(root).prepare(`DELETE FROM edit_signals WHERE slug = ? AND path = ?`);
+  for (const r of rows) stmt.run(r.slug, r.path);
+}
+
+/**
+ * P6 — lazy read-time reconciliation. A live edit signal means "uncommitted work
+ * in progress on this path". With no daemon watching, the events that clear
+ * signals (commit/merge) never fire, so a committed-or-reverted file's signal
+ * lingers up to the TTL and pollutes the "editing now" view. At read time we drop
+ * (and prune) any signal whose path is no longer dirty in its task's worktree —
+ * zero background work, and it also catches the edit-then-revert case that
+ * commit-detection can't. Fails open: signals for unknown slugs or unreadable
+ * worktrees are kept.
+ */
+async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]): Promise<SignalRow[]> {
+  if (rows.length === 0) return rows;
+  const bySlug = new Map<string, SignalRow[]>();
+  for (const r of rows) {
+    const list = bySlug.get(r.slug);
+    if (list) list.push(r);
+    else bySlug.set(r.slug, [r]);
+  }
+  const kept: SignalRow[] = [];
+  const stale: SignalRow[] = [];
+  await Promise.all(
+    [...bySlug].map(async ([slug, slugRows]) => {
+      const task = tasks.find((t) => t.slug === slug);
+      if (!task) return void kept.push(...slugRows); // unknown task → can't verify, keep
+      const dirty = await worktreeDirtyPaths(task.worktreePath);
+      if (dirty === null) return void kept.push(...slugRows); // git failed → keep
+      for (const r of slugRows) (dirty.has(r.path) ? kept : stale).push(r);
+    }),
+  );
+  if (stale.length) pruneSignals(root, stale);
+  return kept;
+}
+
 /** Current edit signals, grouped by path; overlapping paths are warnings. */
 export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): Promise<EditSignal[]> {
-  const rows = liveRows(root, windowMin);
   const tasks = await loadTasks(root);
+  const rows = await reconcileSignals(root, liveRows(root, windowMin), tasks);
   const agents = await detectAgents(tasks.map((t) => t.worktreePath));
   const agentFor = (slug: string) => {
     const t = tasks.find((x) => x.slug === slug);
