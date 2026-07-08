@@ -122,8 +122,9 @@ program
 
 program
   .command('doctor')
+  .option('--docs', 'scan for scattered .md sprawl (memory-bank/, stray NOTES/TODO, competing rule files) — propose-only')
   .description('audit junk: orphaned worktrees, branches, tmux sessions, leaked temp files')
-  .action(() => run(doctorCmd));
+  .action((opts: { docs?: boolean }) => run(() => doctorCmd(opts)));
 
 program
   .command('clean')
