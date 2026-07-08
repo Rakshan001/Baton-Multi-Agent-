@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-08 (session 11: G1 graph-freshness golden rule + G2 root-session coordination, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open)
+> Last updated: **2026-07-09 (session 12: M1–M3 every-agent coordination, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open)
 
 ## What this project is
 
@@ -236,6 +236,22 @@ no daemon ever running. README gained "Do I need the daemon running?" + a real
 contributor guide. **428 tests green.** Remaining G-phases: G3 daemon-less graph
 query fallback; G4 language-support docs. Known gap: root sessions of hook-less
 agents (cursor/codex/antigravity) are still dark outside worktrees.
+
+**Every-agent coordination M1–M3 (2026-07-09, session 12).** Plan + capability matrix at
+docs/plans/2026-07-09-multi-agent-coordination.md (the traceability record — phases,
+confidence gates, edge cases, progress log). Research: Ponytail's 16 adapters + vendor
+docs → Cursor has documented `afterFileEdit` hooks w/ `conversation_id`; Codex hooks are
+trust- and version-gated (<95% → deferred); Antigravity CLI = `agy`, inherits Gemini
+config; aider = git-native only. **M1**: MCP session identity for EVERY agent —
+`baton mcp` is one process per session, so pid = session (`sess-p<pid>`) and the parent
+process chain names the agent (`detectParentAgent` in src/agents.ts, `BATON_AGENT` env
+override); auto-registers in hook_sessions; `report_progress` works without a worktree;
+new `touch_files` MCP tool records signals; AGENTS.md coordination guide teaches both.
+**M2**: `baton hooks install cursor [--project]` → `.cursor/hooks.json` `afterFileEdit →
+baton guard --agent cursor`; guard normalizes Cursor's payload (`normalizeGuardPayload`)
+and records signals, silent to non-Claude hosts. **M3**: antigravity in the agent
+registry (detection-only: `agy` + Antigravity.app; launchers deliberately unguessed) +
+web AgentId. 439 tests green, both workspaces build.
 
 ## Pending / next 🔜
 
