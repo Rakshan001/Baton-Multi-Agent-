@@ -31,7 +31,7 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
-import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './commands/memory.js';
+import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { orientCmd } from './commands/orient.js';
@@ -161,6 +161,11 @@ memory
   .command('gc')
   .description('drop stale facts (anchored files changed since they were saved)')
   .action(() => run(memoryGcCmd));
+
+memory
+  .command('log')
+  .description('KB change history: superseded/removed facts (archived, not destroyed)')
+  .action(() => run(memoryLogCmd));
 
 const kb = program
   .command('kb')

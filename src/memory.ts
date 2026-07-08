@@ -15,7 +15,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { git } from './util/exec.js';
@@ -228,6 +228,68 @@ export function memoryDir(mainRoot: string): string {
   return join(mainRoot, '.baton', 'memory', 'facts');
 }
 
+/**
+ * Superseded/removed facts move HERE instead of being destroyed, so a fact's
+ * lineage survives for a future repair queue. It is a SIBLING of facts/, so
+ * `listMemoryFacts` (a non-recursive readdir over facts/) never sees it — recall
+ * is unchanged at zero cost. Both live under gitignored `.baton/memory/`: an
+ * on-disk audit substrate, not a committed-across-clones history.
+ */
+export function archiveDir(mainRoot: string): string {
+  return join(mainRoot, '.baton', 'memory', 'archive');
+}
+
+function journalFile(mainRoot: string): string {
+  return join(mainRoot, '.baton', 'memory', 'journal.jsonl');
+}
+
+/** One append-only line per lifecycle op — the KB's change history. */
+export interface JournalEntry {
+  op: 'supersede' | 'remove';
+  id: string;
+  supersededBy: string | null;
+  reason: string;
+  at: string;
+}
+
+/**
+ * Retire a fact: move its file into the archive and append a journal line.
+ * Replaces every hard-delete in the module. Returns false if the file was
+ * already gone (idempotent). The move overwrites any same-id archive file so a
+ * reused slug re-archives cleanly.
+ */
+async function archiveFact(
+  mainRoot: string,
+  id: string,
+  op: JournalEntry['op'],
+  reason: string,
+  supersededBy: string | null = null,
+): Promise<boolean> {
+  const safeId = id.replace(/[^a-z0-9-]/gi, '');
+  const src = join(memoryDir(mainRoot), `${safeId}.md`);
+  if (!existsSync(src)) return false;
+  const dir = archiveDir(mainRoot);
+  await mkdir(dir, { recursive: true });
+  await rename(src, join(dir, `${safeId}.md`));
+  factCache.delete(src);
+  const entry: JournalEntry = { op, id: safeId, supersededBy, reason, at: new Date().toISOString() };
+  await appendFile(journalFile(mainRoot), JSON.stringify(entry) + '\n', 'utf-8');
+  return true;
+}
+
+/** The KB change log, newest first. Drives `baton memory log` (no agent-token cost). */
+export async function readJournal(root: string): Promise<JournalEntry[]> {
+  const mainRoot = await resolveRoot(root);
+  const file = journalFile(mainRoot);
+  if (!existsSync(file)) return [];
+  const out: JournalEntry[] = [];
+  for (const line of (await readFile(file, 'utf-8')).split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line) as JournalEntry); } catch { /* skip a torn line */ }
+  }
+  return out.reverse();
+}
+
 const sha1 = (data: string | Buffer) => createHash('sha1').update(data).digest('hex').slice(0, 12);
 
 /** Content hash of an anchored file, cached by mtime (re-hash only on change). */
@@ -320,7 +382,10 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   const tmp = join(dir, `.${id}.${process.pid}.tmp`);
   await writeFile(tmp, renderFactFile(record), 'utf-8');
   await rename(tmp, target);
-  if (dup && dup.id !== id) await rm(join(dir, `${dup.id}.md`), { force: true });
+  // Superseded knowledge is archived (not destroyed) with its successor recorded.
+  if (dup && dup.id !== id) {
+    await archiveFact(mainRoot, dup.id, 'supersede', 'superseded by newer knowledge', id);
+  }
 
   return { ...record, freshness: 'fresh', staleReason: null, commitsBehind: 0, project: null };
 }
@@ -431,13 +496,9 @@ export async function recallMemories(root: string, opts: { topic?: string; limit
   return { facts: picked.slice(0, limit), total: all.length, staleDropped: all.length - usable.length };
 }
 
-export async function removeMemory(root: string, id: string): Promise<boolean> {
+export async function removeMemory(root: string, id: string, reason = 'manual removal'): Promise<boolean> {
   const mainRoot = await resolveRoot(root);
-  const file = join(memoryDir(mainRoot), `${id.replace(/[^a-z0-9-]/gi, '')}.md`);
-  if (!existsSync(file)) return false;
-  await rm(file, { force: true });
-  factCache.delete(file);
-  return true;
+  return archiveFact(mainRoot, id, 'remove', reason);
 }
 
 /** Drop stale facts (changed/removed anchors). Returns removed ids. */
@@ -446,17 +507,17 @@ export async function gcMemories(root: string): Promise<string[]> {
   const removed: string[] = [];
   for (const f of all) {
     if (f.freshness === 'stale') {
-      if (await removeMemory(root, f.id)) removed.push(f.id);
+      if (await removeMemory(root, f.id, 'gc: stale anchor')) removed.push(f.id);
     }
   }
   return removed;
 }
 
-/** Delete many facts by id at once. Returns the ids actually removed. */
-export async function bulkRemoveMemory(root: string, ids: string[]): Promise<string[]> {
+/** Archive many facts by id at once. Returns the ids actually removed. */
+export async function bulkRemoveMemory(root: string, ids: string[], reason = 'manual removal'): Promise<string[]> {
   const removed: string[] = [];
   for (const id of [...new Set(ids)]) {
-    if (await removeMemory(root, id)) removed.push(id);
+    if (await removeMemory(root, id, reason)) removed.push(id);
   }
   return removed;
 }
@@ -486,7 +547,7 @@ export function factsToPrune(facts: MemoryStatus[], policy: RetentionPolicy, now
 /** Apply a retention policy now. Returns removed ids. */
 export async function pruneMemories(root: string, policy: RetentionPolicy, now = Date.now()): Promise<string[]> {
   const ids = factsToPrune(await listMemories(root), policy, now);
-  return bulkRemoveMemory(root, ids);
+  return bulkRemoveMemory(root, ids, 'retention policy');
 }
 
 /* ---- persisted retention policy (.baton/memory/retention.json) ---- */
