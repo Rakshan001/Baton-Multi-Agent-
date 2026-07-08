@@ -32,7 +32,9 @@ Stop at the **first** rung that holds. Say in one line what you skipped and why.
    future that may never come → skip it (YAGNI). Name it and move on.
 2. **Does it already exist in this repo?** A helper, util, type, or pattern a few files over →
    reuse it. Re-implementing what's already here is the most common slop. *With Baton: query the
-   knowledge graph / `CODEBASE.md` before writing — that's what the map is for.*
+   knowledge graph / `CODEBASE.md` before writing — that's what the map is for. Heed the graph's
+   freshness warning: for files it flags as having uncommitted edits, re-read the file itself —
+   a stale graph answer is how duplicate functions get born.*
 3. **Does the standard library do it?** Use it. `stdlib` over a hand-rolled version.
 4. **Does a native platform feature cover it?** `<input type="date">` over a picker library, CSS
    over JS, a DB constraint over app-level checks.

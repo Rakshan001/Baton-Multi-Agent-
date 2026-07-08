@@ -45,6 +45,29 @@ describe('renderOrientation — durable, budgeted onboarding brief', () => {
     expect(out.toLowerCase()).toMatch(/no .*memory|getting started|fresh/);
     expect(out).toMatch(/check_files|list_signals/);
   });
+
+  it('carries the graph-freshness warning when the graph lags (G1 golden rule)', () => {
+    const out = renderOrientation({
+      hasCodebaseMd: true,
+      freshnessNote: '⚠ Graph freshness: 2 file(s) have uncommitted edits — re-read: src/a.ts',
+      memorySection: memory,
+      reports: [report('add-oauth', 'Added OAuth login')],
+    });
+    expect(out).toContain('Graph freshness');
+    expect(out).toContain('src/a.ts');
+  });
+
+  it('keeps the freshness warning even when the budget drops other sections', () => {
+    const fat = 'x'.repeat(ORIENT_MAX_CHARS);
+    const out = renderOrientation({
+      hasCodebaseMd: true,
+      freshnessNote: '⚠ Graph freshness: re-read src/a.ts',
+      memorySection: `## Project memory (evidence-checked)\n\n${fat}`,
+      reports: [report('add-oauth', 'Added OAuth login')],
+    }, ORIENT_MAX_CHARS);
+    expect(out).toContain('Graph freshness'); // a safety warning outranks nice-to-have context
+    expect(out.length).toBeLessThanOrEqual(ORIENT_MAX_CHARS);
+  });
 });
 
 describe('buildOrientation — gathers real memory/reports for a repo', () => {
@@ -65,5 +88,23 @@ describe('buildOrientation — gathers real memory/reports for a repo', () => {
     const brief = await buildOrientation(root);
     expect(brief).toContain('zero-dependency');
     expect(brief.length).toBeLessThanOrEqual(ORIENT_MAX_CHARS);
+  });
+
+  it('warns about uncommitted edits the graph cannot see, when a kb exists', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    const head = (await git(['rev-parse', 'HEAD'], root)).trim();
+    await mkdir(join(root, 'graphify-out'), { recursive: true });
+    await writeFile(join(root, 'graphify-out', 'graph.json'),
+      JSON.stringify({ nodes: [], links: [], built_at_commit: head }), 'utf-8');
+    await mkdir(join(root, '.baton'), { recursive: true });
+    await writeFile(join(root, '.baton', 'kb.json'), JSON.stringify({
+      root, projects: [{ id: 'p', name: 'p', path: root, graphPath: join(root, 'graphify-out', 'graph.json') }],
+      mergedGraphPath: null, lastBuiltAt: null,
+    }), 'utf-8');
+    await writeFile(join(root, 'a.ts'), 'export const a = 2; // edited, uncommitted\n', 'utf-8');
+
+    const brief = await buildOrientation(root);
+    expect(brief).toContain('a.ts');
+    expect(brief.toLowerCase()).toContain('re-read');
   });
 });

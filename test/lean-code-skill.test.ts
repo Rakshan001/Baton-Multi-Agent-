@@ -38,6 +38,8 @@ describe('bundled lean-code skill (S2)', () => {
       ['leave one runnable check behind', 'runnable check'],
       // attribution (Ponytail is MIT)
       ['credits Ponytail', 'ponytail'],
+      // G1 — a stale graph is how duplicate functions get born
+      ['heed the graph freshness warning', 'freshness warning'],
     ];
     for (const [why, needle] of required) {
       expect(body.includes(needle), `missing: ${why} (looked for "${needle}")`).toBe(true);

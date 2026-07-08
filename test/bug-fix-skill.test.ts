@@ -36,6 +36,10 @@ describe('bundled bug-fix skill — v2 invariants', () => {
       ['store a fact, not a diary', 'fact, not a diary'],
       ['record the fixing commit so recurrence is recallable', 'fixed-in'],
       ['context/token hygiene (compact)', 'compact'],
+
+      // G1 — graph-freshness golden rule
+      ['the graph is only as fresh as its last build', 'only as fresh as its last build'],
+      ['re-read files with uncommitted edits instead of trusting the graph', 're-read the file'],
     ];
 
     for (const [why, needle] of required) {

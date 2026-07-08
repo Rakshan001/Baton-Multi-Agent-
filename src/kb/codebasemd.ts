@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { SKIP_DIRS } from './projects.js';
 import { readStats } from './graphify.js';
-import { saveKb, type KbProject, type KbState } from './state.js';
+import { loadKb, saveKb, type KbProject, type KbState } from './state.js';
 
 /* ------------------------------ god nodes ------------------------------ */
 
@@ -315,6 +315,21 @@ export async function refreshCodebaseDocs(root: string, state: KbState): Promise
     }
   }
   return written;
+}
+
+/**
+ * G1: graphify's own post-commit hook rebuilds the graph OUTSIDE the daemon
+ * (no kb.rebuilt event fires), leaving CODEBASE.md describing the previous
+ * build. Regenerate the docs when any project's footer lags its graph;
+ * no-op (and cheap — one footer/stats compare per project) when fresh.
+ */
+export async function refreshDocsIfStale(root: string): Promise<string[]> {
+  const state = await loadKb(root);
+  if (!state || state.projects.length === 0) return [];
+  for (const p of state.projects) {
+    if ((await codebaseDocStatus(p)) === 'stale') return refreshCodebaseDocs(root, state);
+  }
+  return [];
 }
 
 /** Staleness for `kb status`: footer commit vs the graph's built_at_commit. */

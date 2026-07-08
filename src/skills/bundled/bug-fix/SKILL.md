@@ -135,6 +135,12 @@ ad-hoc one with grep/ctags), make sure it reflects the now-current code.*
 - No graph tooling at all → skip; Phase 3/4 fall back to source-reading + `grep` (Agent D below
   becomes the primary blast-radius method).
 
+> **Golden rule: the graph is only as fresh as its last build.** Even a just-rebuilt graph
+> cannot see *uncommitted* edits — yours or another session's. If a graph answer flags a file
+> as having uncommitted changes (or `check_files` says someone is editing it),
+> **re-read the file** and treat its graph symbols as unverified. Trusting a stale symbol is
+> how a fix lands next to a function that no longer exists — or gets duplicated.
+
 ---
 
 ## Phase 3 — Parallel multi-agent audit of EVERY file the fix could touch (MANDATORY)

@@ -28,6 +28,7 @@ import { stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
 import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, graphPathFor, kbStatus, loadKb, saveKb } from './kb/state.js';
+import { graphFreshness, renderGraphFreshnessNote, injectFreshnessNote } from './kb/freshness.js';
 import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
@@ -45,7 +46,7 @@ import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
 import { getTask } from './store.js';
-import { refreshCodebaseDocs } from './kb/codebasemd.js';
+import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
 import { agentActiveLoads, pickHandoffTarget } from './handoff/workload.js';
 import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from './kb/contextpack.js';
@@ -305,7 +306,7 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
  * response (JSON or SSE text) is streamed back. All await paths are caught so
  * a backend crash can't bring down the daemon.
  */
-async function proxyGraphify(req: IncomingMessage, res: ServerResponse, projectId: string): Promise<void> {
+async function proxyGraphify(req: IncomingMessage, res: ServerResponse, root: string, projectId: string): Promise<void> {
   if (!graphPool) return void res.writeHead(503).end('graph pool not started');
   let port: number;
   try { port = await graphPool.ensure(projectId); }
@@ -324,7 +325,22 @@ async function proxyGraphify(req: IncomingMessage, res: ServerResponse, projectI
       body: body || '{}',
       signal: AbortSignal.timeout(30_000),
     });
-    const text = await upstream.text();
+    let text = await upstream.text();
+    if (upstream.ok) {
+      // G1 golden rule: a graph answer carries its own staleness warning, so an
+      // agent never trusts symbols for files with uncommitted edits. Advisory —
+      // any failure here must never break the answer itself.
+      try {
+        const state = await loadKb(root);
+        const target = projectId === 'merged'
+          ? (state?.mergedGraphPath ? { path: root, graphPath: state.mergedGraphPath } : null)
+          : state?.projects.find((p) => p.id === projectId) ?? null;
+        if (target) {
+          const note = renderGraphFreshnessNote(await graphFreshness(target.path, target.graphPath));
+          text = injectFreshnessNote(text, upstream.headers.get('content-type'), note);
+        }
+      } catch { /* freshness is advisory */ }
+    }
     res.writeHead(upstream.status, { 'Content-Type': upstream.headers.get('content-type') ?? 'application/json' });
     res.end(text);
   } catch (e) {
@@ -371,7 +387,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (gm) {
     if (method !== 'POST') return send(res, 405, { error: 'POST only' }, origin);
     if (gm[1] !== getMcpToken(root)) return send(res, 403, { error: 'bad token' }, origin);
-    return proxyGraphify(req, res, gm[2]);
+    return proxyGraphify(req, res, root, gm[2]);
   }
 
   // Anti-CSRF (applies to EVERY state-changing /api request, not just one route).
@@ -1105,6 +1121,9 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
       void loadKb(root).then((kb) => (kb ? refreshCodebaseDocs(root, kb) : undefined)).catch(() => undefined);
     }, 2000);
   });
+  // graphify's own post-commit hook rebuilds graphs OUTSIDE the daemon (no
+  // kb.rebuilt fires) — sweep so CODEBASE.md follows the graph within a minute.
+  setInterval(() => { void refreshDocsIfStale(root).catch(() => undefined); }, 60_000).unref();
   const server = createServer((req, res) => {
     void handle(req, res, root, opts).catch((e) =>
       send(res, 500, { error: (e as Error).message }, corsOrigin(req)),
