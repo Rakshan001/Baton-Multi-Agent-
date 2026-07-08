@@ -93,6 +93,19 @@ baton new "fix the checkout crash" --project api-server   # or pick it in the da
 
 `baton serve` serves a realtime React dashboard at **http://localhost:7077** — a Command Center board, live Activity, Conflicts, the Knowledge Graph, Memory, History, an Agents roster (with one-click MCP wiring), and the Skills catalog. It binds to `127.0.0.1` only and is read-only until you pass `--write`. See [docs/dashboard.md](docs/dashboard.md).
 
+## Do I need the daemon running?
+
+**No — Baton is terminal-first.** You open your own terminals, run `claude` / `cursor` / `codex` yourself, and coordination happens through hooks + MCP tools + a local SQLite file. Start the dashboard only when you want to *look*:
+
+| Works with **no daemon** | Needs `baton serve` |
+|---|---|
+| Edit signals — sessions warn each other before touching a busy file (the edit hook writes them) | The dashboard UI + realtime (SSE) live view |
+| Shared memory, `recall`/`save`, orient briefs, `baton bugs`, reports, blame, handoff | Knowledge-graph *queries* over MCP (the daemon hosts one shared graphify backend per project) |
+| Graph rebuilds (git post-commit hook, incremental) | Interactive agent terminals in the browser |
+| The whole CLI: `status`, `signals`, `pass`/`take`, `merge`, `doctor` | Headless agent launch from the UI |
+
+History, memory, and reports are plain files + git — so when you *do* open the dashboard later, the past is all there; only live *uncommitted-edit* activity from hook-less agents needs the daemon watching at the time.
+
 ## Documentation
 
 Full docs live in [**`docs/`**](docs/README.md):
@@ -112,13 +125,21 @@ Full docs live in [**`docs/`**](docs/README.md):
 
 ## Contributing
 
-Baton is an open-source personal project. Issues and PRs welcome. Start with [STATUS.md](STATUS.md) (what's built, what's pending, where things live) and [docs/architecture.md](docs/architecture.md).
+Baton is open source (MIT) and contributions are welcome — the project is deliberately easy to hack on:
+
+- **Orient first**: [STATUS.md](STATUS.md) is the living map — what's built, what's pending, and where every module lives. [docs/architecture.md](docs/architecture.md) explains the shape; [CLAUDE.md](CLAUDE.md) lists the conventions that must not break (zero-dependency daemon, SSE-only realtime, shell-free git).
+- **How changes land**: every feature is TDD'd (the test exists and fails before the code), and non-negotiable behaviors are guarded by *invariant tests* — if a future edit drops a safety rule from a bundled skill, the suite fails loudly.
+- **Good first contributions**: an agent adapter (add your CLI to `src/agents/registry.ts`), a bundled skill (`src/skills/bundled/<id>/SKILL.md` — the loader auto-discovers it), a language check against your stack, or a docs fix.
 
 ```bash
-npm run build && npx vitest run        # backend build + tests
+npm install && npm install --prefix web
+npm run build && npx vitest run        # backend build + full test suite
 npm run build --prefix web             # dashboard build
-node dist/cli.js serve --write         # run it locally
+node dist/cli.js serve --write         # run it locally on :7077
+npm run dev --prefix web               # UI dev server :5173 (demo data ON)
 ```
+
+Open a PR against `main` with tests. If you're changing coordination behavior, run the suite a few times — flaky is treated as broken here.
 
 ## License
 

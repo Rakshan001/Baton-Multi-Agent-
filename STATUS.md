@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-08 (session 10: skills v2 — S1–S6 on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open)
+> Last updated: **2026-07-08 (session 11: G1 graph-freshness golden rule + G2 root-session coordination, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open)
 
 ## What this project is
 
@@ -209,6 +209,33 @@ injection for codex/gemini (token-hostile), no SSE for the panel (5s poll is eno
 no upstream-Ponytail UI import (redundant with the bundled adaptation). **396 tests
 green**; docs (README, skills, cli-reference, memory, session-handoff, dashboard)
 updated this session.
+
+**G-round: graph freshness + terminal-first coordination (2026-07-08, session 11).**
+Research first (two agents): graphify supports ~35 tree-sitter languages (JS/TS/JSX/TSX,
+Python, Java, Go, Rust, C#, PHP, Swift, Kotlin, Vue/Svelte…); post-commit hook rebuilds
+incrementally and worktrees share hooks; the staleness gaps were uncommitted edits,
+CODEBASE.md lag, silent detached-rebuild failures, and hub re-merge. Root-checkout
+sessions were fully dark (no detection/signals/handoff; memory/guard/orient worked).
+**G1 (graph-freshness golden rule):** `src/kb/freshness.ts` classifies fresh/behind/
+dirty (uncommitted edits to indexable files) and renders an honest warning; orient
+opens with it (budget-protected); the graphify proxy appends it to every query answer
+(byte-for-byte passthrough on anything unparseable); `refreshDocsIfStale` + a 60s
+daemon sweep keep CODEBASE.md following hook rebuilds; the rule is in the bug-fix +
+lean-code skills, invariant-locked. Root-caused a flaky hub test: merge fire-and-forgot
+a detached graphify update even for never-indexed projects — `queueMergeGraphRefresh`
+now skips a graph that doesn't exist (first builds belong to kb init).
+**G2 (root-session coordination):** the PreToolUse guard hook now WRITES the edit
+signal it used to only read — task slug inside a worktree, `sess-<id8>` pseudo-slug
+(from Claude's hook `session_id`) at the repo root, registered in a new
+`hook_sessions` table (agent + checkout root). Reads attribute agents from it and
+reconcile pseudo-session signals against the session's own checkout; a 15s grace
+period keeps just-recorded signals (the hook fires before the file hits disk).
+Orient nudges main-checkout sessions toward `baton new`. Verified end-to-end: two
+simulated root sessions warned each other + `baton signals` showed the overlap with
+no daemon ever running. README gained "Do I need the daemon running?" + a real
+contributor guide. **428 tests green.** Remaining G-phases: G3 daemon-less graph
+query fallback; G4 language-support docs. Known gap: root sessions of hook-less
+agents (cursor/codex/antigravity) are still dark outside worktrees.
 
 ## Pending / next 🔜
 
