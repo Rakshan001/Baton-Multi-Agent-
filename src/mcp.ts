@@ -15,10 +15,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { collectStatus } from './board.js';
+import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
 import { queryFile } from './history.js';
-import { checkFiles, getSignals, isWatcherActive, setProgress } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
 import { buildOrientation } from './kb/orient.js';
@@ -36,8 +37,18 @@ export async function startMcpServer(): Promise<void> {
   // git path, so give them the git root — unchanged in hub mode.
   const memRoot = await gitRoot();
   // The caller's own task, so check_files/who_touched don't report its edits as
-  // "busy" to itself (set by baton when it spawns the agent).
-  const selfSlug = process.env.BATON_SLUG?.trim() || undefined;
+  // "busy" to itself (set by baton when it spawns the agent). Sessions with no
+  // task (any agent, repo root, no worktree) get a per-session identity instead:
+  // `baton mcp` runs one process per agent session, so the pid is the session
+  // and the parent process chain says which agent spawned us (M1, zero config).
+  const taskSlug = process.env.BATON_SLUG?.trim() || undefined;
+  const selfSlug = taskSlug ?? sessionSlug(`p${process.pid}`);
+  if (!taskSlug) {
+    try {
+      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent());
+      registerHookSession(root, selfSlug, agent, memRoot);
+    } catch { /* identity is best-effort — tools still work anonymously */ }
+  }
   const server = new McpServer(
     { name: 'baton', version: '0.1.0' },
     { instructions: 'New to this repo? Call orient() first for a budgeted project brief (memory, recent work, structure), then recall_memory before exploring, and check_files before editing shared files.' },
@@ -115,10 +126,23 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { note: z.string().describe('One line: what you are doing + rough progress') },
     },
     async ({ note }) => {
-      if (!selfSlug) return asText({ error: 'no task identity (BATON_SLUG) — run inside a baton worktree' });
       const trimmed = note.trim().slice(0, 200);
       setProgress(root, selfSlug, trimmed);
       return asText({ reported: trimmed, slug: selfSlug });
+    },
+  );
+
+  server.registerTool(
+    'touch_files',
+    {
+      description:
+        'Tell the other sessions which files YOU are editing right now (live edit signals). Call it right after you start editing shared files — especially when working at the repo root outside a managed worktree, where no file watcher covers you. Signals expire in 30 min and self-clean once the work is committed.',
+      inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths you are editing') },
+    },
+    async ({ paths }) => {
+      const touched = paths.map((p) => p.trim()).filter((p) => p && !p.startsWith('/') && !p.includes('..'));
+      for (const p of touched) recordHookEdit(root, { slug: selfSlug, path: p });
+      return asText({ touched, as: selfSlug });
     },
   );
 

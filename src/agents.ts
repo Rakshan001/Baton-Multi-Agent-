@@ -30,6 +30,48 @@ function classify(command: string): string | null {
   return null;
 }
 
+/**
+ * Which agent owns a process, given its ancestor command lines (M1). Registry
+ * detect patterns first (strict, tuned for CLI process scans), then a lenient
+ * id-in-path pass — IDE hosts spawn MCP servers from paths like
+ * /Applications/Cursor.app/… that the strict CLI patterns don't cover. Safe to
+ * be lenient here: the chain is OUR OWN ancestry, not the whole process table.
+ */
+export function firstAgentIn(commands: string[]): string | null {
+  for (const cmd of commands) {
+    const strict = classify(cmd);
+    if (strict) return strict;
+  }
+  for (const cmd of commands) {
+    for (const { id } of AGENT_PATTERNS) {
+      if (id && new RegExp(`(^|[/\\\\\\s])${id}`, 'i').test(cmd)) return id;
+    }
+  }
+  return null;
+}
+
+/**
+ * The agent that spawned this process — `baton mcp` runs as a child of the
+ * agent session it serves, so walking parent pids identifies the agent with
+ * zero configuration. Null when the chain holds no known agent (fail open).
+ */
+export async function detectParentAgent(maxDepth = 6): Promise<string | null> {
+  const chain: string[] = [];
+  let pid = process.ppid;
+  for (let i = 0; i < maxDepth && pid > 1; i++) {
+    try {
+      const { stdout } = await execa('ps', ['-o', 'ppid=,command=', '-p', String(pid)]);
+      const m = stdout.trim().match(/^(\d+)\s+(.*)$/);
+      if (!m) break;
+      chain.push(m[2]);
+      pid = parseInt(m[1], 10);
+    } catch {
+      break;
+    }
+  }
+  return firstAgentIn(chain);
+}
+
 async function listProcesses(): Promise<Array<{ pid: number; command: string }>> {
   try {
     // `ps -axo pid=,command=` works on macOS and Linux; '=' suppresses headers.

@@ -148,17 +148,33 @@ export function recordHookEdit(
   opts: { slug: string; path: string; at?: string; session?: { agent: string; sessionRoot: string } },
 ): void {
   const at = opts.at ?? new Date().toISOString();
-  const db = getDb(root);
-  db.prepare(
-    `INSERT INTO edit_signals (slug, path, at) VALUES (?, ?, ?)
-     ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at`,
-  ).run(opts.slug, opts.path, at);
-  if (opts.session) {
-    db.prepare(
+  getDb(root)
+    .prepare(
+      `INSERT INTO edit_signals (slug, path, at) VALUES (?, ?, ?)
+       ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at`,
+    )
+    .run(opts.slug, opts.path, at);
+  if (opts.session) registerHookSession(root, opts.slug, opts.session.agent, opts.session.sessionRoot, at);
+}
+
+/**
+ * Register a session (agent + the checkout it works in) without recording an
+ * edit — the MCP server calls this at startup (M1) so cursor/codex/gemini
+ * sessions are attributable before they touch anything.
+ */
+export function registerHookSession(
+  root: string,
+  slug: string,
+  agent: string | null,
+  sessionRoot: string,
+  at: string = new Date().toISOString(),
+): void {
+  getDb(root)
+    .prepare(
       `INSERT INTO hook_sessions (slug, agent, root, at) VALUES (?, ?, ?, ?)
        ON CONFLICT(slug) DO UPDATE SET agent = excluded.agent, root = excluded.root, at = excluded.at`,
-    ).run(opts.slug, opts.session.agent, opts.session.sessionRoot, at);
-  }
+    )
+    .run(slug, agent, sessionRoot, at);
 }
 
 function hookSessions(root: string): Map<string, HookSession> {
