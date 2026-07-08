@@ -113,7 +113,10 @@ export async function startAgent(
         const section = memoryBriefSection(recalled.facts, recalled.staleDropped);
         if (section) memory = `\n\n${section}`;
       } catch { /* memory is an enhancement — never block a launch */ }
-      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${memory}`;
+      const scope = task.scope?.length
+        ? `\n\nYour scope: ${task.scope.join(', ')}. Stay within it; if you must touch files outside it, check_files first — another agent may own that area.`
+        : '';
+      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${scope}${memory}`;
     }
   }
 

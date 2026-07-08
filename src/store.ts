@@ -19,6 +19,9 @@ export interface Task {
   /** The git repo the worktree/branch belongs to. Equals the sub-project dir in a hub,
    *  or the repo root in a single repo. Older records omit it — fall back to the served root. */
   repoRoot?: string;
+  /** Declared file scope (path globs) this task owns — used to warn on overlap at
+   *  creation and to steer the agent's launch prompt. Advisory, not enforced. */
+  scope?: string[];
 }
 
 /** Thrown when a slug doesn't resolve to a recorded task. */

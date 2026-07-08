@@ -75,8 +75,9 @@ program
   .command('new')
   .argument('<task...>', 'task description')
   .option('--project <id>', 'in a multi-repo hub: which sub-project the task targets')
+  .option('--scope <globs>', 'comma-separated path globs this task owns (warns on overlap; steers the agent)')
   .description('scaffold a branch + worktree for a task')
-  .action((task: string[], opts: { project?: string }) => run(() => newCmd(task.join(' '), opts)));
+  .action((task: string[], opts: { project?: string; scope?: string }) => run(() => newCmd(task.join(' '), opts)));
 
 program
   .command('ls')

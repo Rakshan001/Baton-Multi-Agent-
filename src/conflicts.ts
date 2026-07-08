@@ -47,6 +47,51 @@ export function computeConflictsFromSets(
   return result;
 }
 
+/**
+ * The literal path prefix of a glob, up to the first segment with a wildcard.
+ * `src/auth/**` → `src/auth`; `src/a.ts` → `src/a.ts`; `**\/*.ts` → ``.
+ */
+function globBase(glob: string): string {
+  const out: string[] = [];
+  for (const seg of glob.split('/')) {
+    if (/[*?[\]{}]/.test(seg)) break;
+    out.push(seg);
+  }
+  return out.join('/');
+}
+
+/** True if path `a` is `b`, or a segment-aligned ancestor directory of `b`. */
+function pathContains(a: string, b: string): boolean {
+  return a === b || b.startsWith(a.endsWith('/') ? a : `${a}/`);
+}
+
+/**
+ * Do two sets of path globs touch the same area? A warning heuristic (no glob
+ * engine, zero deps): two globs clash when one's literal base contains the
+ * other's. Errs toward warning — a wildcard-leading glob (empty base) is treated
+ * as matching anything. An empty scope set makes no claim.
+ */
+export function scopesOverlap(a: string[], b: string[]): boolean {
+  for (const ga of a) {
+    for (const gb of b) {
+      const ba = globBase(ga);
+      const bb = globBase(gb);
+      if (ba === '' || bb === '' || pathContains(ba, bb) || pathContains(bb, ba)) return true;
+    }
+  }
+  return false;
+}
+
+/** Existing tasks whose declared scope overlaps a candidate scope. */
+export function overlappingScopes(candidate: string[], tasks: Task[]): { slug: string; scope: string[] }[] {
+  if (!candidate.length) return [];
+  const out: { slug: string; scope: string[] }[] = [];
+  for (const t of tasks) {
+    if (t.scope?.length && scopesOverlap(candidate, t.scope)) out.push({ slug: t.slug, scope: t.scope });
+  }
+  return out;
+}
+
 /** Resolve each task's changed files, then compute pairwise overlap. */
 export async function computeConflicts(
   tasks: Task[],
