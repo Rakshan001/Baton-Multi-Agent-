@@ -13,7 +13,7 @@ import { relative, isAbsolute, dirname, basename, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
 import { resolveMcpRoot } from '../store.js';
-import { checkFiles, type FileCheck } from '../signals.js';
+import { checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
 
 /** Everything the guard must finish within — past this we fail open silently. */
 const GUARD_BUDGET_MS = 1500;
@@ -24,6 +24,8 @@ export interface GuardPayload {
   tool_name?: string;
   tool_input?: { file_path?: string };
   cwd?: string;
+  /** The host agent's session id (Claude Code includes it in every hook payload). */
+  session_id?: string;
 }
 
 /** The worktree-relative path an edit targets, or null if this call is not our business. */
@@ -63,6 +65,25 @@ export function slugFromWorktreePath(p: string): string | undefined {
   return /\.baton\/wt\/([^/]+)/.exec(p)?.[1] ?? undefined;
 }
 
+/**
+ * Who is this session (G2)? A worktree session IS its task; a session at the
+ * repo root has no task, so it is identified by the agent's own session id and
+ * registers its agent + checkout root for attribution/reconciliation. The
+ * guard hook is installed by `baton hooks install claude`, hence agent: claude.
+ */
+export function selfIdentity(
+  payload: GuardPayload,
+  worktreeRoot: string,
+  envSlug?: string,
+): { slug: string | undefined; session?: { agent: string; sessionRoot: string } } {
+  const taskSlug = envSlug?.trim() || slugFromWorktreePath(worktreeRoot);
+  if (taskSlug) return { slug: taskSlug };
+  if (payload.session_id) {
+    return { slug: sessionSlug(payload.session_id), session: { agent: 'claude', sessionRoot: worktreeRoot } };
+  }
+  return { slug: undefined };
+}
+
 async function readStdin(): Promise<string> {
   let data = '';
   process.stdin.setEncoding('utf-8');
@@ -93,8 +114,16 @@ async function runGuard(): Promise<string | null> {
   const rel = guardTarget(await canonicalTarget(payload), worktreeRoot);
   if (!rel) return null;
   const root = await resolveMcpRoot(cwd);
-  const selfSlug = process.env.BATON_SLUG?.trim() || slugFromWorktreePath(worktreeRoot);
-  const check = (await checkFiles(root, [rel], selfSlug))[rel];
+  const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG);
+  // G2: the guard WRITES the signal too — the daemon-less path that makes
+  // sessions at the repo root (and worktree sessions with no daemon) visible
+  // to each other. Never let recording break the advisory.
+  if (self.slug) {
+    try {
+      recordHookEdit(root, { slug: self.slug, path: rel, session: self.session });
+    } catch { /* advisory still runs */ }
+  }
+  const check = (await checkFiles(root, [rel], self.slug))[rel];
   return check ? formatGuardMessage(rel, check) : null;
 }
 

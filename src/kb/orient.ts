@@ -31,6 +31,8 @@ export interface OrientParts {
   /** Pre-rendered memory block (from memoryBriefSection), or '' if none. */
   memorySection: string;
   reports: CompletionReport[];
+  /** One-line worktree nudge for main-checkout sessions (G2), or ''. */
+  worktreeHint?: string;
 }
 
 function reportsSection(reports: CompletionReport[]): string {
@@ -53,8 +55,9 @@ export function renderOrientation(parts: OrientParts, maxChars: number = ORIENT_
   const freshness = (parts.freshnessNote ?? '').trim();
   const memory = parts.memorySection.trim();
   const reports = reportsSection(parts.reports);
+  const hint = (parts.worktreeHint ?? '').trim(); // a nudge — first to go under budget
 
-  const durable = [freshness, codebase, memory, reports].filter(Boolean);
+  const durable = [freshness, codebase, memory, reports, hint].filter(Boolean);
   if (durable.length === 0) {
     // Nothing learned yet — still orient the agent on how to proceed.
     return [header, 'No project memory or shipped tasks recorded yet — you are getting started fresh. As you learn decisions/gotchas, `save_memory` them so the next agent skips the rediscovery.', TOOLS_POINTER].join('\n\n');
@@ -63,7 +66,7 @@ export function renderOrientation(parts: OrientParts, maxChars: number = ORIENT_
   // Fit within budget: drop trailing sections (reports first), then trim memory,
   // but the header and live-tools pointer are non-negotiable.
   const fixed = `${header}\n\n${TOOLS_POINTER}`.length + 4; // + section joins
-  let sections = [freshness, codebase, memory, reports].filter(Boolean);
+  let sections = [freshness, codebase, memory, reports, hint].filter(Boolean);
   while (sections.length && fixed + sections.join('\n\n').length > maxChars) {
     if (sections.length > 1) sections = sections.slice(0, -1); // drop the lowest-priority section
     else {
@@ -107,7 +110,12 @@ export async function buildOrientation(root: string, opts: { topic?: string; cwd
 
   const freshnessNote = await freshnessNoteFor(root, opts.cwd);
   const hasCodebaseMd = existsSync(join(root, 'CODEBASE.md'));
-  return renderOrientation({ hasCodebaseMd, freshnessNote, memorySection, reports });
+  // G2: a session at the main checkout is coordinated (its hook writes signals),
+  // but parallel work merges cleanest from an isolated worktree — one-line nudge.
+  const worktreeHint = opts.cwd && !/\.baton[\\/]wt[\\/]/.test(opts.cwd)
+    ? '_Working in the main checkout — fine for solo work. For parallel sessions without merge conflicts, isolate the task first: `baton new "<task>"`, then start the agent inside the worktree it prints._'
+    : '';
+  return renderOrientation({ hasCodebaseMd, freshnessNote, memorySection, reports, worktreeHint });
 }
 
 /** Resolve the coordination root and build the brief (for the CLI / hook / MCP tool). */

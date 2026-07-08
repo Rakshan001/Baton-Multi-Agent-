@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { guardTarget, formatGuardMessage, slugFromWorktreePath } from '../src/commands/guard.js';
+import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity } from '../src/commands/guard.js';
 import type { FileCheck } from '../src/signals.js';
 
 describe('guardTarget — extract the repo-relative file a PreToolUse edit targets', () => {
@@ -59,5 +59,25 @@ describe('slugFromWorktreePath — self-identity fallback when BATON_SLUG is abs
   });
   it('returns undefined outside a baton worktree', () => {
     expect(slugFromWorktreePath('/repo')).toBeUndefined();
+  });
+});
+
+describe('selfIdentity — who is this session, worktree task or root session (G2)', () => {
+  const payload = { tool_name: 'Edit', session_id: 'abc12345-6789-4def-a012-3456789abcde' };
+
+  it('a worktree session is its task slug — no session registration needed', () => {
+    const id = selfIdentity(payload, '/repo/.baton/wt/fix-auth', 'fix-auth');
+    expect(id.slug).toBe('fix-auth');
+    expect(id.session).toBeUndefined();
+  });
+
+  it('a root session gets a pseudo-slug from its session id + registers agent and checkout', () => {
+    const id = selfIdentity(payload, '/repo');
+    expect(id.slug).toBe('sess-abc12345');
+    expect(id.session).toEqual({ agent: 'claude', sessionRoot: '/repo' });
+  });
+
+  it('no task and no session id → anonymous (nothing to record)', () => {
+    expect(selfIdentity({ tool_name: 'Edit' }, '/repo').slug).toBeUndefined();
   });
 });

@@ -90,6 +90,16 @@ describe('buildOrientation — gathers real memory/reports for a repo', () => {
     expect(brief.length).toBeLessThanOrEqual(ORIENT_MAX_CHARS);
   });
 
+  it('nudges a main-checkout session toward an isolated worktree (G2)', async () => {
+    const brief = await buildOrientation(root, { cwd: root });
+    expect(brief).toContain('baton new');
+  });
+
+  it('does not nudge a session already inside a worktree', async () => {
+    const brief = await buildOrientation(root, { cwd: join(root, '.baton', 'wt', 'fix-auth') });
+    expect(brief).not.toContain('baton new');
+  });
+
   it('warns about uncommitted edits the graph cannot see, when a kb exists', async () => {
     const { mkdir } = await import('node:fs/promises');
     const head = (await git(['rev-parse', 'HEAD'], root)).trim();
