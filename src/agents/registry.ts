@@ -58,6 +58,13 @@ export const AGENTS: Record<string, AgentDef> = {
     headless: { cmd: 'gemini', args: (p, m) => [...modelFlag('-m', m), '-p', p] },
     interactive: { cmd: 'gemini', args: (p, m) => [...modelFlag('-m', m), ...(p ? ['-i', p] : [])] },
   },
+  antigravity: {
+    id: 'antigravity', label: 'Antigravity', binary: 'agy',
+    // The CLI is `agy`; the IDE runs as Antigravity.app (Electron + helpers).
+    // Detection-only for now: launcher flags are inherited-from-gemini per the
+    // migration docs but unverified on a real install — don't guess spawn args.
+    detect: /(^|\/|\s)agy(\s|$)|antigravity/i,
+  },
   aider: {
     id: 'aider', label: 'Aider', binary: 'aider',
     detect: /(^|\/|\s)aider(\s|$)/,

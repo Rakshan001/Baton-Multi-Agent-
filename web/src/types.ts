@@ -5,7 +5,7 @@
    ============================================================ */
 
 /** Agents Baton detects (src/agents.ts). `null` = no agent attached. */
-export type AgentId = "claude" | "cursor" | "codex" | "gemini" | "aider" | "opencode";
+export type AgentId = "claude" | "cursor" | "codex" | "gemini" | "antigravity" | "aider" | "opencode";
 
 /** Worktree state (src/git.ts). */
 export type Status = "clean" | "dirty" | "conflict";

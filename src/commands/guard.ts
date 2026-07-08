@@ -28,6 +28,32 @@ export interface GuardPayload {
   session_id?: string;
 }
 
+/** The union of hook dialects the guard accepts on stdin. */
+interface RawHookPayload extends GuardPayload {
+  /** Cursor afterFileEdit fields. */
+  conversation_id?: string;
+  file_path?: string;
+  workspace_roots?: string[];
+}
+
+/**
+ * One guard for every hook dialect (M2): Cursor's `afterFileEdit` sends
+ * `{conversation_id, file_path, workspace_roots}` instead of Claude's
+ * `{tool_name, tool_input, cwd, session_id}` — map it onto the guard shape.
+ * Anything already in guard shape passes through untouched.
+ */
+export function normalizeGuardPayload(raw: RawHookPayload): GuardPayload {
+  if (raw.file_path && !raw.tool_name) {
+    return {
+      tool_name: 'Edit',
+      tool_input: { file_path: raw.file_path },
+      cwd: raw.workspace_roots?.[0] ?? raw.cwd,
+      session_id: raw.conversation_id ?? raw.session_id,
+    };
+  }
+  return raw;
+}
+
 /** The worktree-relative path an edit targets, or null if this call is not our business. */
 export function guardTarget(payload: GuardPayload, worktreeRoot: string): string | null {
   if (!payload.tool_name || !EDIT_TOOLS.has(payload.tool_name)) return null;
@@ -75,11 +101,12 @@ export function selfIdentity(
   payload: GuardPayload,
   worktreeRoot: string,
   envSlug?: string,
+  agent = 'claude',
 ): { slug: string | undefined; session?: { agent: string; sessionRoot: string } } {
   const taskSlug = envSlug?.trim() || slugFromWorktreePath(worktreeRoot);
   if (taskSlug) return { slug: taskSlug };
   if (payload.session_id) {
-    return { slug: sessionSlug(payload.session_id), session: { agent: 'claude', sessionRoot: worktreeRoot } };
+    return { slug: sessionSlug(payload.session_id), session: { agent, sessionRoot: worktreeRoot } };
   }
   return { slug: undefined };
 }
@@ -107,14 +134,14 @@ async function canonicalTarget(payload: GuardPayload): Promise<GuardPayload> {
   }
 }
 
-async function runGuard(): Promise<string | null> {
-  const payload = JSON.parse(await readStdin()) as GuardPayload;
+async function runGuard(agent: string): Promise<string | null> {
+  const payload = normalizeGuardPayload(JSON.parse(await readStdin()) as GuardPayload);
   const cwd = payload.cwd ?? process.cwd();
   const worktreeRoot = await gitRoot(cwd);
   const rel = guardTarget(await canonicalTarget(payload), worktreeRoot);
   if (!rel) return null;
   const root = await resolveMcpRoot(cwd);
-  const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG);
+  const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG, agent);
   // G2: the guard WRITES the signal too — the daemon-less path that makes
   // sessions at the repo root (and worktree sessions with no daemon) visible
   // to each other. Never let recording break the advisory.
@@ -127,15 +154,19 @@ async function runGuard(): Promise<string | null> {
   return check ? formatGuardMessage(rel, check) : null;
 }
 
-export async function guardCmd(): Promise<void> {
+export async function guardCmd(opts: { agent?: string } = {}): Promise<void> {
+  const agent = opts.agent ?? 'claude';
   const timeout = new Promise<null>((res) => setTimeout(res, GUARD_BUDGET_MS, null).unref?.());
   let message: string | null = null;
   try {
-    message = await Promise.race([runGuard(), timeout]);
+    message = await Promise.race([runGuard(agent), timeout]);
   } catch {
     /* fail open — a broken guard must never stall an edit */
   }
-  if (message) {
+  // Only Claude's hook protocol understands hookSpecificOutput; for other
+  // agents the guard is a silent signal writer (their post-edit hooks don't
+  // document a context-injection reply — printing could confuse the host).
+  if (message && agent === 'claude') {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: message } }));
   }
   process.exitCode = 0;

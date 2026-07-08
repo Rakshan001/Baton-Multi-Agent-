@@ -316,15 +316,16 @@ program
 const hooks = program.command('hooks').description('agent-side hook installation');
 hooks
   .command('install')
-  .argument('<agent>', 'claude')
-  .option('--project', 'install into .claude/settings.json in this repo instead of ~/.claude')
-  .description('handoff brief on session end (Stop/PreCompact) + edit-collision guard (PreToolUse)')
+  .argument('<agent>', 'claude | cursor')
+  .option('--project', 'install into this repo (.claude/settings.json / .cursor/hooks.json) instead of the home dir')
+  .description('claude: handoff brief + edit guard + orient; cursor: afterFileEdit edit-signal guard')
   .action((agent: string, opts: { project?: boolean }) => run(() => hooksInstallCmd(agent, opts)));
 
 program
-  .command('guard', { hidden: true }) // invoked by the PreToolUse hook, not by humans
-  .description('read a Claude Code PreToolUse payload on stdin; warn if the file is held by another session')
-  .action(() => run(guardCmd));
+  .command('guard', { hidden: true }) // invoked by agent hooks, not by humans
+  .description('read an edit-hook payload on stdin; record the edit signal + warn if the file is held by another session')
+  .option('--agent <id>', 'which agent host invoked this hook', 'claude')
+  .action((opts: { agent?: string }) => run(() => guardCmd(opts)));
 
 program
   .command('orient')

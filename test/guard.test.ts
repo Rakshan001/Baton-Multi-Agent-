@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity } from '../src/commands/guard.js';
+import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload } from '../src/commands/guard.js';
 import type { FileCheck } from '../src/signals.js';
 
 describe('guardTarget — extract the repo-relative file a PreToolUse edit targets', () => {
@@ -79,5 +79,32 @@ describe('selfIdentity — who is this session, worktree task or root session (G
 
   it('no task and no session id → anonymous (nothing to record)', () => {
     expect(selfIdentity({ tool_name: 'Edit' }, '/repo').slug).toBeUndefined();
+  });
+});
+
+describe('normalizeGuardPayload — one guard for every hook dialect (M2)', () => {
+  it('maps a Cursor afterFileEdit payload onto the guard shape', () => {
+    const p = normalizeGuardPayload({
+      conversation_id: 'conv-42', generation_id: 'g1',
+      file_path: '/repo/src/App.tsx', edits: [{}],
+      workspace_roots: ['/repo'],
+    });
+    expect(p.tool_name).toBe('Edit');
+    expect(p.tool_input?.file_path).toBe('/repo/src/App.tsx');
+    expect(p.cwd).toBe('/repo');
+    expect(p.session_id).toBe('conv-42');
+  });
+
+  it('passes a Claude payload through untouched', () => {
+    const claude = { tool_name: 'Write', tool_input: { file_path: '/r/a.ts' }, cwd: '/r', session_id: 's1' };
+    expect(normalizeGuardPayload(claude)).toEqual(claude);
+  });
+});
+
+describe('selfIdentity — agent parameter (M2)', () => {
+  it('registers a cursor root session under its own agent name', () => {
+    const id = selfIdentity({ session_id: 'conv-42' }, '/repo', undefined, 'cursor');
+    expect(id.slug).toBe('sess-conv-42');
+    expect(id.session).toEqual({ agent: 'cursor', sessionRoot: '/repo' });
   });
 });
