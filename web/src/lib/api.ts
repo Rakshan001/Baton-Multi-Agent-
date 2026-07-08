@@ -423,6 +423,25 @@ class BatonClient {
     this.emit();
     return r;
   }
+  async installSkillEverywhere(id: string): Promise<SkillInstallResult[]> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      const skill = this.demoSkills.find((s) => s.id === id);
+      const results = (skill?.installs ?? []).map((inst) => {
+        inst.installed = true;
+        return { skill: id, agent: inst.agent, rel: inst.rel, path: inst.rel, wrote: true, references: skill?.references.length ?? 0 };
+      });
+      this.emit();
+      return results;
+    }
+    const r = await this.request<{ results: SkillInstallResult[] }>(`/api/skills/${encodeURIComponent(id)}/install`, {
+      method: "POST", body: JSON.stringify({ agent: "all" }),
+    });
+    this.emit();
+    return r.results;
+  }
   async uninstallSkill(id: string, agent: SkillAgent): Promise<{ removed: boolean; rel: string }> {
     this.assertWrite();
     if (this.demo) {

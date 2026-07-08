@@ -33,7 +33,7 @@ import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { KNOWN_AGENT_IDS } from './agents/registry.js';
 import {
-  importSkill, installSkill, listSkillStatus, uninstallSkill,
+  importSkill, installSkill, installSkillEverywhere, listSkillStatus, uninstallSkill,
   SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
 } from './skills/install.js';
 import { bus } from './events.js';
@@ -762,6 +762,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     try {
       if (method === 'DELETE') {
         return send(res, 200, await uninstallSkill(root, id, agent), origin);
+      }
+      if (agent === 'all') {
+        const results = await installSkillEverywhere(root, id);
+        for (const r of results) bus.publish({ type: 'skill.installed', skill: id, agent: r.agent });
+        return send(res, 201, { results }, origin);
       }
       const result = await installSkill(root, id, agent);
       bus.publish({ type: 'skill.installed', skill: id, agent });

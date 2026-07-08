@@ -239,6 +239,19 @@ export async function installSkill(root: string, id: string, agent: string): Pro
   return { skill: id, agent, rel: target.rel, path: target.path, wrote: true, references };
 }
 
+/**
+ * Install one skill into EVERY agent Baton can write (SKILL_AGENTS), in one
+ * shot. Backs `baton skills install <id> --all` and the dashboard's install-
+ * everywhere action. Validates the skill once up front so an unknown id writes
+ * nothing.
+ */
+export async function installSkillEverywhere(root: string, id: string): Promise<InstallResult[]> {
+  if (!(await findSkill(root, id))) throw new SkillNotFoundError(id);
+  const results: InstallResult[] = [];
+  for (const agent of SKILL_AGENTS) results.push(await installSkill(root, id, agent));
+  return results;
+}
+
 export async function uninstallSkill(root: string, id: string, agent: string): Promise<{ removed: boolean; rel: string }> {
   if (!isSkillAgent(agent)) throw new SkillAgentUnsupportedError(agent);
   const target = skillTargetFor(agent, id, root)!;

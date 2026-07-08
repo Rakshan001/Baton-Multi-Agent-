@@ -36,6 +36,7 @@ import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
+import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -167,6 +168,36 @@ memory
   .command('log')
   .description('KB change history: superseded/removed facts (archived, not destroyed)')
   .action(() => run(memoryLogCmd));
+
+const skills = program
+  .command('skills')
+  .description('reusable agent skills: install the bundled playbooks into your agents');
+
+skills
+  .command('list', { isDefault: true })
+  .description('list all skills and where each is installed')
+  .action(() => run(skillsListCmd));
+
+skills
+  .command('install')
+  .argument('<id>', 'skill id (see `baton skills list`)')
+  .option('--agent <agent>', 'install into just one agent (default: all writable agents)')
+  .option('--all', 'install into every writable agent (the default)')
+  .description('install a skill into your agents (all of them unless --agent)')
+  .action((id: string, opts: { agent?: string; all?: boolean }) => run(() => skillsInstallCmd(id, opts)));
+
+skills
+  .command('uninstall')
+  .argument('<id>', 'skill id')
+  .option('--agent <agent>', 'remove from just one agent (default: all)')
+  .description('remove an installed skill from your agents')
+  .action((id: string, opts: { agent?: string }) => run(() => skillsUninstallCmd(id, opts)));
+
+skills
+  .command('import')
+  .argument('<source>', 'a file path or http(s) URL to a SKILL.md')
+  .description('import a skill from a path or URL into the catalog')
+  .action((source: string) => run(() => skillsImportCmd(source)));
 
 const kb = program
   .command('kb')
