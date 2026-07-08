@@ -37,6 +37,7 @@ import { guardCmd } from './commands/guard.js';
 import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
 import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
+import { bugsCmd } from './commands/bugs.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -198,6 +199,12 @@ skills
   .argument('<source>', 'a file path or http(s) URL to a SKILL.md')
   .description('import a skill from a path or URL into the catalog')
   .action((source: string) => run(() => skillsImportCmd(source)));
+
+program
+  .command('bugs')
+  .argument('<symptom...>', 'describe the symptom, e.g. "checkout redirect loops"')
+  .description('has this bug been fixed before? — surfaces prior fixes + commits that may have re-broken them')
+  .action((symptom: string[]) => run(() => bugsCmd(symptom.join(' '))));
 
 const kb = program
   .command('kb')
