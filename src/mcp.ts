@@ -19,13 +19,13 @@ import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
 import { queryFile } from './history.js';
 import { checkFiles, getSignals, isWatcherActive } from './signals.js';
-import { getReport, listReports } from './reports.js';
+import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
 import { buildOrientation } from './kb/orient.js';
+import { asText, capList } from './mcp-format.js';
 
-const asText = (data: unknown) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-});
+/** who_touched can span a file's whole history — cap what an agent is served. */
+const WHO_TOUCHED_CAP = 20;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
@@ -77,10 +77,11 @@ export async function startMcpServer(): Promise<void> {
     'get_report',
     {
       description:
-        'Get the completion report of a merged task (summary, files changed, commits). Use after waiting on busy files to decide whether your issue is already fixed. Omit slug to list recent reports.',
+        'Get the completion report of a merged task (summary, files changed, commits). Use after waiting on busy files to decide whether your issue is already fixed. Omit slug for a compact list of recent reports (pass a slug back for full detail).',
       inputSchema: { slug: z.string().optional().describe('Task slug; omit for recent reports') },
     },
-    async ({ slug }) => asText(slug ? (getReport(root, slug) ?? { error: `no report for '${slug}'` }) : listReports(root, 10)),
+    async ({ slug }) =>
+      asText(slug ? (getReport(root, slug) ?? { error: `no report for '${slug}'` }) : listReports(root, 10).map(reportSummary)),
   );
 
   server.registerTool(
@@ -91,8 +92,9 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { file: z.string().describe('Repo-relative file path') },
     },
     async ({ file }) => {
-      const [merged, live] = [queryFile(root, file), await checkFiles(root, [file], selfSlug)];
-      return asText({ merged, live: live[file] });
+      const [hits, live] = [queryFile(root, file), await checkFiles(root, [file], selfSlug)];
+      const capped = capList(hits, WHO_TOUCHED_CAP);
+      return asText({ merged: capped.items, moreMerged: capped.more, live: live[file] });
     },
   );
 

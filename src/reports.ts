@@ -137,6 +137,33 @@ export function getReport(root: string, slug: string): CompletionReport | null {
   }
 }
 
+export interface ReportSummary {
+  slug: string;
+  task: string;
+  agent: string | null;
+  mergedAt: string;
+  summary: string;
+  fileCount: number;
+  overlappedWith: string[];
+}
+
+/**
+ * A compact row for listing many reports (no-slug get_report): drops the heavy
+ * files[]/commits[] arrays, keeping the first summary line + a file count.
+ * Callers fetch the full report by slug when they actually need the detail.
+ */
+export function reportSummary(r: CompletionReport): ReportSummary {
+  return {
+    slug: r.slug,
+    task: r.task,
+    agent: r.agent,
+    mergedAt: r.mergedAt,
+    summary: (r.summary || '').split('\n')[0],
+    fileCount: r.files.length,
+    overlappedWith: r.overlappedWith,
+  };
+}
+
 export function listReports(root: string, limit = 50): CompletionReport[] {
   const rows = getDb(root)
     .prepare(`SELECT json FROM reports ORDER BY created_at DESC LIMIT ?`)
