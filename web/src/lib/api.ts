@@ -715,10 +715,24 @@ class BatonClient {
       const overlap = this.demoSessions.filter((s) => (s.conflictFiles || []).length);
       const byPath = new Map<string, typeof overlap>();
       overlap.forEach((s) => s.conflictFiles.forEach((f) => { if (!byPath.has(f)) byPath.set(f, []); byPath.get(f)!.push(s); }));
-      return [...byPath.entries()].map(([path, ss]) => ({
+      // A little variety so the "editing right now" panel shows live intent + freshness.
+      const DEMO_NOTES: Record<string, string> = {
+        "fix-checkout-e2e": "reproducing the flaky Stripe redirect in a test",
+        "react-19-upgrade": "migrating class components off legacy context",
+        "add-dark-mode": "wiring the theme toggle into the settings store",
+      };
+      return [...byPath.entries()].map(([path, ss], pi) => ({
         path,
         level: ss.length > 1 ? "warning" as const : "info" as const,
-        holders: ss.map((s) => ({ slug: s.slug, agent: s.agent, lastEditAt: new Date(Date.now() - 120_000).toISOString() })),
+        holders: ss.map((s, hi) => {
+          const secsAgo = 20 + pi * 35 + hi * 50; // staggered freshness
+          const note = DEMO_NOTES[s.slug];
+          return {
+            slug: s.slug, agent: s.agent,
+            lastEditAt: new Date(Date.now() - secsAgo * 1000).toISOString(),
+            ...(note ? { note, noteAt: new Date(Date.now() - secsAgo * 1000).toISOString() } : {}),
+          };
+        }),
       }));
     }
     const r = await this.request<{ signals: EditSignal[] }>("/api/signals");

@@ -261,6 +261,9 @@ export interface SignalHolder {
   slug: string;
   agent: AgentId | string | null;
   lastEditAt: string;
+  /** The holder's live intent (report_progress / P5), if fresh. */
+  note?: string;
+  noteAt?: string;
 }
 
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
