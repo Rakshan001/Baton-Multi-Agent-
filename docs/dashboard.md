@@ -45,12 +45,12 @@ status dot, and the theme toggle. The sidebar lists the nine screens defined in
 | --- | --- |
 | Command Center | Home. The sessions board — every task with its agent, status, and git state — switchable to a canvas view. Start here. |
 | Activity | A live feed of session activity, with quick access to a task's diff, handoff, and live terminal. |
-| Conflicts | Tasks currently flagged `conflict` (overlapping edits). The sidebar shows a badge with the count. |
+| Conflicts | Tasks currently flagged `conflict` (overlapping edits), plus the live **who's-editing panel**: each busy file grouped with every session holding it — the agent, its live intent note ("what I'm doing right now"), and freshness. The sidebar shows a badge with the count. |
 | Knowledge Graph | The force-directed code graph built by graphify — nodes and edges for the indexed repo. |
 | Memory | Shared project facts. Evidence-anchored facts with stale detection; add/prune when `--write` is on. |
 | History | The local file-touch index — which task, agent, and commits touched a file over time. |
 | Agents | The agent roster and running headless agents; connect an agent's MCP from here. |
-| Skills | The catalog of reusable agent playbooks; import and install bundled or external skills. |
+| Skills | The catalog of reusable agent playbooks; import and install bundled or external skills — per agent, or **⚡ Add to all** agents in one click. |
 | Settings | Preferences (theme, etc.) and the connected repo path. |
 
 Each screen reads from the daemon's `/api` endpoints. See the

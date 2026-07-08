@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-04 (session 8: site hosting readiness + dashboard edge cases)** (branch: `feat/worktree-orchestration`)
+> Last updated: **2026-07-08 (session 10: skills v2 — S1–S6 on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open)
 
 ## What this project is
 
@@ -173,6 +173,42 @@ wrong token → 403; SIGTERM daemon → 0 HTTP backends remain (12 pre-existing
 old-style stdio processes untouched). Tests: `test/graphify-server.test.ts` (3)
 + `test/graphify-proxy.test.ts` (1) + `test/mcp-token.test.ts` (1). **266 tests
 green**, backend build clean.
+
+**Multi-agent coordination audit, P1–P12 (2026-07-05/06, session 9 — PR #5).** A
+12-proposal audit (docs/research/2026-07-06-multi-agent-coordination-audit.md) shipped
+one TDD'd phase per commit on `feat/worktree-orchestration`: **P1** gitRoot→worktree
+signal attribution fix (silently broke coordination), **P2** SQLite-backed signals,
+**P3** report-aware `check_files` ("already fixed" answers), **P4** MCP output
+contracts (compact payloads, bounded lists), **P5** `report_progress` (agents share
+live intent notes), **P6** lazy read-time signal reconciliation (dropped signals whose
+path is no longer dirty in the worktree; untracked files aren't false-dropped),
+**P7** orient hook + MCP tool (budgeted session-start brief), **P8** kb-init footprint
+gitignored, **P9** declared task scope + overlap warning at creation, **P10** memory
+journal + archive (nothing hard-deleted; `baton memory log`), **P11** merged-only
+graphify in a hub by default (`projects.length > 1` guard keeps single-project state
+intact), **P12** `baton doctor --docs` propose-only .md-sprawl scan (`src/kb/sprawl.ts`).
+
+**Skills v2, S1–S6 (2026-07-08, session 10 — branch `feat/skills-v2`, off PR #5's
+branch).** Research round first: Ponytail (github.com/DietrichGebert/ponytail, MIT)
+cloned to `.refs/ponytail` and studied — single canonical SKILL.md, mode filtering,
+restraint ladder, honest agentic benchmark (~54% less code, ~20% cheaper, ~27% faster,
+100% safe). Then: **S1** bundled `bug-fix` skill v2 (Golden Rule 0: check the shared
+tracker FIRST / record the fix to memory LAST — `save_memory` with `fixed-in:<sha>`;
+guarded by an invariant test), **S2** new `lean-code` bundled skill (original-wording
+adaptation of Ponytail's 7-rung ladder + safety carve-outs, MIT-attributed; ideas, not
+text), **S3** install-a-skill-into-every-agent (`installSkillEverywhere`, new
+`baton skills list|install|uninstall|import` CLI, `agent:"all"` API, "⚡ Add to all"
+button), **S4** live who's-editing panel (Conflicts.tsx groups each busy file's holders
+with their P5 intent note + freshness; web-only), **S5** workload-aware handoff
+(`src/handoff/workload.ts` least-loaded pick + `GET /api/tasks/:slug/suggest-handoff`;
+dialog preselects with reason + idle/N-active badges), **S6** bug recurrence
+(`src/recurrence.ts` + `baton bugs "<symptom>"` — prior fixes from memory, a STALE fix
+fact is itself the regression signal, suspect commits from history; zero new storage).
+Deliberate non-builds (lean-code applied to ourselves): no AGENTS.md always-on skill
+injection for codex/gemini (token-hostile), no SSE for the panel (5s poll is enough),
+no upstream-Ponytail UI import (redundant with the bundled adaptation). **396 tests
+green**; docs (README, skills, cli-reference, memory, session-handoff, dashboard)
+updated this session.
 
 ## Pending / next 🔜
 

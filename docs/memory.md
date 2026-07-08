@@ -58,15 +58,26 @@ Memory files are plain text read by every agent, so a pasted credential would re
 
 A fact under 10 characters is also rejected (write a real sentence). When the store hits 500 facts, saves fail until you reclaim space with `baton memory gc`.
 
-Near-duplicates are handled automatically: when a new fact shares an opening fingerprint *and* its body is sufficiently similar to an existing one, the new fact **supersedes** the old one (the old file is removed after the new one lands).
+Near-duplicates are handled automatically: when a new fact shares an opening fingerprint *and* its body is sufficiently similar to an existing one, the new fact **supersedes** the old one (the old file is archived after the new one lands).
+
+## Nothing is hard-deleted: the journal & archive
+
+Every removal — manual `rm`, `gc`, supersession, bulk delete, retention pruning — **moves** the fact file to `.baton/memory/archive/` and appends a line to a JSONL journal recording *what* was removed, *why*, and *when* (and, for supersession, *by which* fact). `baton memory log` prints it newest-first:
+
+```bash
+baton memory log
+```
+
+So a "deleted" fact is always recoverable, and you can audit why the store shrank — useful when several agents share one memory and one of them gc's.
 
 ## CLI
 
 ```bash
 baton memory list              # show all facts with freshness + anchors
 baton memory add "<fact>" [--type <t>] [--files a.ts,b.ts] [--task <slug>]
-baton memory rm <id>           # delete one fact by id
-baton memory gc                # drop all stale facts (changed/removed anchors)
+baton memory rm <id>           # archive one fact by id
+baton memory gc                # archive all stale facts (changed/removed anchors)
+baton memory log               # journal of removals/supersessions (newest first)
 ```
 
 Example listing:

@@ -15,7 +15,8 @@ The catalog and rendering logic live in [`src/skills/catalog.ts`](../src/skills/
 
 | ID | Name | What it does |
 | --- | --- | --- |
-| `bug-fix` | Bug fix | Flagship debugging playbook: reproduce, audit blast radius, root-cause, get an approved plan, re-verify against regressions, write a report, and auto-commit (never pushes). |
+| `bug-fix` | Bug fix | Flagship debugging pipeline (v2): **check the shared tracker first** (is it already fixed? is someone editing those files right now?), reproduce, audit blast radius, root-cause, get an approved plan, re-verify against regressions, write a report, auto-commit (never pushes), and **record the fix to shared memory last** — which is what powers `baton bugs` recurrence checks. |
+| `lean-code` | Lean code | Restraint ladder against over-engineering: before writing code, ask — does it exist? is it in this repo? stdlib? platform? an installed dep? one line? — and only then write the minimum. Never simplifies validation, error handling, security, or accessibility. Adapted (ideas, not text) from [Ponytail](https://github.com/DietrichGebert/ponytail) (MIT), whose ladder measured ~54% less code, ~20% cheaper, ~27% faster, 100% safe on real agent sessions. |
 | `token-efficient-coding` | Token-efficient coding | Keep token cost down — targeted reads, minimal diffs, working around context rot and compaction. |
 | `traceable-changes` | Traceable changes | Atomic conventional commits in an isolated worktree, for a bisectable, blame-able history across multiple agents. |
 | `memory-light` | Memory-light | Recall before exploring, externalize state, write durable facts, and hand off cleanly across sessions. |
@@ -23,7 +24,7 @@ The catalog and rendering logic live in [`src/skills/catalog.ts`](../src/skills/
 | `map-codebase` | Map this codebase | Build the graphify knowledge graph and `CODEBASE.md` so agents navigate a compact map instead of the whole repo. |
 | `safe-refactor` | Safe refactor | Restructure without changing behaviour — worktrees, a green test baseline, and the graph to find every caller. |
 
-`bug-fix` plus the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
+`bug-fix`, `lean-code`, and the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
 
 ## Install targets
 
@@ -34,7 +35,21 @@ Baton can write skills for two agent CLIs. Each gets the on-disk format it under
 | `claude` | `.claude/skills/<id>/SKILL.md` (+ `references/` alongside) | Claude Code skill — `name` + `description` frontmatter, then the playbook. |
 | `cursor` | `.cursor/rules/<id>.mdc` (+ sibling `<id>/references/`) | Cursor project rule — `description` + `alwaysApply: false` frontmatter. |
 
-The other agents (`codex`, `gemini`, `aider`, `opencode`) have no standard skill directory Baton can write, and installing for them returns an unsupported-agent error.
+The other agents (`codex`, `gemini`, `aider`, `opencode`) have no standard skill directory Baton can write, and installing for them returns an unsupported-agent error. (Deliberately: cramming a full playbook into their always-on instruction files would cost tokens on every turn — skills should load on demand.)
+
+## Install into every agent at once
+
+One command (or one click) writes a skill into **all** writable agents, each in its own format:
+
+```bash
+baton skills list                    # catalog + per-agent install state
+baton skills install bug-fix         # → ALL writable agents (claude + cursor)
+baton skills install bug-fix --agent claude   # just one
+baton skills uninstall bug-fix
+baton skills import <path|url>       # then install it like a bundled one
+```
+
+Over HTTP, `POST /api/skills/:id/install` with `{"agent":"all"}` returns a per-agent `results` array. In the dashboard Skills page, every skill card has an **⚡ Add to all** button.
 
 Notes on rendering:
 
@@ -56,7 +71,7 @@ The id is slugified from the frontmatter `name` (falling back to the filename or
 
 ## Dashboard
 
-The **Skills** page in the dashboard ([http://localhost:7077](http://localhost:7077) when running `baton serve`) lists the full catalog with each skill's name, description, tags, what it produces, and its per-agent install state. From there you can import a skill and install or uninstall it for Claude or Cursor. See [serve & dashboard](./dashboard.md) for starting the daemon.
+The **Skills** page in the dashboard ([http://localhost:7077](http://localhost:7077) when running `baton serve`) lists the full catalog with each skill's name, description, tags, what it produces, and its per-agent install state. From there you can import a skill and install or uninstall it per agent — or hit **⚡ Add to all** to install into every agent at once. See [serve & dashboard](./dashboard.md) for starting the daemon.
 
 ## HTTP API
 

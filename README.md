@@ -82,10 +82,11 @@ baton new "fix the checkout crash" --project api-server   # or pick it in the da
 | 🌳 | **Worktree isolation** | Every task gets its own git worktree + `baton/<slug>` branch. No clobbered branches, ever. |
 | 🧠 | **Knowledge graph** | [`baton kb`](docs/knowledge-graph.md) indexes your repo into a queryable graph (via [graphify](https://pypi.org/project/graphifyy/)) + a `CODEBASE.md` map. Agents navigate instead of grepping — the map is **~300× cheaper** than reading the files. |
 | 🤝 | **Session handoff** | [`baton pass`](docs/session-handoff.md) packages a session into one `HANDOFF.md` — objective, plan, checklist, files, git state, **cost estimate** — and `baton take` turns it into an execution prompt. |
-| 📡 | **Live edit signals** | A realtime dashboard (SSE) shows who's editing what. Two sessions on one file → an **overlap warning before the conflict**. |
-| 📌 | **Evidence-anchored memory** | [Shared facts](docs/memory.md) pinned to commits + file content hashes. When an anchored file changes, the fact is **withheld** — agents can't hallucinate from stale knowledge. |
-| 🧩 | **Installable skills** | A [catalog of reusable agent playbooks](docs/skills.md) — one click writes a skill into the agent's own config (`.claude/skills/…`, `.cursor/rules/…`). Ships a flagship `bug-fix` skill + an efficiency & traceability pack. |
-| 🔀 | **Agent routing** | [`baton route`](docs/agent-routing.md) picks the right agent per task from committed rules (deterministic, no LLM). |
+| 📡 | **Live edit signals** | A realtime dashboard (SSE) shows **who's editing what — and what they're doing** (each session's live intent note + freshness). Two sessions on one file → an **overlap warning before the conflict**. |
+| 📌 | **Evidence-anchored memory** | [Shared facts](docs/memory.md) pinned to commits + file content hashes. When an anchored file changes, the fact is **withheld** — agents can't hallucinate from stale knowledge. Nothing is hard-deleted: removed facts go to a journaled archive (`baton memory log`). |
+| 🧩 | **Installable skills** | A [catalog of reusable agent playbooks](docs/skills.md) — **one click (or `baton skills install <id>`) installs a skill into every agent at once**, each in its own format (`.claude/skills/…`, `.cursor/rules/…`). Ships a flagship `bug-fix` pipeline, a `lean-code` restraint skill (adapted from [Ponytail](https://github.com/DietrichGebert/ponytail), whose ladder measured **~54% less code and ~20% cheaper** on real agent sessions), and an efficiency & traceability pack. |
+| 🐛 | **Bug recurrence** | `baton bugs "<symptom>"` — was this fixed before, and did a later change re-break it? Composes recorded fixes (memory) with commit history to name the **suspect commits**. Zero new storage. |
+| 🔀 | **Agent routing** | [`baton route`](docs/agent-routing.md) picks the right agent per task from committed rules (deterministic, no LLM) — and [handoff](docs/session-handoff.md) prefers the **least-loaded** available agent. |
 | 🧭 | **MCP tools** | [`baton mcp`](docs/mcp-tools.md) exposes coordination tools (`check_files`, `who_touched`, `recall_memory`, …) to every agent over MCP. |
 
 ## The dashboard
