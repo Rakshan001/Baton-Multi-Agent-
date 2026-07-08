@@ -25,6 +25,22 @@ function tomlStr(s: string): string {
 export interface McpOpts {
   baseUrl: string;
   token: string;
+  /** Register per-project `graphify-<id>` servers too. Off by default in a hub,
+   *  where the merged graph already spans every project (P11 — avoid duplicated
+   *  tool defs across 4+ backends). Ignored outside a hub. */
+  perProject?: boolean;
+}
+
+/**
+ * Which projects get their own `graphify-<id>` server. In a true hub (a merged
+ * graph spanning 2+ projects) the merged graph already covers everything, so
+ * per-project servers are redundant token/process duplication — collapse to
+ * merged-only unless explicitly opted in. A lone project (even one carrying a
+ * mergedGraphPath) is NOT a hub: there is nothing to collapse into, so keep it.
+ */
+function projectGraphs(state: KbState, perProject = false): KbState['projects'] {
+  const isHub = !!state.mergedGraphPath && state.projects.length > 1;
+  return isHub && !perProject ? [] : state.projects;
 }
 
 /**
@@ -35,7 +51,7 @@ export interface McpOpts {
 export function mcpServers(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
   const servers: Record<string, McpServerDef> = {};
   const url = (id: string) => `${opts.baseUrl}/mcp/g/${opts.token}/${id}`;
-  for (const p of state.projects) servers[`graphify-${p.id}`] = { type: 'http', url: url(p.id) };
+  for (const p of projectGraphs(state, opts.perProject)) servers[`graphify-${p.id}`] = { type: 'http', url: url(p.id) };
   if (state.mergedGraphPath) servers['graphify-merged'] = { type: 'http', url: url('merged') };
   // Coordination tools (check_files / get_report / who_touched / list_tasks).
   servers['baton'] = { command: 'baton', args: ['mcp'] };
@@ -46,9 +62,9 @@ export function mcpServers(state: KbState, opts: McpOpts): Record<string, McpSer
  * Codex stdio variant: returns server defs using `uv` spawn instead of http
  * urls, because Codex's TOML MCP format only supports `command` + `args`.
  */
-function mcpServersCodex(state: KbState): Record<string, McpServerDef> {
+function mcpServersCodex(state: KbState, perProject = false): Record<string, McpServerDef> {
   const servers: Record<string, McpServerDef> = {};
-  for (const p of state.projects) {
+  for (const p of projectGraphs(state, perProject)) {
     servers[`graphify-${p.id}`] = { command: 'uv', args: serveArgs(p.graphPath) };
   }
   if (state.mergedGraphPath) {
@@ -68,9 +84,8 @@ export function jsonSnippet(state: KbState, opts: McpOpts): string {
 export function codexSnippet(state: KbState, opts: McpOpts): string {
   // Codex keeps stdio — special-cased because Codex only supports command+args,
   // not url-based MCP servers. Claude/Cursor/Gemini get the http defs.
-  void opts; // opts accepted for uniform signature but not used here
   const lines: string[] = [];
-  for (const [name, def] of Object.entries(mcpServersCodex(state))) {
+  for (const [name, def] of Object.entries(mcpServersCodex(state, opts.perProject))) {
     lines.push(`[mcp_servers.${tomlStr(name)}]`);
     if ('command' in def) {
       lines.push(`command = ${tomlStr(def.command)}`);
@@ -93,7 +108,7 @@ export function codexSnippet(state: KbState, opts: McpOpts): string {
 export function mcpServersGemini(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
   const servers: Record<string, McpServerDef> = {};
   const url = (id: string) => `${opts.baseUrl}/mcp/g/${opts.token}/${id}`;
-  for (const p of state.projects) servers[`graphify-${p.id}`] = { httpUrl: url(p.id) };
+  for (const p of projectGraphs(state, opts.perProject)) servers[`graphify-${p.id}`] = { httpUrl: url(p.id) };
   if (state.mergedGraphPath) servers['graphify-merged'] = { httpUrl: url('merged') };
   servers['baton'] = { command: 'baton', args: ['mcp'] };
   return servers;
