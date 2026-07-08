@@ -20,6 +20,7 @@ import { getMcpToken } from '../kb/mcp-token.js';
 import { mergeJsonConfig, McpConfigParseError } from '../agents/connect.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
 import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
+import { ensureBatonGitignore } from '../kb/batonignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
 import { resolveBatonRoot } from '../store.js';
@@ -173,6 +174,9 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
     : '! could not install git hooks — run `graphify hook install` manually');
 
   await saveKb(root, state);
+  // Keep the generated footprint (.baton/, graphify-out/, .mcp.json, …) out of
+  // git status. No-ops on a hub root (already ignores everything).
+  if (await ensureBatonGitignore(root, share)) console.log('✓ .gitignore updated (baton keeps generated files out of git)');
   const docs = await refreshCodebaseDocs(root, state);
   console.log(`✓ CODEBASE.md ×${docs.length} (token-cheap structure maps)`);
   if (share) {
