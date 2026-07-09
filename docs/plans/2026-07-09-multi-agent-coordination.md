@@ -97,17 +97,18 @@ aider: git-native (auto-commits every edit → post-commit signals) — M7.
   → `GET /api/agents/root` → CommandCenter merges the counts into "Active sessions"
   + the agent chips, with an "N at repo root" note. *Live-verified against FAT_FOX:
   reports 9 (6 terminal + 3 Claude-Desktop-hosted), matching the real process tree.*
-- [ ] **B2 — history shows no commits made outside `baton merge`** *(root-caused,
-  awaiting go-ahead)*. Symptom: dozens of real merged commits on the FAT_FOX
-  sub-repos, `history.db` `commits` table empty. Cause: the table is written ONLY
-  by `recordMerge()`, called only from `baton merge <slug>`; these agents merge via
-  GitHub PRs directly on the sub-repos, which Baton never sees. Plan: `ingestGitLog`
-  reads each kb project's recent `git log --name-only` into `commits`/`commit_files`
-  under a synthetic per-project bucket (slug `git:<projectId>`, agent null); daemon
-  runs it on an interval + startup. History page needs no change (listHistory already
-  surfaces it); `who_touched`/blame gain real coverage. Writes to the shared
-  history.db, so confirm before building. Idempotent (ON CONFLICT sha DO NOTHING;
-  files inserted only for new shas). Detection-only Cursor-IDE caveat noted in B3.
+- [x] **B2 — history shows no commits made outside `baton merge`** *(fixed 2026-07-09,
+  453 tests)*. Symptom: dozens of real merged commits on the FAT_FOX sub-repos,
+  `history.db` `commits` table empty. Cause: the table is written ONLY by
+  `recordMerge()`, called only from `baton merge <slug>`; these agents merge via
+  GitHub PRs directly on the sub-repos, which Baton never sees. Fix: `git.recentCommits`
+  reads a repo's last N non-merge commits + files; `history.ingestGitLog` upserts them
+  into a synthetic per-project bucket (slug `git:<projectId>`, task `<name> · direct
+  commits`, agent null) — idempotent (ON CONFLICT sha DO NOTHING; files inserted only
+  for genuinely-new shas, so a commit a real task already owns keeps its attribution).
+  Daemon runs `ingestAllProjects` at startup + every 60s. History page + who_touched/
+  blame need no change (they JOIN the bucket task row). *Live-verified: 100 real FAT_FOX
+  commits ingested with correct messages across the two active sub-repos.*
 - [ ] **B3 — Cursor IDE not counted at root**. The registry detects `cursor-agent`
   (the CLI) but not the Cursor IDE app, whose agent runs inside the extension host
   with no repo-cwd process to scan. Cursor coordination is via hooks (M2:
@@ -119,3 +120,6 @@ aider: git-native (auto-commits every edit → post-commit signals) — M7.
 - 2026-07-08: G1 (graph-freshness golden rule) + G2 (root sessions via Claude hooks) shipped.
 - 2026-07-09: research matrix (Ponytail 16 adapters + vendor docs); M1 + M2 + M3 shipped;
   439 tests green; this plan created.
+- 2026-07-09 (FAT_FOX live-hub debugging): B1 (root-terminal sessions now counted on the
+  dashboard) + B2 (git-history ingestion so PR-merged commits show) shipped; 453 tests
+  green; both live-verified against the real 5-project hub. B3 (Cursor IDE) documented.

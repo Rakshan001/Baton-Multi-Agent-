@@ -18,7 +18,7 @@ import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
 import { currentBranch, isGitRepo } from './git.js';
-import { listHistory } from './history.js';
+import { listHistory, ingestGitLog } from './history.js';
 import { loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
@@ -346,6 +346,21 @@ async function proxyGraphify(req: IncomingMessage, res: ServerResponse, root: st
   } catch (e) {
     res.writeHead(504).end(String((e as Error).message));
   }
+}
+
+/**
+ * B2: ingest each kb project's real git history into a per-project bucket, so
+ * commits made outside `baton merge` still appear in History/blame. Best-effort
+ * — a project without git or an unreadable log just contributes nothing.
+ */
+async function ingestAllProjects(root: string): Promise<void> {
+  try {
+    const kb = await loadKb(root);
+    if (!kb) return;
+    for (const p of kb.projects) {
+      await ingestGitLog(root, { slug: `git:${p.id}`, task: `${p.name} · direct commits`, cwd: p.path }).catch(() => 0);
+    }
+  } catch { /* ingestion is best-effort — never break the daemon */ }
 }
 
 /** kb sub-projects as (id, path-relative-to-main-root) for per-server memory scoping.
@@ -1136,6 +1151,12 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // graphify's own post-commit hook rebuilds graphs OUTSIDE the daemon (no
   // kb.rebuilt fires) — sweep so CODEBASE.md follows the graph within a minute.
   setInterval(() => { void refreshDocsIfStale(root).catch(() => undefined); }, 60_000).unref();
+  // B2: agents merge via GitHub PRs on the sub-repos, outside `baton merge`, so
+  // those commits never reached history.db. Ingest each project's real git log
+  // into a per-project bucket at startup + on an interval, so History and
+  // who_touched/blame cover every commit however it landed.
+  void ingestAllProjects(root);
+  setInterval(() => { void ingestAllProjects(root); }, 60_000).unref();
   const server = createServer((req, res) => {
     void handle(req, res, root, opts).catch((e) =>
       send(res, 500, { error: (e as Error).message }, corsOrigin(req)),

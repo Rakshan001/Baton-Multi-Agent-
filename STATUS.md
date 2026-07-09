@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-09 (session 12: M1–M3 every-agent coordination, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open)
+> Last updated: **2026-07-09 (session 13: FAT_FOX live-hub bug fixes B1+B2, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open; PR #6 = skills+coordination)
 
 ## What this project is
 
@@ -252,6 +252,25 @@ baton guard --agent cursor`; guard normalizes Cursor's payload (`normalizeGuardP
 and records signals, silent to non-Claude hosts. **M3**: antigravity in the agent
 registry (detection-only: `agy` + Antigravity.app; launchers deliberately unguessed) +
 web AgentId. 439 tests green, both workspaces build.
+
+**FAT_FOX live-hub bug fixes B1+B2 (2026-07-09, session 13).** Debugging a real
+5-project hub (6+ Claude terminal sessions running at the hub root, plus GitHub-PR
+merges) surfaced two dashboard blind spots. **B1**: agents running at the hub/repo
+root (not in a task worktree) showed as "No agents attached" — `collectStatus`/
+`detectAgents` are worktree-scoped only. Fix: `detectRootAgents` (scans the full
+process table; matches cwd against the hub root + every kb project; excludes task
+worktrees; collapses launcher/worker process pairs so a GUI-hosted agent like Claude
+Desktop's bundled Claude Code isn't double-counted) → `rootAgentSummary` →
+`GET /api/agents/root` → CommandCenter "Active sessions" + agent chips + an "N at repo
+root" note. Live-verified: 9 sessions (6 terminal + 3 desktop-hosted). **B2**: commits
+merged via GitHub PRs on the sub-repos never reached `history.db` (its commits table is
+written only by `baton merge`→`recordMerge`). Fix: `git.recentCommits` + `history.
+ingestGitLog` import each project's real `git log` into a per-project bucket
+(`git:<id>`, agent null), idempotent, never clobbering a real task's sha; daemon runs
+`ingestAllProjects` at startup + every 60s. Live-verified: 100 real FAT_FOX commits
+ingested. B3 (Cursor IDE not process-detectable → coordinate via hooks/MCP) documented
+in the plan. 453 tests green. NOTE: the user's FAT_FOX daemon must be restarted to pick
+up this code (it was running a pre-fix build).
 
 ## Pending / next 🔜
 
