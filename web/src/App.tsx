@@ -10,7 +10,7 @@ import { ToastViewport } from "./components/Toast";
 import { ApiDot, ComingSoon } from "./components/primitives";
 import { TweaksPanel } from "./components/TweaksPanel";
 import { usePrefs, ls, type Prefs } from "./hooks/usePrefs";
-import { useStatus, useHistory, usePoll } from "./hooks/usePoll";
+import { useStatus, useRootAgents, useHistory, usePoll } from "./hooks/usePoll";
 import { useEvents } from "./hooks/useEvents";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { BatonAPI } from "./lib/api";
@@ -392,6 +392,7 @@ export default function App() {
 
   const events = useEvents({ enabled: !prefs.offline && !demo, baseUrl: activeConn.baseUrl });
   const status = useStatus(events.live);
+  const rootAgents = useRootAgents();
   const history = useHistory(events.live);
   const meta = usePoll<Meta>(() => BatonAPI.getMeta(), { interval: 30000, deps: [connectionId] });
   const agents = usePoll<AgentRosterEntry[]>(() => BatonAPI.getAgents(), { interval: 8000, deps: [connectionId] });
@@ -494,7 +495,7 @@ export default function App() {
       case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
       case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
-      default: return <CommandCenter status={status} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
+      default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
     }
   })();
 

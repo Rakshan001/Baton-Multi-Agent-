@@ -208,6 +208,14 @@ class BatonClient {
       return { ...r, agent: this.agentOverride.get(r.slug)! };
     });
   }
+  /** Agents at the hub/repo root or a kb sub-project — not attached to any task worktree. */
+  async getRootAgents(): Promise<Array<{ agent: string; count: number }>> {
+    if (this.demo) {
+      await this.demoGate();
+      return []; // the demo showcase has no root-terminal scenario to fabricate honestly
+    }
+    return this.request<Array<{ agent: string; count: number }>>("/api/agents/root");
+  }
   async getHistory(): Promise<TaskHistory[]> {
     if (this.demo) {
       await this.demoGate();

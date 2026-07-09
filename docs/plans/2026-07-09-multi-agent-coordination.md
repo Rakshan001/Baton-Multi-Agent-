@@ -85,6 +85,35 @@ aider: git-native (auto-commits every edit → post-commit signals) — M7.
 - **Windows** — `/proc` vs `lsof` paths handled in detection; `ps -o ppid=` parent walk is
   POSIX-only → parent-agent detection silently degrades to `BATON_AGENT`/null. ⚠ accepted
 
+## Live-hub bugs (found on the real FAT_FOX 5-project hub, 2026-07-09)
+
+- [x] **B1 — dashboard blind to root-terminal sessions** *(fixed 2026-07-09, 447 tests)*
+  Symptom: 6+ live Claude sessions in plain terminals at the hub root, dashboard
+  said "No agents attached right now." Cause: `collectStatus`/`detectAgents` are
+  entirely task-worktree-scoped; a session at the hub root matches no worktree.
+  Fix: `detectRootAgents` (scans the whole process table, matches cwd against the
+  hub root + every kb project, excludes task worktrees, collapses launcher/worker
+  process pairs so one GUI-hosted session isn't double-counted) → `rootAgentSummary`
+  → `GET /api/agents/root` → CommandCenter merges the counts into "Active sessions"
+  + the agent chips, with an "N at repo root" note. *Live-verified against FAT_FOX:
+  reports 9 (6 terminal + 3 Claude-Desktop-hosted), matching the real process tree.*
+- [ ] **B2 — history shows no commits made outside `baton merge`** *(root-caused,
+  awaiting go-ahead)*. Symptom: dozens of real merged commits on the FAT_FOX
+  sub-repos, `history.db` `commits` table empty. Cause: the table is written ONLY
+  by `recordMerge()`, called only from `baton merge <slug>`; these agents merge via
+  GitHub PRs directly on the sub-repos, which Baton never sees. Plan: `ingestGitLog`
+  reads each kb project's recent `git log --name-only` into `commits`/`commit_files`
+  under a synthetic per-project bucket (slug `git:<projectId>`, agent null); daemon
+  runs it on an interval + startup. History page needs no change (listHistory already
+  surfaces it); `who_touched`/blame gain real coverage. Writes to the shared
+  history.db, so confirm before building. Idempotent (ON CONFLICT sha DO NOTHING;
+  files inserted only for new shas). Detection-only Cursor-IDE caveat noted in B3.
+- [ ] **B3 — Cursor IDE not counted at root**. The registry detects `cursor-agent`
+  (the CLI) but not the Cursor IDE app, whose agent runs inside the extension host
+  with no repo-cwd process to scan. Cursor coordination is via hooks (M2:
+  `baton hooks install cursor`)/MCP, not process detection — process-counting the
+  IDE would false-positive on every window. Document rather than hack.
+
 ## Progress log
 
 - 2026-07-08: G1 (graph-freshness golden rule) + G2 (root sessions via Claude hooks) shipped.

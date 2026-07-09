@@ -15,7 +15,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
-import { collectStatus } from './board.js';
+import { collectStatus, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
 import { currentBranch, isGitRepo } from './git.js';
 import { listHistory } from './history.js';
@@ -633,18 +633,30 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
+  if (method === 'GET' && path === '/api/agents/root') {
+    const [tasks, kb] = await Promise.all([loadTasks(root), loadKb(root)]);
+    const summary = await rootAgentSummary(
+      root,
+      (kb?.projects ?? []).map((p) => p.path),
+      tasks.map((t) => t.worktreePath),
+    );
+    return send(res, 200, summary, origin);
+  }
   if (method === 'GET' && path === '/api/history') return send(res, 200, listHistory(root), origin);
   if (method === 'GET' && path === '/api/meta') {
     const tmuxOk = await detectTmux();
-    // A multi-repo hub root isn't a git repo; tasks must target a sub-project.
+    // A setup hub may be git-initialized for coordination metadata. Treat it as
+    // a hub when the KB has multiple projects, not when the root lacks .git.
     const rootIsRepo = await isGitRepo(root);
-    const kb = rootIsRepo ? null : await loadKb(root);
-    const hubProjects = kb?.projects.map((p) => ({ id: p.id, name: p.name })) ?? [];
+    const kb = await loadKb(root);
+    const hubProjects = (kb?.projects.length ?? 0) > 1
+      ? kb!.projects.map((p) => ({ id: p.id, name: p.name }))
+      : [];
     return send(res, 200, {
       repo: root, branch: rootIsRepo ? await currentBranch(root) : null,
       writeEnabled: !!opts.writeEnabled, version: VERSION,
       // In a hub, the dashboard must ask which project a new task targets.
-      hub: !rootIsRepo, projects: hubProjects,
+      hub: hubProjects.length > 0, projects: hubProjects,
       agents: { headless: HEADLESS_AGENTS, interactive: INTERACTIVE_AGENTS },
       terminals: tmuxOk
         ? { available: true }
