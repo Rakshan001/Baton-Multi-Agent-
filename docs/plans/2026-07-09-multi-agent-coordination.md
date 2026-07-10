@@ -115,6 +115,129 @@ aider: git-native (auto-commits every edit → post-commit signals) — M7.
   `baton hooks install cursor`)/MCP, not process detection — process-counting the
   IDE would false-positive on every window. Document rather than hack.
 
+## W-round: workspace hygiene + honest-graph + parity (from the 2026-07-09 audit scores)
+
+- [x] **W1 — worktree GC** *(shipped 2026-07-10)*. `baton clean` now also surveys every
+  registered worktree per kb project (`git worktree list --porcelain`), classifies
+  main/dirty/unmerged/locked/merged (merge target: `origin/<default>` first — the
+  PR-merge workflow — then local main/master; nothing resolvable → all unmerged,
+  fail safe), and with `--fix` removes ONLY merged+clean trees via `git worktree
+  remove` (no --force: git is the second safety net). Branches are never deleted.
+  Baton tasks whose tree is removed are dropped from the store (canonicalized
+  paths — macOS /var symlink). du only on removable candidates (RAM/time-light).
+  *Live dry-run on FAT_FOX: 42 removable, ~8.8G reclaimable, dirty/unmerged all
+  correctly protected.*
+- [x] **W2 — branch-divergence graph warning** *(shipped 2026-07-10)*. Found worse than
+  planned: in a hub, a worktree session matched NO kb project → no freshness note at
+  all. `projectForCwd` now resolves the owning project via git-common-dir, and orient
+  appends `renderBranchDivergenceNote` — the indexable files where the session's
+  branch differs from the graph's build commit ("the graph describes code this branch
+  does not have — re-read these"). Direct two-commit diff, no ancestry assumption.
+- [x] **W3 — unmanaged-worktree truth-telling** *(shipped 2026-07-10)*. The G2 nudge
+  wrongly told foreign-worktree sessions "working in the main checkout". Linked-
+  worktree detection (git-dir ≠ git-common-dir) now yields the honest hint: unmanaged
+  worktree, nothing auto-cleans it, prefer `baton new`.
+- [x] **W4 — Antigravity skills** *(shipped 2026-07-10)*. SKILL_AGENTS += antigravity →
+  `.agents/skills/<id>/SKILL.md` + references/, verbatim SKILL.md format shared with
+  Claude — evidenced by a live Antigravity workspace layout, not docs. "Add to all"
+  covers it; web SkillAgent + registry glyph added.
+- [x] **W5 — downshift routing** *(shipped 2026-07-10)*. A keyword rule always won even
+  when severity said trivial ("quick typo fix in the plan doc" → 'plan' rule →
+  claude/opus). Rules still win (explicit config), but clearly-trivial tasks
+  (severity <25) now carry an advisory `downshift` (light/local chain + reason) —
+  suggest-only, like escalation. Mirrored in web/src/lib/routing.ts; parity suite
+  gained a downshift case so the mirror can't drift. `baton route` prints
+  "💡 cheaper option".
+- [ ] **W6 — memory auto-capture** *(deferred BELOW the 95% gate, deliberately)*. The
+  only real mechanism is a Claude Stop-hook `{"decision":"block"}` that forces a
+  save_memory pass before the session ends (with `stop_hook_active` as the loop
+  guard). The exact contract is unverified here and the pattern is intrusive-by-design
+  (blocks every stop). Verify on a real session first; alternative: a conditional
+  UserPromptSubmit nudge (mechanism proven by Ponytail) gated on "N commits and no
+  memory saved" — needs a cheap per-session detection story. Do not ship a guess.
+
+## Improvement roadmap — every subsystem toward 8.5 (honest ceilings)
+
+> Rule: no faked rankings. Each subsystem lists its real levers, the score they can
+> honestly reach, and — where 8.5 is NOT reachable — why, explicitly. Priority order
+> per the owner: token economy first; handoff = the manual relay UX now, full
+> auto-resume later; the graph's ceiling is capped by an upstream tool we don't own.
+
+### T — Token economy: 6.5 → 8.5 ✅ reachable (top priority)
+- [ ] **T1 — slim the MCP tool schemas.** ~2–2.5k tokens of prose descriptions are paid
+  by EVERY session. Rewrite each description to its minimum effective form (target
+  ≥45% cut), verify agents still call tools correctly. Measure before/after with a
+  tokenizer — the number goes in the README.
+- [ ] **T2 — slim orient + AGENTS.md guide.** Orient is already budgeted (~800); the
+  guide (~350) can drop to ~180 without losing the check→touch→report loop.
+- [ ] **T3 — graph-answer caps.** `who_touched` is capped; audit graph proxy answers and
+  `list_signals` for unbounded lists; cap with "(+N more)" like freshness notes.
+- [ ] **T4 — overhead meter (feeds P1).** Record the actual injected overhead per session
+  so the cost is a measured number, not an estimate.
+  *Ceiling honesty: fixed overhead can drop to ~2–2.5k/session but never to zero — MCP
+  schemas must live in context. 8.5 = lean overhead + measured net savings; 10 would
+  require host-side lazy tool loading we don't control.*
+
+### H — Handoff (manual relay first): 5 → 8.5 ✅ reachable
+The owner's real flow: an agent near its usage limit is told "create handoff" → it
+writes a structured brief (done / pending / next steps / files / gotchas) → the human
+copies it into the next agent, which continues. Full auto-resume (orphan detection,
+queues) is deliberately LATER.
+- [ ] **H1 — `create_handoff` MCP tool** so ANY agent (cursor/codex/antigravity — not
+  just Claude's Stop hook) can write the brief on request; store per-session, not
+  per-task-slug only, so root sessions can hand off too.
+- [ ] **H2 — bundled `handoff` skill**: teaches the agent WHAT a good brief contains
+  (completed %, remaining work as a checklist, files in flight, decisions made,
+  next command to run) — invoked by "create a handoff", zero standing token cost.
+- [ ] **H3 — copy UX in the dashboard**: the Handoff dialog gets "Copy brief",
+  "Copy file path", and "Copy resume prompt" (a paste-ready prompt for the next
+  agent: "You are resuming task X; here is the brief: …").
+- [ ] **H4 — `baton take` with no slug** lists takeable briefs newest-first; `baton
+  resume` as the alias that prints the resume prompt for the top one.
+  *Later (X2): dead-session detection + orphaned-task queue + auto-notify.*
+
+### P — Proof / instrumentation: 2 → 8.5 ✅ reachable (answers the critics)
+- [ ] **P1 — savings ledger.** Count, per session: overhead injected (T4); map reads vs
+  `repoTokens` (the exploration a map read replaced); memory recalls (× the measured
+  rediscovery cost); `bugs`/`get_report` hits; guard collisions surfaced.
+  `baton usage --verdict` prints net tokens saved/spent, honestly signed.
+- [ ] **P2 — A/B benchmark harness** (Ponytail's pattern): same task set, same repo,
+  with and without Baton wiring; publish the numbers, favorable or not.
+- [ ] **P3 — "When NOT to use Baton" README section** with the break-even table
+  (small repo / solo / one-off session ⇒ net cost). Honesty is the marketing.
+
+### A — Agent parity: 6.5 → 8.5 ✅ reachable (needs 2 live verifications)
+- [ ] **A1 — verification session on the owner's real installs**: run codex + agy once,
+  capture hook config shape + payloads (`baton doctor --agents` helper that probes
+  installed CLIs and reports what's wirable). This unlocks M4/M5 at ≥95%.
+- [ ] **A2 — M4 codex hooks, A3 — M5 antigravity/gemini hooks, A4 — M8 opencode plugin**
+  (reuse the M2 guard pattern; each lands only after A1 verifies its facts).
+
+### HI — History/attribution: 7 → 8.5 ✅ reachable
+- [ ] **HI1 — inferred attribution for PR commits.** Commits land under the human's git
+  identity (by policy), so author ≠ agent. Correlate branch↔task-slug and
+  files+time-window↔edit signals to attribute `git:` bucket commits to a session —
+  ALWAYS labelled "inferred", never presented as fact.
+- [ ] **HI2 — `baton bugs` uses the ingested PR history** for suspect-commit ranking
+  (it currently leans on task history).
+
+### K — Knowledge graph: 5.5 → ~7.5–8 ⚠ 8.5 NOT honestly reachable today
+- [ ] **K1 — auto re-merge the hub graph** when a sub-project graph.json changes
+  (daemon mtime watch, debounced). Kills the hub-lag staleness.
+- [ ] **K2 — bound serving RAM**: recycle a graphify backend past an RSS threshold /
+  query count (pool already reaps idle). The BUILD spike (720MB→1.8GB) is inside
+  graphify itself — upstream work, out of our tree.
+- [ ] **K3 — opt-in idle incremental rebuild** (`kb.autoRebuild`): debounced `graphify
+  update` after edit signals go quiet — CPU cost, zero token cost, keeps the graph
+  fresher than commit-gating without rebuild-per-keystroke.
+  *Ceiling honesty: per-branch graphs for every worktree would fix branch-blindness
+  but cost a build per worktree per rebase — not economical; we warn instead (W2).
+  Build-RAM is graphify's. With K1–K3: ~7.5–8. Claiming 8.5 would be the kind of
+  fake ranking this plan forbids.*
+
+### Overall: 6.5 → ~8.3 with T+H+P+A+HI landed; >8.5 additionally needs X2 (auto-resume)
+and the graph ceiling accepted or graphify improved upstream.
+
 ## Progress log
 
 - 2026-07-08: G1 (graph-freshness golden rule) + G2 (root sessions via Claude hooks) shipped.
@@ -123,3 +246,6 @@ aider: git-native (auto-commits every edit → post-commit signals) — M7.
 - 2026-07-09 (FAT_FOX live-hub debugging): B1 (root-terminal sessions now counted on the
   dashboard) + B2 (git-history ingestion so PR-merged commits show) shipped; 453 tests
   green; both live-verified against the real 5-project hub. B3 (Cursor IDE) documented.
+- 2026-07-10: honest audit of the live hub (25GB total; 13GB = 60+ agent-created orphaned
+  worktrees, ~90% already merged; Baton's own footprint 29MB) → W-round shipped W1–W5,
+  W6 deferred below the confidence gate. 476 tests green.

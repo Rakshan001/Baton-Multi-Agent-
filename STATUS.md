@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-09 (session 13: FAT_FOX live-hub bug fixes B1+B2, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open; PR #6 = skills+coordination)
+> Last updated: **2026-07-10 (session 14: W-round — worktree GC, honest-graph, downshift routing, antigravity skills, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open; PR #6 = skills+coordination)
 
 ## What this project is
 
@@ -271,6 +271,27 @@ ingestGitLog` import each project's real `git log` into a per-project bucket
 ingested. B3 (Cursor IDE not process-detectable → coordinate via hooks/MCP) documented
 in the plan. 453 tests green. NOTE: the user's FAT_FOX daemon must be restarted to pick
 up this code (it was running a pre-fix build).
+
+**W-round: workspace hygiene + honest graph + parity (2026-07-10, session 14).** Driven by
+an honest audit of the live FAT_FOX hub: 25GB total, of which ~13GB was 60+ agent-created
+orphaned worktrees (~90% for branches already PR-merged) — Baton's own footprint was 29MB.
+**W1**: `baton clean` gained merged-worktree GC across every kb project (porcelain survey,
+origin/<default>-first merge target, never touches main/dirty/unmerged/locked, never
+deletes branches, `git worktree remove` without --force as the second safety net, du only
+on removable candidates; baton tasks whose tree is removed are dropped from the store).
+Live dry-run on FAT_FOX: 42 removable, ~8.8G reclaimable. **W2**: hub worktree sessions
+previously matched NO kb project → no graph freshness note; projectForCwd now resolves the
+owner via git-common-dir, and orient appends a branch-divergence warning (files where the
+session's branch differs from the graph's build commit). **W3**: the G2 nudge wrongly told
+foreign-worktree sessions "main checkout" — linked-worktree detection (git-dir ≠
+git-common-dir) now yields the honest unmanaged-worktree hint. **W4**: antigravity joined
+SKILL_AGENTS (`.agents/skills/<id>/SKILL.md`, layout evidenced by a live Antigravity
+workspace); web SkillAgent + registry glyph. **W5**: advisory `downshift` on RouteSuggestion
+when a keyword rule catches a clearly-trivial task (severity <25) — rules still win,
+cheaper light/local chain + reason attached; mirrored in web routing, parity suite extended.
+**W6 deferred below the 95% gate** (Stop-hook decision:block contract unverified; documented
+in the plan). All in docs/plans/2026-07-09-multi-agent-coordination.md W-round section.
+479 tests green ×2.
 
 ## Pending / next 🔜
 
