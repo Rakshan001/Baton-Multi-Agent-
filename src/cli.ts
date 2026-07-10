@@ -20,6 +20,7 @@ import { historyCmd } from './commands/history.js';
 import { serveCmd } from './commands/serve.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
+import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
 import { pathCmd } from './commands/path.js';
 import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
@@ -130,10 +131,15 @@ program
 
 program
   .command('clean')
-  .option('--fix', 'actually delete the audited junk (default: dry-run / suggest)')
-  .option('-f, --force', 'also remove worktrees with uncommitted changes')
-  .description('reclaim junk found by `baton doctor` (dry-run unless --fix)')
-  .action((opts: { fix?: boolean; force?: boolean }) => run(() => cleanCmd(opts)));
+  .option('--fix', 'actually delete (default: dry-run / suggest)')
+  .option('-f, --force', 'also remove worktrees with uncommitted changes (junk pass only)')
+  .option('--json', 'machine-readable output (worktree GC pass)')
+  .description('reclaim junk (baton doctor) + GC worktrees whose branches are already merged (dry-run unless --fix; branches kept)')
+  .action((opts: { fix?: boolean; force?: boolean; json?: boolean }) =>
+    run(async () => {
+      await cleanCmd(opts); // baton-artifact junk: stale tasks, tmux, temp files
+      await worktreeGcCmd({ apply: opts.fix, json: opts.json }); // merged-branch worktree GC (W1)
+    }));
 
 const memory = program
   .command('memory')
