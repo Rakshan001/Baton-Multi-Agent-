@@ -87,6 +87,41 @@ export function injectFreshnessNote(body: string, contentType: string | null, no
   }
 }
 
+/**
+ * W2 — branch divergence. The graph is built from the MAIN checkout's commit,
+ * so a session in a worktree on another branch is reading answers about code
+ * it doesn't have. Render the honest warning naming the differing files.
+ */
+export function renderBranchDivergenceNote(files: string[], builtAtCommit: string): string {
+  if (files.length === 0) return '';
+  const sha = builtAtCommit.slice(0, 7);
+  const shown = files.slice(0, NOTE_MAX_FILES);
+  const extra = files.length - shown.length;
+  return (
+    `⚠ Graph freshness: the graph was built at ${sha}, but this session's branch differs from it in ` +
+    `${files.length} file(s) — the graph describes code this branch does not have. ` +
+    `Re-read these files instead of trusting graph symbols for them: ${shown.join(', ')}${extra > 0 ? ` (+${extra} more)` : ''}`
+  );
+}
+
+/**
+ * Indexable files that differ between the graph's build commit and a
+ * worktree's HEAD. Direct two-commit diff (no ancestry assumption — works for
+ * branches that fork before or after the build point). Fail-safe: any git
+ * error (unknown commit, not a repo) returns [] — a warning must never break
+ * orientation.
+ */
+export async function worktreeGraphDivergence(worktreeCwd: string, builtAtCommit: string): Promise<string[]> {
+  const r = await gitTry(['diff', '--name-only', builtAtCommit, 'HEAD'], worktreeCwd);
+  if (!r.ok) return [];
+  return r.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter(isIndexablePath)
+    .sort();
+}
+
 /* ------------------------------- IO wrapper ------------------------------ */
 
 // Graph queries can arrive in bursts (an agent chains several); the git calls

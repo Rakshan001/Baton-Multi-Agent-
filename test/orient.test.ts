@@ -100,6 +100,16 @@ describe('buildOrientation — gathers real memory/reports for a repo', () => {
     expect(brief).not.toContain('baton new');
   });
 
+  it('tells an UNMANAGED worktree session the truth, not "main checkout" (W3)', async () => {
+    // an agent-created ad-hoc worktree — outside .baton/wt
+    const wt = join(root, 'wt-adhoc');
+    await git(['worktree', 'add', '-q', '-b', 'feat/adhoc', wt], root);
+    const brief = await buildOrientation(root, { cwd: wt });
+    expect(brief.toLowerCase()).toContain('unmanaged worktree');
+    expect(brief).toContain('baton clean');
+    expect(brief).not.toContain('main checkout');
+  });
+
   it('warns about uncommitted edits the graph cannot see, when a kb exists', async () => {
     const { mkdir } = await import('node:fs/promises');
     const head = (await git(['rev-parse', 'HEAD'], root)).trim();
@@ -116,5 +126,52 @@ describe('buildOrientation — gathers real memory/reports for a repo', () => {
     const brief = await buildOrientation(root);
     expect(brief).toContain('a.ts');
     expect(brief.toLowerCase()).toContain('re-read');
+  });
+});
+
+describe('hub worktree sessions get graph warnings (W2)', () => {
+  it('resolves the owning project via git-common-dir and warns about branch divergence', async () => {
+    const { mkdtemp, rm, writeFile, mkdir } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join: j } = await import('node:path');
+    const { git } = await import('../src/util/exec.js');
+    const { resetGraphFreshnessCache } = await import('../src/kb/freshness.js');
+    resetGraphFreshnessCache();
+    const hub = await mkdtemp(j(tmpdir(), 'baton-orient-hub-'));
+    try {
+      // hub with one sub-project repo
+      const proj = j(hub, 'api-server');
+      await mkdir(proj, { recursive: true });
+      await git(['init', '-q', '-b', 'main'], proj);
+      await git(['config', 'user.email', 't@t.dev'], proj);
+      await git(['config', 'user.name', 't'], proj);
+      await writeFile(j(proj, 'auth.ts'), 'export const a = 1;\n', 'utf-8');
+      await git(['add', '.'], proj);
+      await git(['commit', '-q', '-m', 'graph built here'], proj);
+      const builtAt = (await git(['rev-parse', 'HEAD'], proj)).trim();
+      // a fake graph carrying the build commit
+      const graphPath = j(proj, 'graphify-out', 'graph.json');
+      await mkdir(j(proj, 'graphify-out'), { recursive: true });
+      await writeFile(graphPath, JSON.stringify({ nodes: [], links: [], built_at_commit: builtAt }), 'utf-8');
+      // kb registration at the hub root
+      await mkdir(j(hub, '.baton'), { recursive: true });
+      await writeFile(
+        j(hub, '.baton', 'kb.json'),
+        JSON.stringify({ root: hub, projects: [{ id: 'api', name: 'api', path: proj, graphPath }], mergedGraphPath: null, lastBuiltAt: null, share: false }),
+        'utf-8',
+      );
+      // a worktree OUTSIDE the project path, diverged from the build commit
+      const wt = j(hub, 'wt-feature');
+      await git(['worktree', 'add', '-q', '-b', 'feat/x', wt], proj);
+      await writeFile(j(wt, 'auth.ts'), 'export const a = 2;\n', 'utf-8');
+      await git(['add', '.'], wt);
+      await git(['commit', '-q', '-m', 'branch work'], wt);
+
+      const brief = await buildOrientation(hub, { cwd: wt });
+      expect(brief).toContain('branch differs');
+      expect(brief).toContain('auth.ts');
+    } finally {
+      await rm(hub, { recursive: true, force: true });
+    }
   });
 });

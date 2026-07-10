@@ -10,13 +10,14 @@
  * hook (`baton orient --auto`).
  */
 import { existsSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { dirname, join, resolve as resolvePath, sep } from 'node:path';
 import { recallMemories, memoryBriefSection } from '../memory.js';
 import { listReports, type CompletionReport } from '../reports.js';
 import { resolveMcpRoot } from '../store.js';
 import { gitRoot } from '../git.js';
+import { gitTry } from '../util/exec.js';
 import { loadKb } from './state.js';
-import { graphFreshness, renderGraphFreshnessNote } from './freshness.js';
+import { graphFreshness, renderGraphFreshnessNote, renderBranchDivergenceNote, worktreeGraphDivergence } from './freshness.js';
 
 /** ~800 tokens. Focused context beats a big dump (Chroma "Context Rot"). */
 export const ORIENT_MAX_CHARS = 3200;
@@ -79,17 +80,49 @@ export function renderOrientation(parts: OrientParts, maxChars: number = ORIENT_
   return [header, ...sections, TOOLS_POINTER].join('\n\n').slice(0, maxChars);
 }
 
-/** The kb project this session sits in: cwd match first, else the only/root project. */
+/**
+ * The kb project a session's cwd belongs to. Path-prefix first; for a LINKED
+ * WORKTREE (whose path is outside every project) resolve the owning repo via
+ * git-common-dir — `<project>/.git` — so worktree sessions still get graph
+ * warnings (in a hub they previously matched nothing and got none).
+ */
+async function projectForCwd(state: NonNullable<Awaited<ReturnType<typeof loadKb>>>, at: string) {
+  const byPath = state.projects.find((p) => at === p.path || at.startsWith(p.path + sep));
+  if (byPath) return byPath;
+  const common = await gitTry(['rev-parse', '--path-format=absolute', '--git-common-dir'], at);
+  if (common.ok) {
+    const owner = dirname(common.stdout.trim());
+    const byRepo = state.projects.find((p) => resolvePath(p.path) === resolvePath(owner));
+    if (byRepo) return byRepo;
+  }
+  return state.projects.length === 1 ? state.projects[0] : state.projects.find((p) => p.path === root0(state));
+}
+const root0 = (state: { root?: string }) => state.root ?? '';
+
+/** Linked worktree (vs main checkout): its private git dir differs from the shared common dir. */
+async function isLinkedWorktree(cwd: string): Promise<boolean> {
+  const r = await gitTry(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], cwd);
+  if (!r.ok) return false;
+  const [gitDir, commonDir] = r.stdout.trim().split('\n').map((l) => resolvePath(l.trim()));
+  return !!gitDir && !!commonDir && gitDir !== commonDir;
+}
+
 async function freshnessNoteFor(root: string, cwd?: string): Promise<string> {
   try {
     const state = await loadKb(root);
     if (!state || state.projects.length === 0) return '';
     const at = cwd ?? root;
-    const project =
-      state.projects.find((p) => at === p.path || at.startsWith(p.path + sep)) ??
-      (state.projects.length === 1 ? state.projects[0] : state.projects.find((p) => p.path === root));
+    const project = await projectForCwd(state, at);
     if (!project) return '';
-    return renderGraphFreshnessNote(await graphFreshness(project.path, project.graphPath));
+    const fresh = await graphFreshness(project.path, project.graphPath);
+    const notes = [renderGraphFreshnessNote(fresh)];
+    // W2: a worktree session's branch can differ from the graph's build point —
+    // the graph then describes code this branch does not have.
+    if (fresh.builtAtCommit && resolvePath(at) !== resolvePath(project.path) && !at.startsWith(project.path + sep)) {
+      const diverged = await worktreeGraphDivergence(at, fresh.builtAtCommit);
+      notes.push(renderBranchDivergenceNote(diverged, fresh.builtAtCommit));
+    }
+    return notes.filter(Boolean).join('\n');
   } catch {
     return ''; // freshness is a warning, never a blocker
   }
@@ -110,11 +143,16 @@ export async function buildOrientation(root: string, opts: { topic?: string; cwd
 
   const freshnessNote = await freshnessNoteFor(root, opts.cwd);
   const hasCodebaseMd = existsSync(join(root, 'CODEBASE.md'));
-  // G2: a session at the main checkout is coordinated (its hook writes signals),
-  // but parallel work merges cleanest from an isolated worktree — one-line nudge.
-  const worktreeHint = opts.cwd && !/\.baton[\\/]wt[\\/]/.test(opts.cwd)
-    ? '_Working in the main checkout — fine for solo work. For parallel sessions without merge conflicts, isolate the task first: `baton new "<task>"`, then start the agent inside the worktree it prints._'
-    : '';
+  // G2/W3: one-line placement nudge. Main checkout → suggest isolating via
+  // `baton new`. An UNMANAGED worktree (created outside baton) → say so:
+  // coordination still works, but nothing auto-cleans it after merge — a real
+  // hub accumulated 60+ of these (~13GB of merged dead weight).
+  let worktreeHint = '';
+  if (opts.cwd && !/\.baton[\\/]wt[\\/]/.test(opts.cwd)) {
+    worktreeHint = (await isLinkedWorktree(opts.cwd))
+      ? '_This is an unmanaged worktree (created outside `baton new`). Coordination works here, but nothing auto-removes it after its branch merges — it stays on disk until someone runs `baton clean`. Prefer `baton new "<task>"` for the next task._'
+      : '_Working in the main checkout — fine for solo work. For parallel sessions without merge conflicts, isolate the task first: `baton new "<task>"`, then start the agent inside the worktree it prints._';
+  }
   return renderOrientation({ hasCodebaseMd, freshnessNote, memorySection, reports, worktreeHint });
 }
 

@@ -4,6 +4,8 @@ import {
   isIndexablePath,
   renderGraphFreshnessNote,
   injectFreshnessNote,
+  renderBranchDivergenceNote,
+  worktreeGraphDivergence,
 } from '../src/kb/freshness.js';
 
 /**
@@ -109,5 +111,56 @@ describe('injectFreshnessNote — append the warning to a proxied graph answer',
     expect(injectFreshnessNote(noContent, 'application/json', 'WARN')).toBe(noContent);
     const errorResp = JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -1, message: 'x' } });
     expect(injectFreshnessNote(errorResp, 'application/json', 'WARN')).toBe(errorResp);
+  });
+});
+
+describe('worktree branch divergence (W2)', () => {
+  it('renders a warning naming the files that differ from the graph build point', () => {
+    const note = renderBranchDivergenceNote(['src/auth.ts', 'src/pay.ts'], 'abc1234def');
+    expect(note).toContain('abc1234');
+    expect(note).toContain('src/auth.ts');
+    expect(note).toMatch(/re-read/i);
+    expect(note).toMatch(/branch/i);
+  });
+  it('renders nothing when the branch matches the build point', () => {
+    expect(renderBranchDivergenceNote([], 'abc1234def')).toBe('');
+  });
+  it('caps the file list like the dirty note does', () => {
+    const files = Array.from({ length: 10 }, (_, i) => `f${i}.ts`);
+    const note = renderBranchDivergenceNote(files, 'abc1234def');
+    expect(note).toContain('(+4 more)');
+  });
+});
+
+describe('worktreeGraphDivergence — against a real worktree', () => {
+  it('lists indexable files that differ between the graph commit and the worktree HEAD', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { git } = await import('../src/util/exec.js');
+    const repo = await mkdtemp(join(tmpdir(), 'baton-diverge-'));
+    try {
+      await git(['init', '-q', '-b', 'main'], repo);
+      await git(['config', 'user.email', 't@t.dev'], repo);
+      await git(['config', 'user.name', 't'], repo);
+      await writeFile(join(repo, 'a.ts'), 'export const a = 1;\n', 'utf-8');
+      await git(['add', '.'], repo);
+      await git(['commit', '-q', '-m', 'graph built here'], repo);
+      const builtAt = (await git(['rev-parse', 'HEAD'], repo)).trim();
+      const wt = join(repo, 'wt-branch');
+      await git(['worktree', 'add', '-q', '-b', 'feat/x', wt], repo);
+      await writeFile(join(wt, 'a.ts'), 'export const a = 2;\n', 'utf-8');
+      await writeFile(join(wt, 'README.md'), 'docs only\n', 'utf-8'); // not indexable
+      await git(['add', '.'], wt);
+      await git(['commit', '-q', '-m', 'branch work'], wt);
+
+      expect(await worktreeGraphDivergence(wt, builtAt)).toEqual(['a.ts']);
+      // same commit → no divergence
+      expect(await worktreeGraphDivergence(repo, builtAt)).toEqual([]);
+      // unknown commit → fail safe, empty
+      expect(await worktreeGraphDivergence(wt, 'f'.repeat(40))).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
