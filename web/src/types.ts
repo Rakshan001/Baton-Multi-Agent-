@@ -336,6 +336,13 @@ export interface RoutingSuggestion {
 }
 
 /** Rich suggestion (suggestRoute): severity-ranked, tier-aware, explainable. */
+/** W5 — advisory cheaper-tier alternative for a trivial task caught by a rule. */
+export interface Downshift {
+  tier: string;
+  chain: TierEntry[];
+  reason: string;
+}
+
 export interface RouteSuggestion {
   mode: RoutingMode;
   agent: string;
@@ -348,6 +355,8 @@ export interface RouteSuggestion {
   rule: RoutingRule | null;
   source: "single" | "rule" | "severity" | "default";
   confidence: "high" | "low";
+  /** Advisory: a cheaper tier that could handle this (rule pick stays the answer). */
+  downshift?: Downshift | null;
 }
 
 /** GET /api/routing[?task=…] */
@@ -413,7 +422,7 @@ export type FileStatus = "added" | "modified" | "deleted";
 export interface DiffFile { path: string; status: FileStatus; hunks: DiffHunk[]; add: number; del: number; lang: string }
 
 /** Agent CLIs Baton can install a skill into (have a skill/rule directory). */
-export type SkillAgent = "claude" | "cursor";
+export type SkillAgent = "claude" | "cursor" | "antigravity";
 
 /** Per-agent install state for one skill. */
 export interface SkillInstallState {

@@ -5,8 +5,9 @@
  * on-disk format it understands.
  *
  * Supported install targets:
- *   claude → <repo>/.claude/skills/<id>/SKILL.md   (+ references/ alongside)
- *   cursor → <repo>/.cursor/rules/<id>.mdc         (+ <id>/references/ alongside)
+ *   claude      → <repo>/.claude/skills/<id>/SKILL.md  (+ references/ alongside)
+ *   cursor      → <repo>/.cursor/rules/<id>.mdc         (+ <id>/references/ alongside)
+ *   antigravity → <repo>/.agents/skills/<id>/SKILL.md   (+ references/ alongside)
  *   others (codex, gemini, aider, opencode) → no standard skill dir (unsupported)
  *
  * Multi-file skills: a skill may ship reference files (checklists, templates).
@@ -23,7 +24,7 @@ import { dirname, join } from 'node:path';
 import { bundledSkills, type SkillDef } from './catalog.js';
 
 /** Agent CLIs that have a skill/rule directory Baton can write. */
-export const SKILL_AGENTS = ['claude', 'cursor'] as const;
+export const SKILL_AGENTS = ['claude', 'cursor', 'antigravity'] as const;
 export type SkillAgent = (typeof SKILL_AGENTS)[number];
 
 export interface SkillTarget {
@@ -86,6 +87,12 @@ export function skillTargetFor(agent: string, id: string, root: string): SkillTa
     const rel = join('.cursor', 'rules', `${id}.mdc`);
     // Single-file rule; references travel in a sibling <id>/ folder.
     return { agent, path: join(root, rel), rel, refsDir: join(root, '.cursor', 'rules', id) };
+  }
+  if (agent === 'antigravity') {
+    // Antigravity reads .agents/skills/<id>/SKILL.md — same layout as Claude
+    // (verified on a live Antigravity workspace, references/ included).
+    const dir = join('.agents', 'skills', id);
+    return { agent, path: join(root, dir, 'SKILL.md'), rel: join(dir, 'SKILL.md'), refsDir: join(root, dir) };
   }
   return null; // codex, gemini, aider, opencode — no standard skill dir
 }
@@ -225,8 +232,8 @@ export async function installSkill(root: string, id: string, agent: string): Pro
   const target = skillTargetFor(agent, id, root)!;
 
   await mkdir(dirname(target.path), { recursive: true });
-  // Claude gets the hand-authored SKILL.md verbatim when faithful; otherwise render.
-  const main = agent === 'claude' && skill.raw ? skill.raw : renderSkill(agent, skill);
+  // Claude + Antigravity share the SKILL.md format — hand-authored files go verbatim.
+  const main = (agent === 'claude' || agent === 'antigravity') && skill.raw ? skill.raw : renderSkill(agent, skill);
   await writeFile(target.path, main, 'utf-8');
 
   let references = 0;
@@ -256,8 +263,8 @@ export async function uninstallSkill(root: string, id: string, agent: string): P
   if (!isSkillAgent(agent)) throw new SkillAgentUnsupportedError(agent);
   const target = skillTargetFor(agent, id, root)!;
   const had = existsSync(target.path);
-  if (agent === 'claude') {
-    // The whole .claude/skills/<id>/ dir (SKILL.md + references) is ours.
+  if (agent === 'claude' || agent === 'antigravity') {
+    // The whole skills/<id>/ dir (SKILL.md + references) is ours.
     await rm(target.refsDir, { recursive: true, force: true });
   } else {
     await rm(target.path, { force: true });                 // the .mdc rule

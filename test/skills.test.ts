@@ -14,12 +14,24 @@ describe('skillTargetFor', () => {
       agent: 'cursor', rel: '.cursor/rules/bug-fix.mdc',
       path: '/repo/.cursor/rules/bug-fix.mdc', refsDir: '/repo/.cursor/rules/bug-fix',
     });
+    // W4 — Antigravity reads .agents/skills/<id>/SKILL.md (same layout as Claude;
+    // verified against a live Antigravity workspace, references/ included).
+    expect(skillTargetFor('antigravity', 'bug-fix', '/repo')).toMatchObject({
+      agent: 'antigravity', rel: '.agents/skills/bug-fix/SKILL.md',
+      path: '/repo/.agents/skills/bug-fix/SKILL.md', refsDir: '/repo/.agents/skills/bug-fix',
+    });
   });
 
   it('returns null for agents with no skill directory', () => {
     for (const a of ['codex', 'gemini', 'aider', 'opencode']) {
       expect(skillTargetFor(a, 'x', '/repo')).toBeNull();
     }
+  });
+
+  it('renders Antigravity skills in the Claude SKILL.md format (W4)', () => {
+    const out = renderSkill('antigravity', sampleSkill());
+    expect(out).toMatch(/^---\nname: demo-skill\ndescription: /);
+    expect(out).not.toContain('alwaysApply');
   });
 });
 
