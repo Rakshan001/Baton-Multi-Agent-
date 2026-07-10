@@ -310,3 +310,43 @@ describe('validateRoutingConfig v2', () => {
     expect(errors.some((e) => e.includes('routing.mode'))).toBe(true);
   });
 });
+
+describe('downshift advisory — cheaper agent for trivial tasks (W5)', () => {
+  it('offers a lighter tier when a heavy rule catches a trivial task', () => {
+    // 'plan' keyword → claude/opus rule, but the task itself is a typo fix
+    const s = suggestRoute('quick typo fix in the plan doc wording', BUILTIN_ROUTING);
+    expect(s.source).toBe('rule');
+    expect(s.agent).toBe('claude'); // the rule still wins — downshift is advisory
+    expect(s.downshift).toBeTruthy();
+    expect(['light', 'local']).toContain(s.downshift!.tier);
+    expect(s.downshift!.chain.length).toBeGreaterThan(0);
+    expect(s.downshift!.reason).toMatch(/trivial|severity/i);
+  });
+
+  it('does not second-guess a heavy rule on a genuinely heavy task', () => {
+    const s = suggestRoute('plan the architecture for the payments migration', BUILTIN_ROUTING);
+    expect(s.source).toBe('rule');
+    expect(s.downshift ?? null).toBeNull();
+  });
+
+  it('does not downshift a rule that already targets a light agent', () => {
+    // 'fix'/'bug' rule → codex, which lives in the light tier already
+    const s = suggestRoute('quick small fix: typo label wording', BUILTIN_ROUTING);
+    expect(s.source).toBe('rule');
+    expect(s.agent).toBe('codex');
+    expect(s.downshift ?? null).toBeNull();
+  });
+
+  it('stays silent in manual mode (suggestions are advisory-only there)', () => {
+    const manual: RoutingConfig = { ...BUILTIN_ROUTING, mode: 'manual' };
+    const s = suggestRoute('quick typo fix in the plan doc wording', manual);
+    expect(s.downshift ?? null).toBeNull();
+  });
+
+  it('severity path needs no downshift — it already picks the cheap tier', () => {
+    const s = suggestRoute('tweak wording', BUILTIN_ROUTING); // no rule keyword
+    expect(s.source).toBe('severity');
+    expect(['light', 'local']).toContain(s.tier!);
+    expect(s.downshift ?? null).toBeNull();
+  });
+});
