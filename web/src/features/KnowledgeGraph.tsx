@@ -15,10 +15,12 @@ import { showToast } from "../lib/toast";
 import type { KbStatus, KbProjectStat, GraphData, GraphNode, GraphLink } from "../types";
 import { ContextPackModal } from "./ContextPackModal";
 
-/** Fixed 12-color community palette (works on dark + light surfaces). */
+/** Fixed 12-color community palette — deliberately desaturated so the graph
+ *  reads as an instrument, not a balloon chart. Hue identifies the community;
+ *  the ring-not-fill node style (GraphCanvas) keeps the canvas quiet. */
 const PALETTE = [
-  "#6e8efb", "#34c98e", "#f2a65a", "#e0639c", "#9d7bf5", "#46c2d6",
-  "#d6c454", "#ee7261", "#5fae6c", "#c98ad6", "#7d9aa8", "#b9a06a",
+  "#8296c8", "#74ab92", "#c39d6e", "#b4839d", "#9489c2", "#77a4b2",
+  "#ada374", "#b58a7f", "#84a088", "#a58bb0", "#8898a4", "#a09277",
 ];
 const communityColor = (c: number | undefined) => PALETTE[(c ?? 0) % PALETTE.length];
 

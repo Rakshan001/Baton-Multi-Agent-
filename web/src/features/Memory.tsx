@@ -247,26 +247,23 @@ function FactCard({ f, writeEnabled, onDelete, projectLabel, selected, onToggle,
   const fr = FRESHNESS[f.freshness];
   const attribution = [f.agent && `by ${f.agent}`, f.task && `task ${f.task}`].filter(Boolean).join(" · ");
   return (
-    <article style={{ background: selected ? "var(--accent-soft)" : "var(--bg-surface)", border: `1px solid ${selected ? "var(--accent-border)" : f.freshness === "stale" ? "var(--conflict-border)" : "var(--border-subtle)"}`, borderRadius: "var(--r-md)", padding: "13px 15px", display: "flex", gap: 11, opacity: f.freshness === "stale" ? 0.85 : 1 }}>
+    <article style={{ background: selected ? "var(--accent-soft)" : "var(--bg-surface)", border: `1px solid ${selected ? "var(--accent-border)" : "var(--border-subtle)"}`, borderLeft: `3px solid ${selected ? "var(--accent)" : fr.color}`, borderRadius: "var(--r-md)", padding: "12px 15px", display: "flex", gap: 11, opacity: f.freshness === "stale" ? 0.85 : 1 }}>
       {writeEnabled && (
         <input type="checkbox" checked={selected} onChange={onToggle} aria-label={`Select ${f.id}`}
           style={{ marginTop: 3, flex: "none", cursor: "pointer", opacity: selectMode || selected ? 1 : 0.5 }} />
       )}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span className="chip" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--bg-surface-2)", border: "1px solid var(--border-default)" }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 7 }}>
+        {/* One quiet eyebrow line instead of three competing chips. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", minHeight: 20 }}>
+          <span className="eyebrow" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <Icon name={TYPE_ICON[f.type] as never} size={11} /> {f.type}
+            {f.project !== null && <span data-tip="Scoped to this server (by its anchored files)" style={{ color: "var(--text-quaternary)" }}>· {projectLabel(f.project)}</span>}
           </span>
-          {f.project !== null && (
-            <span className="chip" data-tip="Scoped to this server (by its anchored files)" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--bg-surface-2)", border: "1px solid var(--border-default)", color: "var(--text-secondary)" }}>
-              <Icon name="folder" size={11} /> {projectLabel(f.project)}
-            </span>
-          )}
-          <span data-tip={f.staleReason ?? fr.tip} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: "var(--fw-semibold)", color: fr.color }}>
-            <span style={{ width: 7, height: 7, borderRadius: 99, background: fr.color }} /> {fr.label}
-            {f.commitsBehind ? <span style={{ color: "var(--text-quaternary)", fontWeight: 400 }}>· {f.commitsBehind} commits old</span> : null}
+          <span data-tip={f.staleReason ?? fr.tip} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: "var(--fw-medium)", color: fr.color }}>
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: fr.color }} /> {fr.label}
+            {f.commitsBehind ? <span style={{ color: "var(--text-quaternary)", fontWeight: 400 }}> · {f.commitsBehind} commits old</span> : null}
           </span>
-          <span className="mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-quaternary)" }}>{f.id}</span>
+          <span className="mono" style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-quaternary)" }}>{f.id}</span>
           {writeEnabled && (
             <button className="btn btn-ghost btn-icon fr" onClick={() => onDelete(f.id)} aria-label={`Delete ${f.id}`} data-tip="Delete this fact" style={{ width: 26, height: 26 }}>
               <Icon name="trash" size={13} />

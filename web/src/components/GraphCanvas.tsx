@@ -46,14 +46,22 @@ export function GraphCanvas({ data, communityColor, selectedId, highlightIds, on
   const stateRef = useRef({ selectedId, highlightIds, communityColor });
   stateRef.current = { selectedId, highlightIds, communityColor };
 
+  // Hub nodes (top of the degree distribution) keep their labels at any zoom —
+  // the graph stays legible without labeling every node into a collision mess.
+  const hubCutoffRef = useRef(Infinity);
+
   // init once
   useEffect(() => {
     const el = elRef.current;
     if (!el) return;
     const textPrimary = cssVar("--text-primary", "#e8e8ea");
-    const linkColor = cssVar("--border-default", "#3a3a40");
+    const textSecondary = cssVar("--text-secondary", "#9ba1a6");
+    const halo = cssVar("--bg-base", "#08090a");
+    const surface = cssVar("--bg-elevated", "#1b1e22");
+    const linkColor = cssVar("--border-subtle", "rgba(255,255,255,0.06)");
+    const MONO = "'JetBrains Mono', ui-monospace, Menlo, monospace";
     const degree = degreeRef.current;
-    const radius = (id: string) => Math.min(3 + Math.sqrt(degree.get(id) ?? 1) * 1.4, 11);
+    const radius = (id: string) => Math.min(2.5 + Math.sqrt(degree.get(id) ?? 1) * 1.25, 9);
 
     const fg = new ForceGraph<FGNode, GraphLink>(el)
       .backgroundColor("rgba(0,0,0,0)")
@@ -73,24 +81,40 @@ export function GraphCanvas({ data, communityColor, selectedId, highlightIds, on
         const r = radius(node.id);
         const isSel = node.id === sel;
         const dimmed = hl !== null && !hl.has(node.id) && !isSel;
+        const hue = color(node.community);
 
-        ctx.globalAlpha = dimmed ? 0.14 : 1;
+        // Ring, not balloon: neutral fill with a community-hued stroke keeps
+        // dozens of hues from shouting at once.
+        ctx.globalAlpha = dimmed ? 0.12 : 1;
         ctx.beginPath();
         ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-        ctx.fillStyle = color(node.community);
+        ctx.fillStyle = surface;
         ctx.fill();
-        if (isSel) {
-          ctx.lineWidth = 2 / globalScale;
-          ctx.strokeStyle = textPrimary;
-          ctx.stroke();
-        }
-        // labels only when zoomed in enough to read them
-        if ((globalScale > 1.6 && !dimmed) || isSel) {
-          ctx.font = `${Math.max(10 / globalScale, 2.5)}px ui-sans-serif`;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+        ctx.fillStyle = hue;
+        ctx.globalAlpha = dimmed ? 0.06 : 0.28;
+        ctx.fill();
+        ctx.globalAlpha = dimmed ? 0.12 : 0.95;
+        ctx.lineWidth = Math.max(1.2 / globalScale, 0.6);
+        ctx.strokeStyle = isSel ? textPrimary : hue;
+        if (isSel) ctx.lineWidth = Math.max(2.2 / globalScale, 1.2);
+        ctx.stroke();
+
+        // Labels: hubs always, everything else once zoomed in. Mono with a
+        // background halo so text survives edge crossings.
+        const isHub = (degree.get(node.id) ?? 0) >= hubCutoffRef.current;
+        if (isSel || (!dimmed && (isHub || globalScale > 2.2))) {
+          const fs = Math.max(11 / globalScale, 3);
+          ctx.font = `500 ${fs}px ${MONO}`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillStyle = textPrimary;
-          ctx.fillText(node.label, node.x, node.y + r + 2 / globalScale);
+          ctx.globalAlpha = dimmed ? 0.12 : 1;
+          ctx.lineWidth = Math.max(3 / globalScale, 1.5);
+          ctx.strokeStyle = halo;
+          ctx.strokeText(node.label, node.x, node.y + r + 3 / globalScale);
+          ctx.fillStyle = isSel || isHub ? textPrimary : textSecondary;
+          ctx.fillText(node.label, node.x, node.y + r + 3 / globalScale);
         }
         ctx.globalAlpha = 1;
       })
@@ -128,6 +152,10 @@ export function GraphCanvas({ data, communityColor, selectedId, highlightIds, on
       degree.set(nodeId(l.source), (degree.get(nodeId(l.source)) ?? 0) + 1);
       degree.set(nodeId(l.target), (degree.get(nodeId(l.target)) ?? 0) + 1);
     }
+    // Label the ~8 best-connected nodes at any zoom (the hubs orient the map);
+    // everything else labels on zoom, so labels never pile into a collision mess.
+    const sorted = [...degree.values()].sort((a, b) => b - a);
+    hubCutoffRef.current = sorted.length ? Math.max(sorted[Math.min(7, sorted.length - 1)], 3) : Infinity;
     // Big graphs: cap simulation time so the page stays responsive.
     fg.cooldownTicks(data.nodes.length > 3000 ? 100 : Infinity);
     fg.graphData({ nodes: data.nodes as FGNode[], links: data.links });

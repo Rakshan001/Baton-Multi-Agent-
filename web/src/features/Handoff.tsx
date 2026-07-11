@@ -46,32 +46,34 @@ export function HandoffInbox() {
 
   if (!briefs.length) return null;
   return (
-    <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--accent-soft)", border: "1px solid var(--accent-border)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--accent-text)", fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
-        <Icon name="share" size={14} strokeWidth={2} /> <span style={{ whiteSpace: "nowrap" }}>Handoffs awaiting pickup</span>
-        <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", fontWeight: "var(--fw-regular)", opacity: 0.85, whiteSpace: "nowrap" }}>{briefs.length} open</span>
+    <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderLeft: "3px solid var(--accent)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
+        <Icon name="share" size={14} strokeWidth={2} style={{ color: "var(--accent-text)" }} /> <span style={{ whiteSpace: "nowrap" }}>Handoffs awaiting pickup</span>
+        <span className="mono" style={{ marginLeft: "auto", fontSize: "var(--fs-12)", fontWeight: "var(--fw-regular)", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>{briefs.length} open</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {briefs.slice(0, 3).map((b) => (
-          <div key={b.path} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: "var(--r-sm)", background: "color-mix(in srgb, var(--bg-elevated) 55%, transparent)" }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
+          <div key={b.path} style={{ display: "flex", flexDirection: "column", gap: 7, padding: "8px 9px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)" }}>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</div>
-              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {b.from} → {b.to} · {b.status}{b.created ? ` · ${briefAge(b.created)}` : ""}
               </div>
             </div>
-            <button className="btn fr" style={{ flex: "none" }} data-tip="Copy the full brief as a prompt for the next agent"
-              onClick={() => copyText("Resume prompt", resumePrompt(b))}>
-              <Icon name="copy" size={12} /> Resume prompt
-            </button>
-            <button className="btn btn-ghost btn-icon fr" style={{ flex: "none" }} aria-label="Copy pickup command" data-tip={`Copy: baton resume ${b.slug}`}
-              onClick={() => copyText("Pickup command", b.kind === "task" ? `cd ${b.cwd} && baton take ${b.slug}` : `baton resume ${b.slug}`)}>
-              <Icon name="terminal" size={13} />
-            </button>
-            <button className="btn btn-ghost btn-icon fr" style={{ flex: "none" }} aria-label="Copy brief file path" data-tip={`Copy path: ${b.path}`}
-              onClick={() => copyText("Brief path", b.path)}>
-              <Icon name="folder" size={13} />
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button className="btn btn-sm fr" style={{ flex: "none" }} data-tip="Copy the full brief as a prompt for the next agent"
+                onClick={() => copyText("Resume prompt", resumePrompt(b))}>
+                <Icon name="copy" size={12} /> Resume prompt
+              </button>
+              <button className="btn btn-sm btn-ghost fr" style={{ flex: "none", width: 28, padding: 0 }} aria-label="Copy pickup command" data-tip={`Copy: baton resume ${b.slug}`}
+                onClick={() => copyText("Pickup command", b.kind === "task" ? `cd ${b.cwd} && baton take ${b.slug}` : `baton resume ${b.slug}`)}>
+                <Icon name="terminal" size={13} />
+              </button>
+              <button className="btn btn-sm btn-ghost fr" style={{ flex: "none", width: 28, padding: 0 }} aria-label="Copy brief file path" data-tip={`Copy path: ${b.path}`}
+                onClick={() => copyText("Brief path", b.path)}>
+                <Icon name="folder" size={13} />
+              </button>
+            </div>
           </div>
         ))}
         {briefs.length > 3 && <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", padding: "0 8px" }}>…{briefs.length - 3} more — `baton resume` lists all</div>}

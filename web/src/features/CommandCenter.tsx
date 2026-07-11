@@ -3,7 +3,7 @@
    At-a-glance summary + the Sessions workspace (board ⇄ canvas).
    ============================================================ */
 import type { ReactNode } from "react";
-import { Icon, type IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { AgentBadge, SegmentedControl } from "../components/primitives";
 import { AGENT_REGISTRY, AgentGlyph } from "../lib/registry";
 import { deriveColumn } from "../lib/derive";
@@ -18,27 +18,20 @@ import type { View } from "../hooks/usePrefs";
 type Tone = "conflict" | "ready" | "accent" | "clean" | "default";
 type Filter = "conflict" | "ready" | null;
 
-function MiniStat({ label, value, tone, icon, sub, onClick, active }: {
-  label: string; value: ReactNode; tone?: Tone; icon: IconName; sub?: string; onClick?: () => void; active?: boolean;
+/** One reading on the instrument strip: colored tick, mono number, label. */
+function StatSeg({ label, value, tone, sub, onClick, active }: {
+  label: string; value: ReactNode; tone?: Tone; sub?: string; onClick?: () => void; active?: boolean;
 }) {
-  const color = ({ conflict: "var(--conflict)", ready: "var(--ready)", accent: "var(--accent)", clean: "var(--clean)" } as Record<string, string>)[tone || ""] || "var(--text-tertiary)";
+  const color = ({ conflict: "var(--conflict)", ready: "var(--ready)", accent: "var(--accent)", clean: "var(--clean)" } as Record<string, string>)[tone || ""] || "var(--idle)";
+  const hot = tone === "conflict" && typeof value === "number" && value > 0;
   return (
-    <button className="fr" onClick={onClick} aria-pressed={active} style={{
-      flex: "1 1 0", minWidth: 130, textAlign: "left", cursor: onClick ? "pointer" : "default",
-      background: "var(--bg-surface)", border: "1px solid", borderColor: active ? color : "var(--border-subtle)",
-      borderRadius: "var(--r-lg)", padding: "13px 15px", display: "flex", flexDirection: "column", gap: 8,
-      boxShadow: active ? `0 0 0 1px ${color} inset` : "none", transition: "border-color var(--dur-1), box-shadow var(--dur-1)",
-    }}
-      onMouseEnter={(e) => { if (!active) e.currentTarget.style.borderColor = "var(--border-default)"; }}
-      onMouseLeave={(e) => { if (!active) e.currentTarget.style.borderColor = "var(--border-subtle)"; }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--text-tertiary)" }}>
-        <span style={{ color, display: "grid" }}><Icon name={icon} size={15} /></span>
-        <span style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)" }}>{label}</span>
-      </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span className="mono" style={{ fontSize: "var(--fs-26)", fontWeight: "var(--fw-semibold)", letterSpacing: "-0.03em", color: tone === "conflict" && typeof value === "number" && value > 0 ? "var(--conflict-text)" : "var(--text-primary)", lineHeight: 1 }}>{value}</span>
-        {sub && <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{sub}</span>}
-      </div>
+    <button className="stat-seg fr" onClick={onClick} aria-pressed={onClick ? active : undefined}
+      data-clickable={onClick ? "true" : undefined} data-active={active ? "true" : undefined} tabIndex={onClick ? 0 : -1}>
+      <span className="stat-tick" style={{ "--seg-color": color } as React.CSSProperties} />
+      <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+        <span className="stat-num" style={hot ? { color: "var(--conflict-text)" } : undefined}>{value}</span>
+        <span className="stat-label">{label}{sub ? <span style={{ color: "var(--text-quaternary)" }}> · {sub}</span> : null}</span>
+      </span>
     </button>
   );
 }
@@ -97,21 +90,21 @@ export function CommandCenter({
 
       {/* summary band */}
       <div style={{ padding: "14px 16px 12px", display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <MiniStat label="Active sessions" value={loading ? "—" : active.length + rootAgentCount} tone="accent" icon="bot" sub={rootAgentCount > 0 ? `${sessions.length} tracked + ${rootAgentCount} at root` : `of ${sessions.length}`} />
-          <MiniStat label="In progress" value={loading ? "—" : dirty.length} tone="clean" icon="terminal" />
-          <MiniStat label="Conflicts" value={loading ? "—" : conflicts.length} tone="conflict" icon="alertTriangle" onClick={() => setFilter(filter === "conflict" ? null : "conflict")} active={filter === "conflict"} />
-          <MiniStat label="Ready to merge" value={loading ? "—" : ready.length} tone="ready" icon="gitMerge" onClick={() => setFilter(filter === "ready" ? null : "ready")} active={filter === "ready"} />
+        <div className="stat-strip">
+          <StatSeg label="Active sessions" value={loading ? "—" : active.length + rootAgentCount} tone="accent" sub={rootAgentCount > 0 ? `${sessions.length} tracked + ${rootAgentCount} at root` : `of ${sessions.length}`} />
+          <StatSeg label="In progress" value={loading ? "—" : dirty.length} tone="clean" />
+          <StatSeg label="Conflicts" value={loading ? "—" : conflicts.length} tone="conflict" onClick={() => setFilter(filter === "conflict" ? null : "conflict")} active={filter === "conflict"} />
+          <StatSeg label="Ready to merge" value={loading ? "—" : ready.length} tone="ready" onClick={() => setFilter(filter === "ready" ? null : "ready")} active={filter === "ready"} />
         </div>
 
         {/* attention + agents strip */}
         <div className="cc-strip" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <HandoffInbox />
           {conflicts.length > 0 && (
-            <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--conflict-text)", fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
-                <Icon name="alertTriangle" size={14} strokeWidth={2} /> <span style={{ whiteSpace: "nowrap" }}>Needs attention</span>
-                <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", fontWeight: "var(--fw-regular)", color: "var(--conflict-text)", opacity: 0.85, whiteSpace: "nowrap" }}>
+            <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderLeft: "3px solid var(--conflict)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
+                <Icon name="alertTriangle" size={14} strokeWidth={2} style={{ color: "var(--conflict-text)" }} /> <span style={{ whiteSpace: "nowrap" }}>Needs attention</span>
+                <span className="mono" style={{ marginLeft: "auto", fontSize: "var(--fs-12)", fontWeight: "var(--fw-regular)", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
                   {conflicts.length} merge-risk session{conflicts.length === 1 ? "" : "s"}
                 </span>
               </div>
@@ -130,11 +123,11 @@ export function CommandCenter({
             </div>
           )}
 
-          <div style={{ flex: "1 1 240px", minWidth: 220, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 9 }}>
+          <div style={{ flex: "1 1 240px", minWidth: 220, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderLeft: "3px solid var(--idle)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 9 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
               <Icon name="bot" size={14} style={{ color: "var(--text-tertiary)" }} /> <span style={{ whiteSpace: "nowrap" }}>Active agents</span>
               {rootAgentCount > 0 && (
-                <span style={{ marginLeft: "auto", fontSize: "var(--fs-11)", fontWeight: "var(--fw-regular)", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
+                <span className="mono" style={{ marginLeft: "auto", fontSize: "var(--fs-11)", fontWeight: "var(--fw-regular)", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
                   {rootAgentCount} at repo root
                 </span>
               )}
@@ -144,7 +137,7 @@ export function CommandCenter({
             ) : (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {agentRows.map(({ a, n }) => (
-                  <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px 3px 6px", borderRadius: 99, background: `color-mix(in srgb, ${a.color} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${a.color} 32%, transparent)` }}>
+                  <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px 3px 6px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)" }}>
                     <AgentGlyph id={a.id} size={13} />
                     <span style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)" }}>{a.short}</span>
                     <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{n}</span>

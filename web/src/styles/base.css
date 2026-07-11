@@ -164,6 +164,64 @@ button { font-family: inherit; color: inherit; }
 .divider { height: 1px; background: var(--border-subtle); border: 0; margin: 0; }
 .vdivider { width: 1px; background: var(--border-subtle); align-self: stretch; }
 
+/* Sidebar nav — CSS-driven states (JS hover mutation fought React's style
+   diffing and left ghost highlights on previously active items). */
+.nav-item {
+  display: flex; align-items: center; gap: 11px;
+  height: 36px; padding: 0 11px; width: 100%;
+  border: none; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-secondary);
+  font-size: var(--fs-13); font-weight: var(--fw-medium); font-family: inherit;
+  text-align: left; cursor: pointer; position: relative;
+  transition: background var(--dur-1), color var(--dur-1);
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); }
+.nav-item[aria-current="page"]::before {
+  content: ""; position: absolute; left: -10px; top: 9px; bottom: 9px;
+  width: 3px; border-radius: var(--r-full); background: var(--accent);
+}
+
+/* Instrument strip — one quiet row of readings instead of a grid of
+   template stat cards. Segment ticks carry the semantic color. */
+.stat-strip {
+  display: flex; align-items: stretch; flex-wrap: wrap;
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg); overflow: hidden;
+}
+.stat-seg {
+  flex: 1 1 0; min-width: 132px;
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 16px; border: none; background: transparent;
+  border-left: 1px solid var(--border-subtle);
+  font-family: inherit; text-align: left; color: inherit; cursor: default;
+  transition: background var(--dur-1);
+}
+.stat-seg:first-child { border-left: none; }
+.stat-seg[data-clickable="true"] { cursor: pointer; }
+.stat-seg[data-clickable="true"]:hover { background: var(--bg-hover); }
+.stat-seg[data-active="true"] { background: var(--bg-active); }
+.stat-tick {
+  width: 3px; height: 28px; border-radius: 2px; flex: none;
+  background: var(--seg-color, var(--idle));
+}
+.stat-num {
+  font-family: var(--font-mono); font-size: var(--fs-21);
+  font-weight: var(--fw-semibold); letter-spacing: -0.03em; line-height: 1.1;
+  color: var(--text-primary);
+}
+.stat-label {
+  font-size: var(--fs-12); color: var(--text-tertiary);
+  line-height: 1.3; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Mono uppercase eyebrow — the instrument-panel section label. */
+.eyebrow {
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: var(--fw-semibold);
+  letter-spacing: var(--ls-caps); text-transform: uppercase; color: var(--text-tertiary);
+}
+
 /* Tooltip (CSS-only) */
 [data-tip] { position: relative; }
 [data-tip]::after {

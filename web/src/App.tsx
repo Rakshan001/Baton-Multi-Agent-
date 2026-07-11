@@ -311,13 +311,10 @@ function Sidebar({ route, navigate, counts, project }: { route: string; navigate
         const active = route === n.id;
         const badge = n.id === "conflicts" && counts.conflicts > 0 ? counts.conflicts : null;
         return (
-          <button key={n.id} className="fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined} style={{ display: "flex", alignItems: "center", gap: 11, height: 38, padding: "0 11px", borderRadius: "var(--r-sm)", border: "none", cursor: "pointer", textAlign: "left", width: "100%", position: "relative", background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent-text)" : "var(--text-secondary)", fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", fontFamily: "inherit", transition: "background var(--dur-1), color var(--dur-1)" }}
-            onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; } }}
-            onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-secondary)"; } }}>
-            {active && <span style={{ position: "absolute", left: -10, top: 9, bottom: 9, width: 3, borderRadius: 99, background: "var(--accent)" }} />}
+          <button key={n.id} className="nav-item fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined}>
             <Icon name={n.icon} size={17} style={{ flex: "none" }} />
             <span style={{ flex: 1 }}>{n.label}</span>
-            {badge && <span style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, minWidth: 18, height: 18, display: "grid", placeItems: "center", padding: "0 5px" }}>{badge}</span>}
+            {badge && <span className="mono" style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, minWidth: 18, height: 18, display: "grid", placeItems: "center", padding: "0 5px" }}>{badge}</span>}
           </button>
         );
       })}

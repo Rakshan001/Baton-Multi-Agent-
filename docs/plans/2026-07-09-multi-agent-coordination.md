@@ -342,3 +342,35 @@ needs an LLM of its own.
   rebuild (~1ms, can never go stale), worktree-anchored facts going stale at
   merge (repair self-heals), static synonym map (config is YAGNI for now).
 - Suite: 543/543 (72 files).
+
+## 2026-07-11 — U-round: premium UI pass (branch `feat/premium-ui`)
+
+Ranked audit (screenshots, worst→fine): 1 Knowledge Graph (candy balloons,
+label collisions), 2 Command Center (template stat boxes, three competing
+tinted panels, self-truncating handoff card), 3 sidebar ghost-highlight (JS
+hover mutation fought React style diffing), 4 Agents (six gradient headers),
+5 Memory (chip overload), 6 Activity (stat boxes), 7 top bar. History/Skills/
+Conflicts/Settings already fine.
+
+Direction: "instrument panel, not marketing dashboard" — mono carries all
+DATA (counts, slugs, paths), agent brand hues demoted to glyphs/dots,
+semantic color only for state, uppercase-mono eyebrow + hairline language
+extended app-wide. No emoji, no gradients, one accent.
+
+- [x] Graph: desaturated 12-hue palette; ring-not-balloon nodes (neutral
+  fill, community-hue stroke); mono labels with bg halo; only ~8 hub nodes
+  labeled until zoom > 2.2. GraphCanvas.tsx + palette.
+- [x] Command Center: 4 stat cards → one `.stat-strip` instrument row
+  (colored ticks, mono numbers, click-to-filter preserved); panels unified to
+  neutral surface + 3px semantic left edge (accent=handoff, conflict=attention,
+  idle=agents); agent count pills neutralized.
+- [x] Handoff inbox card: title no longer truncates — two-row layout with
+  action row (Resume prompt / pickup / path).
+- [x] Sidebar: `.nav-item` CSS states (hover/active/focus) replace inline JS
+  mutation — ghost highlight gone (verified via DOM inspection).
+- [x] Agents: neutral headers (glyph carries identity), mono "N live" +
+  pulse dot, MCP status as quiet dot+text, overflow fix.
+- [x] Memory: three chips → one mono eyebrow (TYPE · SERVER) + freshness
+  dot; freshness-colored 3px left edge; id dimmed.
+- [x] Activity: stat boxes → same `.stat-strip` (est badge preserved).
+- Verified in browser dark + light; web build clean; suite 543/543.
