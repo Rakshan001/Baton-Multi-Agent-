@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { git } from './util/exec.js';
 import { escapeRegExp } from './util/regex.js';
+import { rankFacts } from './memory-rank.js';
 
 export type MemoryType = 'decision' | 'gotcha' | 'convention' | 'reference' | 'preference';
 export const MEMORY_TYPES: MemoryType[] = ['decision', 'gotcha', 'convention', 'reference', 'preference'];
@@ -123,6 +124,10 @@ export function factSimilarity(a: string, b: string): number {
 
 /** Min body-similarity before a same-fingerprint save is treated as an update. */
 export const SUPERSEDE_MIN_SIMILARITY = 0.5;
+
+/** Min body-similarity to HINT a possible duplicate (M8). Below auto-supersede
+ *  confidence on purpose: the saving agent judges, Baton never guesses. */
+export const DUPLICATE_HINT_MIN = 0.4;
 
 /**
  * Refuse to store anything that looks like a credential. Memories are plain
@@ -245,11 +250,17 @@ function journalFile(mainRoot: string): string {
 
 /** One append-only line per lifecycle op — the KB's change history. */
 export interface JournalEntry {
-  op: 'supersede' | 'remove';
+  op: 'supersede' | 'remove' | 'reanchor';
   id: string;
   supersededBy: string | null;
   reason: string;
   at: string;
+}
+
+async function appendJournal(mainRoot: string, entry: JournalEntry): Promise<void> {
+  const file = journalFile(mainRoot);
+  await mkdir(dirname(file), { recursive: true });
+  await appendFile(file, JSON.stringify(entry) + '\n', 'utf-8');
 }
 
 /**
@@ -272,8 +283,7 @@ async function archiveFact(
   await mkdir(dir, { recursive: true });
   await rename(src, join(dir, `${safeId}.md`));
   factCache.delete(src);
-  const entry: JournalEntry = { op, id: safeId, supersededBy, reason, at: new Date().toISOString() };
-  await appendFile(journalFile(mainRoot), JSON.stringify(entry) + '\n', 'utf-8');
+  await appendJournal(mainRoot, { op, id: safeId, supersededBy, reason, at: new Date().toISOString() });
   return true;
 }
 
@@ -324,7 +334,14 @@ export interface SaveMemoryInput {
   task?: string;
 }
 
-export async function saveMemory(root: string, input: SaveMemoryInput): Promise<MemoryStatus> {
+export type SaveMemoryResult = MemoryStatus & {
+  /** Existing facts that look like the same knowledge phrased differently —
+   *  write-time reconciliation hints (the Mem0 ADD/UPDATE pattern, agent as
+   *  judge). The auto-superseded fact is never repeated here. */
+  similarExisting?: Array<{ id: string; preview: string }>;
+};
+
+export async function saveMemory(root: string, input: SaveMemoryInput): Promise<SaveMemoryResult> {
   const mainRoot = await resolveRoot(root);
   const fact = (input.fact ?? '').trim();
   if (fact.length < 10) throw new MemoryValidationError('fact too short — write 1–3 full sentences (why + how to apply)');
@@ -387,7 +404,21 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
     await archiveFact(mainRoot, dup.id, 'supersede', 'superseded by newer knowledge', id);
   }
 
-  return { ...record, freshness: 'fresh', staleReason: null, commitsBehind: 0, project: null };
+  // M8: same knowledge phrased differently escapes the fingerprint gate (it
+  // only sees the first 6 words) — surface high-similarity survivors so the
+  // SAVING agent reconciles. Cheaper and safer than auto-merging.
+  const similarExisting = existing
+    .filter((f) => f.id !== dup?.id)
+    .map((f) => ({ f, s: factSimilarity(f.fact, fact) }))
+    .filter((x) => x.s >= DUPLICATE_HINT_MIN)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 3)
+    .map((x) => ({ id: x.f.id, preview: x.f.fact.split('\n')[0].slice(0, 140) }));
+
+  return {
+    ...record, freshness: 'fresh', staleReason: null, commitsBehind: 0, project: null,
+    ...(similarExisting.length ? { similarExisting } : {}),
+  };
 }
 
 /** Parsed facts cached by file mtime — repeated polls re-parse only changes. */
@@ -471,8 +502,35 @@ export async function listMemories(root: string, opts: { projects?: ProjectRel[]
 
 export interface RecallResult {
   facts: MemoryStatus[];
+  /** Facts keyword scoring missed but whose file anchors overlap the recalled
+   *  facts' anchors — the memory graph's edges, derived free from existing
+   *  anchor data (no graph construction cost). Capped small; topic mode only. */
+  related?: MemoryStatus[];
+  /** ids-mode only: requested facts that could NOT be served, with why —
+   *  a stale fact hydrated by id must fail loudly, never arrive as truth. */
+  withheld?: Array<{ id: string; reason: string }>;
+  /** ONE stale fact anchored to the same files as the hits, offered for
+   *  opportunistic verification — the recalling agent is already in-context
+   *  on those files, so re-confirming (or discarding) it is nearly free. */
+  review?: { id: string; preview: string; reason: string };
   total: number;
   staleDropped: number;
+}
+
+const RELATED_CAP = 3;
+
+/** Rank candidate facts by how many anchor files they share with the picked set. */
+export function relatedByAnchors(picked: MemoryStatus[], candidates: MemoryStatus[], cap = RELATED_CAP): MemoryStatus[] {
+  const pickedIds = new Set(picked.map((f) => f.id));
+  const anchorPaths = new Set(picked.flatMap((f) => f.anchors.files.map((a) => a.path)));
+  if (!anchorPaths.size) return [];
+  return candidates
+    .filter((f) => !pickedIds.has(f.id))
+    .map((f) => ({ f, overlap: f.anchors.files.filter((a) => anchorPaths.has(a.path)).length }))
+    .filter((x) => x.overlap > 0)
+    .sort((a, b) => b.overlap - a.overlap || b.f.createdAt.localeCompare(a.f.createdAt))
+    .slice(0, cap)
+    .map((x) => x.f);
 }
 
 /**
@@ -481,24 +539,147 @@ export interface RecallResult {
  * the caller's summary) — a stale "fact" presented as truth is how models
  * hallucinate.
  */
-export async function recallMemories(root: string, opts: { topic?: string; limit?: number } = {}): Promise<RecallResult> {
+export async function recallMemories(
+  root: string,
+  opts: { topic?: string; limit?: number; ids?: string[] } = {},
+): Promise<RecallResult> {
   const all = await listMemories(root);
   const usable = all.filter((f) => f.freshness !== 'stale');
   const limit = Math.max(1, Math.min(opts.limit ?? 10, 50));
-  let picked = usable;
-  if (opts.topic?.trim()) {
-    picked = usable
-      .map((f) => ({ f, s: scoreMemory(f, opts.topic!) }))
-      .filter((x) => x.s > 0)
-      .sort((a, b) => b.s - a.s || b.f.createdAt.localeCompare(a.f.createdAt))
-      .map((x) => x.f);
+  // Hydration mode (M2): exact facts by id, full bodies. A stale or unknown id
+  // is reported in `withheld` — silence would read as "that fact is gone".
+  if (opts.ids?.length) {
+    const byId = new Map(all.map((f) => [f.id, f]));
+    const facts: MemoryStatus[] = [];
+    const withheld: Array<{ id: string; reason: string }> = [];
+    for (const id of [...new Set(opts.ids)].slice(0, 50)) {
+      const f = byId.get(id);
+      if (!f) withheld.push({ id, reason: 'no such fact' });
+      else if (f.freshness === 'stale') withheld.push({ id, reason: f.staleReason ?? 'anchored evidence changed' });
+      else facts.push(f);
+    }
+    return { facts: facts.slice(0, limit), withheld, total: all.length, staleDropped: all.length - usable.length };
   }
-  return { facts: picked.slice(0, limit), total: all.length, staleDropped: all.length - usable.length };
+  let picked = usable;
+  let related: MemoryStatus[] | undefined;
+  let review: RecallResult['review'];
+  if (opts.topic?.trim()) {
+    // BM25 (FTS5) with synonym/identifier expansion; scoreMemory is its fallback.
+    picked = rankFacts(usable, opts.topic);
+    // The anchor graph: facts the keyword score missed but that live on the
+    // same files as the hits. Computed only against the served slice so a
+    // broad topic can't fan out.
+    related = relatedByAnchors(picked.slice(0, limit), usable);
+    // Repair queue, opportunistic half (M3): one stale fact on the same files.
+    const hitPaths = new Set(picked.slice(0, limit).flatMap((f) => f.anchors.files.map((a) => a.path)));
+    const staleHit = all.find((f) => f.freshness === 'stale' && f.anchors.files.some((a) => hitPaths.has(a.path)));
+    if (staleHit) {
+      review = {
+        id: staleHit.id,
+        preview: staleHit.fact.split('\n')[0].slice(0, 140),
+        reason: staleHit.staleReason ?? 'anchored evidence changed',
+      };
+    }
+  }
+  return { facts: picked.slice(0, limit), related, review, total: all.length, staleDropped: all.length - usable.length };
 }
 
 export async function removeMemory(root: string, id: string, reason = 'manual removal'): Promise<boolean> {
   const mainRoot = await resolveRoot(root);
   return archiveFact(mainRoot, id, 'remove', reason);
+}
+
+/* ------------------------------------------------------------------ */
+/* Stale repair (M3): re-anchor instead of losing knowledge            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The mechanically checkable parts of a fact: backticked spans, identifiers
+ * (camelCase / SNAKE_CASE / snake_case), and dotted or slashed paths. Plain
+ * hyphenated prose ("zero-dependency") is NOT one — it wouldn't be found in
+ * code verbatim, so treating it as evidence would block honest re-anchors.
+ */
+export function extractVerifiableTerms(fact: string): string[] {
+  const out = new Set<string>();
+  for (const m of fact.matchAll(/`([^`\n]{2,80})`/g)) out.add(m[1].trim());
+  // Paths and dotted names: src/server.ts, retention.json, foo.bar.baz
+  for (const m of fact.matchAll(/\b[\w-]+(?:[./][\w-]+)+\b/g)) out.add(m[0]);
+  // camelCase and anything_with_underscores
+  for (const m of fact.matchAll(/\b[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*\b|\b\w+_\w+\b/g)) out.add(m[0]);
+  return [...out].filter((t) => t.length >= 3).slice(0, 12);
+}
+
+/** Exact-token survival: `ORIGIN_GUARD` must NOT count as present when the
+ *  file only has `ORIGIN_GUARD_V2` — a rename is exactly the change that can
+ *  make the fact false, so a substring check would false-pass the repair. */
+function termSurvives(hay: string, term: string): boolean {
+  return new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(term)}(?![A-Za-z0-9_])`).test(hay);
+}
+
+export interface RepairResult {
+  /** Facts whose verifiable terms all survived — anchors refreshed, fresh again. */
+  reanchored: string[];
+  /** Facts that need an agent/human to re-verify — kept stale, never deleted here. */
+  needsReview: string[];
+}
+
+/**
+ * The repair queue: for every stale fact, re-anchor mechanically when every
+ * verifiable term still appears in the current anchored files (the change
+ * didn't touch what the fact asserts); otherwise queue it for review. This is
+ * what stops "a file changed" from meaning "the knowledge is gone".
+ */
+export async function repairMemories(root: string): Promise<RepairResult> {
+  const mainRoot = await resolveRoot(root);
+  const all = await listMemories(root);
+  let head: string | null = null;
+  try {
+    head = await git(['rev-parse', 'HEAD'], mainRoot);
+  } catch { /* empty repo — keep the old commit anchor */ }
+
+  const reanchored: string[] = [];
+  const needsReview: string[] = [];
+  for (const f of all) {
+    if (f.freshness !== 'stale') continue;
+    const terms = extractVerifiableTerms(f.fact);
+    let verified = terms.length > 0;
+    if (verified) {
+      // Haystack: the anchor paths themselves + current contents of every
+      // anchored file. A deleted anchor is unverifiable by definition.
+      let hay = f.anchors.files.map((a) => a.path).join('\n');
+      for (const a of f.anchors.files) {
+        try {
+          hay += '\n' + (await readFile(join(mainRoot, a.path), 'utf-8'));
+        } catch {
+          verified = false;
+          break;
+        }
+      }
+      if (verified) verified = terms.every((t) => termSurvives(hay, t));
+    }
+    if (!verified) {
+      needsReview.push(f.id);
+      continue;
+    }
+    const files: FileAnchor[] = [];
+    for (const a of f.anchors.files) files.push({ path: a.path, hash: await fileHash(mainRoot, a.path) });
+    const updated: MemoryFact = {
+      id: f.id, type: f.type, fact: f.fact, agent: f.agent, task: f.task,
+      createdAt: f.createdAt, anchors: { commit: head ?? f.anchors.commit, files },
+      supersedes: f.supersedes, fingerprint: f.fingerprint,
+    };
+    const target = join(memoryDir(mainRoot), `${f.id}.md`);
+    const tmp = join(memoryDir(mainRoot), `.${f.id}.${process.pid}.tmp`);
+    await writeFile(tmp, renderFactFile(updated), 'utf-8');
+    await rename(tmp, target);
+    factCache.delete(target);
+    await appendJournal(mainRoot, {
+      op: 'reanchor', id: f.id, supersededBy: null,
+      reason: 'verifiable terms survived the anchored-file change', at: new Date().toISOString(),
+    });
+    reanchored.push(f.id);
+  }
+  return { reanchored, needsReview };
 }
 
 /** Drop stale facts (changed/removed anchors). Returns removed ids. */
@@ -588,6 +769,46 @@ export async function saveRetention(root: string, policy: RetentionPolicy): Prom
 /** True when a policy would actually remove something (used to gate auto-apply). */
 export function retentionActive(p: RetentionPolicy): boolean {
   return !!(p.maxAgeDays || p.dropStale || p.dropAging);
+}
+
+/* ------------------------------------------------------------------ */
+/* Progressive-disclosure serving (M2)                                 */
+/* ------------------------------------------------------------------ */
+
+export interface RecallRow {
+  id: string;
+  type: MemoryType;
+  freshness: Freshness;
+  /** Full body — only the top RECALL_FULL_BODIES rows carry it. */
+  fact?: string;
+  task?: string | null;
+  commitsBehind?: number | null;
+  /** Index rows: first line only. Hydrate with recall_memory({ ids }). */
+  preview?: string;
+  files?: string[];
+}
+
+/** Full bodies served per recall; everything after arrives as an index row. */
+export const RECALL_FULL_BODIES = 3;
+const PREVIEW_MAX = 140;
+
+/**
+ * The claude-mem 3-layer read pattern: top hits full, the rest as ~50–100
+ * token index rows (id + one line + anchors) the agent hydrates by id only
+ * when actually needed. Pure — the MCP layer serves this verbatim.
+ */
+export function recallRows(facts: MemoryStatus[], fullCount = RECALL_FULL_BODIES): RecallRow[] {
+  return facts.map((f, i) =>
+    i < fullCount
+      ? { id: f.id, type: f.type, freshness: f.freshness, fact: f.fact, task: f.task, commitsBehind: f.commitsBehind }
+      : {
+          id: f.id,
+          type: f.type,
+          freshness: f.freshness,
+          preview: f.fact.split('\n')[0].slice(0, PREVIEW_MAX),
+          files: f.anchors.files.map((a) => a.path).slice(0, 3),
+        },
+  );
 }
 
 /** Compact index block for handoff briefs (~token-cheap, fresh facts only). */

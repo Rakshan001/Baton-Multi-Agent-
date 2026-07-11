@@ -5,7 +5,7 @@
  */
 import { gitRoot } from '../git.js';
 import {
-  gcMemories, listMemories, readJournal, removeMemory, saveMemory,
+  gcMemories, listMemories, readJournal, removeMemory, repairMemories, saveMemory,
   MemoryValidationError, type MemoryStatus,
 } from '../memory.js';
 
@@ -65,13 +65,28 @@ export async function memoryRmCmd(id: string): Promise<void> {
   if (!ok) process.exitCode = 1;
 }
 
+export async function memoryRepairCmd(): Promise<void> {
+  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const r = await repairMemories(root);
+  if (r.reanchored.length) console.log(`⚓ re-anchored ${r.reanchored.length} fact${r.reanchored.length === 1 ? '' : 's'} (still true, evidence refreshed): ${r.reanchored.join(', ')}`);
+  if (r.needsReview.length) {
+    console.log(`○ ${r.needsReview.length} need${r.needsReview.length === 1 ? 's' : ''} review (verify, then re-save or \`baton memory rm\`):`);
+    for (const id of r.needsReview) console.log(`    ${id}`);
+  }
+  if (!r.reanchored.length && !r.needsReview.length) console.log('nothing stale — memory is healthy');
+}
+
 export async function memoryGcCmd(): Promise<void> {
   const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  // Rescue what is mechanically verifiable BEFORE dropping anything (M3) —
+  // gc used to be the knowledge-loss path for facts that were still true.
+  const repaired = await repairMemories(root);
+  if (repaired.reanchored.length) console.log(`⚓ re-anchored ${repaired.reanchored.length} still-true fact${repaired.reanchored.length === 1 ? '' : 's'} instead of dropping`);
   const removed = await gcMemories(root);
   console.log(removed.length ? `✓ removed ${removed.length} stale fact${removed.length === 1 ? '' : 's'}: ${removed.join(', ')}` : 'nothing stale to remove');
 }
 
-const OP_LABEL: Record<'supersede' | 'remove', string> = { supersede: '↻', remove: '✗' };
+const OP_LABEL: Record<'supersede' | 'remove' | 'reanchor', string> = { supersede: '↻', remove: '✗', reanchor: '⚓' };
 
 export async function memoryLogCmd(): Promise<void> {
   const root = await gitRoot(); // memory.ts resolves the main repo root internally
