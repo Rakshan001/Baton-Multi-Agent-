@@ -13,7 +13,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "cv11", "ss01";
   text-rendering: optimizeLegibility;
-  overflow: hidden;
+  /* clip, not hidden: hidden still allows PROGRAMMATIC scrolling, so a
+     focus-scroll toward an edge-overflowing tooltip could shove the whole
+     app sideways. clip forbids scrolling the root outright. */
+  overflow: clip;
 }
 #root { height: 100%; }
 
@@ -215,6 +218,17 @@ button { font-family: inherit; color: inherit; }
   line-height: 1.3; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
+
+/* Top-bar counter segment — same CSS-state rule as .nav-item (inline JS
+   hover mutation is what left ghost highlights in the sidebar). */
+.bar-seg {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 100%; padding: 0 12px; border: none;
+  background: transparent; font-family: inherit;
+  transition: background var(--dur-1);
+}
+button.bar-seg { cursor: pointer; border-radius: var(--r-sm); }
+button.bar-seg:hover { background: var(--bg-hover); }
 
 /* Mono uppercase eyebrow — the instrument-panel section label. */
 .eyebrow {

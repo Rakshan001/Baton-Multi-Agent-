@@ -374,3 +374,8 @@ extended app-wide. No emoji, no gradients, one accent.
   dot; freshness-colored 3px left edge; id dimmed.
 - [x] Activity: stat boxes → same `.stat-strip` (est badge preserved).
 - Verified in browser dark + light; web build clean; suite 543/543.
+- [x] Top bar (audit item 7): counter segments move to CSS states
+  (`.bar-seg`) like the sidebar, decorative glow halos dropped. Found in
+  passing: `body{overflow:hidden}` still allowed PROGRAMMATIC horizontal
+  scroll — a focus-scroll toward an edge-overflowing tooltip shoved the app
+  57px sideways; now `overflow:clip`. Verified dark + light.

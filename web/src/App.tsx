@@ -224,13 +224,8 @@ function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string
   const seg = (label: string, value: number, dot: string, opts: { onClick?: () => void; tip?: string; danger?: boolean; glow?: boolean } = {}) => {
     const Comp: any = opts.onClick ? "button" : "div";
     return (
-      <Comp className={opts.onClick ? "fr" : ""} onClick={opts.onClick} data-tip={opts.tip} style={{
-        display: "inline-flex", alignItems: "center", gap: 7, height: "100%", padding: "0 12px", border: "none",
-        background: "transparent", cursor: opts.onClick ? "pointer" : "default", fontFamily: "inherit",
-        borderRadius: opts.onClick ? "var(--r-sm)" : 0, transition: "background var(--dur-1)" }}
-        onMouseEnter={opts.onClick ? (e: React.MouseEvent<HTMLElement>) => (e.currentTarget.style.background = "var(--bg-hover)") : undefined}
-        onMouseLeave={opts.onClick ? (e: React.MouseEvent<HTMLElement>) => (e.currentTarget.style.background = "transparent") : undefined}>
-        <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flex: "none", boxShadow: opts.glow ? `0 0 0 3px color-mix(in srgb, ${dot} 22%, transparent)` : "none" }} />
+      <Comp className={opts.onClick ? "bar-seg fr" : "bar-seg"} onClick={opts.onClick} data-tip={opts.tip}>
+        <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flex: "none" }} />
         <span className="mono" style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)", letterSpacing: "-0.02em", color: opts.danger ? "var(--conflict-text)" : "var(--text-primary)" }}>{value}</span>
         <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{label}</span>
       </Comp>
