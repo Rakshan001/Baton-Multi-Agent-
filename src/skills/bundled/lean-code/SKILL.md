@@ -1,12 +1,14 @@
 ---
 name: lean-code
 description: >-
-  Stop over-engineering. Before writing code for a task, climb a restraint ladder — does this
-  need to exist at all, does a helper already live in this repo, does the stdlib or the platform
-  already do it, can it be one line — and build the smallest thing that actually works. Never
-  simplify away validation, error handling, security, or accessibility. Use when implementing a
-  feature, adding a utility, wiring a dependency, or whenever a solution feels bigger than the
-  problem ("do I really need a class/library/abstraction for this?").
+  Stop over-engineering (a.k.a. Ponytail / lazy-senior-dev mode / YAGNI). Before writing code,
+  climb a restraint ladder — does this need to exist at all, does a helper already live in this
+  repo, does the stdlib or the platform already do it, can it be one line — and build the
+  smallest thing that actually works. Never simplify away validation, error handling, security,
+  or accessibility. Use on ANY coding task (writing, refactoring, fixing, reviewing, choosing
+  dependencies), and whenever the user says "lean code", "ponytail", "be lazy", "yagni",
+  "do less", "simplest solution", or "shortest path", or complains about over-engineering,
+  bloat, boilerplate, or unnecessary dependencies. Do NOT use for non-coding requests.
 ---
 
 # Lean code — build the smallest thing that works
@@ -17,6 +19,12 @@ description: >-
 Over-engineering is the default failure mode of a coding agent: it invents a class, a config
 system, and three abstraction layers for what a helper and one function would cover. This skill
 is the reflex against that.
+
+## Persistence
+
+Once invoked, this stays active **every response** — no drift back to over-building as the
+session gets long. Still active if unsure. Off only when the user says "stop lean code" /
+"normal mode".
 
 ## Understand first, then climb
 
@@ -47,6 +55,25 @@ Stop at the **first** rung that holds. Say in one line what you skipped and why.
 **Bug fixes climb too:** fix the root cause in the shared function, not the one caller the ticket
 names — the lazy fix (one guard in the shared path) is both the smaller diff and the correct one.
 (For the full bug workflow, use the **bug-fix** skill; this skill keeps *its* diffs lean.)
+
+## Rules
+
+- **No unrequested abstractions:** no interface with one implementation, no factory for one
+  product, no config option for a value that never changes.
+- No boilerplate, no scaffolding "for later" — later can scaffold for itself.
+- **Deletion over addition. Boring over clever** — clever is what someone decodes at 3am.
+- Fewest files possible; the shortest working diff wins *once you understand the problem*.
+- A deliberate shortcut with a known **ceiling** names the ceiling and the upgrade path in a
+  comment: `// lean: global lock — switch to per-account locks if throughput matters`.
+- Two equally short options? Take the one that's correct on edge cases — lazy means writing
+  less code, not picking the flimsier algorithm.
+
+## Output
+
+Code first. Then at most three short lines — pattern: `[code] → skipped: [X], add when [Y]`.
+If the explanation is longer than the code, delete the explanation: every paragraph defending
+a simplification is complexity smuggled back in as prose. (Explanation the user explicitly
+asked for is not debt — give it in full.)
 
 ## The restraint dial *(advisory)*
 

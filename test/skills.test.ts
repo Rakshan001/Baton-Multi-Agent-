@@ -67,6 +67,17 @@ describe('renderSkill', () => {
 });
 
 describe('bundledSkills (file-backed)', () => {
+  it('every bundled skill carries a 3-line human explainer (what / how / win)', async () => {
+    for (const s of await bundledSkills()) {
+      expect(s.explain, `skill '${s.id}' is missing its explain block`).toBeTruthy();
+      for (const key of ['what', 'how', 'win'] as const) {
+        const line = s.explain![key];
+        expect(line?.trim().length, `${s.id}.explain.${key} empty`).toBeGreaterThan(10);
+        expect(line.length, `${s.id}.explain.${key} too long — cards must stay compact`).toBeLessThanOrEqual(120);
+      }
+    }
+  });
+
   it('loads bug-fix from src/skills/bundled with its references, and keeps raw faithful', async () => {
     const skills = await bundledSkills();
     const bug = skills.find((s) => s.id === 'bug-fix');

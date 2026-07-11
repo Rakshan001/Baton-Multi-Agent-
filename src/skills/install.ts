@@ -53,6 +53,8 @@ export interface SkillStatus {
   produces: string[];
   body: string;
   source: 'bundled' | 'imported';
+  /** 3-line human explainer (what / how / win); absent for imported skills. */
+  explain?: { what: string; how: string; win: string };
   /** Relative paths of the skill's reference files (content omitted). */
   references: string[];
   installs: SkillInstallState[];
@@ -203,6 +205,7 @@ export async function listSkillStatus(root: string): Promise<SkillStatus[]> {
     produces: skill.produces,
     body: skill.body,
     source: skill.source,
+    explain: skill.explain,
     references: skill.references.map((r) => r.rel),
     installs: SKILL_AGENTS.map((agent) => {
       const target = skillTargetFor(agent, skill.id, root)!;

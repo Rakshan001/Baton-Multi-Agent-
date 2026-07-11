@@ -40,9 +40,30 @@ describe('bundled lean-code skill (S2)', () => {
       ['credits Ponytail', 'ponytail'],
       // G1 — a stale graph is how duplicate functions get born
       ['heed the graph freshness warning', 'freshness warning'],
+
+      // v2 — the Ponytail pieces the first adaptation dropped (verified against
+      // .refs/ponytail/skills/ponytail/SKILL.md): persistence, the hard rules,
+      // and the output discipline that keeps explanations from smuggling
+      // complexity back in as prose.
+      ['stays active every response once invoked', 'every response'],
+      ['no unrequested abstractions', 'unrequested abstraction'],
+      ['deletion over addition', 'deletion over addition'],
+      ['boring over clever', 'boring over clever'],
+      ['deliberate shortcuts name their ceiling + upgrade path', 'ceiling'],
+      ['output pattern: code → skipped X, add when Y', 'skipped:'],
     ];
     for (const [why, needle] of required) {
       expect(body.includes(needle), `missing: ${why} (looked for "${needle}")`).toBe(true);
+    }
+  });
+
+  it('is discoverable by the words people actually say (the "what is lean-code?" fix)', async () => {
+    const lean = (await bundledSkills()).find((s) => s.id === 'lean-code')!;
+    const desc = lean.description.toLowerCase();
+    // An agent (or human) hears "yagni", "be lazy", "over-engineered", "ponytail" —
+    // the description must catch those, or the skill is never invoked.
+    for (const trigger of ['yagni', 'lazy', 'over-engineer', 'ponytail', 'simplest']) {
+      expect(desc, `description missing trigger word: ${trigger}`).toContain(trigger);
     }
   });
 });

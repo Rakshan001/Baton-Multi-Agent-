@@ -27,6 +27,16 @@ export interface SkillReference {
   content: string;
 }
 
+/** The human-facing 3-line explainer shown on skill cards: what the skill is,
+ *  how it works, and the advantage. Distinct from `description`, which is the
+ *  agent-facing trigger text (long, keyword-dense) — humans need three short
+ *  lines, not a paragraph. */
+export interface SkillExplain {
+  what: string;
+  how: string;
+  win: string;
+}
+
 export interface SkillDef {
   id: string;
   /** Display name. */
@@ -42,6 +52,9 @@ export interface SkillDef {
   /** Supporting files installed alongside the skill (loaded on demand by the agent). */
   references: SkillReference[];
   source: 'bundled' | 'imported';
+  /** 3-line human explainer (what / how / win) for the UI. Bundled skills carry
+   *  one; imported skills fall back to their description. */
+  explain?: SkillExplain;
   /**
    * Verbatim SKILL.md (frontmatter + body) for skills authored as files. When
    * present and the on-disk `name` already matches the id, Claude installs get
@@ -80,9 +93,64 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     tags: ['verify', 'verification', 'double-check', 'hallucination', 'regression', 'skeptic', 'review', 'tests', 'build', 'done', 'symbol exists'],
     produces: ['re-read diff', 'symbol-existence check', 'build/test/lint run', 'independent skeptic re-check'],
   },
+  handoff: {
+    tags: ['handoff', 'relay', 'usage limit', 'context limit', 'resume', 'continue', 'session', 'brief', 'pass', 'take', 'blocked', 'multi-agent'],
+    produces: ['handoff brief', 'pickup command', 'resumed session'],
+  },
   'lean-code': {
     tags: ['lean', 'restraint', 'over-engineering', 'yagni', 'simplicity', 'minimal', 'reuse', 'stdlib', 'native', 'one-liner', 'ponytail'],
     produces: ['restraint ladder', 'smallest working diff', 'reuse over rewrite', 'safety carve-outs preserved'],
+  },
+};
+
+/** What / how / advantage — three short lines per bundled skill, shown on the
+ *  Skills screen so a human (or an agent browsing the catalog) understands each
+ *  skill without reading its playbook. Keep every line under ~90 chars. */
+const SKILL_EXPLAIN: Record<string, SkillExplain> = {
+  'bug-fix': {
+    what: 'A gated pipeline for fixing bugs without creating new ones.',
+    how: 'Reproduce → audit blast radius → hypothesis-driven root cause → 95% skeptic-checked plan → fix → re-verify.',
+    win: 'No duplicate fixes, no symptom patches, no regressions shipped.',
+  },
+  'lean-code': {
+    what: 'The anti-over-engineering reflex (Ponytail’s "lazy senior dev" discipline).',
+    how: 'Climbs a restraint ladder — YAGNI → reuse → stdlib → platform → one line — before writing code.',
+    win: 'Smaller diffs, fewer dependencies, cheaper reviews; safety code stays untouched.',
+  },
+  'token-efficient-coding': {
+    what: 'Work habits that cut a session’s token burn.',
+    how: 'Read the map (CODEBASE.md / graph), not the repo; minimal diffs; never re-read what you know.',
+    win: 'Sessions cost a fraction and stay sharp deeper into the context window.',
+  },
+  'traceable-changes': {
+    what: 'Git discipline for repos where several agents commit.',
+    how: 'One atomic commit per change, conventional messages, isolated worktrees.',
+    win: 'Blame, bisect, and revert always work — any change traces to one commit.',
+  },
+  'memory-light': {
+    what: 'Long-horizon work without dragging the whole history in context.',
+    how: 'Recall memory before exploring; externalize state to disk, not the chat.',
+    win: 'Sessions resume cheaply and nothing gets re-learned twice.',
+  },
+  'verify-before-done': {
+    what: 'A "done means verified" gate before any completion claim.',
+    how: 'Re-read the diff, confirm symbols exist, run build/tests, independent skeptic re-check.',
+    win: 'Hallucinated "done" claims die before they ship.',
+  },
+  handoff: {
+    what: 'The relay: pass unfinished work to another agent instead of losing it.',
+    how: 'create_handoff writes done / pending / next step; the next agent runs `baton resume`.',
+    win: 'A usage limit costs you a minute, not the whole investigation.',
+  },
+  'map-codebase': {
+    what: 'Builds the repo map every other skill navigates by.',
+    how: '`baton kb rebuild` → knowledge graph + CODEBASE.md, served to agents over MCP.',
+    win: 'Orienting costs hundreds of tokens instead of hundreds of thousands.',
+  },
+  'safe-refactor': {
+    what: 'Restructure code without changing behavior.',
+    how: 'Green test baseline → isolated worktree → small steps → graph-checked callers.',
+    win: 'Refactors land without breaking the caller you forgot existed.',
   },
 };
 
@@ -141,6 +209,7 @@ const INLINE_SKILLS: SkillDef[] = [
     body: MAP_BODY,
     references: [],
     source: 'bundled',
+    explain: SKILL_EXPLAIN['map-codebase'],
   },
   {
     id: 'safe-refactor',
@@ -151,6 +220,7 @@ const INLINE_SKILLS: SkillDef[] = [
     body: REFACTOR_BODY,
     references: [],
     source: 'bundled',
+    explain: SKILL_EXPLAIN['safe-refactor'],
   },
 ];
 
@@ -199,6 +269,7 @@ async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
     body: parsed.content.trim() + '\n',
     references,
     source: 'bundled',
+    explain: SKILL_EXPLAIN[id],
     raw: nameMatchesId ? raw : undefined,
   };
 }
