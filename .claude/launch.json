@@ -10,9 +10,10 @@
     {
       "name": "baton-web",
       "runtimeExecutable": "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node",
-      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5173", "--strictPort"],
+      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
       "cwd": "web",
-      "port": 5173
+      "port": 5173,
+      "autoPort": true
     },
     {
       "name": "baton-site",
