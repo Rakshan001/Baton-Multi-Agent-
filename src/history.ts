@@ -183,6 +183,115 @@ export async function ingestGitLog(
   return added;
 }
 
+/* ---- unified commit search (FTS5, token-optimal) ---------------------- */
+
+export interface HistorySearchHit {
+  sha: string;
+  message: string;
+  at: string;
+  slug: string;
+  task: string | null;
+  agent: string | null;
+  files: string[];
+  moreFiles: number;
+}
+
+const SEARCH_FILE_CAP = 5;
+
+/** FTS5 may be absent in exotic SQLite builds — remember per-db so we only probe once. */
+const ftsReady = new Map<string, boolean>();
+
+function ensureFts(root: string): boolean {
+  const key = join(batonDir(root), 'history.db');
+  const cached = ftsReady.get(key);
+  if (cached !== undefined) return cached;
+  const db = getDb(root);
+  try {
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS commits_fts USING fts5(sha UNINDEXED, message, files)`);
+    ftsReady.set(key, true);
+    return true;
+  } catch {
+    ftsReady.set(key, false);
+    return false;
+  }
+}
+
+/** Rebuild the FTS index iff it's out of sync with commits (lazy backfill). The
+ *  write paths stay untouched — a full rebuild of even 10k commits is cheap and
+ *  happens only when a search actually runs after new commits landed. */
+function syncFts(root: string): void {
+  const db = getDb(root);
+  const commitCount = (db.prepare(`SELECT COUNT(*) AS n FROM commits`).get() as { n: number }).n;
+  const ftsCount = (db.prepare(`SELECT COUNT(*) AS n FROM commits_fts`).get() as { n: number }).n;
+  if (commitCount === ftsCount) return;
+  db.exec('BEGIN');
+  try {
+    db.exec(`DELETE FROM commits_fts`);
+    db.exec(
+      `INSERT INTO commits_fts (sha, message, files)
+       SELECT c.sha, c.message, COALESCE((SELECT GROUP_CONCAT(path, ' ') FROM commit_files f WHERE f.sha = c.sha), '')
+       FROM commits c`,
+    );
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+/** Quote each term so identifiers, paths, and hostile input are literal — never FTS syntax. */
+function ftsQuery(query: string): string {
+  return query
+    .split(/\s+/)
+    .map((t) => t.replace(/"/g, '').trim())
+    .filter(Boolean)
+    .map((t) => `"${t}"`)
+    .join(' ');
+}
+
+function hydrateHits(root: string, rows: Array<{ sha: string; message: string; at: string; slug: string }>): HistorySearchHit[] {
+  const db = getDb(root);
+  const taskStmt = db.prepare(`SELECT task, agent FROM tasks WHERE slug = ?`);
+  const filesStmt = db.prepare(`SELECT path FROM commit_files WHERE sha = ?`);
+  return rows.map((r) => {
+    const t = taskStmt.get(r.slug) as { task: string | null; agent: string | null } | undefined;
+    const files = (filesStmt.all(r.sha) as Array<{ path: string }>).map((f) => f.path);
+    return {
+      sha: r.sha, message: r.message, at: r.at, slug: r.slug,
+      task: t?.task ?? null, agent: t?.agent ?? null,
+      files: files.slice(0, SEARCH_FILE_CAP), moreFiles: Math.max(0, files.length - SEARCH_FILE_CAP),
+    };
+  });
+}
+
+/** Search merged/ingested commits by message + touched paths. Ranked (FTS5 when
+ *  available, LIKE fallback otherwise), capped, and cheap to serve to an agent. */
+export function searchHistory(root: string, query: string, limit = 10): HistorySearchHit[] {
+  const db = getDb(root);
+  const cap = Math.max(1, Math.min(limit, 25));
+  const q = ftsQuery(query);
+  if (!q) return [];
+  if (ensureFts(root)) {
+    try {
+      syncFts(root);
+      const rows = db.prepare(
+        `SELECT c.sha, c.message, c.at, c.slug
+         FROM commits_fts fts JOIN commits c ON c.sha = fts.sha
+         WHERE commits_fts MATCH ? ORDER BY rank LIMIT ?`,
+      ).all(q, cap) as Array<{ sha: string; message: string; at: string; slug: string }>;
+      return hydrateHits(root, rows);
+    } catch { /* malformed MATCH despite quoting — fall through to LIKE */ }
+  }
+  const terms = query.split(/\s+/).filter(Boolean).slice(0, 6);
+  if (!terms.length) return [];
+  const where = terms.map(() => `(c.message LIKE ? OR EXISTS (SELECT 1 FROM commit_files f WHERE f.sha = c.sha AND f.path LIKE ?))`).join(' AND ');
+  const params = terms.flatMap((t) => [`%${t}%`, `%${t}%`]);
+  const rows = db.prepare(
+    `SELECT c.sha, c.message, c.at, c.slug FROM commits c WHERE ${where} ORDER BY c.at DESC LIMIT ?`,
+  ).all(...params, cap) as Array<{ sha: string; message: string; at: string; slug: string }>;
+  return hydrateHits(root, rows);
+}
+
 export interface FileHit {
   path: string;
   slug: string;
