@@ -28,11 +28,12 @@ import { mcpCmd } from './commands/mcp.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
 import { doneCmd, takeCmd } from './commands/take.js';
+import { resumeCmd } from './commands/resume.js';
 import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
-import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRmCmd } from './commands/memory.js';
+import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { orientCmd } from './commands/orient.js';
@@ -167,8 +168,13 @@ memory
   .action((id: string) => run(() => memoryRmCmd(id)));
 
 memory
+  .command('repair')
+  .description('re-anchor stale facts whose verifiable terms survived the change; list the rest for review')
+  .action(() => run(memoryRepairCmd));
+
+memory
   .command('gc')
-  .description('drop stale facts (anchored files changed since they were saved)')
+  .description('repair what is mechanically verifiable, then drop the still-stale facts')
   .action(() => run(memoryGcCmd));
 
 memory
@@ -318,6 +324,13 @@ program
   .argument('[slug]', 'task slug (default: the worktree you are in)')
   .description('mark a handoff brief as done')
   .action((slug: string | undefined) => run(() => doneCmd(slug)));
+
+program
+  .command('resume')
+  .argument('[slug]', 'brief slug (omit to list every open handoff brief)')
+  .option('--json', 'machine-readable list')
+  .description('list open handoff briefs, or print the pickup prompt for one')
+  .action((slug: string | undefined, opts: { json?: boolean }) => run(() => resumeCmd(slug, opts)));
 
 const hooks = program.command('hooks').description('agent-side hook installation');
 hooks

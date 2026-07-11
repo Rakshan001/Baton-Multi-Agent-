@@ -25,34 +25,28 @@ import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
 import { resolveBatonRoot } from '../store.js';
 
-const AGENT_GUIDE = `
+/** Exported for the T2 budget/trigger invariant test — every session reads this. */
+export const AGENT_GUIDE = `
 <!-- baton:coordination -->
 ## Multi-agent coordination (Baton)
 
-This repo is coordinated by Baton. Before editing files that other agents may
-be working on:
+Baton coordinates the agent sessions in this repo via the \`baton\` MCP tools.
 
-1. Call the \`baton\` MCP tool \`check_files\` with the paths you plan to edit
-   (or GET \`http://127.0.0.1:7077/api/signals/check?files=a,b\`).
-2. If a file is busy (another session is editing it), prefer other work and
-   re-check later instead of creating conflicting changes.
-3. When you START editing shared files, call \`touch_files\` with those paths
-   and keep \`report_progress\` fresh (one line: what you're doing) — that is
-   how the other sessions avoid colliding with you. Works from anywhere,
-   including the repo root outside a managed worktree, with no daemon running.
-4. After waiting, call \`get_report\` for the finished task — the issue you
-   were assigned may already be fixed; verify before re-doing work.
-5. Read \`CODEBASE.md\` in the project root FIRST — it is the token-cheap map
-   (structure, stack, key symbols). Don't re-scan the repo to orient yourself.
-6. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
-   the codebase instead of broad file scans.
-7. Call \`recall_memory\` with your topic BEFORE exploring — facts earlier
-   sessions learned (decisions, gotchas, conventions), evidence-checked so
-   stale ones are withheld. Cheaper than re-discovering them.
-8. When you make a decision, hit a gotcha, or learn a non-obvious convention,
-   call \`save_memory\` (1–3 sentences + the files it is about) so the next
-   session skips that discovery. Never store secrets (rejected) or anything
-   derivable from the code itself.
+- Orient first: read \`CODEBASE.md\` (the token-cheap repo map) and call
+  \`recall_memory\` with your topic — evidence-checked facts from earlier
+  sessions, stale ones withheld. Don't re-scan the repo.
+- Before editing shared files: \`check_files\` with the paths. Busy → prefer
+  other work and re-check later. After waiting, \`get_report\` — your issue
+  may already be fixed.
+- While working: call \`touch_files\` when you start editing shared files and
+  keep a one-line \`report_progress\` fresh — that is how sibling sessions
+  avoid colliding with you (works at the repo root, no daemon needed).
+- Navigate with the \`graphify-*\` tools (\`query_graph\`) instead of broad
+  scans, and heed graph-freshness warnings: re-read the flagged files.
+- Learned a decision, gotcha, or convention? \`save_memory\` it (1–3 sentences
+  + the files it is about). Never secrets or code-derivable facts.
+- Near your usage/context limit, or blocked? \`create_handoff\` (done, pending,
+  next step, decisions) — the next agent resumes with \`baton resume\`.
 <!-- /baton:coordination -->
 `;
 

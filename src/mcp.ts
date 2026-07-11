@@ -18,15 +18,19 @@ import { collectStatus } from './board.js';
 import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
-import { queryFile } from './history.js';
+import { queryFile, searchHistory } from './history.js';
 import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
-import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
+import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
+import { createSessionHandoff } from './handoff/session-brief.js';
 import { buildOrientation } from './kb/orient.js';
 import { asText, capList } from './mcp-format.js';
+import { TOOL_HELP } from './mcp-help.js';
 
 /** who_touched can span a file's whole history — cap what an agent is served. */
 const WHO_TOUCHED_CAP = 20;
+/** A busy hub can hold hundreds of live signals — cap what one answer serves. */
+const SIGNALS_CAP = 30;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
@@ -57,8 +61,7 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'orient',
     {
-      description:
-        'Get a short project orientation BEFORE exploring: what CODEBASE.md covers, evidence-checked project memory (decisions/gotchas/conventions), recently shipped tasks, and how to coordinate. Call this once at the start of a session so you understand the repo without re-reading it.',
+      description: TOOL_HELP.orient,
       inputSchema: { topic: z.string().optional().describe('What you are about to work on — biases the memory facts') },
     },
     async ({ topic }) => asText({ orientation: await buildOrientation(root, { topic }) }),
@@ -67,8 +70,7 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'check_files',
     {
-      description:
-        'Check whether files are currently being edited by another Baton session (live edit signals + unmerged branch changes). Call BEFORE editing shared files; if busy, prefer waiting or picking other work, then re-check. watcherActive:false means live monitoring is off — "not busy" is unproven.',
+      description: TOOL_HELP.check_files,
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths to check') },
     },
     async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
@@ -77,18 +79,19 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'list_signals',
     {
-      description:
-        'List every file under live edit across all Baton sessions right now. level="warning" means 2+ sessions are editing the same path.',
+      description: TOOL_HELP.list_signals,
       inputSchema: {},
     },
-    async () => asText(await getSignals(root)),
+    async () => {
+      const capped = capList(await getSignals(root), SIGNALS_CAP);
+      return asText({ signals: capped.items, more: capped.more });
+    },
   );
 
   server.registerTool(
     'get_report',
     {
-      description:
-        'Get the completion report of a merged task (summary, files changed, commits). Use after waiting on busy files to decide whether your issue is already fixed. Omit slug for a compact list of recent reports (pass a slug back for full detail).',
+      description: TOOL_HELP.get_report,
       inputSchema: { slug: z.string().optional().describe('Task slug; omit for recent reports') },
     },
     async ({ slug }) =>
@@ -98,8 +101,7 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'who_touched',
     {
-      description:
-        'Agent-blame for a file: which task/agent/commits touched it (merged history) and who is editing it live right now.',
+      description: TOOL_HELP.who_touched,
       inputSchema: { file: z.string().describe('Repo-relative file path') },
     },
     async ({ file }) => {
@@ -112,7 +114,7 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'list_tasks',
     {
-      description: 'List all Baton sessions (worktrees) with status, attached agent, and ahead/behind counts.',
+      description: TOOL_HELP.list_tasks,
       inputSchema: {},
     },
     async () => asText(await collectStatus(root)),
@@ -121,8 +123,7 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'report_progress',
     {
-      description:
-        'Tell the other agents what you are working on RIGHT NOW, in one line (e.g. "refactoring token expiry in auth.ts, ~2 commits left"). Siblings see it on your files via check_files/list_signals, so they can coordinate instead of colliding. Expires in 30 min and clears on your next commit — refresh it as you go.',
+      description: TOOL_HELP.report_progress,
       inputSchema: { note: z.string().describe('One line: what you are doing + rough progress') },
     },
     async ({ note }) => {
@@ -135,8 +136,7 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'touch_files',
     {
-      description:
-        'Tell the other sessions which files YOU are editing right now (live edit signals). Call it right after you start editing shared files — especially when working at the repo root outside a managed worktree, where no file watcher covers you. Signals expire in 30 min and self-clean once the work is committed.',
+      description: TOOL_HELP.touch_files,
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths you are editing') },
     },
     async ({ paths }) => {
@@ -147,10 +147,52 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.registerTool(
+    'search_history',
+    {
+      description: TOOL_HELP.search_history,
+      inputSchema: {
+        query: z.string().describe('Keywords: symbols, file names, or message words'),
+        limit: z.number().optional().describe('Max hits (default 10, max 25)'),
+      },
+    },
+    async ({ query, limit }) => asText({ hits: searchHistory(root, query, limit ?? 10) }),
+  );
+
+  server.registerTool(
+    'create_handoff',
+    {
+      description: TOOL_HELP.create_handoff,
+      inputSchema: {
+        title: z.string().describe('One line: what this work is'),
+        done: z.array(z.string()).optional().describe('Completed items'),
+        pending: z.array(z.string()).optional().describe('Remaining items, most important first'),
+        next: z.string().optional().describe('The single most useful next action for whoever resumes'),
+        decisions: z.array(z.string()).optional().describe('Decisions made / gotchas found — things git cannot show'),
+        to: z.string().optional().describe('Receiving agent, if known (e.g. "codex")'),
+      },
+    },
+    async ({ title, done, pending, next, decisions, to }) => {
+      try {
+        const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent().catch(() => undefined)) || undefined;
+        const brief = await createSessionHandoff(root, {
+          slug: selfSlug, agent, title, done, pending, next, decisions, to, cwd: process.cwd(),
+        });
+        return asText({
+          brief: brief.path,
+          pickup: brief.resume,
+          ...(brief.capturedFacts.length ? { memorized: brief.capturedFacts } : {}),
+          tip: 'Tell the user the pickup command — the next agent runs it to continue.',
+        });
+      } catch (e) {
+        return asText({ rejected: e instanceof Error ? e.message : String(e) });
+      }
+    },
+  );
+
+  server.registerTool(
     'save_memory',
     {
-      description:
-        'Persist a fact you LEARNED while working (a decision made, a gotcha hit, a convention discovered) so future agent sessions skip re-discovering it. 1–3 sentences: the fact + why + how to apply. Pass the repo-relative files the fact is about — they become evidence anchors; if those files later change, the fact is automatically flagged stale instead of being served as truth. Do NOT store anything derivable from the code itself, task-only context, or secrets (rejected).',
+      description: TOOL_HELP.save_memory,
       inputSchema: {
         fact: z.string().describe('The fact: 1–3 sentences, why + how to apply'),
         type: z.enum(MEMORY_TYPES as [string, ...string[]]).optional().describe('decision | gotcha | convention | reference | preference'),
@@ -163,7 +205,15 @@ export async function startMcpServer(): Promise<void> {
       try {
         // memory.ts resolves the MAIN repo root internally (worktree-safe).
         const saved = await saveMemory(memRoot, { fact, type, files, agent, task });
-        return asText({ saved: saved.id, supersedes: saved.supersedes, anchoredFiles: saved.anchors.files.map((f) => f.path) });
+        return asText({
+          saved: saved.id,
+          supersedes: saved.supersedes,
+          anchoredFiles: saved.anchors.files.map((f) => f.path),
+          // Write-time reconciliation (M8): you are the judge — merge or ignore.
+          ...(saved.similarExisting?.length
+            ? { possibleDuplicates: saved.similarExisting, tip: 'If one of these is the same knowledge, keep the better wording and remove the other (baton memory rm <id>).' }
+            : {}),
+        });
       } catch (e) {
         if (e instanceof MemoryValidationError) return asText({ rejected: e.message });
         throw e;
@@ -174,19 +224,33 @@ export async function startMcpServer(): Promise<void> {
   server.registerTool(
     'recall_memory',
     {
-      description:
-        'Recall project memory BEFORE exploring the repo — facts earlier agent sessions learned (decisions, gotchas, conventions), evidence-checked against the current code. Stale facts (whose anchored files changed since) are withheld and only counted, so everything returned is safe to trust. Pass a topic to rank by relevance; omit it for the most recent facts.',
+      description: TOOL_HELP.recall_memory,
       inputSchema: {
         topic: z.string().optional().describe('What you are working on — ranks facts by relevance'),
         limit: z.number().optional().describe('Max facts to return (default 10, max 50)'),
+        ids: z.array(z.string()).optional().describe('Fetch these facts in full (hydrates preview rows)'),
       },
     },
-    async ({ topic, limit }) => {
-      const r = await recallMemories(memRoot, { topic, limit });
+    async ({ topic, limit, ids }) => {
+      const r = await recallMemories(memRoot, { topic, limit, ids });
+      // Hydration mode: full bodies for the requested ids, failures named.
+      if (ids?.length) {
+        return asText({
+          facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
+          ...(r.withheld?.length ? { withheld: r.withheld } : {}),
+        });
+      }
+      const rows = recallRows(r.facts);
       return asText({
-        facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
+        facts: rows,
+        // Anchor-graph neighbors: facts on the same files the hits are about,
+        // which the topic words alone would have missed.
+        ...(r.related?.length ? { relatedByFiles: r.related.map((f) => ({ id: f.id, type: f.type, fact: f.fact })) } : {}),
         totalStored: r.total,
         staleWithheld: r.staleDropped,
+        ...(rows.some((row) => row.preview) ? { tip: 'preview rows are truncated — recall_memory({ ids: [...] }) returns full bodies' } : {}),
+        // Repair queue (M3): you are on these files anyway — verifying costs ~nothing.
+        ...(r.review ? { reviewRequest: { ...r.review, note: 'This stale fact shares files with your hits. If still true, re-save it with save_memory (fresh anchors); if wrong, ignore it.' } } : {}),
       });
     },
   );

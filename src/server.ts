@@ -35,7 +35,7 @@ import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './age
 import { KNOWN_AGENT_IDS } from './agents/registry.js';
 import {
   importSkill, installSkill, installSkillEverywhere, listSkillStatus, uninstallSkill,
-  SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
+  SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
 } from './skills/install.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
@@ -45,6 +45,7 @@ import { getReport, listReports } from './reports.js';
 import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
+import { listBriefs } from './handoff/resume.js';
 import { getTask } from './store.js';
 import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
@@ -61,7 +62,7 @@ import {
 } from './terminals.js';
 import {
   bulkRemoveMemory, gcMemories, listMemories, loadRetention, mainRepoRoot, memoryDir,
-  MemoryValidationError, pruneMemories, removeMemory, retentionActive, saveMemory, saveRetention,
+  MemoryValidationError, pruneMemories, removeMemory, repairMemories, retentionActive, saveMemory, saveRetention,
   type ProjectRel, type RetentionPolicy,
 } from './memory.js';
 import { storageUsage } from './storage.js';
@@ -776,7 +777,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   // GET /api/skills — the catalog (bundled + imported) with per-agent install state
   if (method === 'GET' && path === '/api/skills') {
-    return send(res, 200, { skills: await listSkillStatus(root), agents: ['claude', 'cursor'] }, origin);
+    return send(res, 200, { skills: await listSkillStatus(root), agents: SKILL_AGENTS }, origin);
   }
 
   // POST /api/skills/import — add a skill from a path or http(s) URL (write-gated)
@@ -1049,6 +1050,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, { slug, meta: brief.meta, body: brief.body }, origin);
   }
 
+  // GET /api/handoffs — every open handoff brief (task worktrees + session
+  // briefs under .baton/handoffs). Powers the dashboard's copy-to-resume UX.
+  if (path === '/api/handoffs' && method === 'GET') {
+    const briefs = await listBriefs(root);
+    return send(res, 200, { briefs: briefs.filter((b) => b.status !== 'done') }, origin);
+  }
+
   // GET /api/tasks/:slug/suggest-handoff — load-aware target recommendation
   const shm = path.match(/^\/api\/tasks\/([^/]+)\/suggest-handoff$/);
   if (shm && method === 'GET') {
@@ -1157,6 +1165,12 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // who_touched/blame cover every commit however it landed.
   void ingestAllProjects(root);
   setInterval(() => { void ingestAllProjects(root); }, 60_000).unref();
+  // M7: background memory maintenance (the sleep-time pattern, mechanical
+  // only — no LLM). Stale-but-still-true facts get re-anchored between
+  // sessions instead of waiting for someone to run `baton memory repair`;
+  // rewrites hit the memory watcher above, so the dashboard follows live.
+  void repairMemories(root).catch(() => undefined);
+  setInterval(() => { void repairMemories(root).catch(() => undefined); }, 600_000).unref();
   const server = createServer((req, res) => {
     void handle(req, res, root, opts).catch((e) =>
       send(res, 500, { error: (e as Error).message }, corsOrigin(req)),
