@@ -60,6 +60,25 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
   const mergedCount = data.filter((h) => h.mergedAt).length;
   const totalCommits = data.reduce((n, h) => n + h.commits.length, 0);
 
+  // Group by day (open work first) — a flat list hides the rhythm of the work;
+  // day headers make "what landed when" legible at a glance.
+  const dayLabel = (iso: string | null): string => {
+    if (!iso) return "In flight";
+    const d = new Date(iso); const now = new Date();
+    const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+  };
+  const groups: { label: string; rows: typeof rows }[] = [];
+  for (const h of rows) {
+    const label = dayLabel(h.mergedAt);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.rows.push(h);
+    else groups.push({ label, rows: [h] });
+  }
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="History" subtitle={`${mergedCount} merged · ${totalCommits} commits across the timeline`}>
@@ -77,9 +96,18 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
             desc={data.length ? "Try a different agent or search." : "Merged sessions and their commit lineage will appear here."}
             command={data.length ? undefined : "baton merge settings-dark-mode"} />
         ) : (
+          groups.map((g) => (
+          <section key={g.label} style={{ marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "2px 0 10px" }}>
+              <span style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", letterSpacing: "0.04em", textTransform: "uppercase", color: g.label === "In flight" ? "var(--dirty-text)" : "var(--text-tertiary)", flex: "none" }}>{g.label}</span>
+              <span style={{ flex: 1, height: 1, background: "var(--border-subtle)" }} />
+              <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", flex: "none" }}>
+                {g.rows.length} task{g.rows.length === 1 ? "" : "s"} · {g.rows.reduce((n, h) => n + h.commits.length, 0)} commit{g.rows.reduce((n, h) => n + h.commits.length, 0) === 1 ? "" : "s"}
+              </span>
+            </div>
           <ol style={{ listStyle: "none", margin: 0, padding: 0, position: "relative" }}>
             <span aria-hidden="true" style={{ position: "absolute", left: 19, top: 10, bottom: 10, width: 1.5, background: "var(--border-subtle)" }} />
-            {rows.map((h) => {
+            {g.rows.map((h) => {
               const a = getAgent(h.agent); const open = expanded[h.slug]; const inProgress = !h.mergedAt;
               return (
                 <li key={h.slug} style={{ position: "relative", paddingLeft: 44, marginBottom: 10 }}>
@@ -91,10 +119,18 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
                       <AgentBadge id={h.agent} size="sm" showLabel={false} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-medium)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.task}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
-                          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{h.slug}</span>
-                          <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>·</span>
-                          <span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{a.short}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, minWidth: 0 }}>
+                          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", flex: "none" }}>{h.slug}</span>
+                          <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", flex: "none" }}>·</span>
+                          <span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", flex: "none" }}>{a.short}</span>
+                          {h.commits.length > 0 && !open && (
+                            <>
+                              <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", flex: "none" }}>·</span>
+                              <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {h.commits[0].message}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
                       <span className="chip" style={{ height: 22 }}><Icon name="gitCommit" size={12} /> {h.commits.length}</span>
@@ -128,6 +164,8 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
               );
             })}
           </ol>
+          </section>
+          ))
         )}
       </div>
     </div>

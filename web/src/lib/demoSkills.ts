@@ -246,3 +246,51 @@ export const DEMO_SKILLS: SkillStatus[] = [
     ],
   },
 ];
+
+/* Mirrors SKILL_EXPLAIN in src/skills/catalog.ts — the 3-line human explainer
+   each card shows (what / how / win). Kept in sync by hand; the real daemon
+   serves these from the catalog. */
+const DEMO_EXPLAIN: Record<string, SkillStatus["explain"]> = {
+  "bug-fix": {
+    what: "A gated pipeline for fixing bugs without creating new ones.",
+    how: "Reproduce → audit blast radius → hypothesis-driven root cause → 95% skeptic-checked plan → fix → re-verify.",
+    win: "No duplicate fixes, no symptom patches, no regressions shipped.",
+  },
+  "token-efficient-coding": {
+    what: "Work habits that cut a session's token burn.",
+    how: "Read the map (CODEBASE.md / graph), not the repo; minimal diffs; never re-read what you know.",
+    win: "Sessions cost a fraction and stay sharp deeper into the context window.",
+  },
+  "traceable-changes": {
+    what: "Git discipline for repos where several agents commit.",
+    how: "One atomic commit per change, conventional messages, isolated worktrees.",
+    win: "Blame, bisect, and revert always work — any change traces to one commit.",
+  },
+  "memory-light": {
+    what: "Long-horizon work without dragging the whole history in context.",
+    how: "Recall memory before exploring; externalize state to disk, not the chat.",
+    win: "Sessions resume cheaply and nothing gets re-learned twice.",
+  },
+  "verify-before-done": {
+    what: "A \"done means verified\" gate before any completion claim.",
+    how: "Re-read the diff, confirm symbols exist, run build/tests, independent skeptic re-check.",
+    win: "Hallucinated \"done\" claims die before they ship.",
+  },
+  "map-codebase": {
+    what: "Builds the repo map every other skill navigates by.",
+    how: "`baton kb rebuild` → knowledge graph + CODEBASE.md, served to agents over MCP.",
+    win: "Orienting costs hundreds of tokens instead of hundreds of thousands.",
+  },
+  "safe-refactor": {
+    what: "Restructure code without changing behavior.",
+    how: "Green test baseline → isolated worktree → small steps → graph-checked callers.",
+    win: "Refactors land without breaking the caller you forgot existed.",
+  },
+};
+for (const s of DEMO_SKILLS) s.explain = DEMO_EXPLAIN[s.id];
+// Keep demo installs in sync with SKILL_AGENTS (antigravity landed in W4).
+for (const s of DEMO_SKILLS) {
+  if (!s.installs.some((i) => i.agent === "antigravity")) {
+    s.installs.push({ agent: "antigravity", rel: `.agents/skills/${s.id}/SKILL.md`, installed: false });
+  }
+}

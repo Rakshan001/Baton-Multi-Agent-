@@ -8,6 +8,7 @@ import { AgentBadge, SegmentedControl } from "../components/primitives";
 import { AGENT_REGISTRY, AgentGlyph } from "../lib/registry";
 import { deriveColumn } from "../lib/derive";
 import { Board } from "./Board";
+import { HandoffInbox } from "./Handoff";
 import { CanvasView } from "./Canvas";
 import type { StatusRow } from "../types";
 import type { Project } from "../lib/preview";
@@ -105,6 +106,7 @@ export function CommandCenter({
 
         {/* attention + agents strip */}
         <div className="cc-strip" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <HandoffInbox />
           {conflicts.length > 0 && (
             <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--conflict-text)", fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
