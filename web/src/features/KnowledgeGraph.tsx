@@ -96,10 +96,40 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
     return () => { cancelled = true; };
   }, [activeId, retryTick]);
 
+  // Legend entries: a community is named after where its nodes live (dominant
+  // directory) or, failing that, its best-connected node — "src/skills" or
+  // "AuthService" beats an anonymous "community 7".
   const communities = useMemo(() => {
     if (!graph) return [];
-    const ids = [...new Set(graph.nodes.map((n) => n.community ?? 0))].sort((a, b) => a - b);
-    return ids;
+    const degree = new Map<string, number>();
+    for (const l of graph.links as GraphLink[]) {
+      degree.set(nodeId(l.source), (degree.get(nodeId(l.source)) ?? 0) + 1);
+      degree.set(nodeId(l.target), (degree.get(nodeId(l.target)) ?? 0) + 1);
+    }
+    const acc = new Map<number, { count: number; dirs: Map<string, number>; hub: GraphNode | null }>();
+    for (const n of graph.nodes) {
+      const c = n.community ?? 0;
+      const e = acc.get(c) ?? { count: 0, dirs: new Map<string, number>(), hub: null };
+      e.count++;
+      if (!e.hub || (degree.get(n.id) ?? 0) > (degree.get(e.hub.id) ?? 0)) e.hub = n;
+      if (n.source_file?.includes("/")) {
+        // Directory only (drop the filename), at most two segments deep.
+        const dir = n.source_file.split("/").slice(0, -1).slice(0, 2).join("/");
+        if (dir) e.dirs.set(dir, (e.dirs.get(dir) ?? 0) + 1);
+      }
+      acc.set(c, e);
+    }
+    return [...acc.entries()]
+      .map(([id, e]) => {
+        const top = [...e.dirs.entries()].sort((a, b) => b[1] - a[1])[0];
+        // A deep dominant directory names the cluster best; a flat repo (every
+        // file straight under src/) says nothing, so fall back to the hub node.
+        const label = top && top[1] >= e.count * 0.4 && top[0].includes("/")
+          ? top[0]
+          : e.hub?.label ?? `community ${id}`;
+        return { id, label, count: e.count };
+      })
+      .sort((a, b) => b.count - a.count);
   }, [graph]);
 
   // neighbor index for the inspector + search highlighting
@@ -242,16 +272,30 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
           <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{matchCount} match{matchCount === 1 ? "" : "es"}</span>
         )}
         <div style={{ flex: 1 }} />
-        {communities.length > 1 && communities.length <= 36 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", maxWidth: 420 }}>
-            {communities.map((c) => {
-              const on = community === c;
+        {communities.length > 1 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", maxWidth: 560, justifyContent: "flex-end" }}>
+            {communities.slice(0, 10).map((c) => {
+              const on = community === c.id;
               return (
-                <button key={c} className="fr" onClick={() => setCommunity(on ? null : c)} data-tip={`Community ${c}`}
-                  aria-pressed={on}
-                  style={{ width: 18, height: 18, borderRadius: 6, border: on ? "2px solid var(--text-primary)" : "1px solid var(--border-default)", background: communityColor(c), cursor: "pointer", opacity: community !== null && !on ? 0.35 : 1 }} />
+                <button key={c.id} className="fr mono" onClick={() => setCommunity(on ? null : c.id)}
+                  data-tip={`${c.count} node${c.count === 1 ? "" : "s"} — click to isolate`} aria-pressed={on}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5, height: 22, padding: "0 8px",
+                    borderRadius: 99, cursor: "pointer", fontSize: 10.5,
+                    border: `1px solid ${on ? "var(--text-primary)" : "var(--border-default)"}`,
+                    background: on ? "var(--bg-active)" : "var(--bg-surface)",
+                    color: on ? "var(--text-primary)" : "var(--text-secondary)",
+                    opacity: community !== null && !on ? 0.45 : 1,
+                  }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 99, background: communityColor(c.id), flex: "none" }} />
+                  <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</span>
+                </button>
               );
             })}
+            {communities.length > 10 && (
+              <span className="mono" data-tip="Smaller communities — zoom the canvas to explore them"
+                style={{ fontSize: 10.5, color: "var(--text-quaternary)", padding: "0 4px" }}>+{communities.length - 10}</span>
+            )}
           </div>
         )}
       </div>
@@ -288,7 +332,7 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
                 <div style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)", wordBreak: "break-word" }}>{selected.label}</div>
                 <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                   {selected.file_type && <span className="tag">{selected.file_type}</span>}
-                  <span className="tag">community {selected.community ?? 0}</span>
+                  <span className="tag">{communities.find((c) => c.id === (selected.community ?? 0))?.label ?? `community ${selected.community ?? 0}`}</span>
                 </div>
               </div>
               <button className="btn btn-ghost btn-icon fr" onClick={() => setSelected(null)} aria-label="Close inspector"><Icon name="x" size={14} /></button>

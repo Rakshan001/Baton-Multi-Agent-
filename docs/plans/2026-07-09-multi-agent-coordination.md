@@ -379,3 +379,36 @@ extended app-wide. No emoji, no gradients, one accent.
   passing: `body{overflow:hidden}` still allowed PROGRAMMATIC horizontal
   scroll — a focus-scroll toward an edge-overflowing tooltip shoved the app
   57px sideways; now `overflow:clip`. Verified dark + light.
+
+## V-round — UX follow-through (2026-07-11, feat/premium-ui)
+
+The post-restyle audit's ranked gaps, implemented:
+
+- [x] V1 Board: `SyncChips hideZeros` (a "↑0 ↓0" reading is noise on cards);
+  edge fades on the board scroller so the clipped Conflict column reads as
+  "more content", tracked via scroll + ResizeObserver.
+- [x] V2 Unified ⌘K: palette now also searches merged commits (history),
+  memory facts, and skills — lazy-loaded on open, groups appear only once you
+  type, capped at 6 per data group. Picks deep-link via a `searchSeed`
+  (route + query + tick) that pre-fills the target screen's search; History
+  auto-expands rows while searching so commit matches are visible.
+- [x] V3 Memory parity: filter pills got counts; new stale/needs-review band
+  with Repair action; `POST /api/memory/repair` endpoint (write-gated,
+  publishes memory.updated; TDD in test/memory-repair-endpoint.test.ts —
+  facts must go stale AFTER daemon boot or the M7 startup sweep wins the
+  race); demo repair mirrors the verifiable-terms rule, new prose-only stale
+  demo fact exercises the review queue.
+- [x] V4 Graph: zoom in/out/fit control stack on the canvas; community
+  legend chips are named — dominant directory (≥40% share, ≥2 segments) or
+  the community's hub node label — instead of anonymous color squares;
+  inspector shows the same name.
+- [x] V5 Cross-links: History in-flight rows click through to the session;
+  (Conflicts was already fully linked — headers, cells, holders.)
+- [x] V6 Top bar: quiet dashed "Read-only" chip when write is off, tooltip
+  says how to enable — the inverse of the Write chip, stated once instead of
+  per-button tooltips.
+- Icon set: added `lock`.
+- Verified in browser (dark + light): repair flow live in demo
+  (stale 2 → 1, fresh 2 → 3), ⌘K "idempotency" → commit + fact hits, commit
+  pick seeded History search + expanded the row; suite 545/545 (72 files),
+  both builds clean.

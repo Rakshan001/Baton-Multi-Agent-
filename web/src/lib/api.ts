@@ -694,6 +694,31 @@ class BatonClient {
     this.emit();
     return r;
   }
+  /** Re-anchor stale facts whose verifiable terms survived; the rest are queued for review. */
+  async repairMemories(): Promise<{ reanchored: string[]; needsReview: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(300);
+      // Mirror of the daemon's rule, simplified: a fact naming a `code term`
+      // or file path can be re-verified mechanically; plain prose can't.
+      const verifiable = (t: string) => /`[^`]+`|\b[\w-]+(?:[./][\w-]+)+\b/.test(t);
+      const reanchored: string[] = [], needsReview: string[] = [];
+      this.demoMemory = this.demoFacts().map((f) => {
+        if (f.freshness !== "stale") return f;
+        if (verifiable(f.fact)) {
+          reanchored.push(f.id);
+          return { ...f, freshness: "fresh" as const, staleReason: null, commitsBehind: 0 };
+        }
+        needsReview.push(f.id);
+        return f;
+      });
+      this.emit();
+      return { reanchored, needsReview };
+    }
+    const r = await this.request<{ reanchored: string[]; needsReview: string[] }>("/api/memory/repair", { method: "POST", body: "{}" });
+    this.emit();
+    return r;
+  }
 
   /* ---- real token usage (Claude session files) ---- */
   async getRealUsage(): Promise<RepoUsage | null> {

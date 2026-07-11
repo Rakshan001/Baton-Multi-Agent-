@@ -62,21 +62,29 @@ export function StatusPill({ status, pulse = false }: { status: Status; pulse?: 
 }
 
 /* ---------- SyncChips ---------- */
-export function SyncChips({ ahead, behind, size = "md" }: { ahead: number; behind: number; size?: Size }) {
+export function SyncChips({ ahead, behind, size = "md", hideZeros = false }: { ahead: number; behind: number; size?: Size; hideZeros?: boolean }) {
   const fs = size === "sm" ? "var(--fs-11)" : "var(--fs-12)";
   const base: CSSProperties = {
     display: "inline-flex", alignItems: "center", gap: 2, fontFamily: "var(--font-mono)",
     fontSize: fs, fontWeight: "var(--fw-medium)" as CSSProperties["fontWeight"], padding: "1px 6px 1px 4px",
     borderRadius: "var(--r-xs)", border: "1px solid var(--border-default)",
   };
+  // On dense surfaces (board cards) a "↑0 ↓0" reading is pure noise — hide it.
+  const showAhead = !hideZeros || ahead > 0;
+  const showBehind = !hideZeros || behind > 0;
+  if (!showAhead && !showBehind) return null;
   return (
     <span style={{ display: "inline-flex", gap: 4 }}>
-      <span data-tip={`${ahead} commit${ahead === 1 ? "" : "s"} ahead of main`} style={{ ...base, color: ahead > 0 ? "var(--text-secondary)" : "var(--text-quaternary)", background: ahead > 0 ? "var(--bg-surface-2)" : "transparent" }}>
-        <Icon name="arrowUp" size={11} strokeWidth={2.4} /> {ahead}
-      </span>
-      <span data-tip={`${behind} commit${behind === 1 ? "" : "s"} behind main`} style={{ ...base, color: behind > 0 ? "var(--dirty-text)" : "var(--text-quaternary)", background: behind > 0 ? "var(--dirty-soft)" : "transparent", borderColor: behind > 0 ? "var(--dirty-border)" : "var(--border-default)" }}>
-        <Icon name="arrowDown" size={11} strokeWidth={2.4} /> {behind}
-      </span>
+      {showAhead && (
+        <span data-tip={`${ahead} commit${ahead === 1 ? "" : "s"} ahead of main`} style={{ ...base, color: ahead > 0 ? "var(--text-secondary)" : "var(--text-quaternary)", background: ahead > 0 ? "var(--bg-surface-2)" : "transparent" }}>
+          <Icon name="arrowUp" size={11} strokeWidth={2.4} /> {ahead}
+        </span>
+      )}
+      {showBehind && (
+        <span data-tip={`${behind} commit${behind === 1 ? "" : "s"} behind main`} style={{ ...base, color: behind > 0 ? "var(--dirty-text)" : "var(--text-quaternary)", background: behind > 0 ? "var(--dirty-soft)" : "transparent", borderColor: behind > 0 ? "var(--dirty-border)" : "var(--border-default)" }}>
+          <Icon name="arrowDown" size={11} strokeWidth={2.4} /> {behind}
+        </span>
+      )}
     </span>
   );
 }

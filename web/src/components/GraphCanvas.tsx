@@ -7,6 +7,7 @@
    ============================================================ */
 import { useEffect, useRef } from "react";
 import ForceGraph from "force-graph";
+import { Icon } from "./Icon";
 import type { GraphData, GraphNode, GraphLink } from "../types";
 
 type FGNode = GraphNode & { x?: number; y?: number };
@@ -174,5 +175,22 @@ export function GraphCanvas({ data, communityColor, selectedId, highlightIds, on
     fg.nodeRelSize(fg.nodeRelSize());
   }, [selectedId, highlightIds, data]);
 
-  return <div ref={elRef} style={{ position: "absolute", inset: 0 }} />;
+  // Zoom controls — trackpad pinch isn't discoverable and mouse users have no
+  // way in at all; fit recovers from any lost-in-space pan.
+  const zoomBy = (factor: number) => {
+    const fg = graphRef.current;
+    if (fg) fg.zoom(Math.max(0.05, Math.min(24, fg.zoom() * factor)), 200);
+  };
+  const fit = () => graphRef.current?.zoomToFit(400, 40);
+
+  return (
+    <div style={{ position: "absolute", inset: 0 }}>
+      <div ref={elRef} style={{ position: "absolute", inset: 0 }} />
+      <div style={{ position: "absolute", right: 14, bottom: 14, display: "flex", flexDirection: "column", gap: 4, zIndex: 2 }}>
+        <button className="btn btn-icon fr" aria-label="Zoom in" data-tip="Zoom in" onClick={() => zoomBy(1.5)} style={{ width: 28, height: 28 }}><Icon name="plus" size={13} /></button>
+        <button className="btn btn-icon fr" aria-label="Zoom out" data-tip="Zoom out" onClick={() => zoomBy(1 / 1.5)} style={{ width: 28, height: 28 }}><Icon name="minus" size={13} /></button>
+        <button className="btn btn-icon fr" aria-label="Fit graph to view" data-tip="Fit to view" onClick={fit} style={{ width: 28, height: 28 }}><Icon name="maximize" size={13} /></button>
+      </div>
+    </div>
+  );
 }

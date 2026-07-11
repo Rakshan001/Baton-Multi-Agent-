@@ -6,7 +6,7 @@
    for Cursor — or import your own from a path or URL. Mirrors
    GET /api/skills + POST/DELETE /api/skills/:id/install (src/skills).
    ============================================================ */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader, SearchInput } from "./shared";
@@ -36,9 +36,11 @@ const COMMUNITY_PICKS: { name: string; repo: string; blurb: string; url: string 
   { name: "mcp-builder", repo: "anthropics/skills", blurb: "Build MCP servers that expose your tools to any agent.", url: "https://raw.githubusercontent.com/anthropics/skills/main/skills/mcp-builder/SKILL.md" },
 ];
 
-export function SkillsScreen({ writeEnabled }: { writeEnabled: boolean }) {
+export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boolean; searchSeed?: { q: string; n: number } }) {
   const skills = usePoll<SkillStatus[]>(() => BatonAPI.getSkills(), { interval: 30000 });
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(searchSeed?.q ?? "");
+  // ⌘K deep-link: a picked skill re-seeds the search even if we're already here.
+  useEffect(() => { if (searchSeed) setQ(searchSeed.q); }, [searchSeed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [importing, setImporting] = useState(false);
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);

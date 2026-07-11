@@ -863,6 +863,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (removed.length) bus.publish({ type: 'memory.updated' });
     return send(res, 200, { removed }, origin);
   }
+  // POST /api/memory/repair — mechanically re-anchor stale facts whose
+  // verifiable terms survived; the rest stay queued for review (write-gated)
+  if (method === 'POST' && path === '/api/memory/repair') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const result = await repairMemories(root);
+    if (result.reanchored.length) bus.publish({ type: 'memory.updated' });
+    return send(res, 200, result, origin);
+  }
   // POST /api/memory/bulk-delete — delete many facts at once (write-gated)
   if (method === 'POST' && path === '/api/memory/bulk-delete') {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);

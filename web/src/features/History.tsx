@@ -41,8 +41,10 @@ function ReportBlock({ slug }: { slug: string }) {
   );
 }
 
-export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHistory[]>; onOpen: (slug: string) => void }) {
-  const [q, setQ] = useState("");
+export function HistoryScreen({ history, onOpen, searchSeed }: { history: PollState<TaskHistory[]>; onOpen: (slug: string) => void; searchSeed?: { q: string; n: number } }) {
+  const [q, setQ] = useState(searchSeed?.q ?? "");
+  // ⌘K deep-link: a picked commit re-seeds the search even if we're already here.
+  useEffect(() => { if (searchSeed) setQ(searchSeed.q); }, [searchSeed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [agent, setAgent] = useState<AgentId | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const data = history.data || [];
@@ -108,7 +110,9 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
           <ol style={{ listStyle: "none", margin: 0, padding: 0, position: "relative" }}>
             <span aria-hidden="true" style={{ position: "absolute", left: 19, top: 10, bottom: 10, width: 1.5, background: "var(--border-subtle)" }} />
             {g.rows.map((h) => {
-              const a = getAgent(h.agent); const open = expanded[h.slug]; const inProgress = !h.mergedAt;
+              // While searching, expand every hit — the match is often a commit
+              // message that would otherwise stay hidden behind the fold.
+              const a = getAgent(h.agent); const open = expanded[h.slug] || q.trim().length > 0; const inProgress = !h.mergedAt;
               return (
                 <li key={h.slug} style={{ position: "relative", paddingLeft: 44, marginBottom: 10 }}>
                   <span style={{ position: "absolute", left: 12, top: 16, width: 16, height: 16, borderRadius: 99, display: "grid", placeItems: "center", background: "var(--bg-base)", border: `2px solid ${inProgress ? "var(--dirty)" : a.color}`, zIndex: 1 }}>
@@ -135,7 +139,10 @@ export function HistoryScreen({ history, onOpen }: { history: PollState<TaskHist
                       </div>
                       <span className="chip" style={{ height: 22 }}><Icon name="gitCommit" size={12} /> {h.commits.length}</span>
                       {inProgress ? (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "var(--fs-12)", color: "var(--dirty-text)", background: "var(--dirty-soft)", border: "1px solid var(--dirty-border)", borderRadius: 99, padding: "2px 9px" }}>
+                        <span role="button" tabIndex={0} data-tip="Still in flight — view the session"
+                          onClick={(e) => { e.stopPropagation(); onOpen(h.slug); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onOpen(h.slug); } }}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "var(--fs-12)", color: "var(--dirty-text)", background: "var(--dirty-soft)", border: "1px solid var(--dirty-border)", borderRadius: 99, padding: "2px 9px", cursor: "pointer" }}>
                           <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--dirty)", animation: "pulse-dot 1.6s infinite" }} /> open
                         </span>
                       ) : (

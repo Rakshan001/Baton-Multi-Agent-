@@ -284,6 +284,13 @@ function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, on
           <Icon name="gitMerge" size={13} /> Write
         </span>
       )}
+      {/* The inverse state matters more: half the buttons quietly disable in
+          read-only, so say it once up here instead of tooltip-by-tooltip. */}
+      {!prefs.writeEnabled && !isMobile && (
+        <span data-tip={demo ? "Write actions are off — toggle them in the ⌘K palette" : "Merge, GC and Repair are disabled.\nRestart with `baton serve --write` to enable."} data-tip-side="bottom" style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 32, padding: "0 10px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", flex: "none" }}>
+          <Icon name="lock" size={12} /> Read-only
+        </span>
+      )}
       <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} reconnecting={reconnecting} />
       <ThemeToggle prefs={prefs} />
     </header>
@@ -399,6 +406,9 @@ export default function App() {
   }, [daemonWrite]);
 
   const navigate = (r: string) => { setRoute(r); ls.set("baton:route", r); };
+  // ⌘K data hits deep-link into a screen with its search pre-filled.
+  const [searchSeed, setSearchSeed] = useState<{ route: string; q: string; n: number }>({ route: "", q: "", n: 0 });
+  const seedSearch = (r: string, q: string) => { setSearchSeed((s) => ({ route: r, q, n: s.n + 1 })); navigate(r); };
   const onOpen = (slug: string) => setSelected(slug);
   const onLaunch = (agent: AgentId | null) => setLaunchOpen({ agent });
   const onLive = (slug: string) => setLiveSlug(slug);
@@ -482,10 +492,10 @@ export default function App() {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
-      case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} />;
-      case "history": return <HistoryScreen history={history} onOpen={onOpen} />;
+      case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
+      case "history": return <HistoryScreen history={history} onOpen={onOpen} searchSeed={searchSeed.route === "history" ? searchSeed : undefined} />;
       case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
-      case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} />;
+      case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "skills" ? searchSeed : undefined} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
       default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
     }
@@ -514,7 +524,7 @@ export default function App() {
       {handoffSlug && <HandoffDialog slug={handoffSlug} session={selectedRow(handoffSlug)} onClose={() => setHandoffSlug(null)} writeEnabled={prefs.writeEnabled} />}
       {liveSlug && <LiveSession slug={liveSlug} session={selectedRow(liveSlug)} sessions={sessions} onClose={() => setLiveSlug(null)} setSlug={setLiveSlug} onOpenDiff={(s) => { setLiveSlug(null); setDiffSlug(s); }} demo={demo} subscribe={events.subscribe} />}
       {launchOpen && <LaunchSession initialAgent={launchOpen.agent} onClose={() => setLaunchOpen(null)} writeEnabled={prefs.writeEnabled} onLaunched={(slug) => setSelected(slug)} />}
-      <CommandBar open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate} onOpen={onOpen} onLaunch={onLaunch} sessions={sessions} prefs={prefs} />
+      <CommandBar open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate} onOpen={onOpen} onLaunch={onLaunch} sessions={sessions} history={history.data || []} prefs={prefs} onSeedSearch={seedSearch} />
       <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
       <ToastViewport />
     </div>

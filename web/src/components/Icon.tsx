@@ -6,6 +6,7 @@ import type { CSSProperties } from "react";
 
 export const ICON_PATHS = {
   search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14ZM21 21l-4.3-4.3",
+  lock: "M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1ZM8 11V7a4 4 0 1 1 8 0v4M12 15v2",
   command: "M9 9V7a2 2 0 1 0-2 2h2Zm0 0h6m-6 0v6m6-6V7a2 2 0 1 1 2 2h-2Zm0 0v6m0 0v2a2 2 0 1 0 2-2h-2Zm-6 0v2a2 2 0 1 1-2-2h2Zm0 0h6",
   sun: "M12 6.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM12 1.5v2M12 20.5v2M3.5 12h-2M22.5 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M18.4 5.6l1.4-1.4M4.2 19.8l1.4-1.4",
   moon: "M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z",
