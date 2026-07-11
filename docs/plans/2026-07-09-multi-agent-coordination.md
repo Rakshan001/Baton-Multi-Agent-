@@ -164,16 +164,20 @@ aider: git-native (auto-commits every edit → post-commit signals) — M7.
 > auto-resume later; the graph's ceiling is capped by an upstream tool we don't own.
 
 ### T — Token economy: 6.5 → 8.5 ✅ reachable (top priority)
-- [ ] **T1 — slim the MCP tool schemas.** ~2–2.5k tokens of prose descriptions are paid
-  by EVERY session. Rewrite each description to its minimum effective form (target
-  ≥45% cut), verify agents still call tools correctly. Measure before/after with a
-  tokenizer — the number goes in the README.
-- [ ] **T2 — slim orient + AGENTS.md guide.** Orient is already budgeted (~800); the
-  guide (~350) can drop to ~180 without losing the check→touch→report loop.
-- [ ] **T3 — graph-answer caps.** `who_touched` is capped; audit graph proxy answers and
-  `list_signals` for unbounded lists; cap with "(+N more)" like freshness notes.
-- [ ] **T4 — overhead meter (feeds P1).** Record the actual injected overhead per session
-  so the cost is a measured number, not an estimate.
+- [x] **T1 — slim the MCP tool schemas** *(shipped 2026-07-10)*. Descriptions extracted
+  to src/mcp-help.ts: 2,799 → 1,472 chars in source, **1,500 chars (~375 tokens) on the
+  live wire vs ~700 before — a 46% measured cut** (tools/list smoke). Invariant test
+  locks a 1,500-char total budget, 300/tool, and every behavioral trigger phrase
+  ("call BEFORE editing", "stale facts withheld", "never secrets"…).
+- [x] **T2 — slim the AGENTS.md guide** *(shipped 2026-07-10)*. 1,681 → 1,073 chars
+  (36% cut; measured, not the optimistic ~180 guess — the check→touch→report loop,
+  memory rules and graph-freshness pointer all survive). AGENT_GUIDE exported +
+  invariant test (budget 1,150 + trigger phrases + managed-block markers).
+- [x] **T3 — answer caps** *(shipped 2026-07-10)*. `list_signals` capped at 30 with a
+  `more` count (a busy hub can hold hundreds of live signals). Graph proxy answers
+  left untouched — mangling proxied JSON-RPC to truncate is riskier than the tokens.
+- [ ] **T4 — overhead meter (feeds P1, lands with the P-round).** Record the actual
+  injected overhead per session so the cost is a measured number, not an estimate.
   *Ceiling honesty: fixed overhead can drop to ~2–2.5k/session but never to zero — MCP
   schemas must live in context. 8.5 = lean overhead + measured net savings; 10 would
   require host-side lazy tool loading we don't control.*
@@ -183,17 +187,23 @@ The owner's real flow: an agent near its usage limit is told "create handoff" �
 writes a structured brief (done / pending / next steps / files / gotchas) → the human
 copies it into the next agent, which continues. Full auto-resume (orphan detection,
 queues) is deliberately LATER.
-- [ ] **H1 — `create_handoff` MCP tool** so ANY agent (cursor/codex/antigravity — not
-  just Claude's Stop hook) can write the brief on request; store per-session, not
-  per-task-slug only, so root sessions can hand off too.
-- [ ] **H2 — bundled `handoff` skill**: teaches the agent WHAT a good brief contains
-  (completed %, remaining work as a checklist, files in flight, decisions made,
-  next command to run) — invoked by "create a handoff", zero standing token cost.
-- [ ] **H3 — copy UX in the dashboard**: the Handoff dialog gets "Copy brief",
-  "Copy file path", and "Copy resume prompt" (a paste-ready prompt for the next
-  agent: "You are resuming task X; here is the brief: …").
-- [ ] **H4 — `baton take` with no slug** lists takeable briefs newest-first; `baton
-  resume` as the alias that prints the resume prompt for the top one.
+- [x] **H1 — `create_handoff` MCP tool** (2026-07-11): src/handoff/session-brief.ts +
+  mcp.ts. Agent supplies done/pending/next/decisions; git adds branch + dirty files;
+  live signals add files in flight. Task sessions write the worktree HANDOFF.md
+  (take-compatible); root/anonymous sessions write .baton/handoffs/<slug>.md.
+  Hostile-slug sanitization, 30-item/300-char caps, empty-title rejection —
+  test/session-handoff.test.ts (8 tests). TOOL_HELP now 11 tools (budget 1500→1720
+  chars, still ~40% under pre-T1).
+- [x] **H2 — bundled `handoff` skill** (2026-07-11): src/skills/bundled/handoff/
+  SKILL.md, invariant-locked (test/handoff-skill.test.ts): hand off BEFORE the limit,
+  checkpoint first, single next step, never secrets, execute-don't-re-plan. AGENT_GUIDE
+  gained the create_handoff trigger (budget 1150→1280, deliberate).
+- [x] **H3 — copy UX in the dashboard** (2026-07-11): GET /api/handoffs + HandoffInbox
+  on the Command Center strip (Resume-prompt / pickup-command / brief-path copy buttons,
+  demo fixture) + HandoffDialog done-panel copy buttons. Verified in the browser.
+- [x] **H4 — `baton resume`** (2026-07-11): src/handoff/resume.ts (listBriefs unifies
+  task + session briefs, setBriefStatusAt) + src/commands/resume.ts (no slug = list,
+  slug = resume prompt + flip in-progress). Smoke-tested live on this repo.
   *Later (X2): dead-session detection + orphaned-task queue + auto-notify.*
 
 ### P — Proof / instrumentation: 2 → 8.5 ✅ reachable (answers the critics)
@@ -249,3 +259,86 @@ and the graph ceiling accepted or graphify improved upstream.
 - 2026-07-10: honest audit of the live hub (25GB total; 13GB = 60+ agent-created orphaned
   worktrees, ~90% already merged; Baton's own footprint 29MB) → W-round shipped W1–W5,
   W6 deferred below the confidence gate. 476 tests green.
+
+## 2026-07-11 — G-round (token-optimal search + memory graph) + History UI
+
+Research-driven (see chat 2026-07-11): rejected the Zep/Graphiti-style temporal
+graph (~600k tokens construction per conversation) in favor of zero-cost edges.
+
+- [x] **G-S1 — `search_history` (FTS5)**: SQLite FTS5 over commit messages +
+  touched paths already in history.db; lazy backfill (index syncs on search, no
+  write-path changes); quoted-term queries (hostile input safe); LIKE fallback
+  when FTS5 is unavailable. MCP tool returns ≤25 hits with task/agent/files.
+  test/history-search.test.ts (6). TOOL_HELP now 12 tools, budget 1900 chars.
+- [x] **G-S2 — memory anchor graph**: `relatedByAnchors` — memories sharing file
+  anchors are related; recall(topic) now returns `relatedByFiles` (≤3 facts the
+  keyword score missed but that live on the hits' files). Edges derived free
+  from existing anchor data. test/memory-related.test.ts (3).
+- [x] **UI — History day-grouping**: In flight / Today / Yesterday / date
+  headers with per-group task+commit counts; latest commit message previews on
+  collapsed rows. Verified in browser.
+- Full premium UI restyle deliberately deferred to its own round (needs the
+  owner's before/after eye; tokens.css system itself is sound).
+
+## 2026-07-11 — M-round: memory v2 (research-driven, zero LLM cost)
+
+Deep-research basis: docs/research/2026-07-11-memory-deep-research.md (Beads
+deep-dive + memory-system landscape + native-agent practice). Every mechanism
+below is mechanical or harvests text agents already wrote — Baton still never
+needs an LLM of its own.
+
+- [x] **M1 — BM25 recall** (`src/memory-rank.ts`): FTS5 index built IN MEMORY
+  per query (node:sqlite, porter tokenizer) — can never go stale, ~1ms at the
+  500-fact cap. Mechanical query expansion: camelCase/snake_case splitting +
+  9 domain synonym groups (login→auth, db→sqlite…). Ordering is BM25 score
+  with recency breaking exact ties — deliberately NOT RRF (a test proved
+  rank fusion lets a newer weak match beat an older strong one). Word-scan
+  fallback kept for exotic builds. test/memory-rank.test.ts (12).
+- [x] **M2 — progressive disclosure**: `recall_memory` serves the top 3 facts
+  full, the rest as ~50–100-token preview rows (id, first line, anchors,
+  freshness); `ids: [...]` hydrates full bodies; stale/unknown ids come back
+  in `withheld` with the reason, never silently. Taught just-in-time by an
+  in-answer tip instead of a permanent TOOL_HELP tax (budget stays 1900).
+  test/memory-disclosure.test.ts (6).
+- [x] **M3 — stale-repair queue**: `repairMemories` re-anchors a stale fact
+  mechanically when its verifiable terms (backticked spans, identifiers,
+  paths — NOT hyphenated prose) all survive the file change; otherwise it is
+  queued for review, not deleted. `baton memory repair` (⚓ in the journal);
+  `baton memory gc` now repairs first, then drops. recall(topic) offers at
+  most ONE `reviewRequest` for a stale fact on the hits' files — the agent is
+  in-context there anyway. test/memory-repair.test.ts (9). Fixes the #1
+  knowledge-loss bug (changed file ≠ dead knowledge).
+- [x] **M4 — zero-LLM auto-capture**: `create_handoff` decisions[] (≥20 chars)
+  are saved as `decision` facts anchored to the session's signal + dirty
+  files; secrets/validation rejects skip silently; handoffs outside git still
+  work. The agent already wrote the text — capture costs zero extra tokens.
+  Report summaries deliberately NOT harvested (code-derivable, already served
+  by get_report). test/session-handoff.test.ts (+3).
+- Suite: 537/537 (70 files). E2E verified on built CLI: stale → repair → ⚓
+  fresh. Explicitly rejected: local embeddings (breaks zero-dep; no published
+  win at 500-fact scale), ingestion-time knowledge graphs (Zep ~600k tokens),
+  Letta-style self-editing memory.
+
+### M-round hardening (same day): trade-offs found in the fresh code, fixed
+
+- [x] **M5 — no substring false-pass in repair**: `ORIGIN_GUARD` renamed to
+  `ORIGIN_GUARD_V2` no longer counts as "term survived" — exact-token
+  (word-boundary) matching in `termSurvives`. A false re-anchor is worse than
+  a lost fact; the test proved the bug first.
+- [x] **M6 — precise capture anchors**: a harvested decision anchors to the
+  files it MENTIONS (path or basename in the text); the whole session file
+  set is only the fallback. 8-file anchors go stale when ANY file changes —
+  precision beats churn.
+- [x] **M7 — background repair sweep**: the daemon runs `repairMemories`
+  at startup + every 10 min (unref'd, mechanical, zero LLM) — the Letta
+  "sleep-time maintenance" pattern; rewrites flow through the existing memory
+  watcher so the dashboard updates live.
+- [x] **M8 — write-time reconciliation hints**: `save_memory` now returns
+  `possibleDuplicates` (Jaccard ≥ 0.4 survivors of the fingerprint gate,
+  ≤3) with a merge tip — the Mem0 ADD/UPDATE pattern with the saving agent
+  as the judge. Auto-supersede stays reserved for the high-confidence
+  same-fingerprint case; Baton never guesses with knowledge.
+- Accepted trade-offs (documented, not "fixed"): per-query in-memory FTS
+  rebuild (~1ms, can never go stale), worktree-anchored facts going stale at
+  merge (repair self-heals), static synonym map (config is YAGNI for now).
+- Suite: 543/543 (72 files).
