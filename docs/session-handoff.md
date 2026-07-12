@@ -174,9 +174,13 @@ See [worktrees](./quickstart.md) for `baton merge` (squash + archive by default)
 The dashboard ([`baton serve`](./cli-reference.md)) offers the same flow from the
 Command Center. Open the **Hand off session** dialog on a task to:
 
-- Pick the receiving agent. The routing suggestion is fetched from
-  `GET /api/routing` and pre-selected (except in `manual` mode, where it's shown
-  as a "suggested" chip but never auto-picked).
+- Pick the receiving agent. The suggestion is **workload-aware**: the daemon
+  combines the routing rules with each agent's live load (how many actively
+  churning tasks it already owns, via `GET /api/tasks/:slug/suggest-handoff`)
+  and preselects the **least-loaded available** agent — steering off a busy
+  routing pick with an explained reason. Each option is badged `idle` /
+  `N active`. (In `manual` mode it's shown as a "suggested" chip but never
+  auto-picked.)
 - See what transfers: the branch, commit count, and isolated worktree.
 - Optionally commit pending changes first (agents only see committed work).
 - Add a note for the next agent.

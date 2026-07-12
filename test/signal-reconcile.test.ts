@@ -41,8 +41,10 @@ describe('getSignals — lazy read-time reconciliation (P6)', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  // Aged past the reconcile grace period (G2): brand-new signals are kept
+  // unverified because the guard hook records BEFORE the file hits disk.
   const edit = (slug: string, path: string) =>
-    bus.publish({ type: 'file.edited', slug, path, at: new Date().toISOString() });
+    bus.publish({ type: 'file.edited', slug, path, at: new Date(Date.now() - 60_000).toISOString() });
 
   it('drops a signal once the file is committed in the worktree (no commit.created event)', async () => {
     const task = await createTask('reconcile committed file', root);

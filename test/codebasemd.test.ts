@@ -83,3 +83,47 @@ describe('renderTree', () => {
     expect(lines).toContain('… +8 more files');
   });
 });
+
+describe('refreshDocsIfStale — CODEBASE.md follows a graph rebuilt outside the daemon (G1)', () => {
+  it('regenerates a stale doc and leaves a fresh one alone', async () => {
+    const { mkdtemp, mkdir, rm, writeFile, readFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { git } = await import('../src/util/exec.js');
+    const { refreshDocsIfStale } = await import('../src/kb/codebasemd.js');
+
+    const root = await mkdtemp(join(tmpdir(), 'baton-docs-stale-'));
+    try {
+      await git(['init', '-q'], root);
+      await git(['config', 'user.email', 't@t.dev'], root);
+      await git(['config', 'user.name', 't'], root);
+      await writeFile(join(root, 'a.ts'), 'export const a = 1;\n', 'utf-8');
+      await git(['add', '.'], root);
+      await git(['commit', '-q', '-m', 'init'], root);
+      const head = (await git(['rev-parse', 'HEAD'], root)).trim();
+
+      const graphPath = join(root, 'graphify-out', 'graph.json');
+      await mkdir(join(root, 'graphify-out'), { recursive: true });
+      // The post-commit hook rebuilt the graph to HEAD…
+      await writeFile(graphPath, JSON.stringify({ nodes: [], links: [], built_at_commit: head }), 'utf-8');
+      // …but CODEBASE.md still carries the previous build's footer.
+      await writeFile(join(root, 'CODEBASE.md'),
+        'old map\n\n<!-- baton:codebase generated=2026-01-01T00:00:00Z commit=0000000 -->\n', 'utf-8');
+      await mkdir(join(root, '.baton'), { recursive: true });
+      await writeFile(join(root, '.baton', 'kb.json'), JSON.stringify({
+        root, projects: [{ id: 'p', name: 'p', path: root, graphPath }],
+        mergedGraphPath: null, lastBuiltAt: null,
+      }), 'utf-8');
+
+      const written = await refreshDocsIfStale(root);
+      expect(written.length).toBeGreaterThan(0);
+      const md = await readFile(join(root, 'CODEBASE.md'), 'utf-8');
+      expect(md).toContain(`commit=${head}`); // footer caught up with the graph
+
+      // Second sweep: everything fresh → no writes.
+      expect(await refreshDocsIfStale(root)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

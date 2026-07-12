@@ -71,6 +71,8 @@ export function usePoll<T>(
 
 /** When SSE is live, polling is only a safety net — stretch the intervals. */
 export const useStatus = (live = false) => usePoll<StatusRow[]>(() => BatonAPI.getStatus(), { interval: live ? 30000 : 2000 });
+/** Agents at a hub/repo root or kb sub-project — outside any task worktree. */
+export const useRootAgents = () => usePoll<Array<{ agent: string; count: number }>>(() => BatonAPI.getRootAgents(), { interval: 5000 });
 export const useHistory = (live = false) => usePoll<TaskHistory[]>(() => BatonAPI.getHistory(), { interval: live ? 60000 : 10000 });
 export const useTask = (slug: string) =>
   usePoll<TaskDetail>(() => BatonAPI.getTask(slug), { interval: 2000, deps: [slug] });

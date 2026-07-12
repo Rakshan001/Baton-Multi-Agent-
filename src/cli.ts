@@ -20,6 +20,7 @@ import { historyCmd } from './commands/history.js';
 import { serveCmd } from './commands/serve.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
+import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
 import { pathCmd } from './commands/path.js';
 import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
@@ -36,6 +37,8 @@ import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
+import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
+import { bugsCmd } from './commands/bugs.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -128,10 +131,15 @@ program
 
 program
   .command('clean')
-  .option('--fix', 'actually delete the audited junk (default: dry-run / suggest)')
-  .option('-f, --force', 'also remove worktrees with uncommitted changes')
-  .description('reclaim junk found by `baton doctor` (dry-run unless --fix)')
-  .action((opts: { fix?: boolean; force?: boolean }) => run(() => cleanCmd(opts)));
+  .option('--fix', 'actually delete (default: dry-run / suggest)')
+  .option('-f, --force', 'also remove worktrees with uncommitted changes (junk pass only)')
+  .option('--json', 'machine-readable output (worktree GC pass)')
+  .description('reclaim junk (baton doctor) + GC worktrees whose branches are already merged (dry-run unless --fix; branches kept)')
+  .action((opts: { fix?: boolean; force?: boolean; json?: boolean }) =>
+    run(async () => {
+      await cleanCmd(opts); // baton-artifact junk: stale tasks, tmux, temp files
+      await worktreeGcCmd({ apply: opts.fix, json: opts.json }); // merged-branch worktree GC (W1)
+    }));
 
 const memory = program
   .command('memory')
@@ -167,6 +175,42 @@ memory
   .command('log')
   .description('KB change history: superseded/removed facts (archived, not destroyed)')
   .action(() => run(memoryLogCmd));
+
+const skills = program
+  .command('skills')
+  .description('reusable agent skills: install the bundled playbooks into your agents');
+
+skills
+  .command('list', { isDefault: true })
+  .description('list all skills and where each is installed')
+  .action(() => run(skillsListCmd));
+
+skills
+  .command('install')
+  .argument('<id>', 'skill id (see `baton skills list`)')
+  .option('--agent <agent>', 'install into just one agent (default: all writable agents)')
+  .option('--all', 'install into every writable agent (the default)')
+  .description('install a skill into your agents (all of them unless --agent)')
+  .action((id: string, opts: { agent?: string; all?: boolean }) => run(() => skillsInstallCmd(id, opts)));
+
+skills
+  .command('uninstall')
+  .argument('<id>', 'skill id')
+  .option('--agent <agent>', 'remove from just one agent (default: all)')
+  .description('remove an installed skill from your agents')
+  .action((id: string, opts: { agent?: string }) => run(() => skillsUninstallCmd(id, opts)));
+
+skills
+  .command('import')
+  .argument('<source>', 'a file path or http(s) URL to a SKILL.md')
+  .description('import a skill from a path or URL into the catalog')
+  .action((source: string) => run(() => skillsImportCmd(source)));
+
+program
+  .command('bugs')
+  .argument('<symptom...>', 'describe the symptom, e.g. "checkout redirect loops"')
+  .description('has this bug been fixed before? — surfaces prior fixes + commits that may have re-broken them')
+  .action((symptom: string[]) => run(() => bugsCmd(symptom.join(' '))));
 
 const kb = program
   .command('kb')
@@ -278,15 +322,16 @@ program
 const hooks = program.command('hooks').description('agent-side hook installation');
 hooks
   .command('install')
-  .argument('<agent>', 'claude')
-  .option('--project', 'install into .claude/settings.json in this repo instead of ~/.claude')
-  .description('handoff brief on session end (Stop/PreCompact) + edit-collision guard (PreToolUse)')
+  .argument('<agent>', 'claude | cursor')
+  .option('--project', 'install into this repo (.claude/settings.json / .cursor/hooks.json) instead of the home dir')
+  .description('claude: handoff brief + edit guard + orient; cursor: afterFileEdit edit-signal guard')
   .action((agent: string, opts: { project?: boolean }) => run(() => hooksInstallCmd(agent, opts)));
 
 program
-  .command('guard', { hidden: true }) // invoked by the PreToolUse hook, not by humans
-  .description('read a Claude Code PreToolUse payload on stdin; warn if the file is held by another session')
-  .action(() => run(guardCmd));
+  .command('guard', { hidden: true }) // invoked by agent hooks, not by humans
+  .description('read an edit-hook payload on stdin; record the edit signal + warn if the file is held by another session')
+  .option('--agent <id>', 'which agent host invoked this hook', 'claude')
+  .action((opts: { agent?: string }) => run(() => guardCmd(opts)));
 
 program
   .command('orient')

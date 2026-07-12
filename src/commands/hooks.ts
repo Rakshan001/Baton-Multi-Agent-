@@ -43,9 +43,31 @@ export function withBatonHooks(settings: ClaudeSettings): number {
   ].filter(Boolean).length;
 }
 
+const CURSOR_GUARD_CMD = 'baton guard --agent cursor';
+
+interface CursorHooksConfig { version?: number; hooks?: Record<string, Array<{ command: string }>>; [k: string]: unknown }
+
+/**
+ * Merge Baton's hook into a Cursor hooks.json (M2). Cursor's dialect: a
+ * `{version:1, hooks:{<event>:[{command}]}}` file; `afterFileEdit` fires per
+ * edited file with `file_path`, `workspace_roots`, and a `conversation_id`
+ * session identity — exactly what `baton guard` needs to record the edit
+ * signal. Non-destructive and idempotent, like withBatonHooks.
+ */
+export function withCursorHooks(config: CursorHooksConfig): number {
+  config.version ??= 1;
+  config.hooks ??= {};
+  config.hooks['afterFileEdit'] ??= [];
+  if (config.hooks['afterFileEdit'].some((h) => h.command === CURSOR_GUARD_CMD)) return 0;
+  config.hooks['afterFileEdit'].push({ command: CURSOR_GUARD_CMD });
+  return 1;
+}
+
 export async function hooksInstallCmd(agent: string, opts: { project?: boolean }): Promise<void> {
+  if (agent === 'cursor') return hooksInstallCursor(opts);
   if (agent !== 'claude') {
-    console.error(`only 'claude' hooks are supported for now (got '${agent}')`);
+    console.error(`hooks are supported for 'claude' and 'cursor' (got '${agent}')`);
+    console.error(`  codex/gemini/antigravity sessions coordinate via the baton MCP tools (touch_files/check_files) instead.`);
     process.exitCode = 1;
     return;
   }
@@ -76,4 +98,34 @@ export async function hooksInstallCmd(agent: string, opts: { project?: boolean }
   console.log('  Session end/compact → a HANDOFF.md brief is generated automatically.');
   console.log('  Before each file edit → an advisory note if another session holds that file (never blocks).');
   console.log('  Note: there is no rate-limit hook event — Stop/PreCompact are the closest proxies; `baton pass` is always available manually.');
+}
+
+/** `baton hooks install cursor [--project]` — wire Cursor's afterFileEdit to the guard (M2). */
+async function hooksInstallCursor(opts: { project?: boolean }): Promise<void> {
+  const file = opts.project
+    ? join(await gitRoot(), '.cursor', 'hooks.json')
+    : join(homedir(), '.cursor', 'hooks.json');
+
+  let config: Parameters<typeof withCursorHooks>[0] = {};
+  if (existsSync(file)) {
+    try {
+      config = JSON.parse(await readFile(file, 'utf-8')) as Parameters<typeof withCursorHooks>[0];
+    } catch {
+      console.error(`refusing to overwrite ${file} — it exists but is not valid JSON; fix it first`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const added = withCursorHooks(config);
+  if (!added) {
+    console.log(`hooks already installed in ${file}`);
+    return;
+  }
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  console.log(`✓ installed Baton hooks in ${file}: afterFileEdit → baton guard --agent cursor.`);
+  console.log('  Every Cursor edit now records a live signal (works at the repo root, no daemon needed),');
+  console.log('  so Claude/Codex/other sessions see what Cursor is touching — and vice versa.');
+  console.log('  Restart Cursor (or reload the window) for hooks.json to take effect.');
 }

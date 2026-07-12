@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS task_progress (
   note TEXT,
   at TEXT
 );
+CREATE TABLE IF NOT EXISTS hook_sessions (
+  slug TEXT PRIMARY KEY,
+  agent TEXT,
+  root TEXT,
+  at TEXT
+);
 `;
 
 const conns = new Map<string, DatabaseSync>();
@@ -117,6 +123,66 @@ export interface EditSignal {
 }
 
 interface SignalRow { slug: string; path: string; at: string }
+
+/* ------------------- hook-written signals (root sessions, G2) ------------------- */
+
+/**
+ * A session running at the repo root (no worktree, no task) is identified by
+ * the agent's own session id — stable for the session, meaningless after it.
+ */
+export function sessionSlug(sessionId: string): string {
+  const clean = sessionId.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 8) || 'unknown';
+  return `sess-${clean}`;
+}
+
+interface HookSession { agent: string | null; root: string | null; at: string }
+
+/**
+ * Record an edit signal from the edit-guard hook — the daemon-less write path.
+ * Task-slugged edits are the same rows the daemon watcher writes (upsert-safe);
+ * a root session additionally registers itself (agent + its checkout root) so
+ * reads can attribute and reconcile it without a task record.
+ */
+export function recordHookEdit(
+  root: string,
+  opts: { slug: string; path: string; at?: string; session?: { agent: string; sessionRoot: string } },
+): void {
+  const at = opts.at ?? new Date().toISOString();
+  getDb(root)
+    .prepare(
+      `INSERT INTO edit_signals (slug, path, at) VALUES (?, ?, ?)
+       ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at`,
+    )
+    .run(opts.slug, opts.path, at);
+  if (opts.session) registerHookSession(root, opts.slug, opts.session.agent, opts.session.sessionRoot, at);
+}
+
+/**
+ * Register a session (agent + the checkout it works in) without recording an
+ * edit — the MCP server calls this at startup (M1) so cursor/codex/gemini
+ * sessions are attributable before they touch anything.
+ */
+export function registerHookSession(
+  root: string,
+  slug: string,
+  agent: string | null,
+  sessionRoot: string,
+  at: string = new Date().toISOString(),
+): void {
+  getDb(root)
+    .prepare(
+      `INSERT INTO hook_sessions (slug, agent, root, at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET agent = excluded.agent, root = excluded.root, at = excluded.at`,
+    )
+    .run(slug, agent, sessionRoot, at);
+}
+
+function hookSessions(root: string): Map<string, HookSession> {
+  const rows = getDb(root).prepare(`SELECT slug, agent, root, at FROM hook_sessions`).all() as unknown as Array<
+    HookSession & { slug: string }
+  >;
+  return new Map(rows.map((r) => [r.slug, r]));
+}
 
 /** Watcher liveness: heartbeat fresher than this ⇒ "not busy" answers are trustworthy. */
 export const WATCHER_HEARTBEAT_STALE_MS = 2 * 60_000;
@@ -262,6 +328,12 @@ function pruneSignals(root: string, rows: SignalRow[]): void {
  * commit-detection can't. Fails open: signals for unknown slugs or unreadable
  * worktrees are kept.
  */
+/**
+ * The guard hook records BEFORE the tool writes the file, so a just-recorded
+ * signal's path may not be dirty yet — verify only signals older than this.
+ */
+const RECONCILE_GRACE_MS = 15_000;
+
 async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]): Promise<SignalRow[]> {
   if (rows.length === 0) return rows;
   const bySlug = new Map<string, SignalRow[]>();
@@ -270,15 +342,22 @@ async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]):
     if (list) list.push(r);
     else bySlug.set(r.slug, [r]);
   }
+  const sessions = hookSessions(root);
   const kept: SignalRow[] = [];
   const stale: SignalRow[] = [];
+  const now = Date.now();
   await Promise.all(
     [...bySlug].map(async ([slug, slugRows]) => {
-      const task = tasks.find((t) => t.slug === slug);
-      if (!task) return void kept.push(...slugRows); // unknown task → can't verify, keep
-      const dirty = await worktreeDirtyPaths(task.worktreePath);
+      // Root sessions have no task — their signals verify against the checkout
+      // the session registered (usually the main repo root).
+      const checkRoot = tasks.find((t) => t.slug === slug)?.worktreePath ?? sessions.get(slug)?.root;
+      if (!checkRoot) return void kept.push(...slugRows); // unknown holder → can't verify, keep
+      const dirty = await worktreeDirtyPaths(checkRoot);
       if (dirty === null) return void kept.push(...slugRows); // git failed → keep
-      for (const r of slugRows) (dirty.has(r.path) ? kept : stale).push(r);
+      for (const r of slugRows) {
+        const fresh = now - Date.parse(r.at) < RECONCILE_GRACE_MS;
+        (fresh || dirty.has(r.path) ? kept : stale).push(r);
+      }
     }),
   );
   if (stale.length) pruneSignals(root, stale);
@@ -290,9 +369,11 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
   const tasks = await loadTasks(root);
   const rows = await reconcileSignals(root, liveRows(root, windowMin), tasks);
   const agents = await detectAgents(tasks.map((t) => t.worktreePath));
+  const sessions = hookSessions(root);
   const agentFor = (slug: string) => {
     const t = tasks.find((x) => x.slug === slug);
-    return t ? (agents.get(t.worktreePath) ?? null) : null;
+    if (t) return agents.get(t.worktreePath) ?? null;
+    return sessions.get(slug)?.agent ?? null; // root session — self-reported by its hook
   };
 
   const byPath = new Map<string, SignalHolder[]>();

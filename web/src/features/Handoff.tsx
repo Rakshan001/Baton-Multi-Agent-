@@ -10,7 +10,7 @@ import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
 import { BatonAPI, branchFor } from "../lib/api";
 import { showToast } from "../lib/toast";
-import type { StatusRow, AgentId, RouteSuggestion } from "../types";
+import type { StatusRow, AgentId, RouteSuggestion, HandoffLoadSuggestion } from "../types";
 
 /** One-line explanation of why routing picked this agent (chip tooltip). */
 function suggestionWhy(s: RouteSuggestion): string {
@@ -37,9 +37,13 @@ export function HandoffDialog({
   const [busy, setBusy] = useState(false);
   const [doneInfo, setDoneInfo] = useState<{ toAgent: AgentId; estTokens?: number; estCostUsd?: number; briefPath?: string } | null>(null);
   const [suggestion, setSuggestion] = useState<RouteSuggestion | null>(null);
+  const [load, setLoad] = useState<HandoffLoadSuggestion | null>(null);
+  const userPicked = useRef(false);
   const ref = useRef<HTMLDivElement>(null);
   const hasPending = (task?.filesChanged || 0) > 0;
   const options = AGENT_REGISTRY.filter((a) => a.id !== task?.agent);
+
+  const pick = (id: AgentId) => { userPicked.current = true; setTarget(id); };
 
   // Routing suggestion: preselect only while the user hasn't picked anything.
   useEffect(() => {
@@ -51,11 +55,25 @@ export function HandoffDialog({
       // Manual mode = advisory only — show the chip, never preselect.
       if (r.suggestion.mode === "manual") return;
       const valid = options.some((a) => a.id === r.suggestion!.agent);
-      if (valid) setTarget((cur) => cur ?? (r.suggestion!.agent as AgentId));
+      if (valid && !userPicked.current) setTarget((cur) => cur ?? (r.suggestion!.agent as AgentId));
     }).catch(() => undefined);
     return () => { on = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task?.task]);
+
+  // Load-aware recommendation: prefer a free agent. Overrides the routing-only
+  // preselect (it already folds routing in as a tie-break) unless the user chose.
+  useEffect(() => {
+    let on = true;
+    BatonAPI.suggestHandoff(slug).then((s) => {
+      if (!on) return;
+      setLoad(s);
+      const valid = s.recommended && options.some((a) => a.id === s.recommended);
+      if (valid && !userPicked.current) setTarget(s.recommended as AgentId);
+    }).catch(() => undefined);
+    return () => { on = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -135,22 +153,36 @@ export function HandoffDialog({
           </div>
 
           <div>
-            <div className="tag" style={{ marginBottom: 8 }}>Receiving agent</div>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+              <span className="tag">Receiving agent</span>
+              {load?.recommended && (
+                <span style={{ fontSize: 11, color: "var(--text-tertiary)" }} data-tip={load.reason}>
+                  <Icon name="zap" size={10} style={{ color: "var(--accent)", verticalAlign: "-1px" }} /> {load.reason}
+                </span>
+              )}
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
               {options.map((a) => {
                 const on = target === a.id;
                 const suggested = suggestion?.agent === a.id;
+                const recommended = load?.recommended === a.id;
+                const loadN = load?.loads?.[a.id!] ?? 0;
                 return (
-                  <button key={a.id} className="fr" onClick={() => setTarget(a.id)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", background: on ? `color-mix(in srgb, ${a.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${a.color} 45%, transparent)` : "var(--border-subtle)"}`, textAlign: "left", boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${a.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1)" }}>
+                  <button key={a.id} className="fr" onClick={() => pick(a.id!)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", background: on ? `color-mix(in srgb, ${a.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${a.color} 45%, transparent)` : recommended ? "var(--accent-border)" : "var(--border-subtle)"}`, textAlign: "left", boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${a.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1)" }}>
                     <AgentBadge id={a.id} size="sm" showLabel={false} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", display: "block" }}>{a.short}</span>
-                      {suggested && (
-                        <span style={{ fontSize: 9.5, color: "var(--accent-text)", display: "block" }}
-                          data-tip={suggestion ? suggestionWhy(suggestion) : undefined}>
-                          suggested{suggestion?.matched.length ? ` · '${suggestion.matched[0]}'` : ""}{suggestion?.model ? ` · ${suggestion.model}` : ""}{suggestion?.confidence === "low" ? " · low confidence" : ""}
-                        </span>
-                      )}
+                      <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", display: "flex", alignItems: "center", gap: 6 }}>
+                        {a.short}
+                        {load && <span style={{ fontSize: 9.5, fontWeight: "var(--fw-semibold)", color: loadN === 0 ? "var(--clean-text)" : "var(--dirty-text)" }} data-tip={loadN === 0 ? "No active tasks — free to take this" : `${loadN} task${loadN === 1 ? "" : "s"} in progress`}>{loadN === 0 ? "idle" : `${loadN} active`}</span>}
+                      </span>
+                      {recommended
+                        ? <span style={{ fontSize: 9.5, color: "var(--accent-text)", display: "block" }} data-tip={load?.reason}>recommended · lightest load</span>
+                        : suggested && (
+                          <span style={{ fontSize: 9.5, color: "var(--text-tertiary)", display: "block" }}
+                            data-tip={suggestion ? suggestionWhy(suggestion) : undefined}>
+                            fits the task{suggestion?.matched.length ? ` · '${suggestion.matched[0]}'` : ""}
+                          </span>
+                        )}
                     </div>
                     {on && <Icon name="check" size={14} style={{ color: a.color }} />}
                   </button>

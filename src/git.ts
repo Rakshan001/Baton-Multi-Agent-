@@ -328,6 +328,31 @@ export async function branchCommits(
 }
 
 /**
+ * The last `limit` non-merge commits reachable from HEAD, with the files each
+ * touched — for ingesting a repo's real history (commits that landed outside
+ * `baton merge`, e.g. via GitHub PRs). Returns [] when the path isn't a git
+ * repo or git errors (fail-safe).
+ */
+export async function recentCommits(cwd: string, limit = 100): Promise<CommitInfo[]> {
+  // %x1e starts each record, %x1f separates fields; --name-only appends the file
+  // list after the format line, so a record is: <sha>\x1f<msg>\x1f<date>\n<files…>
+  const r = await gitTry(
+    ['log', `-n${limit}`, '--no-merges', '--pretty=format:%x1e%H%x1f%s%x1f%cI', '--name-only'],
+    cwd,
+  );
+  if (!r.ok || !r.stdout) return [];
+  const commits: CommitInfo[] = [];
+  for (const rec of r.stdout.split('\x1e').map((s) => s.replace(/^\n+/, '')).filter(Boolean)) {
+    const lines = rec.split('\n');
+    const [sha, message, at] = (lines[0] ?? '').split('\x1f');
+    if (!sha) continue;
+    const files = lines.slice(1).map((l) => l.trim()).filter(Boolean);
+    commits.push({ sha, message: message ?? '', at: at ?? '', files });
+  }
+  return commits;
+}
+
+/**
  * Merge `branch` into the current branch. Default: SQUASH into one clean commit
  * (keeps the agent's WIP commits out of the real history). Reports conflicts
  * with human labels.

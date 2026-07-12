@@ -15,10 +15,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
-import { collectStatus } from './board.js';
+import { collectStatus, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
 import { currentBranch, isGitRepo } from './git.js';
-import { listHistory } from './history.js';
+import { listHistory, ingestGitLog } from './history.js';
 import { loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
@@ -28,12 +28,13 @@ import { stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
 import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, graphPathFor, kbStatus, loadKb, saveKb } from './kb/state.js';
+import { graphFreshness, renderGraphFreshnessNote, injectFreshnessNote } from './kb/freshness.js';
 import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { KNOWN_AGENT_IDS } from './agents/registry.js';
 import {
-  importSkill, installSkill, listSkillStatus, uninstallSkill,
+  importSkill, installSkill, installSkillEverywhere, listSkillStatus, uninstallSkill,
   SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
 } from './skills/install.js';
 import { bus } from './events.js';
@@ -45,8 +46,9 @@ import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
 import { getTask } from './store.js';
-import { refreshCodebaseDocs } from './kb/codebasemd.js';
+import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
+import { agentActiveLoads, pickHandoffTarget } from './handoff/workload.js';
 import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from './kb/contextpack.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
@@ -304,7 +306,7 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
  * response (JSON or SSE text) is streamed back. All await paths are caught so
  * a backend crash can't bring down the daemon.
  */
-async function proxyGraphify(req: IncomingMessage, res: ServerResponse, projectId: string): Promise<void> {
+async function proxyGraphify(req: IncomingMessage, res: ServerResponse, root: string, projectId: string): Promise<void> {
   if (!graphPool) return void res.writeHead(503).end('graph pool not started');
   let port: number;
   try { port = await graphPool.ensure(projectId); }
@@ -323,12 +325,42 @@ async function proxyGraphify(req: IncomingMessage, res: ServerResponse, projectI
       body: body || '{}',
       signal: AbortSignal.timeout(30_000),
     });
-    const text = await upstream.text();
+    let text = await upstream.text();
+    if (upstream.ok) {
+      // G1 golden rule: a graph answer carries its own staleness warning, so an
+      // agent never trusts symbols for files with uncommitted edits. Advisory —
+      // any failure here must never break the answer itself.
+      try {
+        const state = await loadKb(root);
+        const target = projectId === 'merged'
+          ? (state?.mergedGraphPath ? { path: root, graphPath: state.mergedGraphPath } : null)
+          : state?.projects.find((p) => p.id === projectId) ?? null;
+        if (target) {
+          const note = renderGraphFreshnessNote(await graphFreshness(target.path, target.graphPath));
+          text = injectFreshnessNote(text, upstream.headers.get('content-type'), note);
+        }
+      } catch { /* freshness is advisory */ }
+    }
     res.writeHead(upstream.status, { 'Content-Type': upstream.headers.get('content-type') ?? 'application/json' });
     res.end(text);
   } catch (e) {
     res.writeHead(504).end(String((e as Error).message));
   }
+}
+
+/**
+ * B2: ingest each kb project's real git history into a per-project bucket, so
+ * commits made outside `baton merge` still appear in History/blame. Best-effort
+ * — a project without git or an unreadable log just contributes nothing.
+ */
+async function ingestAllProjects(root: string): Promise<void> {
+  try {
+    const kb = await loadKb(root);
+    if (!kb) return;
+    for (const p of kb.projects) {
+      await ingestGitLog(root, { slug: `git:${p.id}`, task: `${p.name} · direct commits`, cwd: p.path }).catch(() => 0);
+    }
+  } catch { /* ingestion is best-effort — never break the daemon */ }
 }
 
 /** kb sub-projects as (id, path-relative-to-main-root) for per-server memory scoping.
@@ -370,7 +402,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (gm) {
     if (method !== 'POST') return send(res, 405, { error: 'POST only' }, origin);
     if (gm[1] !== getMcpToken(root)) return send(res, 403, { error: 'bad token' }, origin);
-    return proxyGraphify(req, res, gm[2]);
+    return proxyGraphify(req, res, root, gm[2]);
   }
 
   // Anti-CSRF (applies to EVERY state-changing /api request, not just one route).
@@ -616,18 +648,30 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
+  if (method === 'GET' && path === '/api/agents/root') {
+    const [tasks, kb] = await Promise.all([loadTasks(root), loadKb(root)]);
+    const summary = await rootAgentSummary(
+      root,
+      (kb?.projects ?? []).map((p) => p.path),
+      tasks.map((t) => t.worktreePath),
+    );
+    return send(res, 200, summary, origin);
+  }
   if (method === 'GET' && path === '/api/history') return send(res, 200, listHistory(root), origin);
   if (method === 'GET' && path === '/api/meta') {
     const tmuxOk = await detectTmux();
-    // A multi-repo hub root isn't a git repo; tasks must target a sub-project.
+    // A setup hub may be git-initialized for coordination metadata. Treat it as
+    // a hub when the KB has multiple projects, not when the root lacks .git.
     const rootIsRepo = await isGitRepo(root);
-    const kb = rootIsRepo ? null : await loadKb(root);
-    const hubProjects = kb?.projects.map((p) => ({ id: p.id, name: p.name })) ?? [];
+    const kb = await loadKb(root);
+    const hubProjects = (kb?.projects.length ?? 0) > 1
+      ? kb!.projects.map((p) => ({ id: p.id, name: p.name }))
+      : [];
     return send(res, 200, {
       repo: root, branch: rootIsRepo ? await currentBranch(root) : null,
       writeEnabled: !!opts.writeEnabled, version: VERSION,
       // In a hub, the dashboard must ask which project a new task targets.
-      hub: !rootIsRepo, projects: hubProjects,
+      hub: hubProjects.length > 0, projects: hubProjects,
       agents: { headless: HEADLESS_AGENTS, interactive: INTERACTIVE_AGENTS },
       terminals: tmuxOk
         ? { available: true }
@@ -762,6 +806,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     try {
       if (method === 'DELETE') {
         return send(res, 200, await uninstallSkill(root, id, agent), origin);
+      }
+      if (agent === 'all') {
+        const results = await installSkillEverywhere(root, id);
+        for (const r of results) bus.publish({ type: 'skill.installed', skill: id, agent: r.agent });
+        return send(res, 201, { results }, origin);
       }
       const result = await installSkill(root, id, agent);
       bus.publish({ type: 'skill.installed', skill: id, agent });
@@ -1000,6 +1049,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, { slug, meta: brief.meta, body: brief.body }, origin);
   }
 
+  // GET /api/tasks/:slug/suggest-handoff — load-aware target recommendation
+  const shm = path.match(/^\/api\/tasks\/([^/]+)\/suggest-handoff$/);
+  if (shm && method === 'GET') {
+    const slug = decodeURIComponent(shm[1]);
+    const rows = await collectStatus(root);
+    const row = rows.find((r) => r.slug === slug);
+    if (!row) return send(res, 404, { error: `no task '${slug}'` }, origin);
+    const loads = agentActiveLoads(rows);
+    const { config } = await loadRouting(root);
+    const routed = suggestRoute(row.task, config);
+    const candidates = routed.chain.map((c) => c.agent);
+    const pick = pickHandoffTarget({ candidates, loads, routingPick: candidates[0] ?? null, exclude: row.agent });
+    return send(res, 200, { recommended: pick.agent, reason: pick.reason, loads }, origin);
+  }
+
   // POST /api/tasks/:slug/merge — merge branch into current (write-gated)
   const mm = path.match(/^\/api\/tasks\/([^/]+)\/merge$/);
   if (mm && method === 'POST') {
@@ -1084,6 +1148,15 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
       void loadKb(root).then((kb) => (kb ? refreshCodebaseDocs(root, kb) : undefined)).catch(() => undefined);
     }, 2000);
   });
+  // graphify's own post-commit hook rebuilds graphs OUTSIDE the daemon (no
+  // kb.rebuilt fires) — sweep so CODEBASE.md follows the graph within a minute.
+  setInterval(() => { void refreshDocsIfStale(root).catch(() => undefined); }, 60_000).unref();
+  // B2: agents merge via GitHub PRs on the sub-repos, outside `baton merge`, so
+  // those commits never reached history.db. Ingest each project's real git log
+  // into a per-project bucket at startup + on an interval, so History and
+  // who_touched/blame cover every commit however it landed.
+  void ingestAllProjects(root);
+  setInterval(() => { void ingestAllProjects(root); }, 60_000).unref();
   const server = createServer((req, res) => {
     void handle(req, res, root, opts).catch((e) =>
       send(res, 500, { error: (e as Error).message }, corsOrigin(req)),

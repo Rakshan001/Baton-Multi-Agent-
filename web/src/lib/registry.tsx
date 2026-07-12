@@ -38,6 +38,12 @@ export const AGENT_REGISTRY: AgentDef[] = [
     fill: true,
   },
   {
+    id: "antigravity", label: "Antigravity", short: "Antigrav", color: "#fbbf24",
+    // levitation: an arrow rising off two ground lines
+    path: "M12 4.5v8 M8.5 8 12 4.5 15.5 8 M6.5 16h11 M8.5 19h7",
+    fill: false, stroke: 2,
+  },
+  {
     id: "aider", label: "Aider", short: "Aider", color: "#f472b6",
     path: "M4.5 5.5h15a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1Z M7.5 10l2.4 2.2-2.4 2.2 M12.6 14.6h4",
     fill: false, stroke: 1.9,

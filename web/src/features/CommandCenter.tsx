@@ -43,9 +43,11 @@ function MiniStat({ label, value, tone, icon, sub, onClick, active }: {
 }
 
 export function CommandCenter({
-  status, view, setView, onOpen, writeEnabled, filter, setFilter, project, onNewSession,
+  status, rootAgents, view, setView, onOpen, writeEnabled, filter, setFilter, project, onNewSession,
 }: {
   status: PollState<StatusRow[]>;
+  /** Agents at the hub/repo root or a kb sub-project — no task worktree of their own. */
+  rootAgents?: Array<{ agent: string; count: number }>;
   view: View;
   setView: (v: View) => void;
   onOpen: (slug: string) => void;
@@ -61,9 +63,11 @@ export function CommandCenter({
   const conflicts = sessions.filter((s) => s.status === "conflict");
   const ready = sessions.filter((s) => deriveColumn(s) === "ready");
   const dirty = sessions.filter((s) => s.status === "dirty");
+  const rootAgentCount = (rootAgents ?? []).reduce((sum, r) => sum + r.count, 0);
 
   const byAgent: Record<string, number> = {};
   active.forEach((s) => { byAgent[s.agent!] = (byAgent[s.agent!] || 0) + 1; });
+  (rootAgents ?? []).forEach((r) => { byAgent[r.agent] = (byAgent[r.agent] || 0) + r.count; });
   const agentRows = AGENT_REGISTRY.map((a) => ({ a, n: byAgent[a.id!] || 0 })).filter((r) => r.n > 0);
 
   return (
@@ -93,7 +97,7 @@ export function CommandCenter({
       {/* summary band */}
       <div style={{ padding: "14px 16px 12px", display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <MiniStat label="Active sessions" value={loading ? "—" : active.length} tone="accent" icon="bot" sub={`of ${sessions.length}`} />
+          <MiniStat label="Active sessions" value={loading ? "—" : active.length + rootAgentCount} tone="accent" icon="bot" sub={rootAgentCount > 0 ? `${sessions.length} tracked + ${rootAgentCount} at root` : `of ${sessions.length}`} />
           <MiniStat label="In progress" value={loading ? "—" : dirty.length} tone="clean" icon="terminal" />
           <MiniStat label="Conflicts" value={loading ? "—" : conflicts.length} tone="conflict" icon="alertTriangle" onClick={() => setFilter(filter === "conflict" ? null : "conflict")} active={filter === "conflict"} />
           <MiniStat label="Ready to merge" value={loading ? "—" : ready.length} tone="ready" icon="gitMerge" onClick={() => setFilter(filter === "ready" ? null : "ready")} active={filter === "ready"} />
@@ -127,6 +131,11 @@ export function CommandCenter({
           <div style={{ flex: "1 1 240px", minWidth: 220, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 9 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
               <Icon name="bot" size={14} style={{ color: "var(--text-tertiary)" }} /> <span style={{ whiteSpace: "nowrap" }}>Active agents</span>
+              {rootAgentCount > 0 && (
+                <span style={{ marginLeft: "auto", fontSize: "var(--fs-11)", fontWeight: "var(--fw-regular)", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
+                  {rootAgentCount} at repo root
+                </span>
+              )}
             </div>
             {agentRows.length === 0 ? (
               <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>No agents attached right now.</span>
@@ -140,6 +149,11 @@ export function CommandCenter({
                   </span>
                 ))}
               </div>
+            )}
+            {rootAgentCount > 0 && (
+              <span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", lineHeight: 1.4 }}>
+                Running in plain terminals at the repo root (not in a managed worktree). They still coordinate via the baton MCP tools.
+              </span>
             )}
           </div>
         </div>

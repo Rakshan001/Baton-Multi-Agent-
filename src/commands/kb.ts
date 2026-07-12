@@ -36,16 +36,20 @@ be working on:
    (or GET \`http://127.0.0.1:7077/api/signals/check?files=a,b\`).
 2. If a file is busy (another session is editing it), prefer other work and
    re-check later instead of creating conflicting changes.
-3. After waiting, call \`get_report\` for the finished task — the issue you
+3. When you START editing shared files, call \`touch_files\` with those paths
+   and keep \`report_progress\` fresh (one line: what you're doing) — that is
+   how the other sessions avoid colliding with you. Works from anywhere,
+   including the repo root outside a managed worktree, with no daemon running.
+4. After waiting, call \`get_report\` for the finished task — the issue you
    were assigned may already be fixed; verify before re-doing work.
-4. Read \`CODEBASE.md\` in the project root FIRST — it is the token-cheap map
+5. Read \`CODEBASE.md\` in the project root FIRST — it is the token-cheap map
    (structure, stack, key symbols). Don't re-scan the repo to orient yourself.
-5. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
+6. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
    the codebase instead of broad file scans.
-6. Call \`recall_memory\` with your topic BEFORE exploring — facts earlier
+7. Call \`recall_memory\` with your topic BEFORE exploring — facts earlier
    sessions learned (decisions, gotchas, conventions), evidence-checked so
    stale ones are withheld. Cheaper than re-discovering them.
-7. When you make a decision, hit a gotcha, or learn a non-obvious convention,
+8. When you make a decision, hit a gotcha, or learn a non-obvious convention,
    call \`save_memory\` (1–3 sentences + the files it is about) so the next
    session skips that discovery. Never store secrets (rejected) or anything
    derivable from the code itself.
