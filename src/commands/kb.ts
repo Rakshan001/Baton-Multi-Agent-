@@ -15,11 +15,15 @@ import { detectProjects } from '../kb/projects.js';
 import {
   graphPathFor, kbStatus, loadKb, mergedGraphFile, saveKb, type KbState,
 } from '../kb/state.js';
-import { mcpServers, snippetFor } from '../kb/mcp.js';
+import { mcpServers, snippetFor, type McpOpts } from '../kb/mcp.js';
+import { getMcpToken } from '../kb/mcp-token.js';
 import { mergeJsonConfig, McpConfigParseError } from '../agents/connect.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
 import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
+import { ensureBatonGitignore } from '../kb/batonignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
+import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
+import { resolveBatonRoot } from '../store.js';
 
 const AGENT_GUIDE = `
 <!-- baton:coordination -->
@@ -32,16 +36,20 @@ be working on:
    (or GET \`http://127.0.0.1:7077/api/signals/check?files=a,b\`).
 2. If a file is busy (another session is editing it), prefer other work and
    re-check later instead of creating conflicting changes.
-3. After waiting, call \`get_report\` for the finished task — the issue you
+3. When you START editing shared files, call \`touch_files\` with those paths
+   and keep \`report_progress\` fresh (one line: what you're doing) — that is
+   how the other sessions avoid colliding with you. Works from anywhere,
+   including the repo root outside a managed worktree, with no daemon running.
+4. After waiting, call \`get_report\` for the finished task — the issue you
    were assigned may already be fixed; verify before re-doing work.
-4. Read \`CODEBASE.md\` in the project root FIRST — it is the token-cheap map
+5. Read \`CODEBASE.md\` in the project root FIRST — it is the token-cheap map
    (structure, stack, key symbols). Don't re-scan the repo to orient yourself.
-5. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
+6. Use the \`graphify-*\` MCP tools (\`query_graph\`, \`get_node\`) to navigate
    the codebase instead of broad file scans.
-6. Call \`recall_memory\` with your topic BEFORE exploring — facts earlier
+7. Call \`recall_memory\` with your topic BEFORE exploring — facts earlier
    sessions learned (decisions, gotchas, conventions), evidence-checked so
    stale ones are withheld. Cheaper than re-discovering them.
-7. When you make a decision, hit a gotcha, or learn a non-obvious convention,
+8. When you make a decision, hit a gotcha, or learn a non-obvious convention,
    call \`save_memory\` (1–3 sentences + the files it is about) so the next
    session skips that discovery. Never store secrets (rejected) or anything
    derivable from the code itself.
@@ -108,7 +116,7 @@ export async function askChoice<T extends string>(
   }
 }
 
-export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean } = {}): Promise<void> {
+export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; port?: string } = {}): Promise<void> {
   let root: string;
   try {
     root = await gitRoot(path ? resolve(path) : undefined);
@@ -170,6 +178,9 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
     : '! could not install git hooks — run `graphify hook install` manually');
 
   await saveKb(root, state);
+  // Keep the generated footprint (.baton/, graphify-out/, .mcp.json, …) out of
+  // git status. No-ops on a hub root (already ignores everything).
+  if (await ensureBatonGitignore(root, share)) console.log('✓ .gitignore updated (baton keeps generated files out of git)');
   const docs = await refreshCodebaseDocs(root, state);
   console.log(`✓ CODEBASE.md ×${docs.length} (token-cheap structure maps)`);
   if (share) {
@@ -179,11 +190,14 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   console.log(`✓ knowledge base ready (.baton/kb.json)`);
 
   // Project-scoped .mcp.json is picked up by Claude Code in every worktree.
+  // Outside a running daemon, default to port 7077 (the baton serve default).
   const mcpPath = join(root, '.mcp.json');
   if (opts.mcp !== false) {
+    const port = Number(opts.port ?? 7077);
+    const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
     const existing = existsSync(mcpPath) ? await readFile(mcpPath, 'utf-8') : '';
     try {
-      await writeFile(mcpPath, mergeJsonConfig(existing, mcpServers(state), mcpPath), 'utf-8');
+      await writeFile(mcpPath, mergeJsonConfig(existing, mcpServers(state, mcpOpts), mcpPath), 'utf-8');
       console.log(`✓ wrote graphify + baton MCP servers to .mcp.json`);
     } catch (e) {
       // Don't clobber a .mcp.json we can't parse — preserve the user's other servers.
@@ -322,7 +336,7 @@ export async function kbShareCmd(mode?: string): Promise<void> {
   }
 }
 
-export async function kbMcpCmd(opts: { agent?: string } = {}): Promise<void> {
+export async function kbMcpCmd(opts: { agent?: string; port?: string } = {}): Promise<void> {
   const root = await gitRoot();
   const state = await loadKb(root);
   if (!state) {
@@ -337,6 +351,41 @@ export async function kbMcpCmd(opts: { agent?: string } = {}): Promise<void> {
     codex: '~/.codex/config.toml',
     gemini: '~/.gemini/settings.json',
   };
+  // Outside a running daemon, default to port 7077 (the baton serve default).
+  const port = Number(opts.port ?? 7077);
+  const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
   console.log(`# ${agent} → add to ${dest[agent] ?? dest.claude}`);
-  console.log(snippetFor(agent, state));
+  console.log(snippetFor(agent, state, mcpOpts));
+}
+
+/** `baton kb context` — print/write the shareable markdown pack for external chatbots. */
+export async function kbContextCmd(
+  path: string | undefined,
+  opts: { project?: string; out?: string; tokens?: string } = {},
+): Promise<void> {
+  const root = await resolveBatonRoot(path ? resolve(path) : process.cwd());
+  const state = await loadKb(root);
+  const maxTokens = Math.max(1000, Math.min(200_000, Number(opts.tokens ?? 8000) || 8000));
+  let pack;
+  try {
+    pack = await buildContextPack(root, state, { project: opts.project, maxTokens });
+  } catch (e) {
+    if (e instanceof UnknownProjectError) {
+      console.error(`no project '${opts.project}' — valid: ${e.projects.join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw e;
+  }
+  if (opts.out) {
+    const file = resolve(opts.out);
+    await writeFile(file, pack.markdown, 'utf-8');
+    const extras = [
+      `~${pack.tokens.toLocaleString()} tokens`,
+      ...(pack.redactions ? [`${pack.redactions} secret${pack.redactions === 1 ? '' : 's'} redacted`] : []),
+    ].join(', ');
+    console.error(`✓ context pack → ${file} (${extras})`);
+  } else {
+    process.stdout.write(pack.markdown);
+  }
 }

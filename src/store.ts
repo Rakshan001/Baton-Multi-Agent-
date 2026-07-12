@@ -2,9 +2,9 @@
  * Tiny JSON store for Baton tasks, kept at <repo>/.baton/tasks.json (gitignored).
  * One file, no database — sufficient at this scale.
  */
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { gitRoot } from './git.js';
+import { gitRoot, mainRepoRoot } from './git.js';
 
 export interface Task {
   slug: string;
@@ -19,6 +19,9 @@ export interface Task {
   /** The git repo the worktree/branch belongs to. Equals the sub-project dir in a hub,
    *  or the repo root in a single repo. Older records omit it — fall back to the served root. */
   repoRoot?: string;
+  /** Declared file scope (path globs) this task owns — used to warn on overlap at
+   *  creation and to steer the agent's launch prompt. Advisory, not enforced. */
+  scope?: string[];
 }
 
 /** Thrown when a slug doesn't resolve to a recorded task. */
@@ -35,6 +38,32 @@ export function batonDir(gitRoot: string): string {
   return join(gitRoot, '.baton');
 }
 
+// Warn once per untrusted .baton dir — resolveBatonRoot runs on hot paths.
+const untrustedWarned = new Set<string>();
+
+/**
+ * True if `dir/.baton` exists, is a directory, and is safe to adopt: owned by
+ * the current user and not world-writable. Group-writable is deliberately
+ * allowed (Debian/Ubuntu user-private-group setups run umask 002); the uid
+ * match is the real gate against a .baton planted by another user. On
+ * platforms without getuid (Windows) the ownership check is skipped.
+ */
+async function trustedBatonDir(dir: string): Promise<boolean> {
+  const st = await stat(join(dir, '.baton'));
+  if (!st.isDirectory()) return false;
+  if (typeof process.getuid !== 'function') return true;
+  if (st.uid !== process.getuid() || (st.mode & 0o002) !== 0) {
+    if (!untrustedWarned.has(dir)) {
+      untrustedWarned.add(dir);
+      console.warn(
+        `[baton] ignoring untrusted .baton at ${dir} (uid ${st.uid}, mode ${(st.mode & 0o777).toString(8)}) — continuing upward`,
+      );
+    }
+    return false;
+  }
+  return true;
+}
+
 /**
  * The Baton root — the directory that owns `.baton/` (tasks, kb, memory). For a
  * single repo this is the git root; for a multi-repo hub it's the (non-git)
@@ -46,13 +75,41 @@ export async function resolveBatonRoot(cwd: string = process.cwd()): Promise<str
   let dir = cwd;
   for (;;) {
     try {
-      if ((await stat(join(dir, '.baton'))).isDirectory()) return dir;
+      if (await trustedBatonDir(dir)) return dir;
     } catch { /* no .baton here — keep walking up */ }
     const parent = dirname(dir);
     if (parent === dir) break; // reached the filesystem root
     dir = parent;
   }
   return gitRoot(cwd); // not set up yet → the git repo is the Baton root
+}
+
+/**
+ * The Baton root as seen by `baton mcp`, which an agent almost always spawns
+ * from INSIDE its task worktree (`.baton/wt/<slug>`). Two traps to avoid:
+ *
+ *  1. `gitRoot()` would return the worktree, whose `.baton` is an empty shadow
+ *     store — so coordination tools would report no signals and no tasks.
+ *  2. `resolveBatonRoot(worktreeCwd)` alone is also defeated once a worktree has
+ *     been polluted with a shadow `.baton` (older buggy builds created one on
+ *     the first tool call): its upward walk stops at that shadow.
+ *
+ * So: trust an explicit `BATON_ROOT` when a baton-spawned agent carries one;
+ * otherwise escape the worktree via the git common dir FIRST, then walk up from
+ * the main repo root to the owning `.baton` (past sub-repo git boundaries, so
+ * hub mode still resolves to the hub, never a sub-repo).
+ */
+export async function resolveMcpRoot(
+  cwd: string = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const explicit = env.BATON_ROOT?.trim();
+  if (explicit) return explicit;
+  try {
+    return await resolveBatonRoot(await mainRepoRoot(cwd));
+  } catch {
+    return resolveBatonRoot(cwd); // not a git repo — best effort
+  }
 }
 
 export function tasksFile(gitRoot: string): string {
@@ -91,19 +148,67 @@ export async function getTask(gitRoot: string, slug: string): Promise<Task | und
   return (await loadTasks(gitRoot)).find((t) => t.slug === slug);
 }
 
+// Cross-process advisory lock: `serialized()` covers concurrent writes inside
+// ONE process, but the CLI (`baton new`) and a running daemon are separate
+// processes writing the same tasks.json — without a lock, simultaneous
+// read-modify-writes lose one side's update (writes stay crash-atomic via
+// tmp+rename either way; this is about lost updates, not torn files).
+const LOCK_RETRY_MS = 25;
+const LOCK_TIMEOUT_MS = 2000;
+const LOCK_STALE_MS = 5000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function withTasksLock<T>(gitRoot: string, fn: () => Promise<T>): Promise<T> {
+  const lock = join(batonDir(gitRoot), 'tasks.lock');
+  await mkdir(batonDir(gitRoot), { recursive: true });
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let acquired = false;
+  while (!acquired) {
+    try {
+      await mkdir(lock); // atomic: only one process can create it
+      acquired = true;
+    } catch {
+      try {
+        const st = await stat(lock);
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          await rm(lock, { recursive: true, force: true }); // crashed holder — break it
+          continue;
+        }
+      } catch {
+        continue; // lock vanished between mkdir and stat — retry immediately
+      }
+      if (Date.now() >= deadline) {
+        // Availability over strictness: a wedged lock must not brick task writes.
+        console.warn(`[baton] tasks.lock busy for ${LOCK_TIMEOUT_MS}ms — proceeding without it`);
+        break;
+      }
+      await sleep(LOCK_RETRY_MS);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (acquired) await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export async function addTask(gitRoot: string, task: Task): Promise<void> {
-  await serialized(async () => {
-    const tasks = await loadTasks(gitRoot);
-    tasks.push(task);
-    await saveTasks(gitRoot, tasks);
-  });
+  await serialized(() =>
+    withTasksLock(gitRoot, async () => {
+      const tasks = await loadTasks(gitRoot);
+      tasks.push(task);
+      await saveTasks(gitRoot, tasks);
+    }),
+  );
 }
 
 export async function removeTask(gitRoot: string, slug: string): Promise<void> {
-  await serialized(async () => {
-    const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
-    await saveTasks(gitRoot, tasks);
-  });
+  await serialized(() =>
+    withTasksLock(gitRoot, async () => {
+      const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
+      await saveTasks(gitRoot, tasks);
+    }),
+  );
 }
 
 /** kebab-case slug from free text, made unique against `taken`. */

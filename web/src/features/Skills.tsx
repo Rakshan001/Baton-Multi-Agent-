@@ -148,7 +148,8 @@ export function SkillsScreen({ writeEnabled }: { writeEnabled: boolean }) {
 
 function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnabled: boolean; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<SkillAgent | null>(null);
+  const [busy, setBusy] = useState<SkillAgent | "all" | null>(null);
+  const allInstalled = s.installs.length > 0 && s.installs.every((i) => i.installed);
 
   async function toggle(agent: SkillAgent, installed: boolean) {
     setBusy(agent);
@@ -163,6 +164,19 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
       onChanged();
     } catch (e) {
       showToast({ kind: "error", title: "Couldn’t update skill", desc: (e as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function installAll() {
+    setBusy("all");
+    try {
+      const results = await BatonAPI.installSkillEverywhere(s.id);
+      showToast({ kind: "ok", title: `Installed "${s.name}" everywhere`, desc: `${results.length} agent${results.length === 1 ? "" : "s"}: ${results.map((r) => getAgent(r.agent).short).join(", ")}` });
+      onChanged();
+    } catch (e) {
+      showToast({ kind: "error", title: "Couldn’t install to all agents", desc: (e as Error).message });
     } finally {
       setBusy(null);
     }
@@ -210,6 +224,17 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
 
       {/* per-agent install controls */}
       <div style={{ padding: "4px 15px 12px", display: "flex", flexWrap: "wrap", gap: 7 }}>
+        {!allInstalled && (
+          <button
+            className="btn btn-sm btn-primary fr"
+            disabled={!writeEnabled || busy !== null}
+            data-tip={!writeEnabled ? "Read-only — run `baton serve --write`" : "Install this skill into every writable agent at once"}
+            onClick={installAll}
+            style={{ gap: 6 }}
+          >
+            <Icon name="zap" size={12} /> {busy === "all" ? "Installing…" : "Add to all"}
+          </button>
+        )}
         {s.installs.map((inst) => {
           const a = getAgent(inst.agent);
           return (

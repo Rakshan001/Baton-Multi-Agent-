@@ -3,8 +3,8 @@
  * an in-process build queue so two graphify runs never race on one project.
  * Persisted at <repo>/.baton/kb.json (gitignored, same as tasks.json).
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, sep } from 'node:path';
 import { batonDir } from '../store.js';
 import { readStats, type GraphStats } from './graphify.js';
 
@@ -40,10 +40,43 @@ export function graphPathFor(projectPath: string): string {
   return join(projectPath, 'graphify-out', 'graph.json');
 }
 
+// Warn once per bad path — loadKb runs on 2s poll paths and must not spam.
+const invalidWarned = new Set<string>();
+
+/** Test-only: clear the warn-once memory between test cases. */
+export function resetKbValidationWarnings(): void {
+  invalidWarned.clear();
+}
+
+/**
+ * A kb.json project entry is trusted only if its path realpath-resolves to the
+ * Baton root or below AND is a directory containing `.git` (dir for a repo,
+ * file for a git worktree). kb.json is plain JSON on disk — a tampered or
+ * stale entry must not steer graphify spawns or stats reads elsewhere.
+ */
+async function isValidProject(root: string, p: KbProject): Promise<boolean> {
+  try {
+    const [realRoot, realProj] = await Promise.all([realpath(root), realpath(p.path)]);
+    if (realProj !== realRoot && !realProj.startsWith(realRoot + sep)) throw new Error('outside the Baton root');
+    if (!(await stat(p.path)).isDirectory()) throw new Error('not a directory');
+    await stat(join(p.path, '.git')); // repo dir or worktree file — either is fine
+    return true;
+  } catch (e) {
+    if (!invalidWarned.has(p.path)) {
+      invalidWarned.add(p.path);
+      console.warn(`[baton] kb.json: skipping project '${p.id}' — ${p.path}: ${(e as Error).message}`);
+    }
+    return false;
+  }
+}
+
 export async function loadKb(root: string): Promise<KbState | null> {
   try {
     const raw = await readFile(kbFile(root), 'utf-8');
-    return JSON.parse(raw) as KbState;
+    const state = JSON.parse(raw) as KbState;
+    const checks = await Promise.all(state.projects.map((p) => isValidProject(root, p)));
+    state.projects = state.projects.filter((_, i) => checks[i]);
+    return state;
   } catch {
     return null;
   }

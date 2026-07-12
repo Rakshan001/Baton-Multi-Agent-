@@ -113,6 +113,7 @@ Audit and reclaim junk — orphaned worktrees, `baton/*` branches, ghost tmux se
 
 ```bash
 baton doctor                  # audit only
+baton doctor --docs           # scan for scattered .md sprawl (memory-banks, stray NOTES/TODO, drifting per-agent rule files) — propose-only, never deletes
 baton clean [--fix] [-f|--force]   # dry-run unless --fix; --force removes dirty worktrees
 ```
 
@@ -128,6 +129,26 @@ baton kb export [--out <file>]                                 # → baton-kb-<r
 baton kb import <source> [--no-rebuild]                        # adopt a .tar.gz pack or a kb/ directory
 baton kb share [on|off]                                        # toggle committing the KB (kb/ dir)
 baton kb mcp [--agent claude|cursor|codex|gemini]              # print MCP config for an agent
+baton kb context [path]                                        # shareable context pack for external chatbots
+```
+
+### `baton kb context [path]`
+
+Print a shareable markdown **context pack** — a ≤ ~8k-token brief of the
+project (overview, stack, folder tree, key graph symbols, fresh memory facts,
+**no source code**) that pastes into any external chatbot (ChatGPT, Grok,
+DeepSeek). Secrets are redacted. Not the same as `kb export`, which produces a
+machine pack for `kb import`.
+
+| Flag | Meaning |
+|---|---|
+| `--project <id>` | hub: render one sub-project instead of the combined pack |
+| `--out <file>` | write to a file instead of stdout |
+| `--tokens <n>` | token budget (default 8000 — fits ChatGPT's free tier) |
+
+```bash
+baton kb context | pbcopy        # copy the whole-hub brief to the clipboard
+baton kb context --project api --out api-context.md
 ```
 
 ## Headless agent runs
@@ -178,7 +199,26 @@ baton memory list                 # default; ● fresh · ◐ aging · ○ stale
 baton memory add "<fact>" [--type decision|gotcha|convention|reference|preference] \
                           [--files <comma,paths>] [--task <slug>]
 baton memory rm <id>
-baton memory gc                   # drop stale facts (anchored files changed)
+baton memory gc                   # archive stale facts (anchored files changed)
+baton memory log                  # journal of removed/superseded facts (nothing is hard-deleted)
+```
+
+### `bugs`
+Has this bug been fixed before — and did a later change re-break it? Matches the symptom against fixes recorded in memory (the `bug-fix` skill records each one), then traces the fix's files through commit history for **suspect commits**. A stale fix fact (its anchored file changed since) is itself a regression signal.
+
+```bash
+baton bugs "checkout redirect loops"
+```
+
+## Skills — `skills`
+
+Reusable agent playbooks. See [Skills](./skills.md).
+
+```bash
+baton skills list                       # catalog + per-agent install state
+baton skills install <id> [--agent a]   # default: install into ALL writable agents
+baton skills uninstall <id> [--agent a]
+baton skills import <path|url>          # add your own, then install it
 ```
 
 ## Agent integration

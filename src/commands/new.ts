@@ -10,6 +10,7 @@ import { branchExists, createWorktree, currentBranch, headCommit, isGitRepo } fr
 import { recordTask } from '../history.js';
 import { addTask, batonDir, loadTasks, resolveBatonRoot, slugify, type Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
+import { overlappingScopes } from '../conflicts.js';
 import { bus } from '../events.js';
 
 /**
@@ -52,7 +53,7 @@ export class UnknownProjectError extends Error {
  * @param root      the Baton root (owns `.baton/`); a single repo or a hub folder.
  * @param projectId in a hub, which sub-project's git repo the worktree branches off.
  */
-export async function createTask(taskText: string, root?: string, projectId?: string): Promise<Task> {
+export async function createTask(taskText: string, root?: string, projectId?: string, scope?: string[]): Promise<Task> {
   const text = taskText?.trim();
   if (!text) throw new EmptyTaskError();
 
@@ -99,6 +100,7 @@ export async function createTask(taskText: string, root?: string, projectId?: st
     baseCommit,
     projectId: resolvedProjectId,
     repoRoot: gitRepo,
+    scope: scope?.length ? scope : undefined,
     createdAt: new Date().toISOString(),
   };
   await addTask(batonRoot, task);
@@ -107,16 +109,18 @@ export async function createTask(taskText: string, root?: string, projectId?: st
   return task;
 }
 
-export async function newCmd(taskText: string, opts: { project?: string } = {}): Promise<void> {
+export async function newCmd(taskText: string, opts: { project?: string; scope?: string } = {}): Promise<void> {
   if (!taskText?.trim()) {
-    console.error('Usage: baton new "<task description>" [--project <id>]');
+    console.error('Usage: baton new "<task description>" [--project <id>] [--scope <globs>]');
     process.exitCode = 1;
     return;
   }
 
+  const scope = opts.scope?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
+
   let task;
   try {
-    task = await createTask(taskText, undefined, opts.project);
+    task = await createTask(taskText, undefined, opts.project, scope);
   } catch (e) {
     // In a hub the task must name a sub-project — guide the user instead of a raw throw.
     if (e instanceof ProjectRequiredError || e instanceof UnknownProjectError) {
@@ -132,6 +136,18 @@ export async function newCmd(taskText: string, opts: { project?: string } = {}):
 
   console.log(`✓ created ${task.branch}${task.projectId ? ` in ${task.projectId}` : ''}`);
   console.log(`  worktree: ${task.worktreePath}`);
+
+  if (scope.length) {
+    console.log(`  scope: ${scope.join(', ')}`);
+    // Advisory overlap warning at creation — the earliest point to catch two
+    // tasks aimed at the same code (before either has edited anything).
+    const others = (await loadTasks(await resolveBatonRoot())).filter((t) => t.slug !== task.slug);
+    const clashes = overlappingScopes(scope, others);
+    for (const c of clashes) {
+      console.log(`  ⚠ scope overlaps '${c.slug}' (${c.scope.join(', ')}) — coordinate or narrow the scope.`);
+    }
+  }
+
   console.log('');
   console.log('  Launch your agent there:');
   console.log(`    cd ${task.worktreePath}`);

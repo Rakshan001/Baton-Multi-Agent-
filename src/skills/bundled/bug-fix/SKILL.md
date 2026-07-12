@@ -7,9 +7,11 @@ description: >-
   confidence AND an explicit approved plan before editing a single line. Enforces clean DRY
   code (reuse, no duplication, no avoidable API calls / N+1 queries), re-verifies the symptom
   is actually gone with an independent skeptic re-check of the diff, then commits automatically
-  but NEVER pushes — it explicitly asks and pushes only with permission. Use whenever the user
-  says "use the bug fix skill", "/bug-fix", "fix this bug", reports a bug, a test fails,
-  behavior is unexpected, or something is broken.
+  but NEVER pushes — it explicitly asks and pushes only with permission. Checks the shared
+  tracker FIRST (already fixed? stuck on a branch? live collision?) and records the fix — root
+  cause + the fixing commit — to shared memory LAST, so the next session inherits it and a later
+  regression is one recall away. Use whenever the user says "use the bug fix skill", "/bug-fix",
+  "fix this bug", reports a bug, a test fails, behavior is unexpected, or something is broken.
 ---
 
 # Bug Fix Skill (portable)
@@ -17,14 +19,21 @@ description: >-
 Fix bugs systematically. The order is non-negotiable:
 
 ```
+TRACKER CHECK (already fixed? stuck on a branch? live collision?) →
 REPRODUCE-FIRST + TRIAGE → SYNC (current code) → MAP (audit) → MULTI-AGENT AUDIT →
 BLAST RADIUS → ROOT CAUSE → WRITTEN PLAN → ⛔ CONFIDENCE ≥95% GATE ⛔ → ⛔ WAIT FOR APPROVAL ⛔ →
 TEST → FIX → DRY/PERF QUALITY GATE → RE-VERIFY (symptom gone + independent skeptic) →
-REPORT → COMMIT (auto) → ⛔ ASK BEFORE PUSH ⛔
+RECORD TO SHARED MEMORY → COMMIT (auto) → ⛔ ASK BEFORE PUSH ⛔ → COMPACT IF NEEDED
 ```
 (Re-check git staleness before editing and before committing — other people/sessions move fast.)
 
 **Golden rules**
+0. CHECK THE SHARED TRACKER FIRST, record to it LAST. Before anything, ask the tracker: is this
+   bug already fixed, stuck on an unmerged branch, or being edited by a live session right now?
+   If so → STOP and surface it; don't re-fix or collide. When done, write the root cause + files
+   + the fixing commit back so the next session inherits it. *(In this repo the tracker is
+   **baton** — `baton status` / `signals` / `check_files` / memory recall + `save_memory`. No
+   shared tracker in the project → skip Phase 0 and Phase 11's memory write; the rest is unchanged.)*
 1. REPRODUCE BEFORE YOU FIX. If the symptom doesn't reproduce on current code → STOP. Scale
    effort to complexity (triage) — but never weaken the safety gates.
 2. SYNC BEFORE YOU AUDIT. Audit the *current* code, not stale code. Re-check staleness again
@@ -50,23 +59,25 @@ REPORT → COMMIT (auto) → ⛔ ASK BEFORE PUSH ⛔
 
 ---
 
-## Phase 0 — Multi-session coordination *(optional — only if a shared registry exists)*
+## Phase 0 — Multi-session coordination & "is it already fixed?" *(if a shared tracker exists)*
 
-*Skip this entire phase unless the project has a shared bugfix ledger (multiple people/agents
-editing the same checkout in parallel). For a normal single-developer repo, go to Phase 0.5.*
+*The #1 avoidable failure is running the whole pipeline on a bug someone already fixed, or
+colliding with a live session. Ask the shared tracker BEFORE doing anything. No shared tracker
+in the project → skip to Phase 0.5.*
 
-If a shared `specs/bugfixes/` (or equivalent) ledger exists:
-1. **Derive identity:** `bug-name` (kebab-case), owning module/package, a **fingerprint**
-   (`slug(title)::normalized-route-or-location`).
-2. **Atomically claim** the bug (e.g. an `mkdir`-lock or the project's claim script). Outcomes:
-   - **CLAIMED** → proceed.
-   - **TAKEN** → read its status. Already fixed/committed → **STOP**, tell the user. In-progress
-     & fresh → warn + ask. Stale → take over with the user's ok.
-   - **DUP** → same fingerprint already fixed → **STOP** and point to it.
-3. Skim the registry for related in-flight work in the same files.
+**With baton** (this repo's tracker — the concrete instantiation of the generic steps below):
+1. **Already fixed / in-flight?** Recall prior knowledge and scan history for this symptom's
+   files: `save_memory`'s counterpart recall (the `recall_memory` tool or `baton memory list`),
+   `baton status`, and history/blame for the buggy file. A merged fix already touches it →
+   **STOP**, link it. A fix exists on an unmerged branch ("stuck between branches") → **STOP**,
+   surface it, ask whether to merge/rebase that instead of writing a new one.
+2. **Live collision?** Ask `check_files <paths>` (or `baton signals`): if **another session is
+   editing these files right now**, **warn + ask** before proceeding — don't collide.
 
-`status.json` is the source of truth (see `references/status-template.json`); any generated
-dashboard is regenerated, never hand-edited.
+**Generic tracker (no baton):** if a shared `specs/bugfixes/` ledger exists, derive a
+`bug-name` + fingerprint, **atomically claim** it (CLAIMED → proceed · TAKEN → read status,
+already-fixed STOP / in-progress warn+ask · DUP → STOP and point to it), and skim for related
+in-flight work. `status.json` is the source of truth (`references/status-template.json`).
 
 ---
 
@@ -123,6 +134,12 @@ ad-hoc one with grep/ctags), make sure it reflects the now-current code.*
   the project's command.
 - No graph tooling at all → skip; Phase 3/4 fall back to source-reading + `grep` (Agent D below
   becomes the primary blast-radius method).
+
+> **Golden rule: the graph is only as fresh as its last build.** Even a just-rebuilt graph
+> cannot see *uncommitted* edits — yours or another session's. If a graph answer flags a file
+> as having uncommitted changes (or `check_files` says someone is editing it),
+> **re-read the file** and treat its graph symbols as unverified. Trusting a stale symbol is
+> how a fix lands next to a function that no longer exists — or gets duplicated.
 
 ---
 
@@ -338,10 +355,22 @@ Update both.*
 
 ---
 
-## Phase 11 — Bugfix report *(report file optional; registry update only if one exists)*
+## Phase 11 — Record the fix to shared memory *(if a shared tracker exists)*
 
-Write a short report (use `references/report-template.md`) if the project keeps bugfix reports.
-If using a registry, update `status.json` and regenerate any dashboard.
+*Why: so the NEXT session finds your work instead of re-investigating — and so a regression that
+resurfaces months later (after 5–6 features land on the same files) is one recall away, not a
+fresh hunt.*
+
+**With baton:** write the durable knowledge with `save_memory` (or `baton memory add`) — a
+**fact, not a diary**: the symptom, the root cause (`file:line`), the fix, and any non-obvious
+gotcha (a shared contract, an envelope quirk, a consumer that had to stay compatible). Anchor it
+to the files you changed and include the fixing commit (`fixed-in: <sha>`, filled once Phase 12
+commits) so a later `recall` on those files surfaces this fix immediately. Store the insight,
+not the whole diff. Type it as a `gotcha` when it encodes a trap a future edit could re-trigger.
+
+**Report (optional):** if the project keeps bugfix reports, write a short one
+(`references/report-template.md`); with a generic registry, update `status.json` + regenerate any
+dashboard.
 
 ---
 
@@ -362,8 +391,19 @@ Once the fix is verified (Phase 9 clean):
    - Push **only** if the user explicitly grants permission. On "no" → leave it local. Done.
 3. **On approved push only:** `git push origin <branch>`; update the registry if any; run any
    project post-push routine (e.g. branch cleanup) — confirm first if it would discard anything.
+4. **Finalize the memory fact:** now that the commit exists, fill the Phase 11 fact's
+   `fixed-in: <sha>` (with baton, the commit is already linked to the file in history — the sha
+   just makes the recall explicit).
 
 **PRs:** open a PR only if the user explicitly asks.
+
+---
+
+## Phase 13 — Context/token hygiene
+
+Once the bug is fully done and recorded, if the working context is near full (≈95%), **compact**
+(run `/compact`, or remind the user) so the next task doesn't re-send this whole history as input
+tokens. Only compact when genuinely finished — a mid-fix compact can drop the plan you still need.
 
 ---
 
@@ -385,7 +425,7 @@ Once the fix is verified (Phase 9 clean):
 
 ## Definition of done
 
-- [ ] (If a registry exists) bug claimed; not a duplicate.
+- [ ] Shared tracker checked FIRST (already fixed / stuck-unmerged / live collision) — else STOPPED & surfaced.
 - [ ] Bug reproduced on current code (or STOPPED if it didn't reproduce); complexity tier set.
 - [ ] Synced onto the integration branch BEFORE auditing; staleness re-checked before edit & commit.
 - [ ] (If a graph exists) map refreshed / confirmed current on the synced code.
@@ -403,3 +443,5 @@ Once the fix is verified (Phase 9 clean):
 - [ ] Docs updated; map/graph refreshed if new code surface was added.
 - [ ] Committed automatically (proper message, project author, only this bug's files).
 - [ ] Push NOT done automatically — explicitly asked; pushed only if the user approved.
+- [ ] Fix recorded to shared memory (fact, not diary — root cause + `fixed-in: <sha>`) if a tracker exists.
+- [ ] Context hygiene: compacted (or reminded) if the working context was near full.

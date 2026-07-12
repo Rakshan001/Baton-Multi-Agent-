@@ -28,6 +28,10 @@ export async function routeCmd(text: string): Promise<void> {
 
   console.log(`→ ${pick.agent}${model}   ${why}${s.confidence === 'low' ? ' · low confidence' : ''}`);
   console.log(`  severity: ${s.severity}/100${s.signals.length ? `   ${s.signals.join(' · ')}` : ''}`);
+  if (s.downshift) {
+    const alt = s.downshift.chain.map((e) => e.agent + (e.model ? `:${e.model}` : '')).join(' → ');
+    console.log(`  💡 cheaper option: ${alt} — ${s.downshift.reason}`);
+  }
   if (s.chain.length > 1) {
     const chain = s.chain.map((e, i) => {
       const label = `${e.agent}${e.model ? `:${e.model}` : ''}`;

@@ -15,6 +15,8 @@ import { gitTry } from '../util/exec.js';
 import { isGitRepo } from '../git.js';
 import { detectProjects, findNestedGitRepos, PROJECT_MARKERS, type SubProject } from '../kb/projects.js';
 import { askChoice, kbInitCmd } from './kb.js';
+import { connectAgents, type AgentConnectOutcome } from '../agents/connect.js';
+import { DEFAULT_CONNECT_AGENTS } from './connect.js';
 
 /** Options shared with `kb init`, plus the setup-mode flags. */
 export interface SetupOpts {
@@ -57,7 +59,7 @@ async function finishSingle(root: string, opts: SetupOpts, headline: string): Pr
     console.log(`\n✓ ${headline}. Agents read it over MCP — no dashboard needed.`);
     console.log('    (Run `baton serve` here anytime to open the dashboard.)');
   }
-  printOtherAgentMcp();
+  await connectAllAgents(root, opts);
 }
 
 /** Forwarded to kbInitCmd (strip the setup-only flags). */
@@ -113,13 +115,32 @@ async function nextFreePort(start: number, used: Set<number>): Promise<number> {
   return p;
 }
 
-/** Non-Claude agents query the graph over MCP via these one-liners (Claude is auto-wired). */
-function printOtherAgentMcp(): void {
-  console.log('\n  Let Codex / Gemini / Cursor query the graph (which servers exist + how to navigate):');
-  console.log('    baton kb mcp --agent codex     # prints Codex MCP config');
-  console.log('    baton kb mcp --agent gemini    # Gemini');
-  console.log('    baton kb mcp --agent cursor    # Cursor');
-  console.log('  (Claude Code is wired automatically via .mcp.json.)');
+const CONNECT_LINE: Record<AgentConnectOutcome['status'], (o: AgentConnectOutcome) => string> = {
+  connected: (o) => `    ✓ ${o.agent} — wired for coordination`,
+  already: (o) => `    · ${o.agent} — already connected`,
+  'needs-confirm': (o) => `    ! ${o.agent} — needs a global write (rerun below)`,
+  unsupported: (o) => `    – ${o.agent} — start it in the worktree manually`,
+  'parse-error': (o) => `    ✗ ${o.agent} — config unparseable; left untouched`,
+};
+
+/**
+ * Wire every agent to the `baton` coordination MCP server so they can see each
+ * other's edits/tasks. Project-scoped (claude/cursor) write now; global
+ * (codex/gemini) need --yes. Best-effort — never blocks a finished setup.
+ */
+async function connectAllAgents(root: string, opts: SetupOpts): Promise<void> {
+  try {
+    const outcomes = await connectAgents(root, DEFAULT_CONNECT_AGENTS, { confirmGlobal: opts.yes });
+    console.log('\n  Agents wired to Baton coordination (they can now see each other):');
+    for (const o of outcomes) console.log(CONNECT_LINE[o.status](o));
+    const deferred = outcomes.filter((o) => o.status === 'needs-confirm');
+    if (deferred.length) {
+      console.log(`    → finish the global ones: baton connect --agents ${deferred.map((o) => o.agent).join(',')} --yes`);
+    }
+    console.log('  (Graph/KB queries are separate: `baton kb mcp --agent <name>` or the dashboard.)');
+  } catch (e) {
+    console.log(`\n  ! could not auto-wire agents (${(e as Error).message}) — run \`baton connect\` when ready.`);
+  }
 }
 
 export async function setupCmd(path: string | undefined, opts: SetupOpts = {}): Promise<void> {
@@ -207,7 +228,10 @@ async function setupIndividual(repos: SubProject[], opts: SetupOpts): Promise<vo
   } else {
     console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP — no dashboard needed.');
   }
-  printOtherAgentMcp();
+  for (const b of built) {
+    console.log(`\n  [${basename(b.path)}]`);
+    await connectAllAgents(b.path, opts);
+  }
 }
 
 async function gitInit(root: string): Promise<void> {

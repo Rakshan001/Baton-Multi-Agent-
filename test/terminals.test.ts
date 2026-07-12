@@ -49,6 +49,18 @@ describe('shQuote / buildSessionCommand', () => {
     expect(buildSessionCommand(INTERACTIVE_LAUNCHERS.gemini, 'do it')).toBe(`gemini '-i' 'do it'`);
   });
 
+  it('prefixes identity env so the launched agent process inherits it (not tmux set-environment, which lands too late)', () => {
+    const cmd = buildSessionCommand(INTERACTIVE_LAUNCHERS.claude, undefined, undefined, {
+      BATON_SLUG: 'fix-auth',
+      BATON_ROOT: '/repo/root',
+    });
+    expect(cmd).toBe(`BATON_SLUG='fix-auth' BATON_ROOT='/repo/root' claude`);
+  });
+
+  it('omits the env prefix entirely when no env is given (unchanged behavior)', () => {
+    expect(buildSessionCommand(INTERACTIVE_LAUNCHERS.claude)).toBe('claude');
+  });
+
   it('cursor uses the cursor-agent CLI, not the IDE binary', () => {
     expect(INTERACTIVE_LAUNCHERS.cursor.cmd).toBe('cursor-agent');
   });

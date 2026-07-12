@@ -12,9 +12,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { batonDir, loadTasks } from './store.js';
+import { batonDir, loadTasks, type Task } from './store.js';
 import { detectAgents } from './agents.js';
 import { changedFiles } from './conflicts.js';
+import { gitTry } from './util/exec.js';
 import { bus } from './events.js';
 
 const nodeRequire = createRequire(import.meta.url);
@@ -31,6 +32,21 @@ CREATE TABLE IF NOT EXISTS edit_signals (
   PRIMARY KEY (slug, path)
 );
 CREATE INDEX IF NOT EXISTS idx_edit_signals_path ON edit_signals(path);
+CREATE TABLE IF NOT EXISTS signal_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+CREATE TABLE IF NOT EXISTS task_progress (
+  slug TEXT PRIMARY KEY,
+  note TEXT,
+  at TEXT
+);
+CREATE TABLE IF NOT EXISTS hook_sessions (
+  slug TEXT PRIMARY KEY,
+  agent TEXT,
+  root TEXT,
+  at TEXT
+);
 `;
 
 const conns = new Map<string, DatabaseSync>();
@@ -54,6 +70,50 @@ export interface SignalHolder {
   slug: string;
   agent: string | null;
   lastEditAt: string;
+  /** Free-text intent the holder reported (report_progress), if fresh. */
+  note?: string;
+  noteAt?: string;
+}
+
+export interface Progress {
+  slug: string;
+  note: string;
+  at: string;
+}
+
+/** Record what a task is working on right now (latest note wins). */
+export function setProgress(root: string, slug: string, note: string): void {
+  getDb(root)
+    .prepare(
+      `INSERT INTO task_progress (slug, note, at) VALUES (?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET note = excluded.note, at = excluded.at`,
+    )
+    .run(slug, note, new Date().toISOString());
+}
+
+/** Fresh progress notes (within the signal window), keyed by slug. */
+export function getProgress(root: string, windowMin = SIGNAL_WINDOW_MIN): Map<string, Progress> {
+  const cutoff = new Date(Date.now() - windowMin * 60_000).toISOString();
+  const rows = getDb(root)
+    .prepare(`SELECT slug, note, at FROM task_progress WHERE at >= ?`)
+    .all(cutoff) as unknown as Progress[];
+  return new Map(rows.map((r) => [r.slug, r]));
+}
+
+export function clearProgress(root: string, slug: string): void {
+  getDb(root).prepare(`DELETE FROM task_progress WHERE slug = ?`).run(slug);
+}
+
+/** Attach each holder's fresh progress note in place (one query, reused). */
+function enrichWithNotes(root: string, holderLists: SignalHolder[][]): void {
+  const progress = getProgress(root);
+  if (progress.size === 0) return;
+  for (const holders of holderLists) {
+    for (const h of holders) {
+      const p = progress.get(h.slug);
+      if (p) { h.note = p.note; h.noteAt = p.at; }
+    }
+  }
 }
 
 export interface EditSignal {
@@ -64,9 +124,98 @@ export interface EditSignal {
 
 interface SignalRow { slug: string; path: string; at: string }
 
+/* ------------------- hook-written signals (root sessions, G2) ------------------- */
+
+/**
+ * A session running at the repo root (no worktree, no task) is identified by
+ * the agent's own session id — stable for the session, meaningless after it.
+ */
+export function sessionSlug(sessionId: string): string {
+  const clean = sessionId.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 8) || 'unknown';
+  return `sess-${clean}`;
+}
+
+interface HookSession { agent: string | null; root: string | null; at: string }
+
+/**
+ * Record an edit signal from the edit-guard hook — the daemon-less write path.
+ * Task-slugged edits are the same rows the daemon watcher writes (upsert-safe);
+ * a root session additionally registers itself (agent + its checkout root) so
+ * reads can attribute and reconcile it without a task record.
+ */
+export function recordHookEdit(
+  root: string,
+  opts: { slug: string; path: string; at?: string; session?: { agent: string; sessionRoot: string } },
+): void {
+  const at = opts.at ?? new Date().toISOString();
+  getDb(root)
+    .prepare(
+      `INSERT INTO edit_signals (slug, path, at) VALUES (?, ?, ?)
+       ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at`,
+    )
+    .run(opts.slug, opts.path, at);
+  if (opts.session) registerHookSession(root, opts.slug, opts.session.agent, opts.session.sessionRoot, at);
+}
+
+/**
+ * Register a session (agent + the checkout it works in) without recording an
+ * edit — the MCP server calls this at startup (M1) so cursor/codex/gemini
+ * sessions are attributable before they touch anything.
+ */
+export function registerHookSession(
+  root: string,
+  slug: string,
+  agent: string | null,
+  sessionRoot: string,
+  at: string = new Date().toISOString(),
+): void {
+  getDb(root)
+    .prepare(
+      `INSERT INTO hook_sessions (slug, agent, root, at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET agent = excluded.agent, root = excluded.root, at = excluded.at`,
+    )
+    .run(slug, agent, sessionRoot, at);
+}
+
+function hookSessions(root: string): Map<string, HookSession> {
+  const rows = getDb(root).prepare(`SELECT slug, agent, root, at FROM hook_sessions`).all() as unknown as Array<
+    HookSession & { slug: string }
+  >;
+  return new Map(rows.map((r) => [r.slug, r]));
+}
+
+/** Watcher liveness: heartbeat fresher than this ⇒ "not busy" answers are trustworthy. */
+export const WATCHER_HEARTBEAT_STALE_MS = 2 * 60_000;
+const HEARTBEAT_REFRESH_MS = 60_000;
+const HEARTBEAT_KEY = 'watcher_heartbeat';
+
+function touchHeartbeat(root: string): void {
+  getDb(root)
+    .prepare(`INSERT INTO signal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    .run(HEARTBEAT_KEY, new Date().toISOString());
+}
+
+/**
+ * True if a daemon's watcher+tracker heartbeat is fresh for this root. Lets
+ * callers (the guard hook, check_files) distinguish "all clear" from "nobody
+ * is recording signals" — a stale/no heartbeat means busy:false is unproven.
+ */
+export function isWatcherActive(root: string): boolean {
+  try {
+    const row = getDb(root).prepare(`SELECT value FROM signal_meta WHERE key = ?`).get(HEARTBEAT_KEY) as
+      | { value: string }
+      | undefined;
+    if (!row) return false;
+    return Date.now() - Date.parse(row.value) < WATCHER_HEARTBEAT_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
 export class SignalTracker {
   private root: string;
   private unsubs: Array<() => void> = [];
+  private heartbeat: NodeJS.Timeout | null = null;
   /** paths already announced as overlapping, so we emit signal.overlap once per overlap. */
   private announced = new Set<string>();
 
@@ -75,6 +224,9 @@ export class SignalTracker {
   }
 
   start(): void {
+    touchHeartbeat(this.root);
+    this.heartbeat = setInterval(() => touchHeartbeat(this.root), HEARTBEAT_REFRESH_MS);
+    this.heartbeat.unref?.();
     this.unsubs.push(
       bus.onType('file.edited', (e) => {
         if (e.event.type !== 'file.edited') return;
@@ -94,6 +246,8 @@ export class SignalTracker {
   }
 
   stop(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.heartbeat = null;
     for (const u of this.unsubs) u();
     this.unsubs = [];
   }
@@ -120,6 +274,8 @@ export class SignalTracker {
 
   clear(slug: string): void {
     getDb(this.root).prepare(`DELETE FROM edit_signals WHERE slug = ?`).run(slug);
+    clearProgress(this.root, slug); // a commit settles the work — its intent note is spent
+
     // Re-derive overlap announcements from what's still live: keep a path announced
     // only while 2+ distinct sessions hold it. A blanket clear() would let an
     // UNRELATED slug clearing re-fire signal.overlap for overlaps that never ended.
@@ -142,14 +298,82 @@ function liveRows(root: string, windowMin = SIGNAL_WINDOW_MIN): SignalRow[] {
     .all(cutoff) as unknown as SignalRow[];
 }
 
+/**
+ * Paths still "dirty" in a worktree: tracked modifications vs HEAD plus brand-new
+ * untracked files (which `git diff HEAD` omits, so we must union them in or a
+ * file being freshly created would look settled). Returns null when git can't
+ * answer, so callers fail OPEN — a signal we can't verify is kept, not dropped.
+ */
+async function worktreeDirtyPaths(worktreePath: string): Promise<Set<string> | null> {
+  const diff = await gitTry(['-C', worktreePath, 'diff', '--name-only', 'HEAD']);
+  if (!diff.ok) return null;
+  const paths = new Set(diff.stdout.split('\n').filter(Boolean));
+  const untracked = await gitTry(['-C', worktreePath, 'ls-files', '--others', '--exclude-standard']);
+  if (untracked.ok) for (const f of untracked.stdout.split('\n').filter(Boolean)) paths.add(f);
+  return paths;
+}
+
+function pruneSignals(root: string, rows: SignalRow[]): void {
+  const stmt = getDb(root).prepare(`DELETE FROM edit_signals WHERE slug = ? AND path = ?`);
+  for (const r of rows) stmt.run(r.slug, r.path);
+}
+
+/**
+ * P6 — lazy read-time reconciliation. A live edit signal means "uncommitted work
+ * in progress on this path". With no daemon watching, the events that clear
+ * signals (commit/merge) never fire, so a committed-or-reverted file's signal
+ * lingers up to the TTL and pollutes the "editing now" view. At read time we drop
+ * (and prune) any signal whose path is no longer dirty in its task's worktree —
+ * zero background work, and it also catches the edit-then-revert case that
+ * commit-detection can't. Fails open: signals for unknown slugs or unreadable
+ * worktrees are kept.
+ */
+/**
+ * The guard hook records BEFORE the tool writes the file, so a just-recorded
+ * signal's path may not be dirty yet — verify only signals older than this.
+ */
+const RECONCILE_GRACE_MS = 15_000;
+
+async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]): Promise<SignalRow[]> {
+  if (rows.length === 0) return rows;
+  const bySlug = new Map<string, SignalRow[]>();
+  for (const r of rows) {
+    const list = bySlug.get(r.slug);
+    if (list) list.push(r);
+    else bySlug.set(r.slug, [r]);
+  }
+  const sessions = hookSessions(root);
+  const kept: SignalRow[] = [];
+  const stale: SignalRow[] = [];
+  const now = Date.now();
+  await Promise.all(
+    [...bySlug].map(async ([slug, slugRows]) => {
+      // Root sessions have no task — their signals verify against the checkout
+      // the session registered (usually the main repo root).
+      const checkRoot = tasks.find((t) => t.slug === slug)?.worktreePath ?? sessions.get(slug)?.root;
+      if (!checkRoot) return void kept.push(...slugRows); // unknown holder → can't verify, keep
+      const dirty = await worktreeDirtyPaths(checkRoot);
+      if (dirty === null) return void kept.push(...slugRows); // git failed → keep
+      for (const r of slugRows) {
+        const fresh = now - Date.parse(r.at) < RECONCILE_GRACE_MS;
+        (fresh || dirty.has(r.path) ? kept : stale).push(r);
+      }
+    }),
+  );
+  if (stale.length) pruneSignals(root, stale);
+  return kept;
+}
+
 /** Current edit signals, grouped by path; overlapping paths are warnings. */
 export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): Promise<EditSignal[]> {
-  const rows = liveRows(root, windowMin);
   const tasks = await loadTasks(root);
+  const rows = await reconcileSignals(root, liveRows(root, windowMin), tasks);
   const agents = await detectAgents(tasks.map((t) => t.worktreePath));
+  const sessions = hookSessions(root);
   const agentFor = (slug: string) => {
     const t = tasks.find((x) => x.slug === slug);
-    return t ? (agents.get(t.worktreePath) ?? null) : null;
+    if (t) return agents.get(t.worktreePath) ?? null;
+    return sessions.get(slug)?.agent ?? null; // root session — self-reported by its hook
   };
 
   const byPath = new Map<string, SignalHolder[]>();
@@ -157,6 +381,7 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
     if (!byPath.has(r.path)) byPath.set(r.path, []);
     byPath.get(r.path)!.push({ slug: r.slug, agent: agentFor(r.slug), lastEditAt: r.at });
   }
+  enrichWithNotes(root, [...byPath.values()]);
   return [...byPath.entries()]
     .map(([path, holders]) => ({
       path,
@@ -176,7 +401,11 @@ export interface FileCheck {
  * Combines live edit signals (uncommitted, real-time) with each task's
  * committed-but-unmerged divergence from its base branch.
  */
-export async function checkFiles(root: string, paths: string[]): Promise<Record<string, FileCheck>> {
+export async function checkFiles(
+  root: string,
+  paths: string[],
+  excludeSlug?: string,
+): Promise<Record<string, FileCheck>> {
   const signals = await getSignals(root);
   const tasks = await loadTasks(root);
   const agents = await detectAgents(tasks.map((t) => t.worktreePath));
@@ -186,13 +415,17 @@ export async function checkFiles(root: string, paths: string[]): Promise<Record<
 
   const result: Record<string, FileCheck> = {};
   for (const p of paths) {
-    const holders: SignalHolder[] = [...(byPath.get(p) ?? [])];
+    // Drop the caller's own edits: an agent asking "is this busy?" means "busy
+    // by someone ELSE" — its own signals are not a reason to wait.
+    const holders: SignalHolder[] = (byPath.get(p) ?? []).filter((h) => h.slug !== excludeSlug);
     for (const t of tasks) {
+      if (t.slug === excludeSlug) continue;
       if (changed.get(t.slug)?.has(p) && !holders.some((h) => h.slug === t.slug)) {
         holders.push({ slug: t.slug, agent: agents.get(t.worktreePath) ?? null, lastEditAt: '' });
       }
     }
     result[p] = { busy: holders.length > 0, by: holders };
   }
+  enrichWithNotes(root, Object.values(result).map((r) => r.by)); // cover committed-but-unmerged holders too
   return result;
 }

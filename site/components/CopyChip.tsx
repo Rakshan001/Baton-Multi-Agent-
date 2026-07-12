@@ -8,10 +8,12 @@ import { useState } from "react";
  */
 export default function CopyChip({
   command,
+  display,
   prefix = "$",
   className = "",
 }: {
   command: string;
+  display?: string;
   prefix?: string;
   className?: string;
 }) {
@@ -36,7 +38,7 @@ export default function CopyChip({
       aria-label={`Copy command: ${command}`}
     >
       <span className="select-none text-faint">{prefix}</span>
-      <span className={`text-fg ${className}`}>{command}</span>
+      <span className={`text-fg ${className}`}>{display ?? command}</span>
       <span
         className="ml-1 select-none text-xs text-faint transition-colors group-hover:text-amber"
         aria-hidden="true"

@@ -6,15 +6,59 @@
  * (refs/baton/archive/<slug>) — preserved, never pushed, bisectable. Also
  * records the task's commits/files into the local history index for tracing.
  */
+import { realpath } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { archiveBranch, branchCommits, currentBranch, mergeBranch, type ConflictEntry } from '../git.js';
 import { detectAgents } from '../agents.js';
 import { recordMerge } from '../history.js';
 import { getTask, loadTasks, resolveBatonRoot, TaskNotFoundError } from '../store.js';
 import { computeConflicts } from '../conflicts.js';
 import { update } from '../kb/graphify.js';
-import { buildQueue, loadKb } from '../kb/state.js';
+import { buildQueue, loadKb, type KbProject } from '../kb/state.js';
 import { bus } from '../events.js';
 import { buildReport, saveReport, writeReportFile } from '../reports.js';
+
+/** The kb project whose path is the merged task's git repo (realpath-compared). */
+export async function projectForRepo(projects: KbProject[], gitRepo: string): Promise<KbProject | null> {
+  let real: string;
+  try {
+    real = await realpath(gitRepo);
+  } catch {
+    return null;
+  }
+  for (const p of projects) {
+    try {
+      if ((await realpath(p.path)) === real) return p;
+    } catch { /* project path missing — skip */ }
+  }
+  return null;
+}
+
+/**
+ * Queue an incremental graph refresh for the merged repo's project. Only the
+ * merged project — never the whole hub — and only when its graph EXISTS: a
+ * never-indexed project has nothing to keep fresh, and first builds belong to
+ * `kb init`/`kb rebuild`, not a surprise background index after a merge.
+ */
+export async function queueMergeGraphRefresh(
+  repoRoot: string,
+  gitRepo: string,
+  slug: string,
+  refresh: (path: string) => Promise<void> = update,
+): Promise<'queued' | 'no-kb' | 'no-project' | 'never-built'> {
+  const kb = await loadKb(repoRoot);
+  if (!kb) return 'no-kb';
+  const target = await projectForRepo(kb.projects, gitRepo);
+  if (!target) {
+    console.warn(`[baton] merge ${slug}: no kb project matches ${gitRepo} — skipping graph refresh`);
+    return 'no-project';
+  }
+  if (!existsSync(target.graphPath)) return 'never-built';
+  buildQueue.enqueue(target.id, () => refresh(target.path), (err) => {
+    if (!err) bus.publish({ type: 'kb.rebuilt', project: target.id });
+  });
+  return 'queued';
+}
 
 /** Thrown when a merge aborts on conflicts; carries the labelled file list. */
 export class MergeConflictError extends Error {
@@ -101,14 +145,7 @@ export async function mergeTaskBranch(
   // Keep the knowledge graph current: squash-merges land on the base branch
   // outside graphify's per-commit hook, so queue an incremental update here.
   // Fire-and-forget — a graph refresh must never block or fail a merge.
-  void loadKb(repoRoot).then((kb) => {
-    if (!kb) return;
-    for (const p of kb.projects) {
-      buildQueue.enqueue(p.id, () => update(p.path), (err) => {
-        if (!err) bus.publish({ type: 'kb.rebuilt', project: p.id });
-      });
-    }
-  }).catch(() => undefined);
+  void queueMergeGraphRefresh(repoRoot, gitRepo, slug).catch(() => undefined);
 
   return { merged: slug, into, branch: task.branch, squashed: squash, archivedRef };
 }

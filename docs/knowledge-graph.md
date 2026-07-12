@@ -68,6 +68,7 @@ baton kb init ./services       # index a specific folder
 | `--no-docs` | Skip adding the coordination guide to `AGENTS.md`/`CLAUDE.md`. |
 | `--share` | Commit the KB to git (`kb/` directory) so teammates skip re-indexing. |
 | `--local` | Keep the KB local-only (skip the interactive share question). |
+| `--port <port>` | Daemon port to embed in the generated MCP config URLs (default 7077). Use this when `baton serve` runs on a non-default port. |
 
 Example output:
 
@@ -132,6 +133,21 @@ automatically (pass `--no-rebuild` to skip). `kb share` mirrors the shareable
 artifacts into a committed `kb/` directory so teammates clone the graph instead
 of re-indexing from scratch.
 
+## Share the project with any chatbot (context pack)
+
+Hit a usage limit on your coding agent and want to continue in ChatGPT, Grok,
+or DeepSeek? `baton kb context` renders everything Baton knows about the
+project into one paste-able markdown brief — overview, stack, annotated folder
+tree, the graph's most-connected symbols, and fresh (evidence-checked) memory
+facts. No file contents are included, secret-looking strings are redacted, and
+the output is capped at a token budget (default 8k, ChatGPT-free-tier sized —
+the footer says which chatbots it fits).
+
+In the dashboard: **Knowledge Graph → Share context** → Copy to clipboard or
+Download `.md`. Over HTTP: `GET /api/kb/context?project=<id|all>&tokens=<n>&format=<md|json>`
+(read-only). The pack works even before `baton kb init` — it just degrades to
+README + structure until a graph exists.
+
 ## The CODEBASE.md map and token savings
 
 Every project gets a deterministic `CODEBASE.md` (< ~2k tokens): detected stack,
@@ -166,7 +182,13 @@ Source: [`src/kb/codebasemd.ts`](../src/kb/codebasemd.ts).
 
 `baton kb init` writes graphify's MCP servers into `.mcp.json` (one
 `graphify-<project>` per project, plus `graphify-merged`), alongside the `baton`
-coordination server. Each graphify server runs via `uv` and exposes:
+coordination server.
+
+**The daemon must be running.** Graph queries route through the daemon's shared
+graphify pool (`POST /mcp/g/<token>/<projectId>`). Backends are lazily started
+on first use and reaped after 15 minutes idle, so you pay no cost for projects
+you don't touch. If `baton serve` is not running, `query_graph` / `get_node`
+calls from agents will fail to connect.
 
 | MCP tool | Use |
 |---|---|
@@ -176,13 +198,13 @@ coordination server. Each graphify server runs via `uv` and exposes:
 Print config for any agent:
 
 ```bash
-baton kb mcp --agent claude    # → .mcp.json (repo root) or ~/.claude.json
+baton kb mcp --agent claude    # → .mcp.json (repo root)
 baton kb mcp --agent cursor    # → .cursor/mcp.json
-baton kb mcp --agent codex     # → ~/.codex/config.toml
+baton kb mcp --agent codex     # → ~/.codex/config.toml (stdio; stays local)
 baton kb mcp --agent gemini    # → ~/.gemini/settings.json
 ```
 
-You can also query from the shell:
+You can also query from the shell without the daemon:
 
 ```bash
 graphify query "where is auth handled" --graph graphify-out/graph.json
@@ -200,6 +222,15 @@ all of a repo's worktrees share `.git/hooks`, every task worktree gets the same
 auto-rebuild: when you commit, the affected graph updates and the matching
 `CODEBASE.md` is regenerated. If hook installation fails, run
 `graphify hook install` manually from the repo root.
+
+Graph changes are picked up automatically by agents: graphify's `--stateless`
+backend re-reads the graph file on each request, so a rebuild is reflected in the
+next query with no daemon restart needed.
+
+> **Note:** If you run `baton kb init` while the daemon is already running,
+> restart the daemon so it picks up the newly wired project paths. The graphify
+> pool captures KB state at daemon start time; projects added after startup won't
+> be served until you restart.
 
 ## Dashboard
 

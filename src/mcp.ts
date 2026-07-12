@@ -15,28 +15,63 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { collectStatus } from './board.js';
+import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
+import { resolveMcpRoot } from './store.js';
 import { queryFile } from './history.js';
-import { checkFiles, getSignals } from './signals.js';
-import { getReport, listReports } from './reports.js';
+import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress } from './signals.js';
+import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, saveMemory } from './memory.js';
+import { buildOrientation } from './kb/orient.js';
+import { asText, capList } from './mcp-format.js';
 
-const asText = (data: unknown) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-});
+/** who_touched can span a file's whole history — cap what an agent is served. */
+const WHO_TOUCHED_CAP = 20;
 
 export async function startMcpServer(): Promise<void> {
-  const root = await gitRoot();
-  const server = new McpServer({ name: 'baton', version: '0.1.0' });
+  // Coordination store: an agent runs `baton mcp` from inside its worktree, so
+  // gitRoot() would point at an empty per-worktree shadow store. resolveMcpRoot
+  // finds the real hub/repo .baton (and honors BATON_ROOT for spawned agents).
+  const root = await resolveMcpRoot();
+  // Memory tools resolve the shared main repo themselves (worktree-safe) from a
+  // git path, so give them the git root — unchanged in hub mode.
+  const memRoot = await gitRoot();
+  // The caller's own task, so check_files/who_touched don't report its edits as
+  // "busy" to itself (set by baton when it spawns the agent). Sessions with no
+  // task (any agent, repo root, no worktree) get a per-session identity instead:
+  // `baton mcp` runs one process per agent session, so the pid is the session
+  // and the parent process chain says which agent spawned us (M1, zero config).
+  const taskSlug = process.env.BATON_SLUG?.trim() || undefined;
+  const selfSlug = taskSlug ?? sessionSlug(`p${process.pid}`);
+  if (!taskSlug) {
+    try {
+      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent());
+      registerHookSession(root, selfSlug, agent, memRoot);
+    } catch { /* identity is best-effort — tools still work anonymously */ }
+  }
+  const server = new McpServer(
+    { name: 'baton', version: '0.1.0' },
+    { instructions: 'New to this repo? Call orient() first for a budgeted project brief (memory, recent work, structure), then recall_memory before exploring, and check_files before editing shared files.' },
+  );
+
+  server.registerTool(
+    'orient',
+    {
+      description:
+        'Get a short project orientation BEFORE exploring: what CODEBASE.md covers, evidence-checked project memory (decisions/gotchas/conventions), recently shipped tasks, and how to coordinate. Call this once at the start of a session so you understand the repo without re-reading it.',
+      inputSchema: { topic: z.string().optional().describe('What you are about to work on — biases the memory facts') },
+    },
+    async ({ topic }) => asText({ orientation: await buildOrientation(root, { topic }) }),
+  );
 
   server.registerTool(
     'check_files',
     {
       description:
-        'Check whether files are currently being edited by another Baton session (live edit signals + unmerged branch changes). Call BEFORE editing shared files; if busy, prefer waiting or picking other work, then re-check.',
+        'Check whether files are currently being edited by another Baton session (live edit signals + unmerged branch changes). Call BEFORE editing shared files; if busy, prefer waiting or picking other work, then re-check. watcherActive:false means live monitoring is off — "not busy" is unproven.',
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths to check') },
     },
-    async ({ paths }) => asText(await checkFiles(root, paths)),
+    async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
   );
 
   server.registerTool(
@@ -53,10 +88,11 @@ export async function startMcpServer(): Promise<void> {
     'get_report',
     {
       description:
-        'Get the completion report of a merged task (summary, files changed, commits). Use after waiting on busy files to decide whether your issue is already fixed. Omit slug to list recent reports.',
+        'Get the completion report of a merged task (summary, files changed, commits). Use after waiting on busy files to decide whether your issue is already fixed. Omit slug for a compact list of recent reports (pass a slug back for full detail).',
       inputSchema: { slug: z.string().optional().describe('Task slug; omit for recent reports') },
     },
-    async ({ slug }) => asText(slug ? (getReport(root, slug) ?? { error: `no report for '${slug}'` }) : listReports(root, 10)),
+    async ({ slug }) =>
+      asText(slug ? (getReport(root, slug) ?? { error: `no report for '${slug}'` }) : listReports(root, 10).map(reportSummary)),
   );
 
   server.registerTool(
@@ -67,8 +103,9 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { file: z.string().describe('Repo-relative file path') },
     },
     async ({ file }) => {
-      const [merged, live] = [queryFile(root, file), await checkFiles(root, [file])];
-      return asText({ merged, live: live[file] });
+      const [hits, live] = [queryFile(root, file), await checkFiles(root, [file], selfSlug)];
+      const capped = capList(hits, WHO_TOUCHED_CAP);
+      return asText({ merged: capped.items, moreMerged: capped.more, live: live[file] });
     },
   );
 
@@ -79,6 +116,34 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: {},
     },
     async () => asText(await collectStatus(root)),
+  );
+
+  server.registerTool(
+    'report_progress',
+    {
+      description:
+        'Tell the other agents what you are working on RIGHT NOW, in one line (e.g. "refactoring token expiry in auth.ts, ~2 commits left"). Siblings see it on your files via check_files/list_signals, so they can coordinate instead of colliding. Expires in 30 min and clears on your next commit — refresh it as you go.',
+      inputSchema: { note: z.string().describe('One line: what you are doing + rough progress') },
+    },
+    async ({ note }) => {
+      const trimmed = note.trim().slice(0, 200);
+      setProgress(root, selfSlug, trimmed);
+      return asText({ reported: trimmed, slug: selfSlug });
+    },
+  );
+
+  server.registerTool(
+    'touch_files',
+    {
+      description:
+        'Tell the other sessions which files YOU are editing right now (live edit signals). Call it right after you start editing shared files — especially when working at the repo root outside a managed worktree, where no file watcher covers you. Signals expire in 30 min and self-clean once the work is committed.',
+      inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths you are editing') },
+    },
+    async ({ paths }) => {
+      const touched = paths.map((p) => p.trim()).filter((p) => p && !p.startsWith('/') && !p.includes('..'));
+      for (const p of touched) recordHookEdit(root, { slug: selfSlug, path: p });
+      return asText({ touched, as: selfSlug });
+    },
   );
 
   server.registerTool(
@@ -97,7 +162,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ fact, type, files, agent, task }) => {
       try {
         // memory.ts resolves the MAIN repo root internally (worktree-safe).
-        const saved = await saveMemory(root, { fact, type, files, agent, task });
+        const saved = await saveMemory(memRoot, { fact, type, files, agent, task });
         return asText({ saved: saved.id, supersedes: saved.supersedes, anchoredFiles: saved.anchors.files.map((f) => f.path) });
       } catch (e) {
         if (e instanceof MemoryValidationError) return asText({ rejected: e.message });
@@ -117,7 +182,7 @@ export async function startMcpServer(): Promise<void> {
       },
     },
     async ({ topic, limit }) => {
-      const r = await recallMemories(root, { topic, limit });
+      const r = await recallMemories(memRoot, { topic, limit });
       return asText({
         facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
         totalStored: r.total,

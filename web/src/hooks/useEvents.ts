@@ -24,20 +24,26 @@ const EVENT_TYPES = [
 
 export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {
   live: boolean;
+  reconnecting: boolean;
   subscribe: (type: string, fn: Handler) => () => void;
 } {
   const [live, setLive] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const everLive = useRef(false);
   const handlersRef = useRef(new Map<string, Set<Handler>>());
 
   useEffect(() => {
     // Demo mode has no daemon; forced-offline means we shouldn't try.
     if (!enabled || BatonAPI.demo || BatonAPI.forcedOffline) {
       setLive(false);
+      setReconnecting(false);
       return;
     }
     const es = new EventSource(`${baseUrl || BatonAPI.baseUrl}/api/events`);
-    es.onopen = () => setLive(true);
-    es.onerror = () => setLive(false); // EventSource retries on its own
+    es.onopen = () => { everLive.current = true; setLive(true); setReconnecting(false); };
+    // EventSource retries on its own; only call it "reconnecting" if the
+    // stream has ever been open — a daemon that was never up is just offline.
+    es.onerror = () => { setLive(false); if (everLive.current) setReconnecting(true); };
 
     const dispatch = (raw: MessageEvent) => {
       let msg: BatonEventMsg;
@@ -59,6 +65,8 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
     return () => {
       es.close();
       setLive(false);
+      setReconnecting(false);
+      everLive.current = false;
     };
   }, [enabled, baseUrl, BatonAPI.demo]);
 
@@ -69,5 +77,5 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
     return () => { map.get(type)?.delete(fn); };
   }, []);
 
-  return { live, subscribe };
+  return { live, reconnecting, subscribe };
 }

@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-01 (session 6: multi-repo hub launcher + blank-terminal fix)** (branch: `feat/worktree-orchestration`)
+> Last updated: **2026-07-10 (session 14: W-round — worktree GC, honest-graph, downshift routing, antigravity skills, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open; PR #6 = skills+coordination)
 
 ## What this project is
 
@@ -46,7 +46,14 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **Skills (catalog + install)** | Searchable catalog of reusable agent playbooks. **File-backed** multi-file skills live under `src/skills/bundled/<id>/` — a real `SKILL.md` (gray-matter frontmatter, incl. folded multi-line descriptions) + an optional `references/` folder; the flagship `bug-fix` skill (reproduce-first → audit → blast radius → root cause → ≥95% skeptic-corroborated confidence + approved plan → fix → re-verify → auto-commit, never push) ships 3 reference files. The **efficiency & traceability pack** adds four more file-backed skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) — each a portable SKILL.md + one `references/` cheat-sheet, with optional "Baton boost" sections (CODEBASE.md/query_graph/recall_memory/who_touched). Tags/produces for file-backed skills live in `BUNDLED_META` (catalog.ts) so the source SKILL.md stays a clean name+description-only Claude skill. Plus short **inline** skills (`map-codebase`, `safe-refactor`) and **imported** skills read from `.baton/skills/*.md`. Bundled skills are cached + copied into `dist/` at build (`scripts/copy-assets.mjs`). `GET /api/skills` returns each skill with per-agent install state + reference paths (content/raw never serialized); `POST/DELETE /api/skills/:id/install` writes/removes in the agent's own format — Claude → `.claude/skills/<id>/SKILL.md` (+ `references/`, hand-authored SKILL.md written verbatim when faithful), Cursor → `.cursor/rules/<id>.mdc` (`alwaysApply:false`) with references copied to a sibling `<id>/` folder the rule points at; other CLIs unsupported. `POST /api/skills/import` adds from a path/http(s) URL (256KB cap, can't shadow a bundled id). All writes gated on `--write`. Dashboard **Skills** screen: search, source/produces/reference chips + multi-file badge, per-agent install toggles, playbook preview, import; an **"Efficiency & traceability pack"** showcase band highlights the four pack skills on the unsearched landing state (click a chip to filter to it); demo mirror (`web/src/lib/demoSkills.ts`). | dashboard → Skills; `curl -XPOST localhost:7077/api/skills/bug-fix/install -d '{"agent":"claude"}'` writes `.claude/skills/bug-fix/SKILL.md` + `references/` |
 | **Project memory** | Evidence-anchored shared memory at `.baton/memory/facts/` (one md file per fact, atomic writes, always the MAIN repo even from worktrees): every fact stores the commit + content-hashes of the files it describes; on every read the anchors are re-checked — changed file ⇒ fact served as `stale` with the reason and **withheld from agents** (anti-hallucination). Agents write via `save_memory` / read via `recall_memory` MCP tools (keyword-ranked, stale-filtered); supersede-by-fingerprint dedup; secret-pattern rejection (keys/tokens/JWTs refused); 1.2k-char + 500-fact caps; handoff briefs embed a token-cheap "Project memory" section; daemon watches the store → `memory.updated` SSE; dashboard Memory page (search, fresh/aging/stale badges, quick-add, GC, delete; demo facts in demo mode); `baton memory list\|add\|rm\|gc` CLI; AGENTS.md guide tells agents to recall-before-exploring and save-after-learning | `baton memory add "…" --files src/x.ts` → edit src/x.ts → `baton memory list` shows STALE → `baton memory gc`; dashboard → Memory |
 
-Tests: 228 vitest tests at root green (routing v2 + MCP-connect + roster + skills covered;
+| **Shared graphify backend pool** | The daemon owns one graphify HTTP backend per **touched** project (lazy start on first query, reaped after 15 min idle); agents POST to `POST /mcp/g/<token>/<projectId>` and never spawn their own processes. Token-gated (`.baton/mcp-token`, mode 0600, embedded in the config URL); backends bind `127.0.0.1`. Claude/Cursor get `{type:'http', url}` MCP entries; Gemini gets `{httpUrl}` (Gemini CLI's streamable-HTTP schema); Codex stays on stdio. Existing setups migrate by re-running `baton kb init` (or the Agents → Connect action). RAM: ~720 MB (3 agents × 6 stdio processes on a 5-project hub) → at most 1–2 backends per touched project regardless of agent count (~120–180 MB shared vs ~720 MB–1.8 GB before). Graph freshness: graphify `--stateless` re-reads on every request (empirically verified: node count drops immediately after file modification, no flush needed). | `node dist/cli.js serve --write --port 7079` against FAT_FOX (5 projects): `/api/kb/mcp` → http URLs; POST tools/list to `merged` + `fatfox-api-server` → 2 Python backends started (HTTP 200 both); wrong token → 403; SIGTERM daemon → 0 backends remain |
+
+| **Context pack** | `baton kb context`, `GET /api/kb/context`, dashboard "Share context" modal — budgeted (≤ ~8k tokens), deterministic, secret-redacted markdown brief of the project/hub for pasting into external chatbots. Spec: docs/superpowers/specs/2026-07-04-context-pack-design.md. | `baton kb context \| pbcopy`; dashboard → Knowledge Graph → Share context |
+| **Site hosting readiness + dashboard edge cases** | env-driven site URL (`NEXT_PUBLIC_SITE_URL`), PNG OG image + favicon, correct quick-start commands, mobile nav menu, noscript reveal fallback; SSE reconnect indicator, honest error/loading/empty states on Memory/Activity/Conflicts/Knowledge Graph pages, overflow fix | `cd site && npm run build` → `/opengraph-image` + `/apple-icon` routes listed; dashboard → Memory/Activity/Conflicts/Knowledge Graph with demo OFF |
+
+**Final-review fixes (2026-07-03, session 7 polish).** (1) Gemini `httpUrl` fix: `McpServerDef` now has a third `{ httpUrl }` variant; `mcpServersGemini()` / `serversForStateGemini()` / `geminiSnippet()` emit it; `mergeTomlConfig` handles it. (2) `--port` flag on `baton kb init` and `baton kb mcp` so non-default-port setups generate correct MCP URLs without needing the daemon running. (3) FIX 3 verified FRESH — graphify `--stateless` re-reads per request; documented in code + docs. (4) `serversForState(state, undefined)` now throws instead of silently returning baton-only. Tests: 8 new tests (gemini httpUrl, port in URL, throw behavior, misleading title renamed). **274 tests green.**
+
+Tests: 266 vitest tests at root green (routing v2 + MCP-connect + roster + skills + graphify-server + graphify-proxy + mcp-token covered;
 `test/skills.test.ts` covers render/parse/target helpers, folded-YAML parsing, multi-file
 references, file-backed bundled loading, and the efficiency & traceability pack's load +
 faithful raw + BUNDLED_META tags/produces). Both workspaces strict TS, both builds clean.
@@ -144,6 +151,147 @@ all three workspaces build clean. Verified end-to-end on the real FAT_FOX hub
 (daemon boots, `/api/meta` hub:true + 5 projects, create→worktree-in-sub-repo→
 merge→remove, self-cleaned). Still to do: live browser click-through of the picker
 + blank-terminal fix with a real `claude` session.
+
+**Shared graphify server + unified agent proxy (2026-07-03).** Replaced the
+per-agent stdio `uv run graphify.serve` spawning with a daemon-owned shared
+HTTP backend pool. `GraphifyPool` (`src/kb/graphify-server.ts`) lazily starts one
+graphify process per touched project and proxies all agent queries through
+`POST /mcp/g/<token>/<projectId>` — the 32-hex token is stored in
+`.baton/mcp-token` (mode 0600) and embedded in the generated MCP config URLs.
+Backends bind `127.0.0.1` only, run `--stateless --json-response` (no session
+affinity), and are reaped via SIGTERM after 15 min idle (60s poll). Daemon
+SIGTERM/SIGINT fires `graphPool.shutdown()` so backends never outlive the daemon.
+MCP config for Claude, Cursor, Gemini rewritten to `{type:'http', url}` form;
+Codex intentionally stays on stdio (its TOML has no url support). Existing
+setups migrate via `baton kb init` or Agents → Connect. Deliberate trade-off:
+graph queries now require `baton serve` to be running — documented in
+`docs/knowledge-graph.md`, `docs/mcp-tools.md`, `docs/architecture.md`,
+`docs/troubleshooting.md`. Verified live against FAT_FOX (5-project hub, port
+7079): 0 HTTP graphify backends before first query; `merged` query → 2 processes
+(1 uv + 1 Python); `fatfox-api-server` query → 4 total (2 projects × 2 each);
+wrong token → 403; SIGTERM daemon → 0 HTTP backends remain (12 pre-existing
+old-style stdio processes untouched). Tests: `test/graphify-server.test.ts` (3)
++ `test/graphify-proxy.test.ts` (1) + `test/mcp-token.test.ts` (1). **266 tests
+green**, backend build clean.
+
+**Multi-agent coordination audit, P1–P12 (2026-07-05/06, session 9 — PR #5).** A
+12-proposal audit (docs/research/2026-07-06-multi-agent-coordination-audit.md) shipped
+one TDD'd phase per commit on `feat/worktree-orchestration`: **P1** gitRoot→worktree
+signal attribution fix (silently broke coordination), **P2** SQLite-backed signals,
+**P3** report-aware `check_files` ("already fixed" answers), **P4** MCP output
+contracts (compact payloads, bounded lists), **P5** `report_progress` (agents share
+live intent notes), **P6** lazy read-time signal reconciliation (dropped signals whose
+path is no longer dirty in the worktree; untracked files aren't false-dropped),
+**P7** orient hook + MCP tool (budgeted session-start brief), **P8** kb-init footprint
+gitignored, **P9** declared task scope + overlap warning at creation, **P10** memory
+journal + archive (nothing hard-deleted; `baton memory log`), **P11** merged-only
+graphify in a hub by default (`projects.length > 1` guard keeps single-project state
+intact), **P12** `baton doctor --docs` propose-only .md-sprawl scan (`src/kb/sprawl.ts`).
+
+**Skills v2, S1–S6 (2026-07-08, session 10 — branch `feat/skills-v2`, off PR #5's
+branch).** Research round first: Ponytail (github.com/DietrichGebert/ponytail, MIT)
+cloned to `.refs/ponytail` and studied — single canonical SKILL.md, mode filtering,
+restraint ladder, honest agentic benchmark (~54% less code, ~20% cheaper, ~27% faster,
+100% safe). Then: **S1** bundled `bug-fix` skill v2 (Golden Rule 0: check the shared
+tracker FIRST / record the fix to memory LAST — `save_memory` with `fixed-in:<sha>`;
+guarded by an invariant test), **S2** new `lean-code` bundled skill (original-wording
+adaptation of Ponytail's 7-rung ladder + safety carve-outs, MIT-attributed; ideas, not
+text), **S3** install-a-skill-into-every-agent (`installSkillEverywhere`, new
+`baton skills list|install|uninstall|import` CLI, `agent:"all"` API, "⚡ Add to all"
+button), **S4** live who's-editing panel (Conflicts.tsx groups each busy file's holders
+with their P5 intent note + freshness; web-only), **S5** workload-aware handoff
+(`src/handoff/workload.ts` least-loaded pick + `GET /api/tasks/:slug/suggest-handoff`;
+dialog preselects with reason + idle/N-active badges), **S6** bug recurrence
+(`src/recurrence.ts` + `baton bugs "<symptom>"` — prior fixes from memory, a STALE fix
+fact is itself the regression signal, suspect commits from history; zero new storage).
+Deliberate non-builds (lean-code applied to ourselves): no AGENTS.md always-on skill
+injection for codex/gemini (token-hostile), no SSE for the panel (5s poll is enough),
+no upstream-Ponytail UI import (redundant with the bundled adaptation). **396 tests
+green**; docs (README, skills, cli-reference, memory, session-handoff, dashboard)
+updated this session.
+
+**G-round: graph freshness + terminal-first coordination (2026-07-08, session 11).**
+Research first (two agents): graphify supports ~35 tree-sitter languages (JS/TS/JSX/TSX,
+Python, Java, Go, Rust, C#, PHP, Swift, Kotlin, Vue/Svelte…); post-commit hook rebuilds
+incrementally and worktrees share hooks; the staleness gaps were uncommitted edits,
+CODEBASE.md lag, silent detached-rebuild failures, and hub re-merge. Root-checkout
+sessions were fully dark (no detection/signals/handoff; memory/guard/orient worked).
+**G1 (graph-freshness golden rule):** `src/kb/freshness.ts` classifies fresh/behind/
+dirty (uncommitted edits to indexable files) and renders an honest warning; orient
+opens with it (budget-protected); the graphify proxy appends it to every query answer
+(byte-for-byte passthrough on anything unparseable); `refreshDocsIfStale` + a 60s
+daemon sweep keep CODEBASE.md following hook rebuilds; the rule is in the bug-fix +
+lean-code skills, invariant-locked. Root-caused a flaky hub test: merge fire-and-forgot
+a detached graphify update even for never-indexed projects — `queueMergeGraphRefresh`
+now skips a graph that doesn't exist (first builds belong to kb init).
+**G2 (root-session coordination):** the PreToolUse guard hook now WRITES the edit
+signal it used to only read — task slug inside a worktree, `sess-<id8>` pseudo-slug
+(from Claude's hook `session_id`) at the repo root, registered in a new
+`hook_sessions` table (agent + checkout root). Reads attribute agents from it and
+reconcile pseudo-session signals against the session's own checkout; a 15s grace
+period keeps just-recorded signals (the hook fires before the file hits disk).
+Orient nudges main-checkout sessions toward `baton new`. Verified end-to-end: two
+simulated root sessions warned each other + `baton signals` showed the overlap with
+no daemon ever running. README gained "Do I need the daemon running?" + a real
+contributor guide. **428 tests green.** Remaining G-phases: G3 daemon-less graph
+query fallback; G4 language-support docs. Known gap: root sessions of hook-less
+agents (cursor/codex/antigravity) are still dark outside worktrees.
+
+**Every-agent coordination M1–M3 (2026-07-09, session 12).** Plan + capability matrix at
+docs/plans/2026-07-09-multi-agent-coordination.md (the traceability record — phases,
+confidence gates, edge cases, progress log). Research: Ponytail's 16 adapters + vendor
+docs → Cursor has documented `afterFileEdit` hooks w/ `conversation_id`; Codex hooks are
+trust- and version-gated (<95% → deferred); Antigravity CLI = `agy`, inherits Gemini
+config; aider = git-native only. **M1**: MCP session identity for EVERY agent —
+`baton mcp` is one process per session, so pid = session (`sess-p<pid>`) and the parent
+process chain names the agent (`detectParentAgent` in src/agents.ts, `BATON_AGENT` env
+override); auto-registers in hook_sessions; `report_progress` works without a worktree;
+new `touch_files` MCP tool records signals; AGENTS.md coordination guide teaches both.
+**M2**: `baton hooks install cursor [--project]` → `.cursor/hooks.json` `afterFileEdit →
+baton guard --agent cursor`; guard normalizes Cursor's payload (`normalizeGuardPayload`)
+and records signals, silent to non-Claude hosts. **M3**: antigravity in the agent
+registry (detection-only: `agy` + Antigravity.app; launchers deliberately unguessed) +
+web AgentId. 439 tests green, both workspaces build.
+
+**FAT_FOX live-hub bug fixes B1+B2 (2026-07-09, session 13).** Debugging a real
+5-project hub (6+ Claude terminal sessions running at the hub root, plus GitHub-PR
+merges) surfaced two dashboard blind spots. **B1**: agents running at the hub/repo
+root (not in a task worktree) showed as "No agents attached" — `collectStatus`/
+`detectAgents` are worktree-scoped only. Fix: `detectRootAgents` (scans the full
+process table; matches cwd against the hub root + every kb project; excludes task
+worktrees; collapses launcher/worker process pairs so a GUI-hosted agent like Claude
+Desktop's bundled Claude Code isn't double-counted) → `rootAgentSummary` →
+`GET /api/agents/root` → CommandCenter "Active sessions" + agent chips + an "N at repo
+root" note. Live-verified: 9 sessions (6 terminal + 3 desktop-hosted). **B2**: commits
+merged via GitHub PRs on the sub-repos never reached `history.db` (its commits table is
+written only by `baton merge`→`recordMerge`). Fix: `git.recentCommits` + `history.
+ingestGitLog` import each project's real `git log` into a per-project bucket
+(`git:<id>`, agent null), idempotent, never clobbering a real task's sha; daemon runs
+`ingestAllProjects` at startup + every 60s. Live-verified: 100 real FAT_FOX commits
+ingested. B3 (Cursor IDE not process-detectable → coordinate via hooks/MCP) documented
+in the plan. 453 tests green. NOTE: the user's FAT_FOX daemon must be restarted to pick
+up this code (it was running a pre-fix build).
+
+**W-round: workspace hygiene + honest graph + parity (2026-07-10, session 14).** Driven by
+an honest audit of the live FAT_FOX hub: 25GB total, of which ~13GB was 60+ agent-created
+orphaned worktrees (~90% for branches already PR-merged) — Baton's own footprint was 29MB.
+**W1**: `baton clean` gained merged-worktree GC across every kb project (porcelain survey,
+origin/<default>-first merge target, never touches main/dirty/unmerged/locked, never
+deletes branches, `git worktree remove` without --force as the second safety net, du only
+on removable candidates; baton tasks whose tree is removed are dropped from the store).
+Live dry-run on FAT_FOX: 42 removable, ~8.8G reclaimable. **W2**: hub worktree sessions
+previously matched NO kb project → no graph freshness note; projectForCwd now resolves the
+owner via git-common-dir, and orient appends a branch-divergence warning (files where the
+session's branch differs from the graph's build commit). **W3**: the G2 nudge wrongly told
+foreign-worktree sessions "main checkout" — linked-worktree detection (git-dir ≠
+git-common-dir) now yields the honest unmanaged-worktree hint. **W4**: antigravity joined
+SKILL_AGENTS (`.agents/skills/<id>/SKILL.md`, layout evidenced by a live Antigravity
+workspace); web SkillAgent + registry glyph. **W5**: advisory `downshift` on RouteSuggestion
+when a keyword rule catches a clearly-trivial task (severity <25) — rules still win,
+cheaper light/local chain + reason attached; mirrored in web routing, parity suite extended.
+**W6 deferred below the 95% gate** (Stop-hook decision:block contract unverified; documented
+in the plan). All in docs/plans/2026-07-09-multi-agent-coordination.md W-round section.
+479 tests green ×2.
 
 ## Pending / next 🔜
 

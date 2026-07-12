@@ -7,8 +7,16 @@ export const GOOD_FIRST_ISSUES_URL = `${ISSUES_URL}?q=is%3Aissue+is%3Aopen+label
 export const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
 export const DOCS_URL = `${REPO_URL}#readme`;
 
-// Star count is fetched live at build time (see Nav). This is the fallback.
-export const STAR_FALLBACK = "★";
+/** The one command a visitor needs — clone the repo. */
+export const CLONE_CMD = `git clone ${REPO_URL}.git`;
+
+/** Full quick start, matching README.md exactly (clone → deps → build → serve). */
+export const QUICKSTART_CMD = [
+  `git clone ${REPO_URL}.git baton && cd baton`,
+  "npm install && npm install --prefix web",
+  "npm run build && npm run build --prefix web",
+  "node dist/cli.js serve --write",
+].join("\n");
 
 export const NAV_LINKS = [
   { label: "How it works", href: "#how-it-works" },

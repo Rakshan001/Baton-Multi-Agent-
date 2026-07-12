@@ -5,7 +5,7 @@
    without a daemon. routing-parity.test.ts enforces lockstep — any
    change here must land in src/routing.ts too, and vice versa.
    ============================================================ */
-import type { RouteSuggestion, RoutingConfig, RoutingMode, RoutingRule, RoutingSuggestion, TierEntry } from "../types";
+import type { Downshift, RouteSuggestion, RoutingConfig, RoutingMode, RoutingRule, RoutingSuggestion, TierEntry } from "../types";
 
 export const TIER_ORDER = ["heavy", "standard", "light", "local"] as const;
 
@@ -111,6 +111,36 @@ function chainFrom(entries: TierEntry[], model?: string): TierEntry[] {
   return entries.map((e) => (model ? { ...e, model } : { ...e }));
 }
 
+/** Which defined tier an agent belongs to (first match in capability order). */
+function tierOfAgent(agent: string, tiers: Record<string, TierEntry[]>): string | null {
+  for (const t of TIER_ORDER) {
+    if (tiers[t]?.some((e) => e.agent === agent)) return t;
+  }
+  return null;
+}
+
+const CHEAP_TIERS = new Set<string>(["light", "local"]);
+
+/** W5 mirror of src/routing.ts maybeDownshift — keep in lockstep (parity test). */
+function maybeDownshift(
+  score: number,
+  ruleTier: string | null,
+  agent: string,
+  tiers: Record<string, TierEntry[]> | undefined,
+  mode: RoutingMode,
+): Downshift | null {
+  if (!tiers || mode === "manual" || score >= 25) return null; // 25 = the 'local' severity band
+  const current = ruleTier ?? tierOfAgent(agent, tiers);
+  if (current && CHEAP_TIERS.has(current)) return null; // already cheap — don't churn
+  const target = severityToTier(score, tiers);
+  if (!target || !CHEAP_TIERS.has(target) || target === current) return null;
+  return {
+    tier: target,
+    chain: chainFrom(tiers[target]),
+    reason: `severity ${score}/100 says this is trivial — the '${target}' tier could handle it at lower cost`,
+  };
+}
+
 export function suggestRoute(taskText: string, config: RoutingConfig = BUILTIN_ROUTING): RouteSuggestion {
   const mode: RoutingMode = config.mode ?? "auto";
   const { score, signals } = scoreSeverity(taskText);
@@ -135,6 +165,7 @@ export function suggestRoute(taskText: string, config: RoutingConfig = BUILTIN_R
         mode, agent: chain[0].agent, model: chain[0].model,
         tier: rule.tier, chain,
         severity: score, signals, matched, rule, source: "rule", confidence,
+        downshift: maybeDownshift(score, rule.tier, chain[0].agent, tiers, mode),
       };
     }
     if (rule.agent) {
@@ -142,6 +173,7 @@ export function suggestRoute(taskText: string, config: RoutingConfig = BUILTIN_R
         mode, agent: rule.agent, model: rule.model,
         tier: null, chain: [{ agent: rule.agent, ...(rule.model ? { model: rule.model } : {}) }],
         severity: score, signals, matched, rule, source: "rule", confidence,
+        downshift: maybeDownshift(score, null, rule.agent, tiers, mode),
       };
     }
   }

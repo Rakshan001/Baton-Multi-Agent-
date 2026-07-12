@@ -60,6 +60,13 @@ export interface RoutingSuggestion {
   source: 'rule' | 'default';
 }
 
+/** W5 — advisory cheaper-tier alternative for a trivial task caught by a rule. */
+export interface Downshift {
+  tier: string;
+  chain: TierEntry[];
+  reason: string;
+}
+
 /** Rich suggestion (suggestRoute): severity-ranked, tier-aware, explainable. */
 export interface RouteSuggestion {
   mode: RoutingMode;
@@ -77,6 +84,8 @@ export interface RouteSuggestion {
   rule: RoutingRule | null;
   source: 'single' | 'rule' | 'severity' | 'default';
   confidence: 'high' | 'low';
+  /** Advisory: a cheaper tier that could handle this (rule pick stays the answer). */
+  downshift?: Downshift | null;
 }
 
 export const CONFIG_FILE = 'baton.config.json';
@@ -338,6 +347,42 @@ function chainFrom(entries: TierEntry[], model?: string): TierEntry[] {
   return entries.map((e) => (model ? { ...e, model } : { ...e }));
 }
 
+/** Which defined tier an agent belongs to (first match in capability order). */
+function tierOfAgent(agent: string, tiers: Record<string, TierEntry[]>): string | null {
+  for (const t of TIER_ORDER) {
+    if (tiers[t]?.some((e) => e.agent === agent)) return t;
+  }
+  return null;
+}
+
+const CHEAP_TIERS = new Set<string>(['light', 'local']);
+
+/**
+ * W5 — a keyword rule always wins ("plan" → claude/opus), even when the task
+ * is a typo fix that happens to mention the plan doc. The rule's pick stays
+ * the answer (rules are explicit user config), but for clearly-trivial tasks
+ * we attach an advisory cheaper-tier alternative — suggest-only, like
+ * escalation. Null when the pick is already cheap or severity isn't trivial.
+ */
+function maybeDownshift(
+  score: number,
+  ruleTier: string | null,
+  agent: string,
+  tiers: Record<string, TierEntry[]> | undefined,
+  mode: RoutingMode,
+): Downshift | null {
+  if (!tiers || mode === 'manual' || score >= 25) return null; // 25 = the 'local' severity band
+  const current = ruleTier ?? tierOfAgent(agent, tiers);
+  if (current && CHEAP_TIERS.has(current)) return null; // already cheap — don't churn
+  const target = severityToTier(score, tiers);
+  if (!target || !CHEAP_TIERS.has(target) || target === current) return null;
+  return {
+    tier: target,
+    chain: chainFrom(tiers[target]),
+    reason: `severity ${score}/100 says this is trivial — the '${target}' tier could handle it at lower cost`,
+  };
+}
+
 /**
  * Severity-ranked, tier-aware suggestion. Pure — no LLM, no I/O. The first
  * chain entry is the recommendation; the rest are fallbacks (resolveChain
@@ -367,6 +412,7 @@ export function suggestRoute(taskText: string, config: RoutingConfig = BUILTIN_R
         mode, agent: chain[0].agent, model: chain[0].model,
         tier: rule.tier, chain,
         severity: score, signals, matched, rule, source: 'rule', confidence,
+        downshift: maybeDownshift(score, rule.tier, chain[0].agent, tiers, mode),
       };
     }
     if (rule.agent) {
@@ -374,6 +420,7 @@ export function suggestRoute(taskText: string, config: RoutingConfig = BUILTIN_R
         mode, agent: rule.agent, model: rule.model,
         tier: null, chain: [{ agent: rule.agent, ...(rule.model ? { model: rule.model } : {}) }],
         severity: score, signals, matched, rule, source: 'rule', confidence,
+        downshift: maybeDownshift(score, null, rule.agent, tiers, mode),
       };
     }
   }

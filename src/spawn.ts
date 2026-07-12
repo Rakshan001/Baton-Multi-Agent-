@@ -113,7 +113,10 @@ export async function startAgent(
         const section = memoryBriefSection(recalled.facts, recalled.staleDropped);
         if (section) memory = `\n\n${section}`;
       } catch { /* memory is an enhancement — never block a launch */ }
-      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${memory}`;
+      const scope = task.scope?.length
+        ? `\n\nYour scope: ${task.scope.join(', ')}. Stay within it; if you must touch files outside it, check_files first — another agent may own that area.`
+        : '';
+      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${scope}${memory}`;
     }
   }
 
@@ -121,7 +124,10 @@ export async function startAgent(
     cwd: task.worktreePath,
     buffer: false,
     stdin: 'ignore',
-    env: { ...process.env, FORCE_COLOR: '0' },
+    // Identity: the agent's `baton mcp` reads these to resolve the hub store
+    // (BATON_ROOT) and to recognize its own edits (BATON_SLUG), instead of
+    // guessing from a worktree cwd.
+    env: { ...process.env, FORCE_COLOR: '0', BATON_ROOT: repoRoot, BATON_SLUG: slug, BATON_TASK: task.task },
   });
   const run: RunningAgent = { agent, model: opts.model, child, startedAt: new Date().toISOString(), lines: [] };
   running.set(slug, run);

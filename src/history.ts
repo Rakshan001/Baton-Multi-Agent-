@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { batonDir } from './store.js';
-import type { CommitInfo } from './git.js';
+import { recentCommits, type CommitInfo } from './git.js';
 
 // node:sqlite is a recent builtin some bundlers (Vite) can't statically resolve.
 // Load it natively + lazily at runtime; the type comes from the erased type-only import.
@@ -134,6 +134,53 @@ export function recordMerge(
     db.exec('ROLLBACK');
     throw e;
   }
+}
+
+/**
+ * B2 — ingest a repo's real git history into a synthetic per-project bucket so
+ * commits that landed OUTSIDE `baton merge` (agents merging via GitHub PRs on
+ * the sub-repos) still show in the History page and who_touched/blame. Returns
+ * how many NEW commits were added. Idempotent (ON CONFLICT sha DO NOTHING) and
+ * files are inserted only for genuinely-new shas, so a commit a real task
+ * already owns is left untouched — the real task keeps the attribution.
+ */
+export async function ingestGitLog(
+  root: string,
+  opts: { slug: string; task: string; cwd: string; limit?: number },
+): Promise<number> {
+  const commits = await recentCommits(opts.cwd, opts.limit ?? 100);
+  if (commits.length === 0) return 0;
+  const db = getDb(root);
+  // Upsert the bucket task row so the tasks-JOIN in queryFile/listHistory resolves.
+  const latestAt = commits.reduce((m, c) => (c.at > m ? c.at : m), commits[0].at);
+  db.prepare(
+    `INSERT INTO tasks (slug, task, agent, branch, base_branch, created_at, merged_at)
+     VALUES (?, ?, NULL, NULL, NULL, ?, ?)
+     ON CONFLICT(slug) DO UPDATE SET task = excluded.task, merged_at = excluded.merged_at`,
+  ).run(opts.slug, opts.task, latestAt, latestAt);
+
+  const insCommit = db.prepare(
+    `INSERT INTO commits (sha, slug, message, at) VALUES (?, ?, ?, ?) ON CONFLICT(sha) DO NOTHING`,
+  );
+  const insFile = db.prepare(`INSERT INTO commit_files (sha, slug, path) VALUES (?, ?, ?)`);
+  let added = 0;
+  db.exec('BEGIN');
+  try {
+    for (const c of commits) {
+      const res = insCommit.run(c.sha, opts.slug, c.message, c.at);
+      if (res.changes > 0) {
+        // New to the index — record its files. If a real task already owned this
+        // sha, DO NOTHING kept its row and we skip here, so no duplicate files.
+        added++;
+        for (const f of c.files) insFile.run(c.sha, opts.slug, f);
+      }
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return added;
 }
 
 export interface FileHit {

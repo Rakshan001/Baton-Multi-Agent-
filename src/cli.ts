@@ -20,9 +20,10 @@ import { historyCmd } from './commands/history.js';
 import { serveCmd } from './commands/serve.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
+import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
 import { pathCmd } from './commands/path.js';
-import { kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
+import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
@@ -31,7 +32,13 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
-import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryRmCmd } from './commands/memory.js';
+import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRmCmd } from './commands/memory.js';
+import { connectCmd } from './commands/connect.js';
+import { guardCmd } from './commands/guard.js';
+import { orientCmd } from './commands/orient.js';
+import { progressCmd } from './commands/progress.js';
+import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
+import { bugsCmd } from './commands/bugs.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -61,11 +68,19 @@ program
     run(() => setupCmd(path, opts)));
 
 program
+  .command('connect')
+  .option('--agents <list>', 'comma-separated: claude,cursor,codex,gemini (default: all four)')
+  .option('--yes', 'also write global ($HOME) configs for codex/gemini')
+  .description('wire the baton coordination MCP server into every agent, so they can see each other')
+  .action((opts: { agents?: string; yes?: boolean }) => run(() => connectCmd(opts)));
+
+program
   .command('new')
   .argument('<task...>', 'task description')
   .option('--project <id>', 'in a multi-repo hub: which sub-project the task targets')
+  .option('--scope <globs>', 'comma-separated path globs this task owns (warns on overlap; steers the agent)')
   .description('scaffold a branch + worktree for a task')
-  .action((task: string[], opts: { project?: string }) => run(() => newCmd(task.join(' '), opts)));
+  .action((task: string[], opts: { project?: string; scope?: string }) => run(() => newCmd(task.join(' '), opts)));
 
 program
   .command('ls')
@@ -110,15 +125,21 @@ program
 
 program
   .command('doctor')
+  .option('--docs', 'scan for scattered .md sprawl (memory-bank/, stray NOTES/TODO, competing rule files) — propose-only')
   .description('audit junk: orphaned worktrees, branches, tmux sessions, leaked temp files')
-  .action(() => run(doctorCmd));
+  .action((opts: { docs?: boolean }) => run(() => doctorCmd(opts)));
 
 program
   .command('clean')
-  .option('--fix', 'actually delete the audited junk (default: dry-run / suggest)')
-  .option('-f, --force', 'also remove worktrees with uncommitted changes')
-  .description('reclaim junk found by `baton doctor` (dry-run unless --fix)')
-  .action((opts: { fix?: boolean; force?: boolean }) => run(() => cleanCmd(opts)));
+  .option('--fix', 'actually delete (default: dry-run / suggest)')
+  .option('-f, --force', 'also remove worktrees with uncommitted changes (junk pass only)')
+  .option('--json', 'machine-readable output (worktree GC pass)')
+  .description('reclaim junk (baton doctor) + GC worktrees whose branches are already merged (dry-run unless --fix; branches kept)')
+  .action((opts: { fix?: boolean; force?: boolean; json?: boolean }) =>
+    run(async () => {
+      await cleanCmd(opts); // baton-artifact junk: stale tasks, tmux, temp files
+      await worktreeGcCmd({ apply: opts.fix, json: opts.json }); // merged-branch worktree GC (W1)
+    }));
 
 const memory = program
   .command('memory')
@@ -150,6 +171,47 @@ memory
   .description('drop stale facts (anchored files changed since they were saved)')
   .action(() => run(memoryGcCmd));
 
+memory
+  .command('log')
+  .description('KB change history: superseded/removed facts (archived, not destroyed)')
+  .action(() => run(memoryLogCmd));
+
+const skills = program
+  .command('skills')
+  .description('reusable agent skills: install the bundled playbooks into your agents');
+
+skills
+  .command('list', { isDefault: true })
+  .description('list all skills and where each is installed')
+  .action(() => run(skillsListCmd));
+
+skills
+  .command('install')
+  .argument('<id>', 'skill id (see `baton skills list`)')
+  .option('--agent <agent>', 'install into just one agent (default: all writable agents)')
+  .option('--all', 'install into every writable agent (the default)')
+  .description('install a skill into your agents (all of them unless --agent)')
+  .action((id: string, opts: { agent?: string; all?: boolean }) => run(() => skillsInstallCmd(id, opts)));
+
+skills
+  .command('uninstall')
+  .argument('<id>', 'skill id')
+  .option('--agent <agent>', 'remove from just one agent (default: all)')
+  .description('remove an installed skill from your agents')
+  .action((id: string, opts: { agent?: string }) => run(() => skillsUninstallCmd(id, opts)));
+
+skills
+  .command('import')
+  .argument('<source>', 'a file path or http(s) URL to a SKILL.md')
+  .description('import a skill from a path or URL into the catalog')
+  .action((source: string) => run(() => skillsImportCmd(source)));
+
+program
+  .command('bugs')
+  .argument('<symptom...>', 'describe the symptom, e.g. "checkout redirect loops"')
+  .description('has this bug been fixed before? — surfaces prior fixes + commits that may have re-broken them')
+  .action((symptom: string[]) => run(() => bugsCmd(symptom.join(' '))));
+
 const kb = program
   .command('kb')
   .description('knowledge base: graphify code graphs per project + merged view');
@@ -160,8 +222,9 @@ kb.command('init')
   .option('--no-docs', 'skip adding the coordination guide to AGENTS.md/CLAUDE.md')
   .option('--share', 'commit the KB to git (kb/ directory) so teammates skip re-indexing')
   .option('--local', 'keep the KB local-only (skip the share question)')
+  .option('--port <port>', 'daemon port to embed in the generated MCP config URLs (default 7077)')
   .description('set up the knowledge base: graph per sub-project + merged graph + git hooks')
-  .action((path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean }) => run(() => kbInitCmd(path, opts)));
+  .action((path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; port?: string }) => run(() => kbInitCmd(path, opts)));
 
 kb.command('export')
   .option('--out <file>', 'output file (default: baton-kb-<repo>-<sha>.tar.gz)')
@@ -192,8 +255,18 @@ kb.command('rebuild')
 
 kb.command('mcp')
   .option('--agent <agent>', 'claude | cursor | codex | gemini', 'claude')
+  .option('--port <port>', 'daemon port to embed in the generated MCP config URLs (default 7077)')
   .description('print MCP config so an agent can query the knowledge graph')
-  .action((opts: { agent?: string }) => run(() => kbMcpCmd(opts)));
+  .action((opts: { agent?: string; port?: string }) => run(() => kbMcpCmd(opts)));
+
+kb.command('context')
+  .argument('[path]', 'project or hub root (default: nearest .baton, else git root)')
+  .option('--project <id>', 'hub: render one sub-project instead of the combined pack')
+  .option('--out <file>', 'write to a file instead of stdout')
+  .option('--tokens <n>', 'token budget (default 8000 — fits ChatGPT free tier)')
+  .description('print a shareable markdown context pack for any external chatbot (pipe to pbcopy)')
+  .action((path: string | undefined, opts: { project?: string; out?: string; tokens?: string }) =>
+    run(() => kbContextCmd(path, opts)));
 
 program
   .command('start')
@@ -249,10 +322,28 @@ program
 const hooks = program.command('hooks').description('agent-side hook installation');
 hooks
   .command('install')
-  .argument('<agent>', 'claude')
-  .option('--project', 'install into .claude/settings.json in this repo instead of ~/.claude')
-  .description('auto-generate a handoff brief when a Claude Code session ends (Stop/PreCompact)')
+  .argument('<agent>', 'claude | cursor')
+  .option('--project', 'install into this repo (.claude/settings.json / .cursor/hooks.json) instead of the home dir')
+  .description('claude: handoff brief + edit guard + orient; cursor: afterFileEdit edit-signal guard')
   .action((agent: string, opts: { project?: boolean }) => run(() => hooksInstallCmd(agent, opts)));
+
+program
+  .command('guard', { hidden: true }) // invoked by agent hooks, not by humans
+  .description('read an edit-hook payload on stdin; record the edit signal + warn if the file is held by another session')
+  .option('--agent <id>', 'which agent host invoked this hook', 'claude')
+  .action((opts: { agent?: string }) => run(() => guardCmd(opts)));
+
+program
+  .command('orient')
+  .option('--auto', 'SessionStart-hook mode: emit as additionalContext, skip if a HANDOFF already oriented the session')
+  .description('print a budgeted project brief (memory, recent work, structure) so a fresh session onboards fast')
+  .action((opts: { auto?: boolean }) => run(() => orientCmd(opts)));
+
+program
+  .command('progress')
+  .argument('<note...>', 'one line: what you are working on right now')
+  .description('tell other agents your current intent (shown on your files via check_files/list_signals)')
+  .action((note: string[]) => run(() => progressCmd(note.join(' '))));
 
 program
   .command('mcp')

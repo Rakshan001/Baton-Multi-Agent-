@@ -16,11 +16,11 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, HandoffLoadSuggestion, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
-import { DEMO_KB, demoGraphFor } from "./demoKb";
+import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -208,6 +208,14 @@ class BatonClient {
       return { ...r, agent: this.agentOverride.get(r.slug)! };
     });
   }
+  /** Agents at the hub/repo root or a kb sub-project — not attached to any task worktree. */
+  async getRootAgents(): Promise<Array<{ agent: string; count: number }>> {
+    if (this.demo) {
+      await this.demoGate();
+      return []; // the demo showcase has no root-terminal scenario to fabricate honestly
+    }
+    return this.request<Array<{ agent: string; count: number }>>("/api/agents/root");
+  }
   async getHistory(): Promise<TaskHistory[]> {
     if (this.demo) {
       await this.demoGate();
@@ -245,6 +253,15 @@ class BatonClient {
       return DEMO_KB;
     }
     return this.request<KbStatus>("/api/kb");
+  }
+  /** The shareable context pack (markdown + metadata) for a project or the whole hub. */
+  async getKbContext(project?: string): Promise<ContextPackResponse> {
+    if (this.demo) {
+      await this.demoGate(150);
+      return DEMO_CONTEXT_PACK;
+    }
+    const q = project ? `?format=json&project=${encodeURIComponent(project)}` : '?format=json';
+    return this.request<ContextPackResponse>(`/api/kb/context${q}`);
   }
   async getKbGraph(project: string): Promise<GraphData> {
     if (this.demo) {
@@ -413,6 +430,25 @@ class BatonClient {
     });
     this.emit();
     return r;
+  }
+  async installSkillEverywhere(id: string): Promise<SkillInstallResult[]> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      this.demoSkills ??= JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[];
+      const skill = this.demoSkills.find((s) => s.id === id);
+      const results = (skill?.installs ?? []).map((inst) => {
+        inst.installed = true;
+        return { skill: id, agent: inst.agent, rel: inst.rel, path: inst.rel, wrote: true, references: skill?.references.length ?? 0 };
+      });
+      this.emit();
+      return results;
+    }
+    const r = await this.request<{ results: SkillInstallResult[] }>(`/api/skills/${encodeURIComponent(id)}/install`, {
+      method: "POST", body: JSON.stringify({ agent: "all" }),
+    });
+    this.emit();
+    return r.results;
   }
   async uninstallSkill(id: string, agent: SkillAgent): Promise<{ removed: boolean; rel: string }> {
     this.assertWrite();
@@ -679,6 +715,25 @@ class BatonClient {
     return this.request<RoutingInfo>(`/api/routing${q}`);
   }
 
+  /** Load-aware handoff recommendation: least-loaded available agent for a task. */
+  async suggestHandoff(slug: string): Promise<HandoffLoadSuggestion> {
+    if (this.demo) {
+      await delay(80);
+      // Load = each agent's actively-churning (dirty/conflict) tasks, from the board.
+      const loads: Record<string, number> = {};
+      for (const s of this.demoSessions) {
+        if (s.agent && (s.status === "dirty" || s.status === "conflict")) loads[s.agent] = (loads[s.agent] ?? 0) + 1;
+      }
+      const me = this.demoSessions.find((s) => s.slug === slug);
+      const pool = [...new Set(this.demoSessions.map((s) => s.agent).filter((a): a is AgentId => !!a && a !== me?.agent))];
+      pool.sort((a, b) => (loads[a] ?? 0) - (loads[b] ?? 0));
+      const recommended = pool[0] ?? null;
+      const n = recommended ? loads[recommended] ?? 0 : 0;
+      return { recommended, reason: recommended ? `${recommended} has the lightest load (${n === 0 ? "idle" : `${n} active`})` : "no other agent available", loads };
+    }
+    return this.request<HandoffLoadSuggestion>(`/api/tasks/${encodeURIComponent(slug)}/suggest-handoff`);
+  }
+
   /* ---- coordination: signals / reports / blame ---- */
   async getSignals(): Promise<EditSignal[]> {
     if (this.demo) {
@@ -687,10 +742,24 @@ class BatonClient {
       const overlap = this.demoSessions.filter((s) => (s.conflictFiles || []).length);
       const byPath = new Map<string, typeof overlap>();
       overlap.forEach((s) => s.conflictFiles.forEach((f) => { if (!byPath.has(f)) byPath.set(f, []); byPath.get(f)!.push(s); }));
-      return [...byPath.entries()].map(([path, ss]) => ({
+      // A little variety so the "editing right now" panel shows live intent + freshness.
+      const DEMO_NOTES: Record<string, string> = {
+        "fix-checkout-e2e": "reproducing the flaky Stripe redirect in a test",
+        "react-19-upgrade": "migrating class components off legacy context",
+        "add-dark-mode": "wiring the theme toggle into the settings store",
+      };
+      return [...byPath.entries()].map(([path, ss], pi) => ({
         path,
         level: ss.length > 1 ? "warning" as const : "info" as const,
-        holders: ss.map((s) => ({ slug: s.slug, agent: s.agent, lastEditAt: new Date(Date.now() - 120_000).toISOString() })),
+        holders: ss.map((s, hi) => {
+          const secsAgo = 20 + pi * 35 + hi * 50; // staggered freshness
+          const note = DEMO_NOTES[s.slug];
+          return {
+            slug: s.slug, agent: s.agent,
+            lastEditAt: new Date(Date.now() - secsAgo * 1000).toISOString(),
+            ...(note ? { note, noteAt: new Date(Date.now() - secsAgo * 1000).toISOString() } : {}),
+          };
+        }),
       }));
     }
     const r = await this.request<{ signals: EditSignal[] }>("/api/signals");

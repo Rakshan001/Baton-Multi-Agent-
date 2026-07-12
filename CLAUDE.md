@@ -5,6 +5,9 @@ agents working on one repo via isolated git worktrees: code knowledge graphs
 (graphify), realtime dashboard (SSE), edit-signal coordination, and session
 handoff between agents.
 
+> This file is for hacking on Baton's own source. If you were instead asked to
+> **install Baton onto someone else's project**, use [AGENTS.md](AGENTS.md).
+
 **Start here:**
 - [STATUS.md](STATUS.md) — what is built, what is pending, where things live. Keep it updated at the end of each session.
 - [SETUP.md](SETUP.md) — environment setup + commands.

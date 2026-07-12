@@ -22,6 +22,7 @@ const TASKS = [
   'write release notes for v2',
   'UI bug: broken responsive layout',
   'research a design doc for the new frontend',
+  'quick typo fix in the plan doc wording', // W5: heavy rule + trivial severity -> downshift advisory
 ];
 
 describe('web routing mirror parity', () => {

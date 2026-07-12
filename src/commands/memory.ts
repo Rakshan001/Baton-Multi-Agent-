@@ -5,7 +5,7 @@
  */
 import { gitRoot } from '../git.js';
 import {
-  gcMemories, listMemories, removeMemory, saveMemory,
+  gcMemories, listMemories, readJournal, removeMemory, saveMemory,
   MemoryValidationError, type MemoryStatus,
 } from '../memory.js';
 
@@ -69,4 +69,21 @@ export async function memoryGcCmd(): Promise<void> {
   const root = await gitRoot(); // memory.ts resolves the main repo root internally
   const removed = await gcMemories(root);
   console.log(removed.length ? `✓ removed ${removed.length} stale fact${removed.length === 1 ? '' : 's'}: ${removed.join(', ')}` : 'nothing stale to remove');
+}
+
+const OP_LABEL: Record<'supersede' | 'remove', string> = { supersede: '↻', remove: '✗' };
+
+export async function memoryLogCmd(): Promise<void> {
+  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const journal = await readJournal(root);
+  if (!journal.length) {
+    console.log('no memory history yet — supersessions and removals are logged here');
+    return;
+  }
+  for (const e of journal) {
+    const when = e.at.replace('T', ' ').replace(/\..*/, '');
+    const to = e.supersededBy ? ` → ${e.supersededBy}` : '';
+    console.log(`${OP_LABEL[e.op]} ${when}  ${e.id}${to}  (${e.reason})`);
+  }
+  console.log(`\n${journal.length} entr${journal.length === 1 ? 'y' : 'ies'} · archived facts kept under .baton/memory/archive/`);
 }

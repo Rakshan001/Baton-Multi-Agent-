@@ -5,7 +5,7 @@
    ============================================================ */
 
 /** Agents Baton detects (src/agents.ts). `null` = no agent attached. */
-export type AgentId = "claude" | "cursor" | "codex" | "gemini" | "aider" | "opencode";
+export type AgentId = "claude" | "cursor" | "codex" | "gemini" | "antigravity" | "aider" | "opencode";
 
 /** Worktree state (src/git.ts). */
 export type Status = "clean" | "dirty" | "conflict";
@@ -261,6 +261,18 @@ export interface SignalHolder {
   slug: string;
   agent: AgentId | string | null;
   lastEditAt: string;
+  /** The holder's live intent (report_progress / P5), if fresh. */
+  note?: string;
+  noteAt?: string;
+}
+
+/** Load-aware handoff recommendation — GET /api/tasks/:slug/suggest-handoff. */
+export interface HandoffLoadSuggestion {
+  /** Least-loaded available agent to hand this task to (null = none). */
+  recommended: AgentId | string | null;
+  reason: string;
+  /** Active-task count per agent (dirty/conflict tasks). */
+  loads: Record<string, number>;
 }
 
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
@@ -324,6 +336,13 @@ export interface RoutingSuggestion {
 }
 
 /** Rich suggestion (suggestRoute): severity-ranked, tier-aware, explainable. */
+/** W5 — advisory cheaper-tier alternative for a trivial task caught by a rule. */
+export interface Downshift {
+  tier: string;
+  chain: TierEntry[];
+  reason: string;
+}
+
 export interface RouteSuggestion {
   mode: RoutingMode;
   agent: string;
@@ -336,6 +355,8 @@ export interface RouteSuggestion {
   rule: RoutingRule | null;
   source: "single" | "rule" | "severity" | "default";
   confidence: "high" | "low";
+  /** Advisory: a cheaper tier that could handle this (rule pick stays the answer). */
+  downshift?: Downshift | null;
 }
 
 /** GET /api/routing[?task=…] */
@@ -401,7 +422,7 @@ export type FileStatus = "added" | "modified" | "deleted";
 export interface DiffFile { path: string; status: FileStatus; hunks: DiffHunk[]; add: number; del: number; lang: string }
 
 /** Agent CLIs Baton can install a skill into (have a skill/rule directory). */
-export type SkillAgent = "claude" | "cursor";
+export type SkillAgent = "claude" | "cursor" | "antigravity";
 
 /** Per-agent install state for one skill. */
 export interface SkillInstallState {
@@ -433,4 +454,13 @@ export interface SkillInstallResult {
   wrote: boolean;
   /** Number of reference files written alongside the skill. */
   references: number;
+}
+
+/** GET /api/kb/context?format=json — the shareable context pack. */
+export interface ContextPackResponse {
+  markdown: string;
+  tokens: number;
+  redactions: number;
+  omitted: string[];
+  fits: { id: string; label: string; limit: number; ok: boolean }[];
 }

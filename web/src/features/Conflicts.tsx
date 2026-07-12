@@ -15,7 +15,14 @@ import type { StatusRow, EditSignal, AgentId } from "../types";
 function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
   const signals = usePoll<EditSignal[]>(() => BatonAPI.getSignals(), { interval: 5000 });
   const rows = signals.data ?? [];
-  if (!rows.length) return null;
+  if (!rows.length) {
+    return (
+      <div className="card" style={{ marginBottom: 16, padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+        <Icon name="zap" size={13} style={{ color: signals.error ? "var(--idle)" : "var(--clean)", flex: "none" }} />
+        {signals.error ? "Live signals unavailable right now." : "No files under live edit — all clear."}
+      </div>
+    );
+  }
   const warnings = rows.filter((s) => s.level === "warning");
   return (
     <div className="card" style={{ marginBottom: 16, padding: 14 }}>
@@ -23,29 +30,43 @@ function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
         <Icon name="zap" size={14} style={{ color: warnings.length ? "var(--conflict)" : "var(--accent)" }} />
         <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>Editing right now</span>
         <span className="tag">{rows.length} file{rows.length === 1 ? "" : "s"}</span>
+        {signals.error != null && rows.length > 0 && (<span className="tag" style={{ color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>)}
         {warnings.length > 0 && (
           <span style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, padding: "1px 8px" }}>
             {warnings.length} overlapping
           </span>
         )}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {rows.slice(0, 12).map((s) => (
-          <div key={s.path} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: "var(--r-sm)", background: s.level === "warning" ? "var(--conflict-soft)" : "transparent" }}>
-            {s.level === "warning"
-              ? <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
-              : <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--accent)", flex: "none", margin: "0 3px" }} />}
-            <span className="mono" style={{ fontSize: "var(--fs-12)", color: s.level === "warning" ? "var(--conflict-text)" : "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.path}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
-              {s.holders.slice(0, 4).map((h, i) => (
-                <button key={`${h.slug}-${i}`} className="fr" onClick={() => onOpen(h.slug)} data-tip={`${h.slug}${h.lastEditAt ? `\nlast edit ${timeAgo(new Date(h.lastEditAt).getTime())}` : ""}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, border: "none", background: "none", cursor: "pointer", padding: 0 }}>
-                  <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
-                  <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
-                </button>
-              ))}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {rows.slice(0, 12).map((s) => {
+          const warn = s.level === "warning";
+          return (
+            <div key={s.path} style={{ borderRadius: "var(--r-sm)", background: warn ? "var(--conflict-soft)" : "var(--bg-surface-2)", border: `1px solid ${warn ? "var(--conflict-border)" : "var(--border-subtle)"}`, padding: "7px 9px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {warn
+                  ? <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
+                  : <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--accent)", flex: "none", margin: "0 3px" }} />}
+                <span className="mono" style={{ fontSize: "var(--fs-12)", color: warn ? "var(--conflict-text)" : "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.path}</span>
+                {warn && <span style={{ flex: "none", fontSize: 10, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 7px", borderRadius: 99 }}>{s.holders.length} agents</span>}
+              </div>
+              {/* who is editing it, and what they're doing right now */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 5, paddingLeft: 21 }}>
+                {s.holders.slice(0, 5).map((h, i) => (
+                  <div key={`${h.slug}-${i}`} style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
+                    <button className="fr" onClick={() => onOpen(h.slug)} data-tip="Open session" style={{ display: "inline-flex", alignItems: "center", gap: 5, border: "none", background: "none", cursor: "pointer", padding: 0, flex: "none" }}>
+                      <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
+                      <span className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
+                    </button>
+                    {h.note
+                      ? <span style={{ fontSize: 11.5, color: "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} data-tip={h.note}>{h.note}</span>
+                      : <span style={{ fontSize: 11, color: "var(--text-quaternary)", fontStyle: "italic", flex: 1 }}>editing…</span>}
+                    {h.lastEditAt && <span style={{ fontSize: 10, color: "var(--text-quaternary)", flex: "none" }}>{timeAgo(new Date(h.lastEditAt).getTime())}</span>}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {warnings.length > 0 && (
         <p style={{ margin: "10px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>

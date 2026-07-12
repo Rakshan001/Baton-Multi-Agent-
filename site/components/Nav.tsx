@@ -1,7 +1,8 @@
 import Link from "next/link";
 import CopyChip from "./CopyChip";
 import NavShell from "./NavShell";
-import { NAV_LINKS, REPO_URL } from "./site";
+import MobileMenu from "./MobileMenu";
+import { NAV_LINKS, REPO_URL, CLONE_CMD } from "./site";
 
 // Fetch the live star count at build time. Falls back gracefully if the
 // GitHub API is unreachable or rate-limited (no token needed for a build).
@@ -62,7 +63,7 @@ export default async function Nav() {
 
         <div className="flex items-center gap-3">
           <div className="hidden lg:block">
-            <CopyChip command="npm install && node dist/cli.js serve --write" prefix="$" />
+            <CopyChip command={CLONE_CMD} prefix="$" />
           </div>
           <a
             href={REPO_URL}
@@ -72,13 +73,16 @@ export default async function Nav() {
           >
             <GitHubGlyph />
             <span>Star</span>
-            <span
-              className="font-mono text-amber"
-              aria-label={stars !== null ? `${stars} GitHub stars` : "Star count"}
-            >
-              {stars !== null ? formatStars(stars) : "★"}
-            </span>
+            {stars !== null && stars > 0 && (
+              <span
+                className="font-mono text-amber"
+                aria-label={`${stars} GitHub stars`}
+              >
+                {formatStars(stars)}
+              </span>
+            )}
           </a>
+          <MobileMenu />
         </div>
       </nav>
     </NavShell>

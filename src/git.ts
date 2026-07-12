@@ -15,6 +15,7 @@
  * See NOTICE.
  */
 import { stat } from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { git, gitTry } from './util/exec.js';
 
 export type RepoState = 'clean' | 'merging' | 'rebasing' | 'cherry-picking' | 'reverting';
@@ -48,6 +49,18 @@ export async function gitRoot(cwd?: string): Promise<string> {
   } catch {
     throw new Error('Not inside a git repository.');
   }
+}
+
+/**
+ * The MAIN repository root, even when `cwd` is inside a task worktree
+ * (`gitRoot()` would return the worktree). Resolved via `--git-common-dir`,
+ * which points every worktree back at the shared `.git`. Throws if not in a
+ * git repo.
+ */
+export async function mainRepoRoot(cwd?: string): Promise<string> {
+  const common = await git(['rev-parse', '--git-common-dir'], cwd);
+  const abs = isAbsolute(common) ? common : resolve(cwd ?? process.cwd(), common);
+  return dirname(abs);
 }
 
 /**
@@ -309,6 +322,31 @@ export async function branchCommits(
       cwd,
     );
     const files = nameR.ok ? nameR.stdout.split('\n').filter(Boolean) : [];
+    commits.push({ sha, message: message ?? '', at: at ?? '', files });
+  }
+  return commits;
+}
+
+/**
+ * The last `limit` non-merge commits reachable from HEAD, with the files each
+ * touched — for ingesting a repo's real history (commits that landed outside
+ * `baton merge`, e.g. via GitHub PRs). Returns [] when the path isn't a git
+ * repo or git errors (fail-safe).
+ */
+export async function recentCommits(cwd: string, limit = 100): Promise<CommitInfo[]> {
+  // %x1e starts each record, %x1f separates fields; --name-only appends the file
+  // list after the format line, so a record is: <sha>\x1f<msg>\x1f<date>\n<files…>
+  const r = await gitTry(
+    ['log', `-n${limit}`, '--no-merges', '--pretty=format:%x1e%H%x1f%s%x1f%cI', '--name-only'],
+    cwd,
+  );
+  if (!r.ok || !r.stdout) return [];
+  const commits: CommitInfo[] = [];
+  for (const rec of r.stdout.split('\x1e').map((s) => s.replace(/^\n+/, '')).filter(Boolean)) {
+    const lines = rec.split('\n');
+    const [sha, message, at] = (lines[0] ?? '').split('\x1f');
+    if (!sha) continue;
+    const files = lines.slice(1).map((l) => l.trim()).filter(Boolean);
     commits.push({ sha, message: message ?? '', at: at ?? '', files });
   }
   return commits;

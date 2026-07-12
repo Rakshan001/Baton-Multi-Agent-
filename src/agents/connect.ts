@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { KbState } from '../kb/state.js';
-import { mcpServers, type McpServerDef } from '../kb/mcp.js';
+import { mcpServers, mcpServersGemini, type McpOpts, type McpServerDef } from '../kb/mcp.js';
 import { escapeRegExp } from '../util/regex.js';
 
 export type McpScope = 'project' | 'global';
@@ -90,8 +90,16 @@ export function mcpTargetFor(agent: string, root: string, home = homedir()): Age
 }
 
 /** The servers Baton wires: graphify graphs (when the KB exists) + the coordination server. */
-export function serversForState(state: KbState | null): Record<string, McpServerDef> {
-  if (state) return mcpServers(state);
+export function serversForState(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && !opts) throw new Error('mcpOpts required when a KB exists');
+  if (state && opts) return mcpServers(state, opts);
+  return { baton: { command: 'baton', args: ['mcp'] } };
+}
+
+/** Gemini variant of serversForState: graphify entries use httpUrl form. */
+export function serversForStateGemini(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && !opts) throw new Error('mcpOpts required when a KB exists');
+  if (state && opts) return mcpServersGemini(state, opts);
   return { baton: { command: 'baton', args: ['mcp'] } };
 }
 
@@ -152,10 +160,15 @@ export function mergeTomlConfig(existing: string, servers: Record<string, McpSer
   const blocks: string[] = [];
   for (const [name, def] of Object.entries(servers)) {
     if (tomlTableRe(name).test(existing)) continue;
-    const block = 'url' in def
-      ? [`[mcp_servers.${tomlStr(name)}]`, `url = ${tomlStr(def.url)}`, '']
-      : [`[mcp_servers.${tomlStr(name)}]`, `command = ${tomlStr(def.command)}`,
-         `args = [${def.args.map(tomlStr).join(', ')}]`, ''];
+    let block: string[];
+    if ('httpUrl' in def) {
+      block = [`[mcp_servers.${tomlStr(name)}]`, `httpUrl = ${tomlStr(def.httpUrl)}`, ''];
+    } else if ('url' in def) {
+      block = [`[mcp_servers.${tomlStr(name)}]`, `url = ${tomlStr(def.url)}`, ''];
+    } else {
+      block = [`[mcp_servers.${tomlStr(name)}]`, `command = ${tomlStr(def.command)}`,
+               `args = [${def.args.map(tomlStr).join(', ')}]`, ''];
+    }
     blocks.push(...block);
   }
   if (!blocks.length) return existing.endsWith('\n') || !existing ? existing : existing + '\n';
@@ -186,12 +199,14 @@ export async function connectAgentMcp(
   agent: string,
   root: string,
   state: KbState | null,
-  opts: { confirmGlobal?: boolean } = {},
+  opts: { confirmGlobal?: boolean; mcpOpts?: McpOpts } = {},
   home = homedir(),
 ): Promise<ConnectResult> {
   const target = mcpTargetFor(agent, root, home);
   if (!target) throw new McpUnsupportedError(agent);
-  const servers = serversForState(state);
+  const servers = agent === 'gemini'
+    ? serversForStateGemini(state, opts.mcpOpts)
+    : serversForState(state, opts.mcpOpts);
   const serverNames = Object.keys(servers);
 
   const existing = existsSync(target.path) ? await readFile(target.path, 'utf-8') : '';
@@ -207,4 +222,58 @@ export async function connectAgentMcp(
   await mkdir(dirname(target.path), { recursive: true });
   await writeFile(target.path, next, 'utf-8');
   return { agent, scope: target.scope, path: target.path, wrote: true, needsConfirm: false, servers: serverNames };
+}
+
+export type AgentConnectStatus =
+  | 'connected'      // written just now
+  | 'already'        // the baton server was already wired
+  | 'needs-confirm'  // a global ($HOME) file — rerun with confirmGlobal
+  | 'unsupported'    // aider/opencode — no standard MCP config
+  | 'parse-error';   // existing file is unparseable — left untouched
+
+export interface AgentConnectOutcome {
+  agent: string;
+  status: AgentConnectStatus;
+  scope: McpScope | null;
+  path: string | null;
+}
+
+/**
+ * Wire a batch of agents to the `baton` coordination MCP server in one call —
+ * the one-command "every agent can now see the others" step. Passes state=null
+ * so it writes the stdio `baton mcp` server (no running daemon required); an
+ * existing graphify KB config is merged, never clobbered. Never throws: each
+ * agent's outcome (including unsupported / parse-error) is returned so the
+ * caller can report the whole batch.
+ */
+export async function connectAgents(
+  root: string,
+  agents: string[],
+  opts: { confirmGlobal?: boolean } = {},
+  home = homedir(),
+): Promise<AgentConnectOutcome[]> {
+  const out: AgentConnectOutcome[] = [];
+  for (const agent of agents) {
+    const target = mcpTargetFor(agent, root, home);
+    if (!target) {
+      out.push({ agent, status: 'unsupported', scope: null, path: null });
+      continue;
+    }
+    try {
+      const status = await readMcpStatus(agent, root, home);
+      if (status.connected) {
+        out.push({ agent, status: 'already', scope: target.scope, path: target.path });
+        continue;
+      }
+      const r = await connectAgentMcp(agent, root, null, { confirmGlobal: opts.confirmGlobal }, home);
+      out.push({ agent, status: r.wrote ? 'connected' : 'needs-confirm', scope: target.scope, path: target.path });
+    } catch (e) {
+      if (e instanceof McpConfigParseError) {
+        out.push({ agent, status: 'parse-error', scope: target.scope, path: target.path });
+      } else {
+        throw e;
+      }
+    }
+  }
+  return out;
 }
