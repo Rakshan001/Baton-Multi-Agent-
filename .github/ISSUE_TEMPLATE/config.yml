@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://baton-landing.vercel.app/docs
+    about: Read the docs before opening an issue — your question may be answered there.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/Rakshan001/Baton-Multi-Agent-/security/advisories/new
+    about: Please report security issues privately, not as public issues.

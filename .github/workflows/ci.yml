@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # --- Backend (root workspace) ---
+      - name: Install (root)
+        run: npm ci
+
+      - name: Build (root)
+        run: npm run build
+
+      - name: Test (root)
+        run: npm test
+
+      # --- Dashboard (web workspace) ---
+      - name: Install (web)
+        run: npm ci --prefix web
+
+      - name: Build (web)
+        run: npm run build --prefix web

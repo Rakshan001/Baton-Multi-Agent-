@@ -8,7 +8,7 @@
 
 [Quickstart](docs/quickstart.md) · [Documentation](docs/README.md) · [CLI reference](docs/cli-reference.md) · [Architecture](docs/architecture.md)
 
-![status](https://img.shields.io/badge/status-active-2ea043) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
+[![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) [![Website](https://img.shields.io/badge/website-baton--landing.vercel.app-000?logo=vercel&logoColor=white)](https://baton-landing.vercel.app) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
 
 </div>
 

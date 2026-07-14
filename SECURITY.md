@@ -1,21 +1,44 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Baton is under active development. Security fixes are applied to the latest
+release on the `main` branch. Older `0.0.x` releases are not separately patched.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| latest (`main`) | ✅         |
+| older `0.0.x`   | ❌         |
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
+**Please do not report security vulnerabilities through public GitHub issues.**
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Instead, report them privately so they can be fixed before public disclosure:
+
+- **Preferred:** open a [GitHub private security advisory](https://github.com/Rakshan001/Baton-Multi-Agent-/security/advisories/new).
+- **Or email:** **rakshanshetty2003@gmail.com** with the subject line
+  `SECURITY: <short summary>`.
+
+Please include:
+
+- A description of the vulnerability and its impact.
+- Steps to reproduce (proof-of-concept, affected component, and version/commit).
+- Any suggested remediation, if you have one.
+
+## What to expect
+
+- **Acknowledgement** of your report within a few days.
+- An assessment and, if confirmed, a fix on a coordinated timeline.
+- Credit for the discovery once a fix is released, unless you prefer to remain
+  anonymous.
+
+## Scope notes
+
+Baton runs a **local daemon** intended for `localhost` use. Relevant hardening
+already in place includes a loopback-Origin anti-CSRF gate on mutating API
+endpoints, shell-free hardened git invocation via `src/util/exec.ts`, and
+YAML-only frontmatter parsing via `src/util/frontmatter.ts` (executable
+frontmatter engines are refused). Reports about exposing the daemon to untrusted
+networks, git-argument injection, or path-traversal in file/worktree handling are
+especially welcome.

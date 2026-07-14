@@ -1,0 +1,30 @@
+name: 🚀 Feature request
+description: Suggest an idea or improvement for Baton
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the pain point or use case. Please focus on the problem before the solution.
+      placeholder: When coordinating agents, I can't ...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to see happen?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other approaches you've thought about.
+  - type: checkboxes
+    id: conventions
+    attributes:
+      label: Alignment
+      options:
+        - label: This fits Baton's model (local, git-only, zero-dependency daemon, SSE realtime).
