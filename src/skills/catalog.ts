@@ -101,6 +101,10 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     tags: ['lean', 'restraint', 'over-engineering', 'yagni', 'simplicity', 'minimal', 'reuse', 'stdlib', 'native', 'one-liner', 'ponytail'],
     produces: ['restraint ladder', 'smallest working diff', 'reuse over rewrite', 'safety carve-outs preserved'],
   },
+  'stack-migration': {
+    tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger'],
+    produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)'],
+  },
 };
 
 /** What / how / advantage — three short lines per bundled skill, shown on the
@@ -141,6 +145,11 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     what: 'The relay: pass unfinished work to another agent instead of losing it.',
     how: 'create_handoff writes done / pending / next step; the next agent runs `baton resume`.',
     win: 'A usage limit costs you a minute, not the whole investigation.',
+  },
+  'stack-migration': {
+    what: 'Migrate a codebase to another stack (Angular→Next.js, etc.) feature-by-feature without losing parity.',
+    how: 'Inventory every endpoint/component → ordered phases → migrate one phase → ≥95% skeptic-checked parity → next; resumes from a MIGRATION.md ledger.',
+    win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature and no duplicated code.',
   },
   'map-codebase': {
     what: 'Builds the repo map every other skill navigates by.',
