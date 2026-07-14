@@ -148,7 +148,7 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
   },
   'stack-migration': {
     what: 'Migrate a codebase to another stack (Angular→Next.js, etc.) feature-by-feature without losing parity.',
-    how: 'Inventory every endpoint/component → ordered phases → migrate one phase → ≥95% skeptic-checked parity → next; resumes from a MIGRATION.md ledger.',
+    how: 'Inventory endpoints/components → phases → migrate one at ≥95% skeptic-checked parity → next; resumes from MIGRATION.md.',
     win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature and no duplicated code.',
   },
   'map-codebase': {
