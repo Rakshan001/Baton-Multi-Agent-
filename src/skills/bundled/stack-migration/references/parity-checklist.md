@@ -1,7 +1,9 @@
 # Per-phase parity checklist
 
 Run this for the phase you're verifying (Phase F4–F5). Parity means the target reproduces the
-source's behavior for every unit in the phase — not that it merely compiles or renders.
+source's **behavior + information** for every unit in the phase — verified against the recorded
+golden-master oracle (Phase C fixtures), **not** by eyeball and **not** pixel-perfect (the target
+uses its own design system). "It compiles / it renders" is not parity.
 
 ## Backend phase — per endpoint
 
@@ -31,6 +33,14 @@ For **each** route (and its components) in the phase's scope, confirm:
 - [ ] Layout / copy / visual match (unless a redesign was explicitly requested).
 - [ ] Reusable components come from the reuse index; new shared ones added to it.
 - [ ] No duplicate data fetching; data in cache/state reused; effects cleaned up.
+- [ ] Matches the recorded Playwright flow + reference network calls for the route.
+
+## Cross-cutting concerns (verify once, in the foundation phase — these have no route/endpoint)
+
+- [ ] Auth guards / route protection, HTTP interceptors → middleware/fetch-wrapper.
+- [ ] 404 / 500 / error pages + error boundaries.
+- [ ] Env vars + config, feature flags, i18n, analytics, SEO/meta, service worker/PWA.
+- [ ] Global styles/theme tokens, app shell/layout, root providers, proxy/rewrite rules.
 
 ## Build / run gate (every phase)
 

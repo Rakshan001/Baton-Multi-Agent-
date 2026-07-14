@@ -49,13 +49,16 @@ PHASE PLAN (split the inventory into ordered phases) → write MIGRATION.md ledg
 
 **Golden rules**
 
-0. **RESUMABLE FIRST, RECORD LAST.** Before anything, read the migration ledger
-   (`MIGRATION.md` at the repo root) and shared memory (baton) to see whether a migration is
-   already underway and **which phase it stopped on**. If so → **continue from there, never
-   restart**. A usage limit, a crash, or "I'll come back in two days" must cost you nothing.
-   After every phase, write the phase status + confidence + reuse index back so the next session
-   inherits it. *(This repo's tracker is **baton** — `baton status`/`signals`/memory recall +
-   `save_memory`. No tracker → the committed `MIGRATION.md` alone is the source of truth.)*
+0. **RESUMABLE FIRST, RECORD LAST — at UNIT granularity.** Before anything, read the migration
+   ledger (`MIGRATION.md` at the repo root) and shared memory (baton) to see whether a migration is
+   already underway and **which units are done** — not just which phase. If so → **continue from
+   the first un-migrated unit, never restart**. A usage limit, a crash, or "I'll come back in two
+   days" must cost you nothing, even if it hits **mid-phase**. So tick each unit in the ledger **as
+   it lands** (not batched at phase end) and commit incrementally, so an interruption after unit 10
+   of 20 resumes at unit 11. `MIGRATION.md` is the **single source of truth** for status; baton
+   memory holds only pointers + gotchas, never authoritative status. *(This repo's tracker is
+   **baton** — `baton status`/`signals`/memory recall + `save_memory`. No tracker → the committed
+   `MIGRATION.md` alone is the source of truth.)*
 1. **UNDERSTAND THE WHOLE CODEBASE BEFORE MIGRATING ONE LINE.** Use the knowledge graph / repo
    map (graphify / CODEBASE.md) to see the full structure. Classify each area as **backend** or
    **frontend**, identify the **source** and **target** stack, and **enumerate every unit** you
@@ -66,8 +69,12 @@ PHASE PLAN (split the inventory into ordered phases) → write MIGRATION.md ledg
 3. **ONE PHASE AT A TIME; ≥95% BEFORE THE NEXT.** A phase is done only when its parity is
    verified AND an independent skeptic corroborates ≥95% confidence. Below 95% → close the gap
    first. Never start phase N+1 with phase N unfinished.
-4. **PARITY, NOT APPROXIMATION.** Every endpoint, every request/response shape, every edge case,
-   every UI state and interaction in scope for the phase must be reproduced in the target. "It
+4. **PARITY MEANS BEHAVIORAL + INFORMATION PARITY — verified against a recorded oracle, not by
+   eyeball.** Every endpoint's request/response shape, every edge case, every UI state, data, and
+   interaction in scope must be reproduced — measured against **recorded golden-master fixtures**
+   (captured from the source before you migrate), not a manual tick. Parity is *behavioral*, **not
+   pixel-perfect**: the target uses its own design system, so match the data, states, copy, and
+   interactions — visual layout is "equivalent per the target's idioms", not a Material clone. "It
    renders" is not parity.
 5. **DRY / REUSE — check the reuse index every phase.** Before writing a new endpoint, hook,
    component, type, or util in the target, check the **reuse index** for one that already exists
@@ -108,11 +115,18 @@ double-migrating a feature. Always resume; never restart.*
    migration: root decisions, gotchas, the library set already approved, and any phase notes.
    `baton signals` / `check_files` → is another session editing the target files right now? If so
    → coordinate before touching them.
-3. **Confirm the code matches the ledger.** Quickly verify the phases marked `done` actually exist
-   in the target (the files/routes are there and compile). If the ledger and the code disagree,
-   trust the code, fix the ledger, and note the discrepancy — never migrate a feature twice.
-4. **Decision:**
-   - Ledger exists with unfinished phases → **resume at the first non-`done` phase** (skip to the
+3. **Confirm the code matches the ledger, at unit level.** Verify the units marked done actually
+   exist in the target (files/routes there and compiling). If ledger and code disagree, trust the
+   code, fix the ledger, and note it — never migrate a unit twice. For a phase left `in-progress`,
+   the ledger's per-unit ticks tell you the exact unit to resume at (rule 0); if ticks are missing,
+   reconstruct from the target files + last commit before continuing.
+4. **Check for source drift** (the "days later" trap). The ledger records the **source commit SHA**
+   the inventory was taken at. Run `git log <sha>..HEAD` over the source paths: if anyone changed
+   the source app during the migration, **re-open the inventory** for the new/changed units and add
+   them to the right phase — otherwise a feature added to the source silently never migrates, and
+   the 95% gate (which checks the *stale* inventory) can't catch it.
+5. **Decision:**
+   - Ledger exists with unfinished work → **resume at the first un-migrated unit** (skip to the
      per-phase loop, Phase F). Re-read that phase's scope from the ledger.
    - Ledger exists, all phases `done` → run the **final full-parity sweep** (Phase G) and stop.
    - No ledger → this is a fresh migration → continue to Phase B.
@@ -140,6 +154,13 @@ what it talks to, and which parts are backend vs frontend before you can phase i
    backend API contract is fixed — the migrated frontend must call the same endpoints with the
    same shapes. If migrating only the backend, existing clients must keep working. Note every
    cross-boundary contract; these are your parity anchors.
+5. **Record the source commit SHA** (`git rev-parse HEAD` on the source) in the ledger — the
+   inventory in Phase C is taken against this snapshot, and Phase A step 4 uses it to detect source
+   drift on resume. Note whether the source is frozen for the migration; if not, drift checks matter.
+6. **Decide the coexistence model** (where the target lives + how a partly-migrated app is served),
+   and record it: new project vs same-repo subfolder, and cutover strategy — big-bang at 100%, or a
+   **strangler** reverse-proxy routing migrated paths to the target and the rest to the source so
+   each phase is genuinely shippable. This decides what "shippable phase" means in the ledger.
 
 ---
 
@@ -167,8 +188,32 @@ checklist you can drive to 100%. The inventory is what parity is measured agains
   of reusable components) so the inventory maps onto idiomatic target units, not a 1:1 copy.
 - Record the count ("40 routes / ~120 components"). This is the frontend checklist.
 
-**Completeness gate:** the inventory is not done until every route registration / component file
-is accounted for. A missed unit is a feature that silently disappears in the migration.
+### ALSO enumerate CROSS-CUTTING concerns (they map to no route/endpoint — and get dropped)
+Most silent migration breakage is here, because these don't show up as an endpoint or a component:
+- App shell / layout, root providers, routing config, 404 / 500 / error pages, error boundaries.
+- HTTP interceptors → target middleware/fetch-wrapper; **auth guards** → target middleware/route
+  protection; request/response transformers.
+- Env vars + config, feature flags, i18n/localization, analytics/telemetry, SEO/meta tags,
+  service workers/PWA, global styles/theme tokens.
+- Build/CI config, proxy/rewrite rules, deployment.
+Add these as their own inventory category and phase them (usually into the foundation phase).
+
+### Record the parity oracle (golden master) — BEFORE migrating
+*Why: parity checked by hand across 150 units doesn't scale and misses things. Capture the source's
+real behavior now, while it still runs, so each migrated unit is verified against a fixture, not a
+memory.*
+- **Backend:** capture real request→response fixtures per endpoint (curl / a recording proxy) into
+  `references/fixtures/` — method, path, sample inputs, exact response body + status. The migrated
+  endpoint must return the same shapes for the same inputs.
+- **Frontend:** script a Playwright flow per route and capture reference screenshots + the network
+  calls each route makes. The migrated route must drive the same flow and make the same calls
+  (behavioral parity — screenshots are a reference for data/states/copy, not a pixel gate).
+- No time/tooling for full capture → at minimum record the response shape + the key states per unit
+  in the ledger, and say so — a documented gap, never a silent one.
+
+**Completeness gate:** the inventory is not done until every route registration / component file /
+cross-cutting concern is accounted for, and a parity oracle (fixture or documented shape) exists
+for each unit. A missed unit is a feature that silently disappears in the migration.
 
 ---
 
@@ -187,6 +232,10 @@ technically running, but unmaintainable. Pick the standard toolset up front, onc
 3. **⛔ STOP — do not run any install until the user approves the dependency list.** On approval,
    install; otherwise adjust to what they want. Record the **approved library set** in the ledger
    so later phases reuse it and don't re-litigate or add rogue deps.
+4. **Mid-migration additions are expected, not forbidden.** You'll discover a needed lib (charts,
+   drag-and-drop, date picker) at a later phase. When you do → **STOP, propose it, get approval,
+   then add it to the ledger's approved set** and continue. The rule forbids *unapproved* deps, not
+   *new* ones — never silently `npm install` something outside the recorded set.
 
 ---
 
@@ -201,7 +250,10 @@ It must be approved before any code is written.*
    types) come first so later phases reuse them (DRY). Keep phases small enough to finish and
    verify in one working session where possible.
 2. **For each phase, list its exact units** from the inventory (which endpoints / which
-   routes+components) and its parity criteria.
+   routes+components) and its parity criteria. **Foundation phases** (API client, auth, design
+   system, shared types, cross-cutting concerns) have no user-facing behavior, so the ≥95%
+   *parity* gate doesn't apply the same way — their done-criterion is: **unit-tested, typechecks,
+   and consumed by ≥1 later phase.** The ≥95% parity gate applies to **feature** phases.
 3. **Write `MIGRATION.md`** (from `references/MIGRATION.template.md`) at the repo root: source→target
    stacks, approved libraries, the ordered phase table (with `status` + `confidence` columns), and
    an empty **reuse index** to be filled as shared units are built. This file is committed and is
@@ -235,6 +287,9 @@ It must be approved before any code is written.*
   shared ones and add them to the index.
 - **Follow the target best practices from Phase D** — idiomatic, typed, no `any` where a real type
   exists, no dead/commented code, no secrets or debug logging left behind.
+- **Checkpoint every unit as it lands** (rule 0): tick it in the ledger's per-unit list and commit
+  incrementally (`feat(migrate): <phase> — <unit>`). This is what makes a mid-phase interruption
+  resume at the next unit instead of losing the whole phase. Never batch all ticks to phase end.
 
 ### F3 — DRY / best-practice quality gate
 - **No duplication:** grep the target for the behavior before adding it; reuse the existing
@@ -246,15 +301,20 @@ It must be approved before any code is written.*
   phase's units → note it in the ledger and fold it in, don't silently sprawl scope.
 
 ### F4 — Parity verify (the core check)
-1. **Tick every unit** in this phase's checklist as reproduced — no endpoint / route / component
-   left unmigrated.
+1. **Verify every unit against its recorded oracle** (Phase C fixtures) — replay the endpoint
+   fixtures and assert the same response shapes/status; replay the Playwright route flow and assert
+   the same network calls + states. No endpoint / route / component / cross-cutting concern left
+   unmigrated. Where only a documented shape exists (no fixture), check against that.
 2. **Reproduce each edge case & UI state** and confirm it behaves as the source did (validation,
    errors, empty states, auth redirects, pagination…).
 3. **Contract parity across the boundary:** migrated frontend calls the same endpoints with the
    same request/response shapes; migrated backend returns the same shapes existing clients expect.
-4. **Compile / typecheck / lint / run tests** with the target's commands. Launch the target app
-   and exercise this phase's flow — observe the behavior, don't just trust that it built.
-5. **Re-run the source** for the same flow if anything is ambiguous, and diff the behavior.
+4. **Compile / typecheck / lint / run tests** with the target's commands. Author (or port) a
+   test/fixture-assertion per migrated unit so "tests pass" actually means parity, not vacuously
+   true. Launch the target app and exercise this phase's flow — observe behavior, don't just trust
+   the build.
+5. **Re-run the source** for the same flow if anything is ambiguous, and diff the behavior against
+   the oracle.
 
 ### F5 — ⛔ Confidence ≥95% gate (skeptic-corroborated) ⛔
 *Why an independent check: self-graded "looks done" is unreliable — a second agent with fresh
@@ -262,11 +322,14 @@ context catches the endpoint you forgot and the edge case you rationalized away.
 1. **Score your own confidence** that this phase reproduces **100% of its inventoried units + edge
    cases** with clean, DRY, idiomatic target code.
 2. **Spawn an independent read-only skeptic agent** (`Read`/`Grep`/read-only `Bash`, **no
-   Edit/Write**, fresh context). Give it this phase's inventory checklist + the diff. Instruct it
-   to **hunt for**: a missing endpoint/route/component, an unhandled edge case or UI state, a
-   dropped validation/auth rule, a broken contract, **duplicated code that should reuse an indexed
-   unit, and avoidable/duplicate API calls or N+1s.** It returns a **0–100 score + the specific
-   gaps** it found.
+   Edit/Write**, fresh context). Give it read access to **both the source app and the migrated
+   diff**, plus this phase's inventory checklist and oracle fixtures. Have it **re-derive the
+   inventory from the source independently** (so it catches units your checklist missed, not just
+   ones on it), then **hunt for**: a missing endpoint/route/component/cross-cutting concern, an
+   unhandled edge case or UI state, a dropped validation/auth rule, a broken contract, **duplicated
+   code that should reuse an indexed unit, and avoidable/duplicate API calls or N+1s.** It returns a
+   **0–100 score — defined as P(no missing unit / dropped edge case / broken contract) — plus the
+   specific gaps** it found.
 3. **Final confidence = the LOWER of your score and the skeptic's.**
 4. **Decision:**
    - **≥95%** → phase passes → go to F6.
@@ -289,9 +352,11 @@ context catches the endpoint you forgot and the edge case you rationalized away.
 4. **⛔ Do NOT push. Ask about push AND PR together** (and which base branch) — push/PR only on the
    user's explicit yes.
 
-### F7 — Re-check the previous phase before starting the next
-Before opening phase N+1, **re-confirm phase N is still ≥95%** — quickly re-run its build + a spot
-check that nothing in the new work regressed it. Then loop back to F1 for the next phase.
+### F7 — Regression-check prior phases before starting the next
+Before opening phase N+1, **run the full build/typecheck + the accumulated automated oracle suite**
+(all recorded fixtures + Playwright flows from every prior phase). This is cheap and catches any
+regression the new work introduced — far more reliable than manually re-eyeballing each old phase,
+and it stays O(1) effort as phases grow. Any failure → fix before proceeding. Then loop to F1.
 
 ---
 
@@ -307,10 +372,13 @@ that unit), update the ledger to reflect 100%, and record the completion to shar
 
 ## Guardrails (always enforced)
 
-- ⛔ **No phase is started before its predecessor hits ≥95% skeptic-corroborated parity**, and no
-  phase plan is executed before the user approves it.
-- ⛔ **Never migrate the whole codebase in one pass** — always ordered phases with a committed ledger.
-- ⛔ **Never install a dependency without approval;** never add a rogue lib outside the approved set.
+- ⛔ **No phase is started before its predecessor hits ≥95% skeptic-corroborated parity** (verified
+  against the recorded oracle, not eyeballed), and no phase plan is executed before the user approves it.
+- ⛔ **Never migrate a unit without a parity oracle** for it (fixture / Playwright / documented shape).
+- ⛔ **Never migrate the whole codebase in one pass** — always ordered phases with a committed,
+  per-unit ledger; checkpoint each unit as it lands so a mid-phase interruption never loses progress.
+- ⛔ **Never install an unapproved dependency;** a new lib mid-migration is fine — propose, get
+  approval, add it to the ledger's approved set — but never silently.
 - ⛔ **Never rebuild a unit that already exists** — check the reuse index first (DRY).
 - ⛔ **Never guess an ambiguous behavior** — ask the user.
 - ⛔ **Commit per phase automatically; never `git push`** without explicit permission (ask push +
@@ -319,14 +387,14 @@ that unit), update the ledger to reflect 100%, and record the completion to shar
 
 ## Definition of done
 
-- [ ] Resume checked FIRST: read `MIGRATION.md` + shared memory; continued from the unfinished phase (never restarted).
-- [ ] Whole codebase understood from the map; source & target stacks named; every area classified backend/frontend.
-- [ ] Full inventory enumerated (every endpoint / every route+component) with edge cases — the checklist parity is measured against.
+- [ ] Resume checked FIRST at UNIT level: read `MIGRATION.md` + shared memory; continued from the first un-migrated unit (never restarted); source-drift checked via the recorded source SHA.
+- [ ] Whole codebase understood from the map; source & target stacks named; every area classified backend/frontend; coexistence model + source SHA recorded.
+- [ ] Full inventory enumerated (every endpoint / every route+component / every cross-cutting concern) with edge cases, and a parity oracle (fixtures / Playwright / documented shape) recorded per unit.
 - [ ] Target best-practice library set proposed and **approved before install**; recorded in the ledger.
 - [ ] Phase plan (ordered, per-phase units) written to `MIGRATION.md` and **approved by the user** before any code.
 - [ ] Each phase migrated one at a time, unit-by-unit, in idiomatic target code, reusing indexed units (DRY, no duplicate endpoints/components/calls).
-- [ ] Each phase parity-verified (every unit + edge case + UI state + contract) and **≥95% skeptic-corroborated** before the next phase; gaps fixed or user asked.
-- [ ] Target compiles / typechecks / passes tests / runs at the end of every phase; previous phase re-checked before the next.
-- [ ] Ledger + reuse index + shared memory updated after every phase (resumable, accurate).
+- [ ] Each phase parity-verified against its oracle (every unit + edge case + UI state + contract) and **≥95% skeptic-corroborated** (skeptic re-derived inventory from the source) before the next phase; gaps fixed or user asked. Foundation phases done at unit-tested + consumed.
+- [ ] Target compiles / typechecks / passes tests / runs at the end of every phase; prior phases regression-checked via the accumulated automated oracle suite before the next.
+- [ ] Ledger (per-unit ticks) + reuse index + shared memory updated as each unit lands (resumable mid-phase, accurate); `MIGRATION.md` is the single source of truth.
 - [ ] Committed per phase (proper message, project author, only that phase's files); push NOT done automatically — asked (push + PR + base branch).
 - [ ] Final full-parity sweep done; whole inventory reproduced; completion recorded.

@@ -11,9 +11,13 @@
 - **Target:** <e.g. Next.js 14 app-router + React 18 + TypeScript + server components>
 - **Scope:** <frontend only / backend only / both>
 - **Migration branch:** <branch name>
+- **Source commit SHA (inventory taken at):** <sha>   **Source frozen?** <yes/no — if no, drift-check on resume>
+- **Coexistence model:** <new project / same-repo subfolder> + <big-bang cutover / strangler proxy>
 - **Started:** <YYYY-MM-DD>   **Last updated:** <YYYY-MM-DD>
 
-## Approved libraries (Phase D — do not add outside this set without asking)
+> This file is the SINGLE SOURCE OF TRUTH for status. baton memory holds only pointers + gotchas.
+
+## Approved libraries (Phase D — mutable: add a row when a new lib is approved mid-migration)
 
 | Concern | Library | Why |
 |---|---|---|
@@ -33,10 +37,14 @@
 Order by dependency: shared foundation first (design system, auth, API client, shared types), then
 feature areas. Status: `todo` / `in-progress` / `done`. A phase is `done` only at ≥95% parity.
 
-| # | Phase | Units (endpoints / routes+components) | Status | Confidence | Notes |
-|---|-------|----------------------------------------|--------|-----------|-------|
-| 0 | Foundation (API client, auth, shared types, design system) | … | todo | — | |
-| 1 | Login / auth | `POST /login`, `POST /refresh`; `LoginPage`, `AuthGuard` | todo | — | |
+Foundation phases are done at "unit-tested + typechecks + consumed by a later phase"; feature
+phases are done at ≥95% parity. The Units cell tracks per-unit done (`[x]`/`[ ]`) so a mid-phase
+interruption resumes at the exact next unit.
+
+| # | Phase | Units — tick per unit (`[x]` done / `[ ]` todo) | Status | Confidence | Notes |
+|---|-------|--------------------------------------------------|--------|-----------|-------|
+| 0 | Foundation (API client, auth, cross-cutting, shared types, design system) | `[ ] apiClient` `[ ] useAuth` `[ ] errorPage` `[ ] i18n` | todo | — | |
+| 1 | Login / auth | `[ ] POST /login` `[ ] POST /refresh` `[ ] LoginPage` `[ ] AuthGuard` | todo | — | |
 | 2 | Home / dashboard | … | todo | — | |
 | … | … | … | todo | — | |
 
