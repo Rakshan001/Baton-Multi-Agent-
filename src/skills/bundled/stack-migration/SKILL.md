@@ -57,8 +57,9 @@ PHASE PLAN (split the inventory into ordered phases) → write MIGRATION.md ledg
    it lands** (not batched at phase end) and commit incrementally, so an interruption after unit 10
    of 20 resumes at unit 11. `MIGRATION.md` is the **single source of truth** for status; baton
    memory holds only pointers + gotchas, never authoritative status. *(This repo's tracker is
-   **baton** — `baton status`/`signals`/memory recall + `save_memory`. No tracker → the committed
-   `MIGRATION.md` alone is the source of truth.)*
+   **baton** — on a usage limit run `baton pass` to write a handoff brief and `baton resume` to pick
+   it up next session; see "Working with baton" below. No tracker → the committed `MIGRATION.md`
+   alone is the source of truth.)*
 1. **UNDERSTAND THE WHOLE CODEBASE BEFORE MIGRATING ONE LINE.** Use the knowledge graph / repo
    map (graphify / CODEBASE.md) to see the full structure. Classify each area as **backend** or
    **frontend**, identify the **source** and **target** stack, and **enumerate every unit** you
@@ -369,6 +370,29 @@ missing units, broken contracts, and duplicated code. Fix anything found (re-ent
 that unit), update the ledger to reflect 100%, and record the completion to shared memory.
 
 ---
+
+## Working with baton (when present — the full-power path)
+
+*The skill is portable and runs without any tracker. But when this repo has **baton**, its
+primitives ARE this skill's resume + coordination machinery — use them instead of the generic
+fallbacks. A migration is a long, multi-session, often multi-agent job, which is exactly what baton
+is built for.*
+
+| Skill step | baton command | Why |
+|---|---|---|
+| Fresh session onboarding (Phase A) | `baton orient` | Budgeted project brief — memory, recent work, structure — so a resumed session reloads cheaply. |
+| Understand the whole codebase (Phase B) | `baton kb rebuild` → then query the graph over MCP | The map you inventory from; don't read the whole repo. |
+| Isolate the work | `baton new "migrate: <phase>"` | Scaffolds a branch **+ worktree** per phase so parallel sessions don't collide. |
+| Multi-session coordination (Phase F1) | `baton status` / `signals` / `progress "<intent>"` | See who's editing what right now; announce your target files. |
+| **Hit a usage limit mid-migration** | `baton pass` | Packages the session into a `HANDOFF.md` brief (done / pending / next unit) — **this is the resume feature.** |
+| **Next session / next day** | `baton resume` (or `baton take <slug>`) | Prints the pickup prompt from the handoff brief; continue at the exact next unit. |
+| Record root facts + gotchas (Phase F6) | `baton memory` (`save_memory`) | Pointers + non-obvious decisions; `MIGRATION.md` stays the source of truth for status. |
+| Refresh the map after new surface | `baton kb rebuild` | So the next phase's audit sees the migrated units. |
+| End-of-migration cleanup | `baton doctor` / `clean --fix` | Reclaim orphaned worktrees/branches from the phased work. |
+
+**The pairing that matters most:** at a usage limit or end of session, `baton pass` writes the
+handoff brief and `MIGRATION.md` holds per-unit status — together they make the migration resume
+*mid-phase* with nothing lost. That is this skill's whole promise, delivered by baton's whole point.
 
 ## Guardrails (always enforced)
 
