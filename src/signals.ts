@@ -10,7 +10,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { batonDir, loadTasks, type Task } from './store.js';
 import { detectAgents } from './agents.js';
@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS hook_sessions (
   root TEXT,
   at TEXT
 );
+CREATE TABLE IF NOT EXISTS watched_roots (
+  slug TEXT PRIMARY KEY,
+  path TEXT,
+  at TEXT
+);
 `;
 
 const conns = new Map<string, DatabaseSync>();
@@ -61,6 +66,21 @@ function getDb(root: string): DatabaseSync {
     conns.set(path, db);
   }
   return db;
+}
+
+/**
+ * Canonicalize a checkout path for identity comparison — resolves symlinks and
+ * macOS's /var→/private/var so a session root and a watched-checkout path that
+ * point at the same directory compare equal. Best-effort: a missing/stale path
+ * falls back to the raw string rather than throwing.
+ */
+function canonicalRoot(p: string | null | undefined): string | null {
+  if (!p) return null;
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 /** A signal is "live" if the file was edited within this window. */
@@ -177,11 +197,79 @@ export function registerHookSession(
     .run(slug, agent, sessionRoot, at);
 }
 
+/**
+ * Bump a registered session's last-seen time on ANY activity — not only edits —
+ * so a connected agent that just reads (orient/check_files/recall) still counts
+ * as present (finding #5). UPDATE-only: a no-op when the session has no row (task
+ * sessions never register), so it can never fabricate presence for a task slug.
+ */
+export function touchHookSession(root: string, slug: string, at: string = new Date().toISOString()): void {
+  getDb(root).prepare(`UPDATE hook_sessions SET at = ? WHERE slug = ?`).run(at, slug);
+}
+
 function hookSessions(root: string): Map<string, HookSession> {
   const rows = getDb(root).prepare(`SELECT slug, agent, root, at FROM hook_sessions`).all() as unknown as Array<
     HookSession & { slug: string }
   >;
   return new Map(rows.map((r) => [r.slug, r]));
+}
+
+/* ------------------- watched checkouts (agent-agnostic capture, ADD-07/A) ------------------- */
+
+/**
+ * A non-task git checkout the daemon watcher is deriving live signals from (the
+ * hub root in a single-repo setup, or each sub-project in a multi-repo hub).
+ * Persisted so read-time reconcile can verify a checkout's signals against its
+ * git dirty state (and prune settled ones), and so reads can layer an agent name
+ * from a session registered at the same checkout. Slugs are `co-<id>`.
+ */
+export function registerWatchedRoot(root: string, slug: string, path: string, at: string = new Date().toISOString()): void {
+  getDb(root)
+    .prepare(
+      `INSERT INTO watched_roots (slug, path, at) VALUES (?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET path = excluded.path, at = excluded.at`,
+    )
+    .run(slug, path, at);
+}
+
+export function unregisterWatchedRoot(root: string, slug: string): void {
+  getDb(root).prepare(`DELETE FROM watched_roots WHERE slug = ?`).run(slug);
+}
+
+/** slug → checkout path for every checkout the daemon is currently watching. */
+export function watchedRoots(root: string): Map<string, string> {
+  const rows = getDb(root).prepare(`SELECT slug, path FROM watched_roots`).all() as unknown as Array<{ slug: string; path: string }>;
+  return new Map(rows.map((r) => [r.slug, r.path]));
+}
+
+/**
+ * How recently a registered session must have been seen (connect or edit) to be
+ * counted as "connected" on the presence board. Longer than the edit-signal
+ * window because a connected agent may sit idle between edits — a session that
+ * hasn't touched a file in 20 min is still present.
+ */
+export const PRESENCE_WINDOW_MIN = 30;
+
+export interface LiveSession {
+  slug: string;
+  agent: string | null;
+  /** The checkout the session registered from (usually a repo/hub root). */
+  root: string | null;
+  /** Last time the session was seen — connect time or last edit. */
+  at: string;
+}
+
+/**
+ * Registered agent sessions (MCP connect via registerHookSession, or an edit
+ * hook) last seen within the window. This is the "who is connected right now"
+ * source the dashboard needs — every agent, hooked or not, worktree or plain
+ * checkout, without a per-agent panel (ISS-12/ISS-14).
+ */
+export function liveSessions(root: string, windowMin = PRESENCE_WINDOW_MIN): LiveSession[] {
+  const cutoff = new Date(Date.now() - windowMin * 60_000).toISOString();
+  return getDb(root)
+    .prepare(`SELECT slug, agent, root, at FROM hook_sessions WHERE at >= ? ORDER BY at DESC`)
+    .all(cutoff) as unknown as LiveSession[];
 }
 
 /** Watcher liveness: heartbeat fresher than this ⇒ "not busy" answers are trustworthy. */
@@ -334,7 +422,13 @@ function pruneSignals(root: string, rows: SignalRow[]): void {
  */
 const RECONCILE_GRACE_MS = 15_000;
 
-async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]): Promise<SignalRow[]> {
+async function reconcileSignals(
+  root: string,
+  rows: SignalRow[],
+  tasks: Task[],
+  sessions: Map<string, HookSession>,
+  watched: Map<string, string>,
+): Promise<SignalRow[]> {
   if (rows.length === 0) return rows;
   const bySlug = new Map<string, SignalRow[]>();
   for (const r of rows) {
@@ -342,15 +436,15 @@ async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]):
     if (list) list.push(r);
     else bySlug.set(r.slug, [r]);
   }
-  const sessions = hookSessions(root);
   const kept: SignalRow[] = [];
   const stale: SignalRow[] = [];
   const now = Date.now();
   await Promise.all(
     [...bySlug].map(async ([slug, slugRows]) => {
       // Root sessions have no task — their signals verify against the checkout
-      // the session registered (usually the main repo root).
-      const checkRoot = tasks.find((t) => t.slug === slug)?.worktreePath ?? sessions.get(slug)?.root;
+      // the session registered (usually the main repo root); fs-watch checkout
+      // signals (`co-*`) verify against the watched checkout path.
+      const checkRoot = tasks.find((t) => t.slug === slug)?.worktreePath ?? sessions.get(slug)?.root ?? watched.get(slug);
       if (!checkRoot) return void kept.push(...slugRows); // unknown holder → can't verify, keep
       const dirty = await worktreeDirtyPaths(checkRoot);
       if (dirty === null) return void kept.push(...slugRows); // git failed → keep
@@ -367,19 +461,61 @@ async function reconcileSignals(root: string, rows: SignalRow[], tasks: Task[]):
 /** Current edit signals, grouped by path; overlapping paths are warnings. */
 export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): Promise<EditSignal[]> {
   const tasks = await loadTasks(root);
-  const rows = await reconcileSignals(root, liveRows(root, windowMin), tasks);
-  const agents = await detectAgents(tasks.map((t) => t.worktreePath));
+  // Query the session/checkout registries once and thread them through reconcile
+  // and attribution — both read them, and getSignals is on the 5s dashboard poll
+  // (finding #6).
   const sessions = hookSessions(root);
+  const watched = watchedRoots(root);
+  const rows = await reconcileSignals(root, liveRows(root, windowMin), tasks, sessions, watched);
+  const agents = await detectAgents(tasks.map((t) => t.worktreePath));
+  // Reverse index: a checkout path → an agent name self-reported by a session
+  // registered there, so fs-watch checkout signals (which see *what* changed,
+  // not *who*) can borrow the agent name when one is known (ADD-07/A). Finding
+  // #3: canonicalize the key (a session root and a watched-checkout path pointing
+  // at the same dir must resolve — symlink, /var vs /private/var), and when two
+  // sessions share a root, attribute to the most recently seen one instead of an
+  // arbitrary last-writer-wins.
+  const agentAtRoot = new Map<string, { agent: string | null; at: string }>();
+  for (const s of sessions.values()) {
+    const canon = canonicalRoot(s.root);
+    if (!canon) continue;
+    const prev = agentAtRoot.get(canon);
+    if (!prev || prev.at < s.at) agentAtRoot.set(canon, { agent: s.agent, at: s.at });
+  }
   const agentFor = (slug: string) => {
     const t = tasks.find((x) => x.slug === slug);
     if (t) return agents.get(t.worktreePath) ?? null;
-    return sessions.get(slug)?.agent ?? null; // root session — self-reported by its hook
+    const sess = sessions.get(slug);
+    if (sess) return sess.agent ?? null; // root session — self-reported by its hook
+    const checkout = watched.get(slug);
+    if (checkout) return agentAtRoot.get(canonicalRoot(checkout)!)?.agent ?? null; // fs-watch signal — layer agent if a session is here
+    return null;
   };
 
   const byPath = new Map<string, SignalHolder[]>();
   for (const r of rows) {
     if (!byPath.has(r.path)) byPath.set(r.path, []);
     byPath.get(r.path)!.push({ slug: r.slug, agent: agentFor(r.slug), lastEditAt: r.at });
+  }
+  // ADD-07/A finding #1 — collapse the fs-watch echo. In a plain checkout a
+  // hooked/MCP session records an edit under its OWN slug AND the daemon's
+  // recursive fs-watch records the same physical edit under the checkout slug
+  // (`co-*`). Left as two holders that fabricates a conflict `warning` and makes
+  // checkFiles flag the agent's own file busy. Drop a `co-*` holder on any path a
+  // session registered at that same checkout already holds — the session holder
+  // is strictly more informative (it knows *who* edited).
+  for (const [path, holders] of byPath) {
+    const sessionRoots = new Set<string>();
+    for (const h of holders) {
+      const canon = canonicalRoot(sessions.get(h.slug)?.root);
+      if (canon) sessionRoots.add(canon);
+    }
+    if (sessionRoots.size === 0) continue;
+    const kept = holders.filter((h) => {
+      const checkout = watched.get(h.slug);
+      return !checkout || !sessionRoots.has(canonicalRoot(checkout)!);
+    });
+    if (kept.length !== holders.length) byPath.set(path, kept);
   }
   enrichWithNotes(root, [...byPath.values()]);
   return [...byPath.entries()]

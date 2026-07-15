@@ -5,6 +5,7 @@
  *
  * Endpoints:
  *   GET    /api/status       → live board rows (collectStatus)
+ *   GET    /api/sessions     → connected agents with no task worktree (collectPresence)
  *   GET    /api/history      → tasks + commits (listHistory)
  *   GET    /api/tasks/:slug  → one task: row + commits + worktree path
  *   GET    /api/meta         → repo root, current branch, capabilities, version
@@ -15,7 +16,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
-import { collectStatus, rootAgentSummary } from './board.js';
+import { collectStatus, collectPresence, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
 import { currentBranch, isGitRepo } from './git.js';
 import { listHistory, ingestGitLog } from './history.js';
@@ -649,6 +650,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
+  // GET /api/sessions — connected agents with no task worktree (presence layer)
+  if (method === 'GET' && path === '/api/sessions') return send(res, 200, await collectPresence(root), origin);
   if (method === 'GET' && path === '/api/agents/root') {
     const [tasks, kb] = await Promise.all([loadTasks(root), loadKb(root)]);
     const summary = await rootAgentSummary(

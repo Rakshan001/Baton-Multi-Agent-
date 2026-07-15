@@ -49,6 +49,31 @@ For **each** route (and its components) in the phase's scope, confirm:
 - [ ] Tests pass.
 - [ ] The target app **runs** and the phase's flow was exercised and observed — not just built.
 
+## Merge gate (only when re-integrating a parallel phase — Parallel mode, Step 6)
+
+Run per branch, merging **one at a time**, before the whole-migration skeptic:
+
+- [ ] `baton merge <slug>` into the migration branch cleanly (conflicts resolved, not auto-flattened).
+- [ ] **Stitch the shared manifests:** the coordinator adds this phase's fragment entries to the shared
+      roots (`nav-registry.ts` imports, `i18n` namespace, DI list) — the entries the workers were forbidden
+      to touch. Verify the manifest resolves (routes register, translations load).
+- [ ] **DRY-dedup:** grep for near-duplicate shared units two agents built independently despite the
+      freeze (two date formatters, two toast helpers). Collapse to one, rewire callers, update the reuse index.
+- [ ] **Regression:** the accumulated oracle suite (all prior phases' fixtures + Playwright flows) still passes.
+- [ ] After ALL parallel branches merged + deduped → run the ≥95% skeptic on the **merged whole**
+      (cross-phase contracts + duplication), not just per-branch.
+
+## Fixture-adequacy pre-check (before F5 scoring)
+
+Green tests prove parity only if the fixtures exercise the failing case. Before scoring, confirm the
+oracle covers **each enumerated edge case**, not just the happy-path record:
+
+- [ ] A fixture for each of: restricted/age-gated, closed/inactive, empty, error, auth-redirect,
+      pagination boundary — wherever the unit has that state.
+- [ ] Fixtures were captured from a record/tenant that actually **has** those edge cases (a benign
+      tenant with none makes the suite vacuously green).
+- [ ] The skeptic re-derives edge cases from the **source**, not from your fixture set.
+
 ## Skeptic prompt (F5)
 
 Give the independent read-only skeptic: this phase's inventory checklist + the `git diff`. Ask it

@@ -9,6 +9,7 @@ import { AgentBadge, SegmentedControl, EmptyState, CopyButton } from "../compone
 import { getAgent } from "../lib/registry";
 import { branchFor, BatonAPI } from "../lib/api";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { StatusRow, DiffHunk, DiffLine, FileStatus, DiffFile } from "../types";
 
 const SYN = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*)|(`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(import|export|from|const|let|var|return|async|await|function|new|type|interface|enum|if|else|for|while|do|switch|case|class|extends|implements|default|true|false|null|undefined|void|public|private|protected|readonly|this|in|of|as|CREATE|INDEX|ON|TABLE|SELECT|FROM|WHERE)\b|\b([A-Z][A-Za-z0-9_]*)\b|\b(\d[\d_.]*)\b/g;
@@ -152,17 +153,18 @@ export function DiffViewer({
   const list = files ?? [];
   const totals = list.reduce((a, f) => ({ add: a.add + f.add, del: a.del + f.del }), { add: 0, del: 0 });
 
+  // Esc, Tab cycling and focus restore come from the shared trap; the
+  // container itself takes initial focus so [ / ] work immediately.
+  useFocusTrap(ref, onClose, { autoFocus: false });
+  useEffect(() => { const t = setTimeout(() => ref.current?.focus(), 40); return () => clearTimeout(t); }, []);
   useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); }
-      else if (e.key === "[" && active > 0) setActive((a) => a - 1);
+      if (e.key === "[" && active > 0) setActive((a) => a - 1);
       else if (e.key === "]" && active < list.length - 1) setActive((a) => a + 1);
     };
     document.addEventListener("keydown", onKey, true);
-    setTimeout(() => ref.current?.focus(), 40);
-    return () => { document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
-  }, [active, list.length, onClose]);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [active, list.length]);
 
   const f = list[active];
 

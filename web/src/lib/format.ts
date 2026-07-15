@@ -5,6 +5,7 @@
 export function timeAgo(input: string | number | null | undefined): string {
   if (!input) return "—";
   const t = typeof input === "number" ? input : new Date(input).getTime();
+  if (!Number.isFinite(t)) return "—";
   const diff = Math.max(0, Date.now() - t);
   const s = Math.floor(diff / 1000);
   if (s < 10) return "just now";

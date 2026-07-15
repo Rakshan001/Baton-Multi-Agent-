@@ -9,11 +9,13 @@
  * Fail-open: any error, missing store, or slow check exits 0 with no output so
  * editing is never stalled by coordination plumbing.
  */
+import { spawn } from 'node:child_process';
 import { relative, isAbsolute, dirname, basename, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
 import { resolveMcpRoot } from '../store.js';
 import { checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
+import { snapshotDue } from './snapshot.js';
 
 /** Everything the guard must finish within — past this we fail open silently. */
 const GUARD_BUDGET_MS = 1500;
@@ -149,9 +151,35 @@ async function runGuard(agent: string): Promise<string | null> {
     try {
       recordHookEdit(root, { slug: self.slug, path: rel, session: self.session });
     } catch { /* advisory still runs */ }
+    // ISS-03: keep a resumable HANDOFF.md fresh DURING the session. Only for a
+    // real task worktree (self.session is set only for a synthetic root
+    // session, which has no task to snapshot). Fire-and-forget, gated by the
+    // cheap mtime debounce so the guard never blocks on a brief rebuild.
+    if (!self.session) void maybeSnapshot(self.slug, worktreeRoot, root, agent);
   }
   const check = (await checkFiles(root, [rel], self.slug))[rel];
   return check ? formatGuardMessage(rel, check) : null;
+}
+
+/**
+ * Spawn a detached `baton snapshot` when one is due. The mtime gate means the
+ * common case is a single stat() and no spawn; when a rebuild IS due we detach
+ * it so the guard's 1500ms advisory budget is never spent on brief generation.
+ */
+async function maybeSnapshot(slug: string, worktreeRoot: string, root: string, agent: string): Promise<void> {
+  try {
+    if (!(await snapshotDue(worktreeRoot))) return;
+    const cli = process.argv[1];
+    if (!cli) return;
+    const child = spawn(process.execPath, [cli, 'snapshot', slug, '--from', agent, '--quiet'], {
+      cwd: worktreeRoot,
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, BATON_ROOT: root },
+    });
+    child.on('error', () => { /* snapshot is best-effort — never affect the edit */ });
+    child.unref();
+  } catch { /* best-effort */ }
 }
 
 export async function guardCmd(opts: { agent?: string } = {}): Promise<void> {

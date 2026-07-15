@@ -295,6 +295,20 @@ export interface HandoffBriefEntry {
   body: string;
 }
 
+/** A connected agent with no task worktree — GET /api/sessions (presence layer).
+ *  Surfaces plain-terminal / MCP-connected sessions the worktree-only board
+ *  cannot show (src/board.ts collectPresence). */
+export interface PresenceSession {
+  slug: string;
+  agent: AgentId | string | null;
+  /** The checkout the session registered from. */
+  root: string | null;
+  /** Last connect/edit time (ISO). */
+  lastSeen: string;
+  /** Actively working (seen very recently), vs idle-but-connected. */
+  live: boolean;
+}
+
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
 export interface EditSignal {
   path: string;

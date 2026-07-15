@@ -102,8 +102,8 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     produces: ['restraint ladder', 'smallest working diff', 'reuse over rewrite', 'safety carve-outs preserved'],
   },
   'stack-migration': {
-    tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger'],
-    produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)'],
+    tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'cursor', 'codex', 'antigravity', 'handoff'],
+    produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)', 'parallel fan-out plan + per-phase HANDOFF briefs'],
   },
 };
 
@@ -148,8 +148,8 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
   },
   'stack-migration': {
     what: 'Migrate a codebase to another stack (Angular→Next.js, etc.) feature-by-feature without losing parity.',
-    how: 'Inventory endpoints/components → phases → migrate one at ≥95% skeptic-checked parity → next; resumes from MIGRATION.md.',
-    win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature and no duplicated code.',
+    how: 'Inventory → phases → migrate one at ≥95% skeptic-checked parity; after the foundation, fan out independent phases across agents (Cursor/Codex) in baton worktrees; resumes from MIGRATION.md.',
+    win: 'A 100+-file rewrite survives usage limits, parallelizes across agents, and lands with no dropped feature or duplicated code.',
   },
   'map-codebase': {
     what: 'Builds the repo map every other skill navigates by.',

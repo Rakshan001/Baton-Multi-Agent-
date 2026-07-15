@@ -11,7 +11,7 @@
    ============================================================ */
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
-import { ErrorState, CardSkeleton } from "../components/primitives";
+import { ErrorState, CardSkeleton, ConfirmDialog } from "../components/primitives";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader, SearchInput } from "./shared";
 import { BatonAPI } from "../lib/api";
@@ -99,27 +99,40 @@ export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
     } finally { setBusy(false); }
   };
 
+  // Deletes are permanent — every path below goes through one ConfirmDialog.
+  const [confirm, setConfirm] = useState<null | { kind: "delete"; id: string } | { kind: "bulk" } | { kind: "gc" }>(null);
+  const [deleting, setDeleting] = useState(false);
+
   const del = async (id: string) => {
-    try { await BatonAPI.deleteMemory(id); } catch (e) { showToast({ kind: "error", title: "Could not delete", desc: (e as Error).message }); }
+    setDeleting(true);
+    try {
+      await BatonAPI.deleteMemory(id);
+      showToast({ kind: "ok", title: "Fact deleted", desc: id, mono: true });
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not delete", desc: (e as Error).message });
+    } finally { setDeleting(false); setConfirm(null); }
   };
 
   const bulkDelete = async () => {
     const ids = [...selected];
     if (!ids.length) return;
+    setDeleting(true);
     try {
       const r = await BatonAPI.bulkDeleteMemories(ids);
       setSelected(new Set());
       showToast({ kind: "ok", title: `Deleted ${r.removed.length} fact${r.removed.length === 1 ? "" : "s"}` });
     } catch (e) {
       showToast({ kind: "error", title: "Bulk delete failed", desc: (e as Error).message });
-    }
+    } finally { setDeleting(false); setConfirm(null); }
   };
 
   const gc = async () => {
+    setDeleting(true);
     try {
       const r = await BatonAPI.gcMemories();
       showToast({ kind: r.removed.length ? "ok" : "info", title: r.removed.length ? `Removed ${r.removed.length} stale fact${r.removed.length === 1 ? "" : "s"}` : "Nothing stale to remove" });
     } catch (e) { showToast({ kind: "error", title: "GC failed", desc: (e as Error).message }); }
+    finally { setDeleting(false); setConfirm(null); }
   };
 
   const [repairing, setRepairing] = useState(false);
@@ -157,7 +170,7 @@ export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
           </button>
         )}
         {staleCount > 0 && writeEnabled && (
-          <button className="btn btn-sm fr" onClick={gc} data-tip="Remove every fact whose anchored files changed — try Repair first">
+          <button className="btn btn-sm fr" onClick={() => setConfirm({ kind: "gc" })} disabled={deleting} data-tip="Remove every fact whose anchored files changed — try Repair first">
             <Icon name="trash" size={13} /> GC {staleCount} stale
           </button>
         )}
@@ -225,7 +238,7 @@ export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
             </label>
             {selected.size > 0 && (
               <>
-                <button className="btn btn-sm fr" onClick={bulkDelete} style={{ color: "var(--conflict-text)" }}><Icon name="trash" size={13} /> Delete {selected.size}</button>
+                <button className="btn btn-sm fr" onClick={() => setConfirm({ kind: "bulk" })} disabled={deleting} style={{ color: "var(--conflict-text)" }}><Icon name="trash" size={13} /> Delete {selected.size}</button>
                 <button className="btn btn-sm btn-ghost fr" onClick={() => setSelected(new Set())}>Clear</button>
               </>
             )}
@@ -257,10 +270,28 @@ export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
           </div>
         ) : (
           visible.map((f) => (
-            <FactCard key={f.id} f={f} writeEnabled={writeEnabled} onDelete={del} projectLabel={projLabel} selected={selected.has(f.id)} onToggle={() => toggle(f.id)} selectMode={selected.size > 0} />
+            <FactCard key={f.id} f={f} writeEnabled={writeEnabled} onDelete={(id) => setConfirm({ kind: "delete", id })} projectLabel={projLabel} selected={selected.has(f.id)} onToggle={() => toggle(f.id)} selectMode={selected.size > 0} />
           ))
         )}
       </div>
+
+      <ConfirmDialog open={confirm !== null} onClose={() => { if (!deleting) setConfirm(null); }} busy={deleting} tone="danger" icon="trash"
+        title={confirm?.kind === "gc" ? `Remove ${staleCount} stale fact${staleCount === 1 ? "" : "s"}?`
+          : confirm?.kind === "bulk" ? `Delete ${selected.size} selected fact${selected.size === 1 ? "" : "s"}?`
+          : "Delete this fact?"}
+        body={confirm?.kind === "gc" ? "Every fact whose anchored files changed will be permanently deleted. Repair can often re-anchor them instead — run it first if you haven't."
+          : confirm?.kind === "bulk" ? "The selected facts are permanently deleted and agents will no longer recall them. This cannot be undone."
+          : (() => {
+              const f = confirm?.kind === "delete" ? facts.find((x) => x.id === confirm.id) : undefined;
+              return (
+                <>
+                  {f && <span style={{ display: "block", marginBottom: 6, color: "var(--text-primary)", overflowWrap: "anywhere" }}>“{f.fact.length > 140 ? f.fact.slice(0, 140) + "…" : f.fact}”</span>}
+                  The fact is permanently deleted and agents will no longer recall it. This cannot be undone.
+                </>
+              );
+            })()}
+        confirmLabel={confirm?.kind === "gc" ? "Remove stale facts" : "Delete"}
+        onConfirm={() => { if (confirm?.kind === "gc") void gc(); else if (confirm?.kind === "bulk") void bulkDelete(); else if (confirm) void del(confirm.id); }} />
     </div>
   );
 }
@@ -313,7 +344,7 @@ function FactCard({ f, writeEnabled, onDelete, projectLabel, selected, onToggle,
             </button>
           )}
         </div>
-        <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.55, color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>{f.fact}</p>
+        <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.55, color: "var(--text-primary)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{f.fact}</p>
         {f.freshness === "stale" && f.staleReason && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--fs-12)", color: "var(--conflict-text)" }}>
             <Icon name="alertTriangle" size={12} /> {f.staleReason} — withheld from agents

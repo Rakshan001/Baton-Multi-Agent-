@@ -19,10 +19,11 @@ import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
 import { queryFile, searchHistory } from './history.js';
-import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
 import { createSessionHandoff } from './handoff/session-brief.js';
+import { snapshotTask } from './commands/snapshot.js';
 import { buildOrientation } from './kb/orient.js';
 import { asText, capList } from './mcp-format.js';
 import { TOOL_HELP } from './mcp-help.js';
@@ -57,6 +58,22 @@ export async function startMcpServer(): Promise<void> {
     { name: 'baton', version: '0.1.0' },
     { instructions: 'New to this repo? Call orient() first for a budgeted project brief (memory, recent work, structure), then recall_memory before exploring, and check_files before editing shared files.' },
   );
+
+  // Keep presence fresh on ANY tool call, not just edits (finding #5): an agent
+  // that only reads (orient/check_files/recall) is still connected, but
+  // hook_sessions.at would otherwise advance only on connect/edit — so the
+  // dashboard would show it idle after the heartbeat and drop it after the
+  // window. Intercept registration once so every tool (present and future)
+  // refreshes the session's last-seen. Only non-task sessions have a row to
+  // touch; touchHookSession is a no-op otherwise.
+  if (!taskSlug) {
+    const rawRegister = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
+    (server as { registerTool: unknown }).registerTool = (name: unknown, config: unknown, handler: (...a: unknown[]) => unknown) =>
+      rawRegister(name, config, (...a: unknown[]) => {
+        try { touchHookSession(root, selfSlug); } catch { /* presence is best-effort */ }
+        return handler(...a);
+      });
+  }
 
   server.registerTool(
     'orient',
@@ -142,6 +159,12 @@ export async function startMcpServer(): Promise<void> {
     async ({ paths }) => {
       const touched = paths.map((p) => p.trim()).filter((p) => p && !p.startsWith('/') && !p.includes('..'));
       for (const p of touched) recordHookEdit(root, { slug: selfSlug, path: p });
+      // ISS-03: keep a resumable HANDOFF.md fresh for agents that reach us via
+      // MCP rather than an edit hook (Codex/Gemini). Only for a real task
+      // (taskSlug); debounced + best-effort so it never blocks or fails the tool.
+      if (taskSlug && touched.length) {
+        void snapshotTask(taskSlug, { root, from: process.env.BATON_AGENT?.trim() }).catch(() => {});
+      }
       return asText({ touched, as: selfSlug });
     },
   );

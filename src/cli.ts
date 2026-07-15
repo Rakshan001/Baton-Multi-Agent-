@@ -36,6 +36,7 @@ import { startCmd, stopCmd } from './commands/start.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
+import { snapshotCmd } from './commands/snapshot.js';
 import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
 import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
@@ -345,6 +346,16 @@ program
   .description('read an edit-hook payload on stdin; record the edit signal + warn if the file is held by another session')
   .option('--agent <id>', 'which agent host invoked this hook', 'claude')
   .action((opts: { agent?: string }) => run(() => guardCmd(opts)));
+
+program
+  .command('snapshot', { hidden: true }) // debounced background checkpoint; the guard fires it, humans may too
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .option('--from <agent>', 'the agent currently working (recorded as the brief author)')
+  .option('--force', 'rebuild even if a fresh brief already exists (skip the debounce)')
+  .option('--quiet', 'no output — detached hook mode')
+  .description('refresh this worktree\'s HANDOFF.md from git/transcript state without committing (so a resumable brief always exists)')
+  .action((slug: string | undefined, opts: { from?: string; force?: boolean; quiet?: boolean }) =>
+    run(() => snapshotCmd(slug, opts)));
 
 program
   .command('orient')

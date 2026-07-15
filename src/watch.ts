@@ -10,6 +10,9 @@ import { watch, type FSWatcher } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { bus } from './events.js';
 import { batonDir, loadTasks } from './store.js';
+import { isGitRepo } from './git.js';
+import { loadKb } from './kb/state.js';
+import { registerWatchedRoot, unregisterWatchedRoot, watchedRoots } from './signals.js';
 
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'graphify-out', '.baton', 'dist', 'build', '.next', '__pycache__', '.venv']);
 /** Editor/tool noise: vim swaps, backup~, temp files, OS cruft. */
@@ -28,6 +31,8 @@ export class WorktreeWatcher {
   private pending = new Map<string, ReturnType<typeof setTimeout>>(); // slug:path → timer
   private root: string;
   private unsubs: Array<() => void> = [];
+  /** Non-task checkout slugs currently registered in the watched_roots table. */
+  private checkouts = new Set<string>();
 
   constructor(root: string) {
     this.root = root;
@@ -55,12 +60,72 @@ export class WorktreeWatcher {
     }
   }
 
-  /** Reconcile watchers with the task store: add new worktrees, drop gone ones. */
+  /**
+   * Reconcile watchers with what should be watched: every `baton new` task
+   * worktree PLUS every non-task git checkout in the hub (ADD-07/A) — the hub
+   * root in a single-repo setup, or each sub-project in a multi-repo hub — so a
+   * plain-terminal / MCP agent (or a hand-edit) produces live signals with zero
+   * per-agent setup. Adds new watchers, drops gone ones, and keeps the
+   * watched_roots registry (which read-time reconcile + agent attribution lean
+   * on) in step with the checkout watchers we actually hold.
+   */
   private async resync(): Promise<void> {
     const tasks = await loadTasks(this.root);
-    const live = new Set(tasks.map((t) => t.slug));
-    for (const t of tasks) if (!this.watchers.has(t.slug)) this.add(t.slug, t.worktreePath);
-    for (const slug of [...this.watchers.keys()]) if (!live.has(slug)) this.remove(slug);
+    const checkouts = await this.checkoutRoots();
+    const desired = new Map<string, string>(); // slug → path
+    for (const t of tasks) desired.set(t.slug, t.worktreePath);
+    for (const [slug, path] of checkouts) desired.set(slug, path);
+
+    for (const [slug, path] of desired) if (!this.watchers.has(slug)) this.add(slug, path);
+    for (const slug of [...this.watchers.keys()]) if (!desired.has(slug)) this.remove(slug);
+
+    // watched_roots must mirror the checkout watchers (not the task ones — tasks
+    // are already resolvable via the task store).
+    for (const [slug, path] of checkouts) {
+      registerWatchedRoot(this.root, slug, path);
+      this.checkouts.add(slug);
+    }
+    // Reconcile against the DB, not just this process's in-memory set: a crashed
+    // daemon leaves rows behind and a fresh process starts with `this.checkouts`
+    // empty, so read-time reconcile would verify signals against a dead checkout
+    // forever (finding #4). The watcher is the sole writer of watched_roots, so
+    // any `co-*` row not in the current checkout set is ours to prune.
+    for (const slug of watchedRoots(this.root).keys()) {
+      if (!checkouts.has(slug)) {
+        unregisterWatchedRoot(this.root, slug);
+        this.checkouts.delete(slug);
+      }
+    }
+  }
+
+  /**
+   * The non-task git checkouts to watch. In a multi-repo hub these are the
+   * sub-projects (the real checkouts); we skip the hub root there so a recursive
+   * root watch doesn't double-count files a sub-project watch already sees. In a
+   * single-repo setup the root itself IS the checkout an agent works in (no
+   * worktree), which is exactly the case that currently shows nothing.
+   *
+   * KNOWN LIMIT (finding #2): a checkout is watched under ONE slug (`co-<id>`),
+   * so fs-watch attributes an edit to the *checkout*, not the *agent*. When two
+   * agents share one plain checkout and edit the same file, the `(slug, path)`
+   * signal collapses to a single holder and no overlap `warning` fires. Reliable
+   * per-agent attribution there requires the edit hook (which records under each
+   * session's own slug); agent-agnostic fs-watch capture cannot and does not
+   * replace it. Do not paper over this by guessing an agent for `co-*` edits.
+   */
+  private async checkoutRoots(): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    try {
+      const kb = await loadKb(this.root);
+      if (kb && kb.projects.length > 0) {
+        for (const p of kb.projects) out.set(`co-${p.id}`, p.path);
+      } else if (await isGitRepo(this.root)) {
+        out.set('co-root', this.root);
+      }
+    } catch {
+      /* kb/git probing is best-effort — task watchers still work without it */
+    }
+    return out;
   }
 
   add(slug: string, worktreePath: string): void {
@@ -108,5 +173,9 @@ export class WorktreeWatcher {
     for (const u of this.unsubs) u();
     this.unsubs = [];
     for (const slug of [...this.watchers.keys()]) this.remove(slug);
+    // The daemon owns the watched_roots registry — clear our checkouts so a
+    // fresh CLI process doesn't reconcile against roots nobody is watching.
+    for (const slug of [...this.checkouts]) unregisterWatchedRoot(this.root, slug);
+    this.checkouts.clear();
   }
 }

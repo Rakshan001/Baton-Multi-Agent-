@@ -173,7 +173,7 @@ export function CommandCenter({
         {view === "board"
           ? <Board sessions={filter ? sessions.filter((s) => (filter === "conflict" ? s.status === "conflict" : deriveColumn(s) === filter)) : sessions}
               loading={loading} error={status.error && !sessions.length ? status.error : null} onOpen={onOpen} writeEnabled={writeEnabled} onRetry={status.refetch} onNewSession={onNewSession} />
-          : <CanvasView sessions={sessions} loading={loading} onOpen={onOpen} />}
+          : <CanvasView sessions={sessions} loading={loading} error={status.error && !sessions.length ? status.error : null} onRetry={status.refetch} onOpen={onOpen} />}
       </div>
     </div>
   );

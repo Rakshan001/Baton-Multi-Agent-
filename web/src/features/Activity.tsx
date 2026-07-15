@@ -12,11 +12,14 @@ import { progressEstimate, timeAgo } from "../lib/format";
 import { getUsage, fmtTokens } from "../lib/preview";
 import { BatonAPI } from "../lib/api";
 import { usePoll, type PollState } from "../hooks/usePoll";
-import type { StatusRow, EditSignal, AgentId, RepoUsage } from "../types";
+import type { StatusRow, EditSignal, PresenceSession, AgentId, RepoUsage } from "../types";
 
 export function Sparkline({ data, color = "var(--accent)", w = 64, h = 22 }: { data: number[]; color?: string; w?: number; h?: number }) {
   const max = Math.max(1, ...data); const n = data.length;
-  const pts = data.map((v, i) => `${(i / (n - 1)) * w},${h - (v / max) * (h - 3) - 1.5}`).join(" ");
+  if (n === 0) return null;
+  const y = (v: number) => h - (v / max) * (h - 3) - 1.5;
+  // A single datapoint has no i/(n-1) slope — draw it as a flat line.
+  const pts = n === 1 ? `0,${y(data[0])} ${w},${y(data[0])}` : data.map((v, i) => `${(i / (n - 1)) * w},${y(v)}`).join(" ");
   const area = `0,${h} ${pts} ${w},${h}`;
   const id = "sp" + Math.abs(data.reduce((a, b) => a * 31 + b, 7)).toString(36);
   return (
@@ -89,6 +92,41 @@ function LiveSignalsSection() {
   );
 }
 
+/** Real mode: agents connected right now that have no task worktree — the plain
+   terminal / MCP sessions the worktree-only board can't show (ISS-12/ISS-14). */
+function ConnectedAgentsSection() {
+  const presence = usePoll<PresenceSession[]>(() => BatonAPI.getSessions(), { interval: 5000 });
+  const rows = presence.data ?? [];
+  if (rows.length === 0) return null; // nothing connected outside worktrees — stay quiet
+  const shortRoot = (p: string | null) => (p ? p.split("/").filter(Boolean).slice(-2).join("/") : "");
+  return (
+    <section className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon name="bot" size={14} style={{ color: "var(--text-tertiary)" }} />
+        <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Connected agents</h2>
+        {presence.error != null && rows.length > 0 && (<span style={{ fontSize: "var(--fs-12)", color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>)}
+        <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }} data-tip="Sessions connected via MCP or edit hooks, working outside a Baton task worktree">{rows.length} session{rows.length === 1 ? "" : "s"}</span>
+      </div>
+      <div>
+        {rows.slice(0, 10).map((s) => (
+          <div key={s.slug} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+            <span style={{ position: "relative", width: 7, height: 7, flex: "none" }} data-tip={s.live ? "active recently" : `last seen ${timeAgo(new Date(s.lastSeen).getTime())}`}>
+              <span style={{ position: "absolute", inset: 0, borderRadius: 99, background: s.live ? "var(--ready)" : "var(--idle)" }} />
+              {s.live && <span style={{ position: "absolute", inset: 0, borderRadius: 99, background: "var(--ready)", animation: "ping 1.6s var(--ease-out) infinite" }} />}
+            </span>
+            <AgentBadge id={(s.agent as AgentId) ?? null} size="sm" showLabel={false} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</div>
+              {s.root && <div className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortRoot(s.root)}</div>}
+            </div>
+            <span style={{ flex: "none", fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{timeAgo(new Date(s.lastSeen).getTime())}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function ActivityScreen({
   status, onOpen, onOpenDiff, onHandoff, onLive,
 }: {
@@ -142,7 +180,7 @@ export function ActivityScreen({
         ...(real && real.totals.sessions > 0
           ? [{
               label: "Tokens used (Claude)", value: fmtTokens(real.totals.inputTokens + real.totals.outputTokens),
-              sub: `${real.totals.sessions} session${real.totals.sessions === 1 ? "" : "s"} · cache-read ${fmtTokens(real.totals.cacheReadTokens)} · ≈ $${real.totals.estCostUsd.toFixed(2)} est`,
+              sub: `${real.totals.sessions} session${real.totals.sessions === 1 ? "" : "s"} · cache-read ${fmtTokens(real.totals.cacheReadTokens)} · ≈ $${(real.totals.estCostUsd ?? 0).toFixed(2)} est`,
               icon: "zap" as IconName, tone: "accent" as const,
             }]
           : []),
@@ -182,6 +220,7 @@ export function ActivityScreen({
               </div>
 
               {!demo && <LiveSignalsSection />}
+              {!demo && <ConnectedAgentsSection />}
 
               {/* per-agent rollup: tokens in demo, real work counters otherwise */}
               <section className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -263,7 +302,7 @@ export function ActivityScreen({
                           const ru = usageBySlug.get(s.slug);
                           return (
                             <div style={{ flex: "none", width: 110, textAlign: "right" }} className="ar-hide-sm"
-                              data-tip={ru ? `${fmtTokens(ru.inputTokens)} in · ${fmtTokens(ru.outputTokens)} out · cache-read ${fmtTokens(ru.cacheReadTokens)} · ≈ $${ru.estCostUsd.toFixed(2)} est` : undefined}>
+                              data-tip={ru ? `${fmtTokens(ru.inputTokens)} in · ${fmtTokens(ru.outputTokens)} out · cache-read ${fmtTokens(ru.cacheReadTokens)} · ≈ $${(ru.estCostUsd ?? 0).toFixed(2)} est` : undefined}>
                               {ru ? (
                                 <>
                                   <div className="mono" style={{ fontSize: "var(--fs-13)", color: "var(--text-primary)" }}>{fmtTokens(ru.inputTokens + ru.outputTokens)}</div>

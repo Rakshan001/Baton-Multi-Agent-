@@ -7,6 +7,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Icon } from "../components/Icon";
 import { CommandLine } from "../components/primitives";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { BatonAPI, ApiError } from "../lib/api";
 import { showToast } from "../lib/toast";
 import type { Task } from "../types";
@@ -18,15 +19,8 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   // Multi-repo hub: a task must target one sub-project (its own git repo). null = single repo.
   const [hubProjects, setHubProjects] = useState<{ id: string; name: string }[] | null>(null);
   const [project, setProject] = useState<string | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) { e.preventDefault(); onClose(); } };
-    document.addEventListener("keydown", onKey, true);
-    setTimeout(() => inputRef.current?.focus(), 40);
-    return () => { document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
-  }, [onClose, busy]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, () => { if (!busy) onClose(); });
 
   useEffect(() => {
     void BatonAPI.getMeta().then((m) => {
@@ -55,7 +49,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: 20 }}>
       <div onClick={() => !busy && onClose()} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
-      <div role="dialog" aria-modal="true" aria-label="New session" style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="New session" style={{
         position: "relative", width: "min(520px, 100%)", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
         borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)", animation: "scale-in var(--dur-2) var(--ease-out)" }}>
 
@@ -106,7 +100,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
             )}
             <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 8 }}>
               <span className="tag">Task description</span>
-              <textarea ref={inputRef} value={task} onChange={(e) => setTask(e.target.value)} rows={3}
+              <textarea data-autofocus value={task} onChange={(e) => setTask(e.target.value)} rows={3}
                 onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit(); }}
                 placeholder="e.g. Refactor auth middleware to support API keys"
                 style={{ width: "100%", resize: "vertical", padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)", color: "var(--text-primary)", fontSize: "var(--fs-14)", fontFamily: "inherit", lineHeight: 1.5, outline: "none" }} />

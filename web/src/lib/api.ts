@@ -16,7 +16,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
@@ -215,6 +215,18 @@ class BatonClient {
       return []; // the demo showcase has no root-terminal scenario to fabricate honestly
     }
     return this.request<Array<{ agent: string; count: number }>>("/api/agents/root");
+  }
+  /** Connected agents with no task worktree — the presence layer (ISS-12/ISS-14). */
+  async getSessions(): Promise<PresenceSession[]> {
+    if (this.demo) {
+      await this.demoGate();
+      return []; // presence is a real-daemon view; the demo showcase fabricates no connected agents
+    }
+    try {
+      return await this.request<PresenceSession[]>("/api/sessions");
+    } catch {
+      return []; // older daemons don't serve this — the panel just stays hidden
+    }
   }
   async getHistory(): Promise<TaskHistory[]> {
     if (this.demo) {

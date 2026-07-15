@@ -3,7 +3,7 @@
    The tabular twin of the canvas merge-risk graph.
    ============================================================ */
 import { Icon } from "../components/Icon";
-import { AgentBadge, EmptyState } from "../components/primitives";
+import { AgentBadge, EmptyState, ErrorState } from "../components/primitives";
 import { ScreenHeader } from "./shared";
 import { getAgent } from "../lib/registry";
 import { basename, dirname, timeAgo } from "../lib/format";
@@ -92,6 +92,11 @@ export function ConflictsScreen({ status, onOpen }: { status: PollState<StatusRo
         <LiveSignals onOpen={onOpen} />
         {status.isLoading && !status.data ? (
           <div className="skeleton" style={{ height: 240, borderRadius: 12 }} />
+        ) : status.error && !status.data ? (
+          // A failed load must not read as "no conflicts" — that's the one
+          // false signal this screen can't afford.
+          <ErrorState title="Couldn't load conflict data" desc={(status.error as Error).message}
+            command="baton serve" onRetry={status.refetch} retrying={status.isFetching} />
         ) : files.length === 0 ? (
           <EmptyState icon="checkCircle" title="All clear — no overlapping edits"
             desc="When two or more sessions touch the same files, they'll show up here ranked by merge risk." />
