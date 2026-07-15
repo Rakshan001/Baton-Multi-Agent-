@@ -23,6 +23,7 @@ import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSe
 import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
 import { createSessionHandoff } from './handoff/session-brief.js';
+import { saveProgress } from './handoff/progress-ledger.js';
 import { snapshotTask } from './commands/snapshot.js';
 import { buildOrientation } from './kb/orient.js';
 import { asText, capList } from './mcp-format.js';
@@ -159,6 +160,30 @@ export async function startMcpServer(): Promise<void> {
       const trimmed = note.trim().slice(0, 200);
       setProgress(root, selfSlug, trimmed);
       return asText({ reported: trimmed, slug: selfSlug });
+    },
+  );
+
+  reg(
+    'save_progress',
+    {
+      description: TOOL_HELP.save_progress,
+      inputSchema: {
+        plan: z.array(z.object({
+          content: z.string().describe('The checklist item'),
+          status: z.string().optional().describe('pending | in_progress | completed'),
+        })).optional().describe('Your full current plan/checklist (replaces the stored one)'),
+        notes: z.array(z.string()).optional().describe('Decisions/findings the next agent should see'),
+        next: z.string().optional().describe('The single most useful next action for whoever resumes'),
+        files: z.array(z.string()).optional().describe('Repo-relative files you have edited (accumulated)'),
+      },
+    },
+    async ({ plan, notes, next, files }) => {
+      try {
+        const led = await saveProgress(root, selfSlug, { plan, notes, next, filesEdited: files });
+        return asText({ saved: selfSlug, plan: led.plan.length, notes: led.notes.length, files: led.filesEdited.length });
+      } catch (e) {
+        return asText({ rejected: e instanceof Error ? e.message : String(e) });
+      }
     },
   );
 

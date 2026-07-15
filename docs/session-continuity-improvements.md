@@ -24,6 +24,20 @@
 
 ## Progress log
 
+**2026-07-16 — ISS-06 done: agent-agnostic plan/notes capture (the brief no longer collapses to git-only for non-Claude agents).**
+`buildBrief`'s Plan / Files / Last-notes came only from Claude's JSONL transcript, so a Cursor/Codex/Gemini
+handoff (or cutoff snapshot) printed "context above is from git alone" — the continuation state you most need
+vanished for every non-Claude agent. New durable per-task **progress ledger** (`src/handoff/progress-ledger.ts`,
+`.baton/progress/<slug>.json`): plan/notes/next REPLACE, files accumulate, atomic writes, capped like
+session-brief. New **`save_progress` MCP tool** any agent calls with its current plan/notes. `buildBrief` now
+merges `max(transcript, ledger)` per field and only falls back to git-only when BOTH are empty — so `snapshot`
+and `baton pass` (which ride on `buildBrief`) inherit it automatically. Edge cases locked: an empty patch never
+fabricates a Plan; a status-less item defaults to `pending`; corrupt/absent JSON degrades to git ground truth.
+Tool-help budget raised 1900→2100 (13th always-on tool, kept lean at 197 chars). — `src/handoff/progress-ledger.ts`,
+`src/handoff/brief.ts`, `src/mcp.ts`, `src/mcp-help.ts`. Tests: +7 (`test/progress-ledger.test.ts` ×6, mcp-help
+budget). Suite 601 passing. This is ADD-04-lite: one agent-agnostic capture surface feeding the same brief
+sections, instead of per-agent transcript parsers. **Uncommitted.**
+
 **2026-07-15 (cont.) — ISS-05 done: memory self-heal no longer needs the daemon.**
 `repairMemories` (the mechanical re-anchor pass) used to run only inside `baton serve` (startup + every
 10 min), so a terminal-first user with no daemon never got stale-but-still-true facts healed — recall
@@ -238,7 +252,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   post-commit hook), not only in the daemon loop. Re-anchor when every mechanically-verifiable
   term still survives verbatim (the logic already exists in `repairMemories`).
 
-### ISS-06 · P2 · Brief's plan / todos / notes are Claude-transcript-only
+### ISS-06 · P2 · Brief's plan / todos / notes are Claude-transcript-only — **DONE 2026-07-16** (see progress log)
 - **Symptom:** hand off from Cursor/Codex and the "Plan", "Files edited", and "Last notes"
   sections silently collapse to git-only — the checklist and remaining-work state are lost.
 - **Root cause:** those sections are parsed from Claude Code's JSONL transcript

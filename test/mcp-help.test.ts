@@ -11,7 +11,7 @@ import { TOOL_HELP, TOOL_HELP_BUDGET } from '../src/mcp-help.js';
 const EXPECTED_TOOLS = [
   'orient', 'check_files', 'list_signals', 'get_report', 'who_touched',
   'list_tasks', 'report_progress', 'touch_files', 'save_memory', 'recall_memory',
-  'create_handoff', 'search_history',
+  'create_handoff', 'search_history', 'save_progress',
 ] as const;
 
 describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
@@ -22,9 +22,9 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
   it('stays inside the total budget (the whole point of T1)', () => {
     const total = Object.values(TOOL_HELP).reduce((n, d) => n + d.length, 0);
     expect(total).toBeLessThanOrEqual(TOOL_HELP_BUDGET);
-    // 12 tools now (search_history joined the H/G rounds). ~470 tokens for 12
-    // tools vs ~700 for the original 10. Raising this needs a deliberate edit.
-    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(1900);
+    // 13 tools now (save_progress joined for ISS-06 agent-agnostic capture).
+    // Raising this needs a deliberate edit — keep every new tool lean.
+    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(2100);
   });
 
   it('keeps every tool description individually lean', () => {
@@ -48,5 +48,7 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
     // The relay trigger: agents must reach for it near their usage/context limit.
     expect(TOOL_HELP.create_handoff).toMatch(/limit/i);
     expect(TOOL_HELP.create_handoff).toMatch(/resume|continue/i);
+    // save_progress must justify itself by the artifact it feeds.
+    expect(TOOL_HELP.save_progress).toMatch(/handoff|snapshot/i);
   });
 });

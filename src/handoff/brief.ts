@@ -13,6 +13,7 @@ import { loadKb } from '../kb/state.js';
 import { queryGraph } from '../kb/graphify.js';
 import { memoryBriefSection, recallMemories } from '../memory.js';
 import { sessionContextFor, type SessionContext } from './claude-session.js';
+import { loadProgress } from './progress-ledger.js';
 
 export interface HandoffMeta {
   baton: number;
@@ -48,6 +49,17 @@ export async function buildBrief(
   opts: { from?: string; to: string; model?: string; note?: string; root: string },
 ): Promise<HandoffBrief> {
   const session: SessionContext | null = await sessionContextFor(task.worktreePath);
+  // ISS-06: for a non-Claude agent there is no transcript, so plan/notes/files
+  // used to vanish. Merge the agent-agnostic progress ledger (save_progress) —
+  // preferring the richer transcript per field when it exists, else the ledger.
+  const ledger = await loadProgress(opts.root, task.slug).catch(() => null);
+  const todos = (session?.todos.length ? session.todos : ledger?.plan) ?? [];
+  const notes = (session?.lastNotes.length ? session.lastNotes : ledger?.notes) ?? [];
+  const filesEdited = (session?.filesEdited.length ? session.filesEdited : ledger?.filesEdited) ?? [];
+  const commands = session?.commands ?? [];
+  // The ledger's explicit "next step" — only the ledger carries one (a Claude
+  // transcript expresses next-work through its todo list instead).
+  const nextStep = !session && ledger?.next ? ledger.next : undefined;
 
   // Git ground truth: what actually changed vs the base branch.
   const diffStat = await gitTry(
@@ -69,8 +81,8 @@ export async function buildBrief(
     est_cost_usd: estCostUsd(session?.estTokens ?? 0),
   };
 
-  const open = session?.todos.filter((t) => t.status !== 'completed') ?? [];
-  const done = session?.todos.filter((t) => t.status === 'completed') ?? [];
+  const open = todos.filter((t) => t.status !== 'completed');
+  const done = todos.filter((t) => t.status === 'completed');
 
   const body: string[] = [
     `# Handoff: ${task.task}`,
@@ -93,23 +105,25 @@ export async function buildBrief(
     dirtyStat.ok && dirtyStat.stdout ? '### Uncommitted\n```\n' + dirtyStat.stdout + '\n```' : '',
   ];
 
-  if (session) {
+  const hasContext = !!(session || todos.length || notes.length || filesEdited.length);
+  if (hasContext) {
     if (done.length || open.length) {
       body.push('', '## Plan');
       for (const t of done) body.push(`- [x] ${t.content}`);
       for (const t of open) body.push(`- [ ] ${t.content}`);
     }
-    if (session.filesEdited.length) {
-      body.push('', '## Files the previous agent edited', ...session.filesEdited.map((f) => `- ${f}`));
+    if (nextStep) body.push('', '## Next step', nextStep);
+    if (filesEdited.length) {
+      body.push('', '## Files the previous agent edited', ...filesEdited.map((f) => `- ${f}`));
     }
-    if (session.lastNotes.length) {
-      body.push('', '## Last notes from the previous agent', ...session.lastNotes.map((n) => `> ${n.replace(/\n/g, '\n> ')}`));
+    if (notes.length) {
+      body.push('', '## Last notes from the previous agent', ...notes.map((n) => `> ${n.replace(/\n/g, '\n> ')}`));
     }
-    if (session.commands.length) {
-      body.push('', '## Commands it ran (context/verification)', '```', ...session.commands.slice(-8), '```');
+    if (commands.length) {
+      body.push('', '## Commands it ran (context/verification)', '```', ...commands.slice(-8), '```');
     }
   } else {
-    body.push('', '_No Claude Code session transcript found for this worktree — context above is from git alone._');
+    body.push('', '_No session transcript or progress ledger for this worktree — context above is from git alone._');
   }
 
   // Graph excerpt: a token-budgeted map of the code relevant to this task.
