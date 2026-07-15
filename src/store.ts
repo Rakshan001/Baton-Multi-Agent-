@@ -2,7 +2,7 @@
  * Tiny JSON store for Baton tasks, kept at <repo>/.baton/tasks.json (gitignored).
  * One file, no database — sufficient at this scale.
  */
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitRoot, mainRepoRoot } from './git.js';
 
@@ -65,23 +65,59 @@ async function trustedBatonDir(dir: string): Promise<boolean> {
 }
 
 /**
+ * True if `hub` has a `.baton/kb.json` that lists `child` as one of its
+ * projects — i.e. the hub owns that checkout, so a `.baton` sitting inside
+ * `child` is a shadow of the hub store (ADD-07/C · ISS-13), not a Baton root in
+ * its own right. Reads kb.json raw (no validation, no `loadKb` import so store
+ * stays free of a kb cycle) so a shadow is caught even before the project's
+ * graph is built; realpath both sides so a symlink or `/var`↔`/private/var`
+ * mismatch still matches.
+ */
+async function hubClaimsProject(hub: string, child: string): Promise<boolean> {
+  try {
+    const raw = await readFile(join(hub, '.baton', 'kb.json'), 'utf-8');
+    const kb = JSON.parse(raw) as { projects?: Array<{ path?: string }> };
+    if (!kb.projects?.length) return false;
+    const realChild = await realpath(child).catch(() => child);
+    for (const p of kb.projects) {
+      if (!p.path) continue;
+      const realP = await realpath(p.path).catch(() => p.path);
+      if (realP === realChild) return true;
+    }
+    return false;
+  } catch {
+    return false; // no kb.json / unreadable → this dir claims nothing
+  }
+}
+
+/**
  * The Baton root — the directory that owns `.baton/` (tasks, kb, memory). For a
  * single repo this is the git root; for a multi-repo hub it's the (non-git)
  * container folder. Walk up from `cwd` for the nearest `.baton/`; if there is
  * none yet, fall back to the enclosing git repo (a fresh repo not set up yet).
  * Throws only when we're neither inside a Baton project nor a git repo.
+ *
+ * ADD-07/C (ISS-13): the nearest `.baton` is NOT adopted blindly — if it sits
+ * inside a checkout an enclosing hub claims as a project (that hub's kb.json
+ * lists this dir), it is a shadow store and we resolve to the hub instead, so
+ * every agent in the hub reads/writes one coherent DB. An independent nested
+ * repo the hub does not claim keeps its own `.baton`.
  */
 export async function resolveBatonRoot(cwd: string = process.cwd()): Promise<string> {
   let dir = cwd;
+  let nearest: string | null = null;
   for (;;) {
-    try {
-      if (await trustedBatonDir(dir)) return dir;
-    } catch { /* no .baton here — keep walking up */ }
+    let owns = false;
+    try { owns = await trustedBatonDir(dir); } catch { /* no .baton here */ }
+    if (owns) {
+      if (nearest === null) nearest = dir; // candidate root — provisionally
+      else if (await hubClaimsProject(dir, nearest)) return dir; // hub owns the shadow
+    }
     const parent = dirname(dir);
     if (parent === dir) break; // reached the filesystem root
     dir = parent;
   }
-  return gitRoot(cwd); // not set up yet → the git repo is the Baton root
+  return nearest ?? gitRoot(cwd); // no .baton anywhere → the git repo is the root
 }
 
 /**

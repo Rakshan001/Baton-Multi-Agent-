@@ -48,3 +48,59 @@ describe('resolveMcpRoot — coordination tools must read the hub store, not a w
     await same(await resolveMcpRoot(root, {}), root);
   });
 });
+
+/**
+ * ADD-07/C (ISS-13) — one coherent hub DB. An agent working directly inside a
+ * hub sub-project must read/write the HUB `.baton`, never a shadow `.baton` that
+ * got planted inside the sub-project checkout (older buggy build, or an agent
+ * that mis-resolved once). A split store silently drops that agent's tasks and
+ * presence from the daemon's view.
+ */
+async function initHub(): Promise<{ hub: string; api: string }> {
+  const hub = await mkdtemp(join(tmpdir(), 'baton-hub-'));
+  await mkdir(join(hub, '.baton'), { recursive: true }); // the real hub store
+  const api = join(hub, 'api');
+  await mkdir(api, { recursive: true });
+  await git(['init', '-q'], api);
+  await git(['config', 'user.email', 'test@baton.dev'], api);
+  await git(['config', 'user.name', 'Baton Test'], api);
+  await git(['checkout', '-q', '-b', 'main'], api);
+  await git(['commit', '-q', '-m', 'initial', '--allow-empty'], api);
+  await writeFile(
+    join(hub, '.baton', 'kb.json'),
+    JSON.stringify({
+      root: hub,
+      projects: [{ id: 'api', name: 'api', path: api, graphPath: join(api, 'graphify-out', 'graph.json') }],
+      mergedGraphPath: null,
+      lastBuiltAt: null,
+    }),
+    'utf-8',
+  );
+  return { hub, api };
+}
+
+describe('resolveMcpRoot — a hub sub-project resolves to the hub store, not a shadow', () => {
+  let hub: string;
+  afterEach(async () => { await rm(hub, { recursive: true, force: true }); });
+
+  it('resolves an agent inside a hub-owned sub-project to the HUB, not a sub-project shadow .baton (ISS-13)', async () => {
+    const h = await initHub(); hub = h.hub;
+    // A shadow store got planted inside the sub-project checkout. The hub's
+    // kb.json lists this checkout as a project, so the shadow is illegitimate.
+    await mkdir(join(h.api, '.baton'), { recursive: true });
+
+    await same(await resolveMcpRoot(h.api, {}), h.hub);
+  });
+
+  it('does NOT hijack an independent nested repo the hub does not claim', async () => {
+    const h = await initHub(); hub = h.hub;
+    // vendor/ is its own git repo with its own .baton, but the hub's kb.json
+    // does not list it — it is a legitimately separate Baton root.
+    const vendor = join(h.hub, 'vendor');
+    await mkdir(vendor, { recursive: true });
+    await git(['init', '-q'], vendor);
+    await mkdir(join(vendor, '.baton'), { recursive: true });
+
+    await same(await resolveMcpRoot(vendor, {}), vendor);
+  });
+});

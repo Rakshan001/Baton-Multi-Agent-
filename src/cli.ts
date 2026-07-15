@@ -128,8 +128,9 @@ program
 program
   .command('doctor')
   .option('--docs', 'scan for scattered .md sprawl (memory-bank/, stray NOTES/TODO, competing rule files) — propose-only')
-  .description('audit junk: orphaned worktrees, branches, tmux sessions, leaked temp files')
-  .action((opts: { docs?: boolean }) => run(() => doctorCmd(opts)));
+  .option('--fix', 'reconcile hub coherence: delete empty/ephemeral shadow .baton dirs inside sub-projects (real state is reported, never touched)')
+  .description('audit junk: orphaned worktrees, branches, tmux sessions, leaked temp files; + hub-coherence (shadow .baton) check')
+  .action((opts: { docs?: boolean; fix?: boolean }) => run(() => doctorCmd(opts)));
 
 program
   .command('clean')

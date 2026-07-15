@@ -22,7 +22,7 @@ too long`) is unrelated `src/skills/catalog.ts` WIP, not ours.
 | 5 | LOW | **Fixed** — `touchHookSession` (UPDATE-only) + a one-shot registration interceptor in `src/mcp.ts` refresh presence on any tool call. Tests: 2. |
 | 6 | LOW | **Fixed** — `hookSessions`/`watchedRoots` queried once in `getSignals` and threaded into `reconcileSignals`. `src/signals.ts`. |
 
-Remaining: **ADD-07 slice C** (below) is still un-started.
+Remaining: **ADD-07 slice C** is **done** (2026-07-15) — see the Slice C section below.
 
 ### Round 2 — self-review of the fixes (2026-07-15)
 
@@ -188,7 +188,19 @@ Nothing here is committed. The pre-existing `test/skills.test.ts` failure
 
 ## Remaining ADD-07 work
 
-### Slice C — one coherent hub DB + `doctor` reconcile (fixes ISS-13)
+### Slice C — one coherent hub DB + `doctor` reconcile (fixes ISS-13) — **DONE 2026-07-15**
+
+**Resolution (uncommitted, on top of the round-2 commit):**
+
+| Part | Resolution |
+|------|------------|
+| **C1 — resolution** | `resolveBatonRoot` no longer adopts the nearest `.baton` blindly: if it sits inside a checkout an enclosing hub claims as a project (`hubClaimsProject` reads that hub's `kb.json` raw, realpath-matched), it resolves **up to the hub**, so every agent shares one store. An independent nested repo the hub does not claim keeps its own `.baton`. `src/store.ts`. Tests: 2 (`test/mcp-root.test.ts`). |
+| **C2 — doctor** | `baton doctor` now runs a hub-coherence pass (`scanShadowBatons`) reporting every shadow `.baton` inside a sub-project, classified removable (ephemeral `history.db`/locks only) vs holds-real-state (tasks / memory facts / `kb.json`). `baton doctor --fix` (`reconcileShadowBatons`) deletes only the removable ones; real state is reported, never touched. `src/commands/doctor.ts` + `--fix` in `src/cli.ts`. Tests: 5 (`test/doctor-hub.test.ts`). |
+
+Suite after slice C: **591 passing**, +7 new tests. Lone failure is the
+unrelated `stack-migration.explain.how too long` skills WIP, not ours.
+
+**Original goal (for reference):**
 
 - **Goal:** guarantee every agent writes to, and the daemon reads from, a
   **single** Baton DB regardless of sub-project `.baton/` dirs. Today a
