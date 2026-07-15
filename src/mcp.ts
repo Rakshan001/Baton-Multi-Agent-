@@ -32,6 +32,12 @@ import { TOOL_HELP } from './mcp-help.js';
 const WHO_TOUCHED_CAP = 20;
 /** A busy hub can hold hundreds of live signals — cap what one answer serves. */
 const SIGNALS_CAP = 30;
+/**
+ * Debounce for refreshing a session's presence on tool calls — well under the
+ * 2-min heartbeat window (WATCHER_HEARTBEAT_STALE_MS) so an active agent always
+ * reads as live, without a DB write on every single tool invocation.
+ */
+const PRESENCE_TOUCH_MS = 30_000;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
@@ -63,19 +69,25 @@ export async function startMcpServer(): Promise<void> {
   // that only reads (orient/check_files/recall) is still connected, but
   // hook_sessions.at would otherwise advance only on connect/edit — so the
   // dashboard would show it idle after the heartbeat and drop it after the
-  // window. Intercept registration once so every tool (present and future)
-  // refreshes the session's last-seen. Only non-task sessions have a row to
-  // touch; touchHookSession is a no-op otherwise.
-  if (!taskSlug) {
-    const rawRegister = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
-    (server as { registerTool: unknown }).registerTool = (name: unknown, config: unknown, handler: (...a: unknown[]) => unknown) =>
-      rawRegister(name, config, (...a: unknown[]) => {
-        try { touchHookSession(root, selfSlug); } catch { /* presence is best-effort */ }
-        return handler(...a);
-      });
-  }
+  // window. `reg` wraps every tool registration below to refresh the session's
+  // last-seen, debounced to well under the heartbeat window so a chatty agent
+  // doesn't write on every call. Wrapping via a local helper (not by reassigning
+  // server.registerTool) keeps the SDK's full type at each call site.
+  let lastPresenceTouch = 0;
+  const presenceTouch = (): void => {
+    if (taskSlug) return; // only non-task sessions have a hook_sessions row to touch
+    const now = Date.now();
+    if (now - lastPresenceTouch < PRESENCE_TOUCH_MS) return;
+    lastPresenceTouch = now;
+    try { touchHookSession(root, selfSlug); } catch { /* presence is best-effort */ }
+  };
+  const reg = ((name: string, config: unknown, cb: (...a: unknown[]) => unknown) =>
+    (server.registerTool as (...x: unknown[]) => unknown)(name, config, (...a: unknown[]) => {
+      presenceTouch();
+      return cb(...a);
+    })) as unknown as typeof server.registerTool;
 
-  server.registerTool(
+  reg(
     'orient',
     {
       description: TOOL_HELP.orient,
@@ -84,7 +96,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ topic }) => asText({ orientation: await buildOrientation(root, { topic }) }),
   );
 
-  server.registerTool(
+  reg(
     'check_files',
     {
       description: TOOL_HELP.check_files,
@@ -93,7 +105,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
   );
 
-  server.registerTool(
+  reg(
     'list_signals',
     {
       description: TOOL_HELP.list_signals,
@@ -105,7 +117,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'get_report',
     {
       description: TOOL_HELP.get_report,
@@ -115,7 +127,7 @@ export async function startMcpServer(): Promise<void> {
       asText(slug ? (getReport(root, slug) ?? { error: `no report for '${slug}'` }) : listReports(root, 10).map(reportSummary)),
   );
 
-  server.registerTool(
+  reg(
     'who_touched',
     {
       description: TOOL_HELP.who_touched,
@@ -128,7 +140,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'list_tasks',
     {
       description: TOOL_HELP.list_tasks,
@@ -137,7 +149,7 @@ export async function startMcpServer(): Promise<void> {
     async () => asText(await collectStatus(root)),
   );
 
-  server.registerTool(
+  reg(
     'report_progress',
     {
       description: TOOL_HELP.report_progress,
@@ -150,7 +162,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'touch_files',
     {
       description: TOOL_HELP.touch_files,
@@ -169,7 +181,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'search_history',
     {
       description: TOOL_HELP.search_history,
@@ -181,7 +193,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ query, limit }) => asText({ hits: searchHistory(root, query, limit ?? 10) }),
   );
 
-  server.registerTool(
+  reg(
     'create_handoff',
     {
       description: TOOL_HELP.create_handoff,
@@ -212,7 +224,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'save_memory',
     {
       description: TOOL_HELP.save_memory,
@@ -244,7 +256,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'recall_memory',
     {
       description: TOOL_HELP.recall_memory,

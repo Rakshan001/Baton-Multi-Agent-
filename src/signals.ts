@@ -474,10 +474,24 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
   // #3: canonicalize the key (a session root and a watched-checkout path pointing
   // at the same dir must resolve — symlink, /var vs /private/var), and when two
   // sessions share a root, attribute to the most recently seen one instead of an
-  // arbitrary last-writer-wins.
+  // arbitrary last-writer-wins. Only sessions seen within the presence window
+  // count: hookSessions() has no time filter, so a departed session would
+  // otherwise keep mislabeling fresh signals at its old checkout indefinitely.
+  // realpathSync is a blocking syscall and getSignals is on the 5s dashboard poll
+  // and the guard's 1500ms budget path — memoize per call so the same handful of
+  // roots is canonicalized once, not once per session/holder (finding #2).
+  const canonCache = new Map<string, string>();
+  const canonOf = (p: string | null | undefined): string | null => {
+    if (!p) return null;
+    let c = canonCache.get(p);
+    if (c === undefined) canonCache.set(p, (c = canonicalRoot(p)!));
+    return c;
+  };
+  const presenceCutoff = new Date(Date.now() - PRESENCE_WINDOW_MIN * 60_000).toISOString();
   const agentAtRoot = new Map<string, { agent: string | null; at: string }>();
   for (const s of sessions.values()) {
-    const canon = canonicalRoot(s.root);
+    if (s.at < presenceCutoff) continue; // departed session — don't attribute from it
+    const canon = canonOf(s.root);
     if (!canon) continue;
     const prev = agentAtRoot.get(canon);
     if (!prev || prev.at < s.at) agentAtRoot.set(canon, { agent: s.agent, at: s.at });
@@ -488,7 +502,7 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
     const sess = sessions.get(slug);
     if (sess) return sess.agent ?? null; // root session — self-reported by its hook
     const checkout = watched.get(slug);
-    if (checkout) return agentAtRoot.get(canonicalRoot(checkout)!)?.agent ?? null; // fs-watch signal — layer agent if a session is here
+    if (checkout) return agentAtRoot.get(canonOf(checkout)!)?.agent ?? null; // fs-watch signal — layer agent if a session is here
     return null;
   };
 
@@ -507,13 +521,13 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
   for (const [path, holders] of byPath) {
     const sessionRoots = new Set<string>();
     for (const h of holders) {
-      const canon = canonicalRoot(sessions.get(h.slug)?.root);
+      const canon = canonOf(sessions.get(h.slug)?.root);
       if (canon) sessionRoots.add(canon);
     }
     if (sessionRoots.size === 0) continue;
     const kept = holders.filter((h) => {
       const checkout = watched.get(h.slug);
-      return !checkout || !sessionRoots.has(canonicalRoot(checkout)!);
+      return !checkout || !sessionRoots.has(canonOf(checkout)!);
     });
     if (kept.length !== holders.length) byPath.set(path, kept);
   }

@@ -24,6 +24,19 @@ too long`) is unrelated `src/skills/catalog.ts` WIP, not ours.
 
 Remaining: **ADD-07 slice C** (below) is still un-started.
 
+### Round 2 — self-review of the fixes (2026-07-15)
+
+A `/code-review` of the six fixes surfaced 6 follow-ups; all addressed (uncommitted, on top of `ddb997b`):
+
+| Finding | Sev | Resolution |
+|---------|-----|------------|
+| transient probe wipes watched_roots | MED | `checkoutRoots` returns `null` when it can't positively determine the set; `resync` only reconciles the registry on an authoritative probe. `src/watch.ts`. Test: 1. |
+| stale-session attribution | MED | `agentAtRoot` skips sessions older than `PRESENCE_WINDOW_MIN`. `src/signals.ts`. Test: 1. |
+| uncached `realpathSync` on hot path | MED | per-call memo (`canonOf`) around `canonicalRoot`. `src/signals.ts`. |
+| git spawn per resync | LOW-MED | `checkoutRoots` cached with a 4s TTL (`probeCheckouts`). `src/watch.ts`. |
+| SDK `registerTool` monkeypatch | LOW-MED | replaced with a typed local `reg` helper (no object reassignment; call-site types preserved). `src/mcp.ts`. |
+| DB write per tool call | LOW | `presenceTouch` debounced to `PRESENCE_TOUCH_MS` (30s). `src/mcp.ts`. |
+
 ---
 
 ## Where we are

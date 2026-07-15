@@ -6,7 +6,8 @@ import { git } from '../src/util/exec.js';
 import { saveKb } from '../src/kb/state.js';
 import { WorktreeWatcher } from '../src/watch.js';
 import {
-  watchedRoots, registerWatchedRoot, recordHookEdit, registerHookSession, getSignals, checkFiles, SIGNAL_WINDOW_MIN,
+  watchedRoots, registerWatchedRoot, recordHookEdit, registerHookSession, getSignals, checkFiles,
+  SIGNAL_WINDOW_MIN, PRESENCE_WINDOW_MIN,
 } from '../src/signals.js';
 
 /**
@@ -72,6 +73,25 @@ describe('WorktreeWatcher — which checkouts it watches', () => {
     await watcher.start();
 
     expect([...watchedRoots(root).keys()]).toEqual(['co-root']); // ghost reconciled away
+  });
+
+  it('does not wipe watched_roots when the checkout probe cannot positively determine (transient)', async () => {
+    await initRepo(root);
+    watcher = new WorktreeWatcher(root);
+    await watcher.start();
+    expect([...watchedRoots(root).keys()]).toEqual(['co-root']);
+
+    // A transient blip (git spawn failure, kb momentarily unreadable) leaves the
+    // probe unable to confirm a checkout set. Simulate it by removing .git so
+    // rev-parse can't confirm a work tree — resync must KEEP the existing row,
+    // not treat "couldn't determine" as "nothing to watch" and prune it.
+    await rm(join(root, '.git'), { recursive: true, force: true });
+    // Clear the short-lived probe cache so resync actually re-probes (and hits
+    // the now-failing git rev-parse) rather than reusing the cached positive.
+    (watcher as unknown as { checkoutProbe: unknown }).checkoutProbe = null;
+    await (watcher as unknown as { resync(): Promise<void> }).resync();
+
+    expect([...watchedRoots(root).keys()]).toEqual(['co-root']); // preserved, not wiped
   });
 
   it('stop() clears the watched_roots it registered (daemon owns the registry)', async () => {
@@ -142,6 +162,19 @@ describe('checkout signals — reconcile + agent attribution', () => {
     // in as a *different* holder and make the agent's own file look busy.
     const check = (await checkFiles(root, ['b.ts'], 'sess-abc'))['b.ts'];
     expect(check.busy).toBe(false);
+  });
+
+  // Review-fix #6: a departed session (last seen beyond the presence window)
+  // must not keep labeling fresh signals at its old checkout.
+  it('does not attribute a co-* signal from an out-of-window session', async () => {
+    const gone = new Date(Date.now() - (PRESENCE_WINDOW_MIN + 5) * 60_000).toISOString();
+    registerWatchedRoot(root, 'co-root', root);
+    registerHookSession(root, 'sess-gone', 'cursor', root, gone); // departed
+    await writeFile(join(root, 'b.ts'), 'export const b = 2;\n', 'utf-8');
+    recordHookEdit(root, { slug: 'co-root', path: 'b.ts', at: aged() });
+
+    const sig = (await getSignals(root)).find((s) => s.path === 'b.ts');
+    expect(sig!.holders[0].agent).toBeNull(); // no live session here → not mislabeled
   });
 
   // Finding #3: attribution must resolve through path canonicalization. The
