@@ -126,7 +126,7 @@ export async function buildBrief(
   // facts (changed anchors) are withheld so the executor never inherits rot.
   try {
     const recalled = await recallMemories(opts.root, { topic: task.task, limit: 6 });
-    const section = memoryBriefSection(recalled.facts, recalled.staleDropped);
+    const section = memoryBriefSection(recalled.facts, recalled.staleDropped, recalled.staleGrounding);
     if (section) body.push('', section);
   } catch { /* memory is an enhancement — never block a handoff */ }
 

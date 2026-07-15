@@ -110,7 +110,7 @@ export async function startAgent(
       let memory = '';
       try {
         const recalled = await recallMemories(repoRoot, { topic: task.task, limit: 6 });
-        const section = memoryBriefSection(recalled.facts, recalled.staleDropped);
+        const section = memoryBriefSection(recalled.facts, recalled.staleDropped, recalled.staleGrounding);
         if (section) memory = `\n\n${section}`;
       } catch { /* memory is an enhancement — never block a launch */ }
       const scope = task.scope?.length

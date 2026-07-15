@@ -180,6 +180,27 @@ describe('memory store (real temp git repo)', () => {
     expect(recalled.staleDropped).toBe(1);
   });
 
+  // ISS-04: a withheld stale fact must arrive as a re-grounding POINTER (what it
+  // was, when it was true, what to re-check) — not just as a bare count, which
+  // reads as a gap and invites a confident wrong re-derivation.
+  it('surfaces withheld stale facts as re-grounding pointers (not just a count)', async () => {
+    const recalled = await recallMemories(root, {}); // a.txt is changed → 1 stale
+    expect(recalled.staleDropped).toBe(1); // count still there (back-compat)
+    expect(recalled.staleGrounding).toHaveLength(1);
+    const p = recalled.staleGrounding[0];
+    expect(p.was).toContain('canonical greeting'); // what it claimed
+    expect(p.verify).toContain('a.txt');           // the file to re-check
+    expect(p.reason).toContain('a.txt changed');   // why it went stale
+    expect(p.trueAsOf).toMatch(/^[0-9a-f]{7,}$/);  // short commit it was true at
+    expect(p.id).toMatch(/^mem-/);
+  });
+
+  it('scopes re-grounding pointers to the topic when one is given', async () => {
+    // The stale fact is about the greeting; an unrelated topic should not ground it.
+    expect((await recallMemories(root, { topic: 'greeting release' })).staleGrounding).toHaveLength(1);
+    expect((await recallMemories(root, { topic: 'kubernetes deployment yaml' })).staleGrounding).toHaveLength(0);
+  });
+
   it('same-fingerprint save supersedes the old fact', async () => {
     const first = await saveMemory(root, { fact: 'Deploys happen from main every friday afternoon.' });
     const second = await saveMemory(root, { fact: 'Deploys happen from main every friday at 15:00 UTC, never on holidays.' });
@@ -251,5 +272,20 @@ describe('memoryBriefSection', () => {
 
   it('returns empty when there is nothing fresh to say', () => {
     expect(memoryBriefSection([], 0)).toBe('');
+  });
+
+  // ISS-04: when grounding pointers are supplied, the brief shows re-grounding
+  // lines (what/when/verify) capped for budget, not a bare withheld count.
+  it('renders capped re-grounding pointers when grounding is provided', () => {
+    const section = memoryBriefSection([], 3, [
+      { id: 'mem-x', was: 'Daemon stays zero-dependency', trueAsOf: 'aed3292', verify: ['src/server.ts'], reason: 'src/server.ts changed' },
+      { id: 'mem-y', was: 'Realtime is SSE not socket.io', trueAsOf: 'ee02853', verify: ['src/events.ts'], reason: 'src/events.ts changed' },
+      { id: 'mem-z', was: 'should be capped out', trueAsOf: null, verify: ['x.ts'], reason: 'x.ts changed' },
+    ]);
+    expect(section).toContain('re-ground before trusting');
+    expect(section).toContain('was true @ aed3292: Daemon stays zero-dependency');
+    expect(section).toContain('verify `src/server.ts`');
+    expect(section).toContain('+1 more withheld'); // 3 total − 2 shown
+    expect(section).not.toContain('should be capped out'); // beyond BRIEF cap of 2
   });
 });

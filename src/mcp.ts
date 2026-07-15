@@ -283,6 +283,12 @@ export async function startMcpServer(): Promise<void> {
         ...(r.related?.length ? { relatedByFiles: r.related.map((f) => ({ id: f.id, type: f.type, fact: f.fact })) } : {}),
         totalStored: r.total,
         staleWithheld: r.staleDropped,
+        // ISS-04: withheld stale facts as re-grounding pointers, not just a
+        // count — what each claimed, the commit it was true at, and the file to
+        // re-check. Verify before relying; do not re-derive from the gap.
+        ...(r.staleGrounding.length
+          ? { staleGrounding: r.staleGrounding, staleTip: 'These WERE true as of the noted commit. Re-check the `verify` file before trusting; if still true, save_memory to re-anchor; if wrong, ignore. Do not re-derive blind.' }
+          : {}),
         ...(rows.some((row) => row.preview) ? { tip: 'preview rows are truncated — recall_memory({ ids: [...] }) returns full bodies' } : {}),
         // Repair queue (M3): you are on these files anyway — verifying costs ~nothing.
         ...(r.review ? { reviewRequest: { ...r.review, note: 'This stale fact shares files with your hits. If still true, re-save it with save_memory (fresh anchors); if wrong, ignore it.' } } : {}),

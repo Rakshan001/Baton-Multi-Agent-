@@ -320,7 +320,7 @@ export async function buildContextPack(
   let memorySection = '';
   try {
     const recalled = await recallMemories(root, { limit: 6 });
-    memorySection = memoryBriefSection(recalled.facts, recalled.staleDropped);
+    memorySection = memoryBriefSection(recalled.facts, recalled.staleDropped, recalled.staleGrounding);
   } catch {
     /* no memory store — section omitted */
   }

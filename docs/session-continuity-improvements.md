@@ -24,6 +24,24 @@
 
 ## Progress log
 
+**2026-07-15 (cont.) — ISS-04 done: withheld stale facts surface as re-grounding pointers, not a bare count.**
+`recallMemories` now returns `staleGrounding: Regrounding[]` alongside the `staleDropped` count (additive —
+every existing consumer/test untouched). Each pointer carries what the fact claimed (`was`), the short commit
+it was true at (`trueAsOf`), the anchor file to re-check (`verify`), and why it went stale (`reason`). Topic
+mode scopes pointers to the topic (`rankFacts`); no-topic orders by fewest commits behind; capped at 5, excludes
+the opportunistic `review` pick. Surfaced on **both** the MCP `recall_memory` output (with a "verify before
+trusting, don't re-derive blind" tip) **and** the injected brief/orient/contextpack sections via
+`memoryBriefSection` (budgeted: ≤2 inline "was true @ commit — verify `<file>`" lines + "+N more withheld",
+per ISS-08). — `src/memory.ts`, `src/mcp.ts`, `src/handoff/brief.ts`, `src/kb/orient.ts`, `src/kb/contextpack.ts`,
+`src/spawn.ts`. Tests: +3 (`test/memory.test.ts`). Suite 594 passing. This is the CUPMem gated-readout shape:
+tell the agent what to re-check instead of hiding it. **Uncommitted.**
+
+**2026-07-15 (cont.) — Presence layer ADD-07 complete (A + B + C), committed.** Slice C (ISS-13) landed:
+`resolveBatonRoot` resolves a hub sub-project up to the hub store instead of adopting a sub-project shadow
+`.baton`, and `baton doctor` (+`--fix`) detects/reconciles shadow `.baton` dirs. See
+[presence-layer-followups.md](./presence-layer-followups.md). Commits `7575df2` (round-2 signal fixes),
+`27ef3c6` (slice C).
+
 **2026-07-15 — P1 continuation cluster (ISS-01 / ISS-02 / ISS-03): first pass landed, uncommitted.**
 The "manual launch is blind" + "no brief at cutoff" loop is now closed for Claude **and** Cursor.
 
@@ -183,7 +201,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   Precedent: Anthropic's Claude-plays-Pokémon agent continues across hard context resets purely by
   reading its own persisted `NOTES.md` *[verified]* — durable notes beat live hooks.
 
-### ISS-04 · P2 · Stale memory vanishes as a bare count → invites re-derivation (hallucination)
+### ISS-04 · P2 · Stale memory vanishes as a bare count → invites re-derivation (hallucination) — **DONE 2026-07-15** (see progress log)
 - **Symptom:** the receiving agent hallucinates a fact the project already settled.
 - **Root cause:** `recallMemories` drops stale facts and returns only a `staleWithheld` **count**
   (`src/memory.ts:542-585`, surfaced at `src/mcp.ts:250`). From the agent's view the knowledge is

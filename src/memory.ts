@@ -513,8 +513,55 @@ export interface RecallResult {
    *  opportunistic verification — the recalling agent is already in-context
    *  on those files, so re-confirming (or discarding) it is nearly free. */
   review?: { id: string; preview: string; reason: string };
+  /** ISS-04: withheld stale facts surfaced as re-grounding POINTERS, not just a
+   *  count. A bare "N withheld" reads as a gap and invites a confident wrong
+   *  re-derivation; a pointer says what the fact claimed, the commit it was true
+   *  at, and which file to re-check — so the agent verifies instead of guessing.
+   *  Topic-scoped and capped (ISS-08); `staleDropped` remains the full count. */
+  staleGrounding: Regrounding[];
   total: number;
   staleDropped: number;
+}
+
+/** A pointer back to a withheld stale fact so the agent can re-ground it. */
+export interface Regrounding {
+  id: string;
+  /** First line of the fact — what it claimed. */
+  was: string;
+  /** Short commit the fact was last verified true at (null in an empty repo). */
+  trueAsOf: string | null;
+  /** Anchor files to re-check before trusting it again. */
+  verify: string[];
+  /** Why it went stale (which anchor changed). */
+  reason: string;
+}
+
+const REGROUND_CAP = 5;
+const REGROUND_PREVIEW = 100;
+
+function toRegrounding(f: MemoryStatus): Regrounding {
+  return {
+    id: f.id,
+    was: f.fact.split('\n')[0].slice(0, REGROUND_PREVIEW),
+    trueAsOf: f.anchors.commit ? f.anchors.commit.slice(0, 8) : null,
+    verify: f.anchors.files.map((a) => a.path).slice(0, 3),
+    reason: f.staleReason ?? 'anchored evidence changed',
+  };
+}
+
+/**
+ * Rank withheld stale facts for re-grounding: topic-scoped when a topic is given
+ * (only facts relevant to what the agent is doing), else most-recently-valid
+ * first (fewest commits behind). Excludes `reviewId` to avoid duplicating the
+ * opportunistic review pick. Capped for context budget (ISS-08).
+ */
+function groundStale(staleAll: MemoryStatus[], topic: string | undefined, reviewId?: string): Regrounding[] {
+  const ranked = topic?.trim()
+    ? rankFacts(staleAll, topic)
+    : [...staleAll].sort(
+        (a, b) => (a.commitsBehind ?? Infinity) - (b.commitsBehind ?? Infinity) || b.createdAt.localeCompare(a.createdAt),
+      );
+  return ranked.filter((f) => f.id !== reviewId).slice(0, REGROUND_CAP).map(toRegrounding);
 }
 
 const RELATED_CAP = 3;
@@ -558,7 +605,9 @@ export async function recallMemories(
       else if (f.freshness === 'stale') withheld.push({ id, reason: f.staleReason ?? 'anchored evidence changed' });
       else facts.push(f);
     }
-    return { facts: facts.slice(0, limit), withheld, total: all.length, staleDropped: all.length - usable.length };
+    // ids mode already fails loud via `withheld`; grounding is for the topic/
+    // default gap, so leave it empty here.
+    return { facts: facts.slice(0, limit), withheld, staleGrounding: [], total: all.length, staleDropped: all.length - usable.length };
   }
   let picked = usable;
   let related: MemoryStatus[] | undefined;
@@ -581,7 +630,9 @@ export async function recallMemories(
       };
     }
   }
-  return { facts: picked.slice(0, limit), related, review, total: all.length, staleDropped: all.length - usable.length };
+  const staleAll = all.filter((f) => f.freshness === 'stale');
+  const staleGrounding = groundStale(staleAll, opts.topic, review?.id);
+  return { facts: picked.slice(0, limit), related, review, staleGrounding, total: all.length, staleDropped: all.length - usable.length };
 }
 
 export async function removeMemory(root: string, id: string, reason = 'manual removal'): Promise<boolean> {
@@ -811,13 +862,41 @@ export function recallRows(facts: MemoryStatus[], fullCount = RECALL_FULL_BODIES
   );
 }
 
-/** Compact index block for handoff briefs (~token-cheap, fresh facts only). */
-export function memoryBriefSection(facts: MemoryStatus[], staleDropped: number): string {
-  if (!facts.length) return '';
+/** How many re-grounding pointers to inline in a brief before deferring the
+ *  rest to `recall_memory` — kept tiny so the anti-gap warning doesn't itself
+ *  become context rot (ISS-08). */
+const BRIEF_GROUNDING_CAP = 2;
+
+/**
+ * Compact index block for handoff briefs (~token-cheap, fresh facts only). When
+ * `grounding` pointers are supplied (ISS-04), withheld stale facts are shown as
+ * "was true @ commit — verify <file>" lines instead of a bare count, so the
+ * receiving agent re-checks rather than re-derives. Falls back to the count note
+ * when no grounding is passed (back-compat).
+ */
+export function memoryBriefSection(
+  facts: MemoryStatus[],
+  staleDropped: number,
+  grounding: Regrounding[] = [],
+): string {
+  if (!facts.length && !grounding.length) return '';
   const lines = facts.slice(0, 6).map((f) => {
     const age = f.commitsBehind ? ` (${f.commitsBehind} commits old)` : '';
     return `- [${f.type}] ${f.fact.split('\n')[0]}${age}`;
   });
-  const note = staleDropped > 0 ? `\n\n_${staleDropped} stale memor${staleDropped === 1 ? 'y was' : 'ies were'} withheld (their anchored files changed) — use \`recall_memory\` to inspect._` : '';
-  return `## Project memory (evidence-checked)\n\n${lines.join('\n')}${note}`;
+  let note = '';
+  if (grounding.length) {
+    const shown = grounding.slice(0, BRIEF_GROUNDING_CAP).map((g) => {
+      const when = g.trueAsOf ? ` @ ${g.trueAsOf}` : '';
+      const file = g.verify[0] ? ` — verify \`${g.verify[0]}\`` : '';
+      return `- ⚠ was true${when}: ${g.was}${file}`;
+    });
+    const more = staleDropped - shown.length;
+    const tail = more > 0 ? `\n- _+${more} more withheld — \`recall_memory\` to inspect_` : '';
+    note = `\n\n_Stale — re-ground before trusting (do not re-derive blind):_\n${shown.join('\n')}${tail}`;
+  } else if (staleDropped > 0) {
+    note = `\n\n_${staleDropped} stale memor${staleDropped === 1 ? 'y was' : 'ies were'} withheld (their anchored files changed) — use \`recall_memory\` to inspect._`;
+  }
+  const body = lines.length ? `\n\n${lines.join('\n')}` : '';
+  return `## Project memory (evidence-checked)${body}${note}`;
 }
