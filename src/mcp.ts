@@ -203,14 +203,15 @@ export async function startMcpServer(): Promise<void> {
         pending: z.array(z.string()).optional().describe('Remaining items, most important first'),
         next: z.string().optional().describe('The single most useful next action for whoever resumes'),
         decisions: z.array(z.string()).optional().describe('Decisions made / gotchas found — things git cannot show'),
+        suggested_skills: z.array(z.string()).optional().describe('Skills the next agent should invoke to continue, e.g. "bug-fix", "stack-migration"'),
         to: z.string().optional().describe('Receiving agent, if known (e.g. "codex")'),
       },
     },
-    async ({ title, done, pending, next, decisions, to }) => {
+    async ({ title, done, pending, next, decisions, suggested_skills, to }) => {
       try {
         const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent().catch(() => undefined)) || undefined;
         const brief = await createSessionHandoff(root, {
-          slug: selfSlug, agent, title, done, pending, next, decisions, to, cwd: process.cwd(),
+          slug: selfSlug, agent, title, done, pending, next, decisions, suggestedSkills: suggested_skills, to, cwd: process.cwd(),
         });
         return asText({
           brief: brief.path,

@@ -39,6 +39,8 @@ export interface SessionHandoffInput {
   next?: string;
   /** Decisions made / gotchas found — the things git can't show. */
   decisions?: string[];
+  /** Skills the next agent should invoke to continue, e.g. ["bug-fix"]. */
+  suggestedSkills?: string[];
   /** Receiving agent, if known. */
   to?: string;
   note?: string;
@@ -120,6 +122,7 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
   const done = cleanList(input.done);
   const pending = cleanList(input.pending);
   const decisions = cleanList(input.decisions);
+  const suggestedSkills = cleanList(input.suggestedSkills);
   const next = input.next?.trim().slice(0, NEXT_MAX);
 
   // Git ground truth — fail-safe: outside a git repo these sections are skipped.
@@ -166,6 +169,10 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
     body.push('', '## Decisions & gotchas');
     for (const d of decisions.items) body.push(`- ${d}`);
     if (decisions.more) body.push(`- …${decisions.more} more not shown`);
+  }
+  if (suggestedSkills.items.length) {
+    // Point the receiver at the skills that continue this work, not a re-plan.
+    body.push('', '## Suggested skills', `Invoke to continue: ${suggestedSkills.items.map((s) => `\`${s}\``).join(', ')}.`);
   }
 
   body.push('', '## Where to work', '```', `cd ${cwd}`, '```');
