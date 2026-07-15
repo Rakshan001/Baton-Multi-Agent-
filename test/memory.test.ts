@@ -255,6 +255,61 @@ describe('memory store (real temp git repo)', () => {
   });
 });
 
+// ISS-05: without a running daemon, recall must self-heal — a stale-but-still-
+// true fact (its verifiable terms survive the anchored-file change) is re-anchored
+// the first time it is recalled, not withheld forever. Debounced so back-to-back
+// recalls don't each pay the repair cost.
+describe('recall-time opportunistic repair (ISS-05)', () => {
+  let root: string;
+  const g = (args: string[]) => execa('git', args, { cwd: root });
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'baton-repair-'));
+    await g(['init', '-q']);
+    await g(['config', 'user.email', 't@t.t']);
+    await g(['config', 'user.name', 'T']);
+    await writeFile(join(root, 'config.ts'), 'export const MAX_RETRIES = 3;\n');
+    await g(['add', '.']);
+    await g(['commit', '-qm', 'init']);
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('re-anchors a stale-but-still-true fact on recall when no daemon is running', async () => {
+    await saveMemory(root, {
+      fact: 'The retry ceiling `MAX_RETRIES` lives in `config.ts`; bump it there, not inline.',
+      type: 'convention',
+      files: ['config.ts'],
+    });
+    // Edit the anchored file but KEEP every verifiable term (MAX_RETRIES, config.ts):
+    // the file hash changes → the fact goes stale, though what it asserts is still true.
+    await writeFile(join(root, 'config.ts'), '// tuned for prod\nexport const MAX_RETRIES = 5;\n');
+    expect((await listMemories(root))[0].freshness).toBe('stale');
+
+    // First recall with no daemon: the opportunistic repair pass heals it in place.
+    const recalled = await recallMemories(root, { topic: 'retry ceiling' });
+    expect(recalled.facts).toHaveLength(1);            // served, not withheld
+    expect(recalled.facts[0].freshness).toBe('fresh'); // re-anchored
+    expect(recalled.staleDropped).toBe(0);
+    expect((await listMemories(root))[0].freshness).toBe('fresh'); // persisted to disk
+  });
+
+  it('debounces: a fact that goes stale again within the window is NOT re-repaired', async () => {
+    // The prior test just ran repair → the debounce marker is fresh. Make the
+    // (now fresh) fact go stale again; recall must withhold it, proving the
+    // repair pass is gated and not paid on every recall.
+    await writeFile(join(root, 'config.ts'), '// unrelated churn\nexport const MAX_RETRIES = 5;\nconst other = 1;\n');
+    expect((await listMemories(root))[0].freshness).toBe('stale');
+
+    const recalled = await recallMemories(root, {});
+    expect(recalled.facts).toHaveLength(0);        // withheld — repair debounced
+    expect(recalled.staleDropped).toBe(1);
+    expect(recalled.staleGrounding).toHaveLength(1); // still an ISS-04 pointer, not a silent gap
+  });
+});
+
 describe('memoryBriefSection', () => {
   it('renders a compact, token-cheap block and notes withheld stale facts', () => {
     const section = memoryBriefSection([

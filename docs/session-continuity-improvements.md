@@ -24,6 +24,18 @@
 
 ## Progress log
 
+**2026-07-15 (cont.) — ISS-05 done: memory self-heal no longer needs the daemon.**
+`repairMemories` (the mechanical re-anchor pass) used to run only inside `baton serve` (startup + every
+10 min), so a terminal-first user with no daemon never got stale-but-still-true facts healed — recall
+withheld them forever. `recallMemories` now runs an opportunistic repair pass (`maybeRepairOnRecall`)
+before it reads facts, debounced to at most once per 10 min via a shared `.baton/memory/.repair-check`
+marker that the daemon, the `baton memory repair` CLI, and the recall pass all stamp — so a running
+daemon keeps the recall-time pass dormant (no double work) and a no-daemon session still heals on the
+first recall in the window. Best-effort: any failure falls back to plain withholding, never blocks
+recall. The pre-stamp (before repairing) guards against concurrent recalls piling on. — `src/memory.ts`.
+Tests: +2 (`test/memory.test.ts`) — heals on recall with no daemon; debounces a re-stale fact within the
+window (still surfaced as an ISS-04 pointer). Suite 596 passing. **Uncommitted.**
+
 **2026-07-15 (cont.) — ISS-04 done: withheld stale facts surface as re-grounding pointers, not a bare count.**
 `recallMemories` now returns `staleGrounding: Regrounding[]` alongside the `staleDropped` count (additive —
 every existing consumer/test untouched). Each pointer carries what the fact claimed (`was`), the short commit
@@ -215,7 +227,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   KEEP/STALE/REPLACE marking + gated readout) raised accuracy 8.7% → 68% on the same backbone
   *[sourced]* — i.e. tell the agent what to re-check, don't hide it.
 
-### ISS-05 · P2 · Memory auto-repair only runs inside the daemon
+### ISS-05 · P2 · Memory auto-repair only runs inside the daemon — **DONE 2026-07-15** (see progress log)
 - **Symptom:** run without `baton serve` and stale facts stay dead forever; recall never heals them.
 - **Root cause:** `repairMemories` is invoked only on daemon start and every 10 min
   (`src/server.ts:1180-1181`). `recallMemories` itself never repairs — it only withholds

@@ -586,10 +586,53 @@ export function relatedByAnchors(picked: MemoryStatus[], candidates: MemoryStatu
  * the caller's summary) — a stale "fact" presented as truth is how models
  * hallucinate.
  */
+/**
+ * ISS-05: `repairMemories` is the self-heal pass, but it only ran inside the
+ * daemon (server.ts) — a terminal-first user with no `baton serve` never got
+ * stale-but-still-true facts re-anchored, so recall withheld them forever.
+ * Run repair opportunistically at recall time, debounced to at most once per
+ * window (mirrors the daemon's 10-min cadence) so back-to-back recalls don't
+ * each pay the file-read cost. Marker lives beside facts/ (not inside it, so
+ * the `.md`-only fact reader never sees it). Best-effort throughout: any
+ * failure leaves recall to fall back to plain withholding — repair is an
+ * enhancement, never a blocker.
+ */
+const RECALL_REPAIR_DEBOUNCE_MS = 10 * 60_000;
+
+/** The shared "last repair pass" clock, beside facts/ (not inside it, so the
+ *  `.md`-only fact reader never sees it). Every repair — daemon, CLI, or the
+ *  recall-time pass below — stamps it, so all three share one debounce window. */
+function repairMarker(mainRoot: string): string {
+  return join(dirname(memoryDir(mainRoot)), '.repair-check');
+}
+async function stampRepair(mainRoot: string): Promise<void> {
+  const marker = repairMarker(mainRoot);
+  await mkdir(dirname(marker), { recursive: true }).catch(() => undefined);
+  await writeFile(marker, '', 'utf-8').catch(() => undefined);
+}
+
+async function maybeRepairOnRecall(root: string): Promise<void> {
+  try {
+    const mainRoot = await resolveRoot(root);
+    try {
+      const st = await stat(repairMarker(mainRoot));
+      if (Date.now() - st.mtimeMs < RECALL_REPAIR_DEBOUNCE_MS) return; // within window — skip
+    } catch { /* no marker yet — first recall heals */ }
+    // Pre-stamp BEFORE repairing so a concurrent recall debounces against this
+    // attempt rather than piling on. A failed repair still holds the window —
+    // no worse than the daemon skipping a tick.
+    await stampRepair(mainRoot);
+    await repairMemories(root);
+  } catch { /* repair is an enhancement — never block recall */ }
+}
+
 export async function recallMemories(
   root: string,
   opts: { topic?: string; limit?: number; ids?: string[] } = {},
 ): Promise<RecallResult> {
+  // Heal first so any stale-but-still-true fact is re-anchored and recallable
+  // in THIS call — the terminal-first self-heal (ISS-05). Debounced internally.
+  await maybeRepairOnRecall(root);
   const all = await listMemories(root);
   const usable = all.filter((f) => f.freshness !== 'stale');
   const limit = Math.max(1, Math.min(opts.limit ?? 10, 50));
@@ -730,6 +773,9 @@ export async function repairMemories(root: string): Promise<RepairResult> {
     });
     reanchored.push(f.id);
   }
+  // Stamp the shared debounce clock so the recall-time pass (maybeRepairOnRecall)
+  // stays dormant while a daemon/CLI repair is keeping memory healed.
+  await stampRepair(mainRoot);
   return { reanchored, needsReview };
 }
 
