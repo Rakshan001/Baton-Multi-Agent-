@@ -11,6 +11,7 @@
  * just-in-time. Kept under a hard char budget so it never bloats the injection.
  */
 import type { HandoffMeta } from './brief.js';
+import { guardrailOneLine } from './guardrails.js';
 
 /** ~700 tokens-worth of chars: enough for objective + next action + guardrails, no more. */
 export const CONTINUATION_MAX_CHARS = 800;
@@ -90,8 +91,9 @@ export function renderContinuationHead(
     `**Next action:** ${facts.nextAction || 'continue the objective — read HANDOFF.md for the plan.'}`,
     ...(facts.workdir ? [`**Work in:** \`cd ${facts.workdir}\`${branch}`] : []),
     'Read **HANDOFF.md** in full before re-planning — it holds the plan, files already edited, and prior notes.',
-    // Positive-phrased guardrails (ISS-07): requirement form outlasts prohibition form.
-    `Stay inside this worktree · run the project tests before ${doneCmd} · execute the existing plan and flag blockers instead of restarting it.`,
+    // Positive-phrased guardrails (ISS-07): requirement form outlasts prohibition
+    // form. Sourced from the one shared place so wording never drifts.
+    guardrailOneLine(doneCmd),
   ].join('\n');
 
   return out.length > maxChars ? out.slice(0, maxChars - 1).trimEnd() + '…' : out;

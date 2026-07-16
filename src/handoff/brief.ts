@@ -14,6 +14,7 @@ import { queryGraph } from '../kb/graphify.js';
 import { memoryBriefSection, recallMemories } from '../memory.js';
 import { sessionContextFor, type SessionContext } from './claude-session.js';
 import { loadProgress } from './progress-ledger.js';
+import { guardrailLines } from './guardrails.js';
 
 export interface HandoffMeta {
   baton: number;
@@ -144,16 +145,15 @@ export async function buildBrief(
     if (section) body.push('', section);
   } catch { /* memory is an enhancement — never block a handoff */ }
 
+  // Positive-phrased rules (ISS-07): requirement form ("do this") outlasts a
+  // deep session better than prohibition form ("do NOT"). The core three come
+  // from the one shared guardrail source; base-branch safety is brief-specific.
   body.push(
     '',
-    '## Before you finish',
-    '- Run the project tests/build and include the output in your summary.',
-    `- \`baton done ${task.slug}\` (or update this file's status) when complete.`,
-    '',
-    '## Do NOT',
-    '- Touch files outside this worktree.',
-    '- Force-push or rewrite history on the base branch.',
-    '- Re-plan from scratch — execute the plan above; flag blockers instead.',
+    '## Rules to hold (they matter more the deeper you get)',
+    ...guardrailLines(`\`baton done ${task.slug}\``).map((l) => `- ${l}`),
+    '- Keep the base branch clean — no force-push or history rewrite on it.',
+    '- Include the test/build output in your summary; then `baton done ' + task.slug + '` (or update this file\'s status) when complete.',
   );
 
   const markdown = matter.stringify(body.filter((l) => l !== '').join('\n').replace(/\n{3,}/g, '\n\n'), meta as unknown as Record<string, unknown>);

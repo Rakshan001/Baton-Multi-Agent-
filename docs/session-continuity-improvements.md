@@ -24,6 +24,18 @@
 
 ## Progress log
 
+**2026-07-16 (cont.) — ISS-07 done: positive-phrased guardrails + mid-session re-injection (completes the ISS-04/06/07 loss cluster).**
+Prohibition ("do NOT") instructions decay hardest across a long session (measured 73%→33% by turn 16). Two fixes:
+(A) one shared source of POSITIVE-phrased guardrails (`src/handoff/guardrails.ts`) — "stay inside this worktree ·
+run the tests before `baton done` · execute the plan and flag blockers" — now used by the continuation head, the
+handoff brief ("## Rules to hold" replaces "## Do NOT"), and the guard, so wording never drifts. (B) the Claude
+edit-guard re-injects those guardrails mid-session on a 20-min debounce (a "safe turn depth" proxy) via a per-task
+`.baton/guardrail/<slug>` marker, alongside any collision advisory — so the rules are refreshed before compliance
+decays, not just stated once at start. Claude-only (Cursor already re-injects via its always-apply `.mdc` rule;
+Codex/Gemini post-edit hooks can't inject context). Fail-open within the guard's 1500 ms budget. — `src/handoff/guardrails.ts`,
+`src/handoff/continuation.ts`, `src/handoff/brief.ts`, `src/commands/guard.ts`. Tests: +8 (`test/guardrails.test.ts` ×4,
+`test/guard.test.ts` ×2, `test/snapshot.test.ts` ×1, brief rephrase). Suite 610 passing. **Uncommitted.**
+
 **2026-07-16 — ISS-06 done: agent-agnostic plan/notes capture (the brief no longer collapses to git-only for non-Claude agents).**
 `buildBrief`'s Plan / Files / Last-notes came only from Claude's JSONL transcript, so a Cursor/Codex/Gemini
 handoff (or cutoff snapshot) printed "context above is from git alone" — the continuation state you most need
@@ -264,7 +276,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   `save_progress` tool the agent calls, or parse each agent's own transcript format, or keep a
   durable per-task ledger updated on edit-signals rather than only at pass-time.
 
-### ISS-07 · P2 · "Do NOT" guardrails in the brief decay mid-session
+### ISS-07 · P2 · "Do NOT" guardrails in the brief decay mid-session — **DONE 2026-07-16** (see progress log)
 - **Symptom:** the receiving agent ignores "stay in the worktree / don't re-plan / run tests
   before done" once it's deep into its session.
 - **Root cause:** these are static one-shot lines in the brief (`src/handoff/brief.ts:133-143`),

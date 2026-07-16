@@ -79,6 +79,15 @@ describe('snapshotTask — debounced, no-commit, status-preserving checkpoint', 
     expect(log).not.toContain('checkpoint');
   });
 
+  it('phrases the brief guardrails as positive requirements, not a "Do NOT" list (ISS-07)', async () => {
+    const brief = await snapshotTask('add-hourly', { root, force: true });
+    expect(brief).not.toBeNull();
+    expect(brief!.markdown).not.toContain('## Do NOT');
+    expect(brief!.markdown).toContain('## Rules to hold');
+    expect(brief!.markdown).toContain('Stay inside this worktree');
+    expect(brief!.markdown).toContain('Execute the existing plan and flag blockers');
+  });
+
   it('preserves an in-progress (taken) brief\'s status instead of resetting it to ready', async () => {
     await snapshotTask('add-hourly', { root, force: true });
     await setBriefStatus(wt, 'in-progress'); // human took it
