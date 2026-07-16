@@ -10,6 +10,14 @@ updates:
       - dependencies
     commit-message:
       prefix: chore(deps)
+    groups:
+      # Same reasoning as /web below: ship the test/build toolchain as one PR,
+      # not one PR per package.
+      test-toolchain:
+        patterns:
+          - vitest
+          - "@vitest/*"
+          - tsx
 
   # Dashboard workspace
   - package-ecosystem: npm
@@ -21,6 +29,18 @@ updates:
       - dependencies
     commit-message:
       prefix: chore(deps)
+    groups:
+      # vite and @vitejs/plugin-react peer-depend on each other's MAJOR, so a
+      # PR moving one alone can never install: plugin-react 4 rejects vite 8,
+      # and plugin-react 6 requires it. Ungrouped, dependabot split that single
+      # upgrade into two PRs that each failed npm ci forever. Keep the toolchain
+      # in one PR so the peer range resolves.
+      vite-toolchain:
+        patterns:
+          - vite
+          - "@vitejs/*"
+          - vitest
+          - "@vitest/*"
 
   # GitHub Actions used in workflows
   - package-ecosystem: github-actions
