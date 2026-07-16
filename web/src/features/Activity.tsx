@@ -166,18 +166,17 @@ export function ActivityScreen({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 12 }}>{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton" style={{ height: 96, borderRadius: 12 }} />)}</div>
           ) : (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              <div className="stat-strip">
                 {cards.map((c) => (
-                  <div key={c.label} className="card" style={{ padding: "13px 15px", display: "flex", flexDirection: "column", gap: 9 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--text-tertiary)" }}>
-                      <span style={{ color: c.tone === "accent" ? "var(--accent)" : c.tone === "ready" ? "var(--ready)" : "var(--text-tertiary)", display: "grid" }}><Icon name={c.icon} size={15} /></span>
-                      <span style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.label}</span>
-                      {c.preview && <span data-tip="Illustrative — not from the API" style={{ marginLeft: "auto", fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "1px 5px" }}>est</span>}
-                    </div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                      <span className="mono" style={{ fontSize: "var(--fs-26)", fontWeight: "var(--fw-semibold)", letterSpacing: "-0.03em", lineHeight: 1 }}>{c.value}</span>
-                    </div>
-                    <span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{c.sub}</span>
+                  <div key={c.label} className="stat-seg">
+                    <span className="stat-tick" style={{ "--seg-color": c.tone === "accent" ? "var(--accent)" : c.tone === "ready" ? "var(--ready)" : "var(--idle)" } as React.CSSProperties} />
+                    <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                      <span className="stat-num" style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                        {c.value}
+                        {c.preview && <span data-tip="Illustrative — not from the API" style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "1px 5px" }}>est</span>}
+                      </span>
+                      <span className="stat-label">{c.label}<span style={{ color: "var(--text-quaternary)" }}> · {c.sub}</span></span>
+                    </span>
                   </div>
                 ))}
               </div>

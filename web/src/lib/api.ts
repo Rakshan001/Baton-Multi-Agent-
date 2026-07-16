@@ -16,7 +16,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, HandoffLoadSuggestion, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
@@ -694,6 +694,31 @@ class BatonClient {
     this.emit();
     return r;
   }
+  /** Re-anchor stale facts whose verifiable terms survived; the rest are queued for review. */
+  async repairMemories(): Promise<{ reanchored: string[]; needsReview: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(300);
+      // Mirror of the daemon's rule, simplified: a fact naming a `code term`
+      // or file path can be re-verified mechanically; plain prose can't.
+      const verifiable = (t: string) => /`[^`]+`|\b[\w-]+(?:[./][\w-]+)+\b/.test(t);
+      const reanchored: string[] = [], needsReview: string[] = [];
+      this.demoMemory = this.demoFacts().map((f) => {
+        if (f.freshness !== "stale") return f;
+        if (verifiable(f.fact)) {
+          reanchored.push(f.id);
+          return { ...f, freshness: "fresh" as const, staleReason: null, commitsBehind: 0 };
+        }
+        needsReview.push(f.id);
+        return f;
+      });
+      this.emit();
+      return { reanchored, needsReview };
+    }
+    const r = await this.request<{ reanchored: string[]; needsReview: string[] }>("/api/memory/repair", { method: "POST", body: "{}" });
+    this.emit();
+    return r;
+  }
 
   /* ---- real token usage (Claude session files) ---- */
   async getRealUsage(): Promise<RepoUsage | null> {
@@ -732,6 +757,45 @@ class BatonClient {
       return { recommended, reason: recommended ? `${recommended} has the lightest load (${n === 0 ? "idle" : `${n} active`})` : "no other agent available", loads };
     }
     return this.request<HandoffLoadSuggestion>(`/api/tasks/${encodeURIComponent(slug)}/suggest-handoff`);
+  }
+
+  /** Open handoff briefs awaiting pickup (task worktrees + session briefs). */
+  async getHandoffs(): Promise<HandoffBriefEntry[]> {
+    if (this.demo) {
+      await this.demoGate();
+      // One illustrative open brief so the inbox + copy buttons are explorable.
+      const body = [
+        "# Handoff: Fix flaky checkout e2e",
+        "",
+        "## Done",
+        "- [x] reproduced the flaky Stripe redirect locally",
+        "- [x] root cause: webhook race in checkout.service.ts",
+        "",
+        "## Pending",
+        "- [ ] add the retry guard + regression test",
+        "",
+        "## Next step",
+        "Write the failing test in e2e/checkout.spec.ts first, then guard the webhook race.",
+        "",
+        "## Pick up with",
+        "```",
+        "baton resume sess-cursor-demo",
+        "```",
+      ].join("\n");
+      return [{
+        slug: "sess-cursor-demo", kind: "session", title: "Fix flaky checkout e2e",
+        status: "ready", from: "cursor", to: "any",
+        created: new Date(Date.now() - 22 * 60_000).toISOString(),
+        path: "/repo/.baton/handoffs/sess-cursor-demo.md", cwd: "/repo",
+        markdown: body, body,
+      }];
+    }
+    try {
+      const r = await this.request<{ briefs: HandoffBriefEntry[] }>("/api/handoffs");
+      return r.briefs;
+    } catch {
+      return []; // older daemons don't serve this — the inbox just stays hidden
+    }
   }
 
   /* ---- coordination: signals / reports / blame ---- */

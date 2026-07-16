@@ -1,11 +1,15 @@
 /* ============================================================
    BATON — Command palette (⌘K) (ported from shell.jsx)
+   One search across everything Baton knows: commands, sessions,
+   merged commits, memory facts, and skills. Data groups appear only
+   once you type — the empty palette stays a quiet command list.
    ============================================================ */
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Icon, type IconName } from "./Icon";
 import { AgentBadge } from "./primitives";
+import { BatonAPI } from "../lib/api";
 import type { Prefs } from "../hooks/usePrefs";
-import type { StatusRow, AgentId } from "../types";
+import type { StatusRow, AgentId, TaskHistory, MemoryFactStatus, SkillStatus } from "../types";
 
 interface Command {
   id: string;
@@ -17,8 +21,12 @@ interface Command {
   run: () => void;
 }
 
+/** Groups fed by data (not commands) — capped so one noisy source can't flood the list. */
+const DATA_GROUP_CAP = 6;
+const DATA_GROUPS = new Set(["Commits", "Facts", "Skills"]);
+
 export function CommandBar({
-  open, onClose, navigate, onOpen, onLaunch, sessions, prefs,
+  open, onClose, navigate, onOpen, onLaunch, sessions, history, prefs, onSeedSearch,
 }: {
   open: boolean;
   onClose: () => void;
@@ -26,12 +34,24 @@ export function CommandBar({
   onOpen: (slug: string) => void;
   onLaunch: (agent: AgentId | null) => void;
   sessions: StatusRow[];
+  history: TaskHistory[];
   prefs: Prefs;
+  /** Jump to a screen with its search pre-filled (deep-link for data hits). */
+  onSeedSearch: (route: string, q: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
+  const [facts, setFacts] = useState<MemoryFactStatus[]>([]);
+  const [skills, setSkills] = useState<SkillStatus[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (open) { setQ(""); setSel(0); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
+  // Lazy-load the searchable corpora when the palette opens; both are small
+  // (memory is hard-capped at 500 facts) and failures just mean fewer groups.
+  useEffect(() => {
+    if (!open) return;
+    BatonAPI.getMemories().then((r) => setFacts(r.facts)).catch(() => setFacts([]));
+    BatonAPI.getSkills().then(setSkills).catch(() => setSkills([]));
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
@@ -56,11 +76,30 @@ export function CommandBar({
       { id: "a-canvas", label: "View canvas", icon: "network", group: "Actions", run: () => { navigate("home"); prefs.setView("canvas"); } },
     ];
     const sess: Command[] = (sessions || []).map((s) => ({ id: "s-" + s.slug, label: s.task, sub: s.slug, agent: s.agent, group: "Sessions", run: () => onOpen(s.slug) }));
-    return [...nav, ...actions, ...sess];
-  }, [navigate, onOpen, onLaunch, sessions, prefs]);
+    const commits: Command[] = (history || []).flatMap((h) =>
+      h.commits.map((c) => ({
+        id: "c-" + c.sha, label: c.message, sub: `${c.sha.slice(0, 7)} · ${h.slug}`, icon: "gitBranch" as IconName,
+        agent: h.agent, group: "Commits", run: () => onSeedSearch("history", c.message),
+      })));
+    const factCmds: Command[] = facts.map((f) => ({
+      id: "f-" + f.id, label: f.fact.length > 90 ? f.fact.slice(0, 87) + "…" : f.fact, sub: `${f.type} · ${f.id}`,
+      icon: "sparkle" as IconName, group: "Facts", run: () => onSeedSearch("memory", f.id),
+    }));
+    const skillCmds: Command[] = skills.map((s) => ({
+      id: "k-" + s.id, label: s.name, sub: s.id, icon: "command" as IconName, group: "Skills",
+      run: () => onSeedSearch("skills", s.id),
+    }));
+    return [...nav, ...actions, ...sess, ...commits, ...factCmds, ...skillCmds];
+  }, [navigate, onOpen, onLaunch, onSeedSearch, sessions, history, facts, skills, prefs]);
 
-  const filtered = q ? commands.filter((c) => (c.label + " " + (c.sub || "")).toLowerCase().includes(q.toLowerCase())) : commands;
-  const groups = filtered.reduce<Record<string, Command[]>>((m, c) => { (m[c.group] = m[c.group] || []).push(c); return m; }, {});
+  // Data groups only join in once the user types — matching by content, not browsing.
+  const filtered = q
+    ? commands.filter((c) => (c.label + " " + (c.sub || "")).toLowerCase().includes(q.toLowerCase()))
+    : commands.filter((c) => !DATA_GROUPS.has(c.group));
+  const groups = filtered.reduce<Record<string, Command[]>>((m, c) => {
+    if (!DATA_GROUPS.has(c.group) || (m[c.group]?.length ?? 0) < DATA_GROUP_CAP) (m[c.group] = m[c.group] || []).push(c);
+    return m;
+  }, {});
   const flat = Object.values(groups).flat();
   useEffect(() => { if (sel >= flat.length) setSel(Math.max(0, flat.length - 1)); }, [flat.length, sel]);
 
@@ -82,7 +121,7 @@ export function CommandBar({
         display: "flex", flexDirection: "column", overflow: "hidden", animation: "scale-in var(--dur-2) var(--ease-out)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "14px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
           <Icon name="search" size={17} style={{ color: "var(--text-tertiary)", flex: "none" }} />
-          <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setSel(0); }} placeholder="Search sessions or run a command…"
+          <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setSel(0); }} placeholder="Search sessions, commits, facts, skills — or run a command…"
             style={{ flex: 1, border: "none", background: "transparent", color: "var(--text-primary)", fontSize: "var(--fs-15)", outline: "none" }} />
           <span className="kbd">esc</span>
         </div>

@@ -64,6 +64,24 @@ export function Board({
   const colRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const scrollerRef = useRef<HTMLDivElement>(null);
 
+  // Edge fades — the Conflict column clips off-screen on narrow windows, and a
+  // bare scrollbar is easy to miss. Fade the clipped edge so it reads as "more".
+  const [clipped, setClipped] = useState({ left: false, right: false });
+  useEffect(() => {
+    const sc = scrollerRef.current;
+    if (!sc) return;
+    const update = () => {
+      const left = sc.scrollLeft > 4;
+      const right = sc.scrollLeft + sc.clientWidth < sc.scrollWidth - 4;
+      setClipped((c) => (c.left === left && c.right === right ? c : { left, right }));
+    };
+    update();
+    sc.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(sc);
+    return () => { sc.removeEventListener("scroll", update); ro.disconnect(); };
+  }, [sessions]);
+
   const grouped = useMemo(() => {
     const g: Record<ColumnId, StatusRow[]> = { idle: [], active: [], dirty: [], conflict: [], ready: [] };
     (sessions || []).forEach((s) => { if (!merging[s.slug]) g[deriveColumn(s)].push(s); });
@@ -252,6 +270,14 @@ export function Board({
           );
         })}
       </div>
+
+      {/* clipped-edge fades (pointer-transparent) */}
+      {clipped.right && (
+        <div aria-hidden="true" style={{ position: "absolute", top: 0, right: 0, bottom: 10, width: 48, pointerEvents: "none", background: "linear-gradient(to right, transparent, var(--bg-base))", zIndex: 2 }} />
+      )}
+      {clipped.left && (
+        <div aria-hidden="true" style={{ position: "absolute", top: 0, left: 0, bottom: 10, width: 48, pointerEvents: "none", background: "linear-gradient(to left, transparent, var(--bg-base))", zIndex: 2 }} />
+      )}
 
       {/* drag overlay */}
       {drag && (

@@ -71,7 +71,7 @@ export function SessionCard({
 
       {/* sync + files */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 4, flexWrap: "wrap" }}>
-        <SyncChips ahead={s.ahead} behind={s.behind} size="sm" />
+        <SyncChips ahead={s.ahead} behind={s.behind} size="sm" hideZeros />
         {s.filesChanged > 0 && (
           <span className="chip" style={{ height: 20, padding: "0 7px", background: "transparent" }}>
             <Icon name="fileWarning" size={11} style={{ color: s.status === "dirty" ? "var(--dirty)" : "var(--text-quaternary)" }} />

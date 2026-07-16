@@ -1,8 +1,8 @@
 /**
- * Multi-repo hub support: a `baton setup` hub root is NOT itself a git repo —
- * the git repos are its sub-projects (listed in kb.json). These tests lock down
- * (1) resolving the Baton root at a non-git hub, and (2) creating a task whose
- * worktree branches off a chosen sub-project instead of the (non-git) hub root.
+ * Multi-repo hub support: the git repos are sub-projects listed in kb.json,
+ * while the hub root may be plain or git-initialized for coordination metadata.
+ * These tests lock down resolving the Baton root and creating a task whose
+ * worktree branches off a chosen sub-project instead of the hub root.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
@@ -97,6 +97,21 @@ describe('createTask on a multi-repo hub', () => {
 
   it('rejects task creation on a hub when no project is chosen', async () => {
     await expect(createTask('Do something', hub)).rejects.toBeInstanceOf(ProjectRequiredError);
+  });
+
+  it('still requires a project when the hub root is git-initialized', async () => {
+    await git(['init', '-q'], hub);
+    await git(['config', 'user.email', 'test@baton.dev'], hub);
+    await git(['config', 'user.name', 'Baton Test'], hub);
+    await git(['checkout', '-q', '-b', 'main'], hub);
+
+    await expect(createTask('Do something', hub)).rejects.toBeInstanceOf(ProjectRequiredError);
+
+    const task = await createTask('Fix the hub picker', hub, 'proj-a');
+    expect(task.projectId).toBe('proj-a');
+    expect(task.repoRoot).toBe(projA);
+    expect(await branchExists(task.branch, projA)).toBe(true);
+    expect(await branchExists(task.branch, hub)).toBe(false);
   });
 
   it('rejects an unknown project id', async () => {

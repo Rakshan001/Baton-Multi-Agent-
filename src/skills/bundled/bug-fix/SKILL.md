@@ -19,13 +19,17 @@ description: >-
 Fix bugs systematically. The order is non-negotiable:
 
 ```
-TRACKER CHECK (already fixed? stuck on a branch? live collision?) →
-REPRODUCE-FIRST + TRIAGE → SYNC (current code) → MAP (audit) → MULTI-AGENT AUDIT →
-BLAST RADIUS → ROOT CAUSE → WRITTEN PLAN → ⛔ CONFIDENCE ≥95% GATE ⛔ → ⛔ WAIT FOR APPROVAL ⛔ →
-TEST → FIX → DRY/PERF QUALITY GATE → RE-VERIFY (symptom gone + independent skeptic) →
-RECORD TO SHARED MEMORY → COMMIT (auto) → ⛔ ASK BEFORE PUSH ⛔ → COMPACT IF NEEDED
+TRACKER CHECK (already fixed? stuck on a branch/handoff? live collision?) →
+REPRODUCE-FIRST + TRIAGE → SYNC: fetch + branch off the FRESH integration branch + ISOLATE →
+MAP (audit) → MULTI-AGENT AUDIT → BLAST RADIUS → ROOT CAUSE → WRITTEN PLAN →
+⛔ CONFIDENCE ≥95% GATE ⛔ → ⛔ WAIT FOR APPROVAL ⛔ →
+TEST → FIX → DRY/PERF QUALITY GATE → RE-VERIFY (symptom gone + NO NEW BUGS + independent skeptic)
+↺ fix any regression in the same pass & re-verify →
+RECORD TO SHARED MEMORY → COMMIT (auto) → ⛔ ASK BEFORE PUSH + PR (which base branch?) ⛔ →
+CLEAN UP OWN BRANCHES/WORKTREES → COMPACT IF NEEDED
 ```
-(Re-check git staleness before editing and before committing — other people/sessions move fast.)
+(Re-check git staleness + branch identity before editing and before committing — other
+people/sessions move fast: they switch branches and commit onto shared checkouts mid-flight.)
 
 **Golden rules**
 0. CHECK THE SHARED TRACKER FIRST, record to it LAST. Before anything, ask the tracker: is this
@@ -49,8 +53,14 @@ RECORD TO SHARED MEMORY → COMMIT (auto) → ⛔ ASK BEFORE PUSH ⛔ → COMPAC
 9. CLEAN CODE, NOT JUST CORRECT. DRY — reuse existing helpers, no duplication, no avoidable/
    duplicate API calls, follow repo conventions (Phase 8.5).
 10. RE-READ ALL CHANGED FILES + their callers after the fix; confirm the reported symptom is
-    actually gone; an independent skeptic agent adversarially re-checks the diff.
-11. COMMIT AUTOMATICALLY when verified — but ⛔ NEVER push. Explicitly ask; push only if approved.
+    actually gone; an independent skeptic agent adversarially re-checks the diff. ⛔ IF THE FIX
+    INTRODUCED A NEW BUG, IT IS NOT DONE — fix that too in the same pass and re-verify
+    (bounded retries, then STOP + offer revert). Leave the tree no more broken than you found it.
+11. COMMIT AUTOMATICALLY when verified — but ⛔ NEVER push. Explicitly ask about push AND PR
+    together (and which base branch); do each only if approved.
+12. DON'T LEAVE A BRANCH MESS. End every fix with ONE clean branch/PR: remove temp worktrees you
+    created, delete your own superseded branches with `git branch -d` (merged-only — never
+    force-delete), and never touch a branch/worktree you didn't create.
 
 > **Adapt to the project.** This skill is stack-agnostic. Wherever it says "the app", "the
 > test command", "the build command", "the graph", or "the registry", substitute this
@@ -71,8 +81,14 @@ in the project → skip to Phase 0.5.*
    `baton status`, and history/blame for the buggy file. A merged fix already touches it →
    **STOP**, link it. A fix exists on an unmerged branch ("stuck between branches") → **STOP**,
    surface it, ask whether to merge/rebase that instead of writing a new one.
-2. **Live collision?** Ask `check_files <paths>` (or `baton signals`): if **another session is
-   editing these files right now**, **warn + ask** before proceeding — don't collide.
+2. **Live collision?** Ask `check_files <paths>` (or the `list_signals` tool): if **another
+   session is editing these files right now**, **warn + ask** before proceeding — don't collide.
+3. **Stuck fix on a branch or in a handoff?** The tracker indexes *merged* work, so also scan
+   unmerged branches: `git fetch origin` then `git log --all --oneline --grep=<bug-keyword>`
+   (and grep the likely fix across branches). Check for a handoff brief too (`HANDOFF.md` /
+   `baton resume`) — an in-progress fix may be parked waiting for pickup. A fix **committed but
+   not merged** → **STOP**, tell the user which branch/PR/brief holds it and ask whether to
+   merge/resume it instead of writing a new one.
 
 **Generic tracker (no baton):** if a shared `specs/bugfixes/` ledger exists, derive a
 `bug-name` + fingerprint, **atomically claim** it (CLAIMED → proceed · TAKEN → read status,
@@ -108,19 +124,30 @@ to EVERY tier, including trivial.** Triage scales agent COUNT only — never the
 
 ---
 
-## Phase 1 — Sync to CURRENT code BEFORE auditing
+## Phase 1 — Sync to CURRENT code + ISOLATE ⛔ always base off the fresh integration branch ⛔
 
-*Why first: if someone else changed these files on the main branch, then auditing, the map, and
-the plan would all be built on stale code. Get current first.*
+*Why first: you must audit, plan, and edit the **latest** code — never a stale local checkout.
+When several sessions share one working directory, another session can switch branches or commit
+onto your tree while you work. The durable fix: base off the freshly-fetched integration branch
+AND edit in an **isolated worktree** other sessions can't yank out from under you.*
 
-1. `git fetch origin` (or the project's remote).
-2. **Rebase/merge the working branch onto the integration branch** (`origin/main` or your
-   project's equivalent). Conflict → **STOP, warn the user**, do not force through.
-3. Check for other in-flight branches touching this area (`git branch -r`, the registry) so you
-   don't rebuild on removed work.
-4. Create the bugfix branch (`bugfix/<bug-name>`) or stay on the current branch. (A branch is
-   fine now — no *code* is edited until the plan is approved in Phase 6.)
-5. If using a registry, set `status: "in-progress"`.
+1. **Fetch the truth first — every run:** `git fetch origin --prune --tags` (`--prune` drops
+   remote-tracking refs for deleted branches, so your branch view stays accurate). Then **map the
+   full branch landscape**: `git branch -a`, `git worktree list`, and open PRs (`gh pr list`).
+   Know every branch that exists before you audit.
+2. **Detect a stale base:** `git status -sb` (ahead/behind) and
+   `git log --oneline --all --source -5 -- <target files>` → is there a **newer version** of the
+   target files on another branch/PR that your local tree predates? If so → **STOP, surface it**;
+   decide with the user whether to branch off that newer code instead.
+3. **Base the fix on the fresh integration branch** (`origin/main` or the project's equivalent) —
+   explicitly off the remote ref, not whatever the shared checkout points at. **Prefer an
+   isolated worktree**: `git worktree add ../wt-bugfix-<bug-name> -b bugfix/<bug-name> origin/main`
+   (with baton: `baton new "<bug-name>"` scaffolds branch + worktree). If you must work in the
+   shared checkout, re-verify the branch hasn't moved right before every edit and every commit.
+4. **Confirm the base is clean:** `git rev-list --left-right --count origin/main...HEAD` should
+   show 0 behind. Behind → rebase before auditing. Conflict or another session's uncommitted WIP
+   in the tree → **STOP, warn the user**; never stash/commit over work you didn't create.
+5. If using a registry, set `status: "in-progress"` so other sessions see you working it.
 
 ---
 
@@ -217,12 +244,30 @@ Mark **HIGH RISK** if ANY hold:
 
 ---
 
-## Phase 5 — Root-cause investigation
+## Phase 5 — Root-cause investigation (a science, not a ceremony)
 
-- **Initial overview** — state precisely: expected vs actual, repro steps.
-- **Five Whys** — trace the behavior **backward** (use the Agent-C callers) to the original
-  trigger point, not where the error surfaces.
-- **Name the root cause** in one sentence before designing any fix.
+*Why: the audit told you WHERE the bug lives; this phase finds WHY. Guess-and-patch is how
+symptom fixes get shipped. Investigate like a scientist: observations → hypotheses → the
+cheapest experiment that can kill each one.*
+
+1. **State the facts** — expected vs actual, the exact error, exact repro steps. Keep
+   observations separate from guesses.
+2. **Shrink to a minimal repro** — cut inputs, steps, and config until the smallest case that
+   still fails. What you removed last usually names the component at fault.
+3. **Ask "what changed?"** — most bugs are regressions. `git log -S '<symbol>'` /
+   `git log --oneline -- <file>` finds when the behavior appeared; with a known-good commit,
+   `git bisect run <test-cmd>` finds the introducing commit mechanically. The introducing diff
+   is often the root cause verbatim.
+4. **Form 2–3 competing hypotheses**, ranked by likelihood. Test the **cheapest first** — one
+   experiment per hypothesis (a narrowed test, a debugger breakpoint, one assertion). Let
+   **evidence** eliminate them; never fix on a hypothesis you haven't tested.
+5. **Instrument, don't stare** — add targeted, removable logging at the boundary where good
+   state becomes bad, then binary-search the pipeline until the corruption point is bracketed
+   between two log lines. Remove the instrumentation before committing.
+6. **Five Whys** — from the corruption point, trace **backward** (use the Agent-C callers) to
+   the original trigger, not where the error surfaces.
+7. **Name the root cause in one sentence** before designing any fix. Can't? You haven't found
+   it — loop back with the next hypothesis.
 
 If 3 fixes have failed → STOP, likely architectural; surface to the user.
 
@@ -286,10 +331,13 @@ steps are confirmed (by you running the app, or handed to the user to run).
 
 ## Phase 8 — Implement the fix
 
-0. **Re-check staleness first** (the approval gate may have waited a while; someone else could
-   have pushed). `git fetch origin`; if the integration branch advanced and touched any file in
-   your plan → rebase and re-confirm the audit/plan still hold before editing. Conflict → STOP,
-   warn the user.
+0. **Re-check staleness + isolation first** (the approval gate may have waited a while; someone
+   else could have pushed, or a concurrent session switched the shared checkout).
+   `git fetch origin --prune`; confirm you are still **on your bugfix branch**
+   (`git rev-parse --abbrev-ref HEAD`). If the integration branch advanced and touched any file
+   in your plan → rebase and re-confirm the audit/plan still hold before editing. Conflict →
+   STOP, warn the user. Re-run `check_files` — if another session is now editing your target
+   files, coordinate before touching them.
 1. Minimal, targeted change addressing the root cause only. Match surrounding style. No
    opportunistic refactors. **Edit only the files in the approved Phase 6 plan.** If you
    discover you need an unlisted file → STOP, return to Phase 4/6, re-plan, re-approve.
@@ -334,9 +382,21 @@ return to Phase 6, note it, re-approve. Do not silently expand scope.
    adversarially hunt for: a broken consumer, an unhandled edge/boundary case, a symptom-only
    patch, **duplicated code that should reuse an existing helper, and avoidable/duplicate API
    calls or N+1 queries.** (Reviewer ≠ author — the agent that wrote the fix cannot clear it.)
-   If it finds a real issue → fix or STOP.
-8. **If any previously-passing test fails or the build breaks → STOP**, warn the user, offer to
-   revert. A clean run is required before declaring the fix done.
+   If it finds a real issue → **fix it (per step 8's loop), don't just note it.**
+8. ⛔ **NO NEW BUGS — the fix must not break anything it touched.** If steps 1–7 reveal that your
+   fix **introduced a regression** (a previously-passing test now fails, the build/type-check now
+   breaks, a shared consumer from Agent C/D now misbehaves, or the skeptic found a real new
+   defect), the bug is **NOT done — you fix that too, now, in the same pass:**
+   - **Diagnose the regression's own root cause** (a quick Phase 5 on the new failure) — don't
+     paper over the symptom or weaken the test to make it pass.
+   - **Fix it within the approved Phase 6 files** if it lives there. If the real fix needs a file
+     **outside** the approved plan → STOP, return to Phase 4/6, re-plan + re-approve.
+   - **Then re-run this ENTIRE Phase 9 from step 1** (both the original symptom AND the
+     regression must be clean). Repeat until a full pass is green.
+   - **Bounded retries:** if the same regression survives **3** fix attempts, or it can't be
+     fixed without a decision only the user can make → **STOP**, surface it, and **offer to
+     revert** the whole fix. Never leave the tree more broken than you found it, and never
+     declare done with a known regression.
 9. Refresh the codebase map/graph *(if the project has one)* so later work reflects the fix.
 
 ---
@@ -378,24 +438,45 @@ dashboard.
 
 Once the fix is verified (Phase 9 clean):
 
-0. **Re-check staleness one last time.** `git fetch origin`; if the integration branch advanced
-   and touched your files → rebase and re-run the Phase 9 checks before committing.
+0. **Re-check staleness + branch identity one last time.** `git fetch origin --prune`; confirm
+   you are still on your bugfix branch and only YOUR files are staged (a shared checkout can be
+   switched — and committed onto — by another session). If the integration branch advanced and
+   touched your files → rebase and re-run the Phase 9 checks before committing.
 1. **Commit automatically — do NOT wait to be asked.**
-   - Stage **only** this bug's files (leave unrelated changes untouched).
+   - Stage **only** this bug's files; one logical fix = one commit (separable concerns → separate
+     atomic commits, never a catch-all).
    - Use the project's configured git author. Do **not** add a `Co-Authored-By` / tool trailer
      unless the project explicitly wants one.
-   - Conventional message: `fix(<area>): <what was fixed>`, body line naming the root cause.
+   - **Write it like a senior engineer** ([Conventional Commits](https://www.conventionalcommits.org)):
+     `fix(<scope>): <imperative subject ≤50 chars>`, blank line, then a body explaining **WHY +
+     the root cause** (the diff already shows *how*). Never `-m "fix"` / `"wip"` — the message
+     must let a reviewer understand the change without opening the diff.
    - If using a registry: set `status: "committed"` + commit hash.
-2. **Do NOT push.** After committing, **STOP and explicitly ask**:
-   > "Fix committed to `<branch>` as `<hash>`. Push to `origin/<branch>`?"
-   - Push **only** if the user explicitly grants permission. On "no" → leave it local. Done.
-3. **On approved push only:** `git push origin <branch>`; update the registry if any; run any
-   project post-push routine (e.g. branch cleanup) — confirm first if it would discard anything.
+2. **Do NOT push.** After committing, **STOP and ALWAYS ask two things together** — never assume:
+   > "Fix committed to `<branch>` as `<hash>`.
+   > 1. **Push** to `origin/<branch>`?
+   > 2. **Also open a PR?** If yes, **which base branch** (`main`, `develop`, a release branch)?"
+   - Do each **only** on an explicit yes. Never default to opening a PR, and never guess the
+     PR's base branch — the user names it. On "no" → leave it local. Done.
+3. **On approved push only:** `git push origin <branch>`. **On approved PR only:** open it
+   against the user-specified base branch, title + body naming the root cause.
 4. **Finalize the memory fact:** now that the commit exists, fill the Phase 11 fact's
    `fixed-in: <sha>` (with baton, the commit is already linked to the file in history — the sha
    just makes the recall explicit).
+5. ⛔ **Branch & worktree hygiene — don't leave a mess.** Stale worktrees and duplicate branches
+   are what corrupt refs and cause the next session's collisions:
+   - Remove any temp worktree you created for this fix: `git worktree remove <path>` (it refuses
+     if there are uncommitted changes — never force away work); `git worktree prune` is safe.
+     With baton: `baton clean` (dry-run) then `baton clean --fix`; a task worktree goes via
+     `baton rm <slug>`.
+   - Delete YOUR now-superseded branches with `git branch -d` (merged-only — **never
+     force-delete**, and never delete a remote branch without explicit user OK).
+   - **Never delete a branch/worktree you didn't create** or another session's. Unsure → list it
+     and ask.
+   - Goal: end every fix with **one clean branch**/PR, no orphaned worktrees. Report what you
+     pruned.
 
-**PRs:** open a PR only if the user explicitly asks.
+**PRs:** only if the user explicitly asks — and always confirm the base branch first.
 
 ---
 
@@ -418,16 +499,22 @@ tokens. Only compact when genuinely finished — a mid-fix compact can drop the 
 - Reproduce before fixing; no root cause → no fix; symptom patches forbidden.
 - **Commit happens automatically once the fix is verified** (proper message, project author,
   only this bug's files staged).
-- ⛔ **Never `git push` automatically.** After committing, explicitly ask; push only on the
-  user's explicit yes. PRs only if explicitly asked.
+- ⛔ **Never `git push` automatically.** After committing, explicitly ask about push AND PR
+  together; each happens only on the user's explicit yes, and the PR's base branch is
+  user-confirmed, never assumed.
+- A regression the fix introduced is fixed in the same pass (bounded retries, then revert
+  offer) — never declare done with a known regression.
+- End with one clean branch: own temp worktrees removed, own merged branches pruned (`-d` only),
+  nothing of anyone else's touched.
 
 ---
 
 ## Definition of done
 
-- [ ] Shared tracker checked FIRST (already fixed / stuck-unmerged / live collision) — else STOPPED & surfaced.
+- [ ] Shared tracker checked FIRST (already fixed / stuck on an unmerged branch or handoff / live collision) — else STOPPED & surfaced.
 - [ ] Bug reproduced on current code (or STOPPED if it didn't reproduce); complexity tier set.
-- [ ] Synced onto the integration branch BEFORE auditing; staleness re-checked before edit & commit.
+- [ ] Fetched (`--prune`) + based the fix on the FRESH integration branch; full branch landscape mapped; no newer version of the target files elsewhere; isolated in a worktree where feasible.
+- [ ] Branch identity + staleness re-checked before edit AND before commit; only this bug's files staged.
 - [ ] (If a graph exists) map refreshed / confirmed current on the synced code.
 - [ ] Audit covered A–D (scaled to tier); every file-to-change read in full; all shared consumers found.
 - [ ] Blast-radius classified; HIGH RISK stopped for user approval.
@@ -439,9 +526,11 @@ tokens. Only compact when genuinely finished — a mid-fix compact can drop the 
 - [ ] Original reported symptom confirmed gone.
 - [ ] All changed files + their shared consumers re-read after the fix.
 - [ ] Independent skeptic re-checked the final diff (correctness + DRY/perf).
+- [ ] NO NEW BUGS: any regression the fix introduced was ALSO fixed (same pass, own root cause, re-verified) — or STOPPED after bounded retries with a revert offer.
 - [ ] Compile/lint clean; no previously-passing test broken.
 - [ ] Docs updated; map/graph refreshed if new code surface was added.
 - [ ] Committed automatically (proper message, project author, only this bug's files).
-- [ ] Push NOT done automatically — explicitly asked; pushed only if the user approved.
+- [ ] Push NOT done automatically — asked about push AND PR together; pushed only if approved; any PR's base branch was user-confirmed (not assumed).
+- [ ] Branch hygiene: own temp worktrees removed, own superseded branches deleted (`-d`, merged-only), one clean branch/PR left.
 - [ ] Fix recorded to shared memory (fact, not diary — root cause + `fixed-in: <sha>`) if a tracker exists.
 - [ ] Context hygiene: compacted (or reminded) if the working context was near full.

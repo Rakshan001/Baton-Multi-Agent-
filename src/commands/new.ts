@@ -25,7 +25,7 @@ export class EmptyTaskError extends Error {
   }
 }
 
-/** The Baton root is a multi-repo hub (not a git repo) but no sub-project was chosen. */
+/** The Baton root is a multi-repo hub but no sub-project was chosen. */
 export class ProjectRequiredError extends Error {
   projects: string[];
   constructor(projects: string[]) {
@@ -60,18 +60,19 @@ export async function createTask(taskText: string, root?: string, projectId?: st
   const batonRoot = root ?? (await resolveBatonRoot());
 
   // Resolve the git repo the worktree/branch lives in. In a hub that's the
-  // chosen sub-project; in a single repo it's the Baton root itself.
+  // chosen sub-project; in a single repo it's the Baton root itself. A setup
+  // hub may also be git-initialized for coordination metadata, so the KB shape
+  // is the hub signal, not whether the root has .git.
   let gitRepo = batonRoot;
   let resolvedProjectId: string | undefined;
+  const kb = await loadKb(batonRoot);
   if (projectId) {
-    const kb = await loadKb(batonRoot);
     const proj = kb?.projects.find((p) => p.id === projectId);
     if (!proj) throw new UnknownProjectError(projectId);
     gitRepo = proj.path;
     resolvedProjectId = proj.id;
-  } else if (!(await isGitRepo(batonRoot))) {
-    // A hub root isn't a git repo — a worktree needs a real repo to branch from.
-    const kb = await loadKb(batonRoot);
+  } else if ((kb?.projects.length ?? 0) > 1 || !(await isGitRepo(batonRoot))) {
+    // A hub worktree needs a real sub-repo to branch from.
     throw new ProjectRequiredError(kb?.projects.map((p) => p.id) ?? []);
   }
 

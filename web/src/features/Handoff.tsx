@@ -10,7 +10,77 @@ import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
 import { BatonAPI, branchFor } from "../lib/api";
 import { showToast } from "../lib/toast";
-import type { StatusRow, AgentId, RouteSuggestion, HandoffLoadSuggestion } from "../types";
+import type { StatusRow, AgentId, RouteSuggestion, HandoffLoadSuggestion, HandoffBriefEntry } from "../types";
+
+/* ---- Handoff inbox (H3): open briefs awaiting pickup, with copy buttons ---- */
+
+function copyText(label: string, text: string) {
+  navigator.clipboard.writeText(text).then(
+    () => showToast({ kind: "ok", title: `${label} copied` }),
+    () => showToast({ kind: "error", title: "Copy failed", desc: "Clipboard unavailable in this context" }),
+  );
+}
+
+function briefAge(iso: string): string {
+  const min = Math.round((Date.now() - Date.parse(iso)) / 60_000);
+  if (!Number.isFinite(min) || min < 0) return "";
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
+/** The paste-into-the-next-agent prompt: where to work + the brief itself. */
+function resumePrompt(b: HandoffBriefEntry): string {
+  return `Continue this handed-off work. Work in: ${b.cwd}\n\n${b.body}\n\nExecute the plan above — don't re-plan from scratch; flag blockers instead.`;
+}
+
+export function HandoffInbox() {
+  const [briefs, setBriefs] = useState<HandoffBriefEntry[]>([]);
+  useEffect(() => {
+    let on = true;
+    const load = () => BatonAPI.getHandoffs().then((b) => { if (on) setBriefs(b); }).catch(() => undefined);
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { on = false; clearInterval(t); };
+  }, []);
+
+  if (!briefs.length) return null;
+  return (
+    <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderLeft: "3px solid var(--accent)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>
+        <Icon name="share" size={14} strokeWidth={2} style={{ color: "var(--accent-text)" }} /> <span style={{ whiteSpace: "nowrap" }}>Handoffs awaiting pickup</span>
+        <span className="mono" style={{ marginLeft: "auto", fontSize: "var(--fs-12)", fontWeight: "var(--fw-regular)", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>{briefs.length} open</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {briefs.slice(0, 3).map((b) => (
+          <div key={b.path} style={{ display: "flex", flexDirection: "column", gap: 7, padding: "8px 9px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</div>
+              <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {b.from} → {b.to} · {b.status}{b.created ? ` · ${briefAge(b.created)}` : ""}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button className="btn btn-sm fr" style={{ flex: "none" }} data-tip="Copy the full brief as a prompt for the next agent"
+                onClick={() => copyText("Resume prompt", resumePrompt(b))}>
+                <Icon name="copy" size={12} /> Resume prompt
+              </button>
+              <button className="btn btn-sm btn-ghost fr" style={{ flex: "none", width: 28, padding: 0 }} aria-label="Copy pickup command" data-tip={`Copy: baton resume ${b.slug}`}
+                onClick={() => copyText("Pickup command", b.kind === "task" ? `cd ${b.cwd} && baton take ${b.slug}` : `baton resume ${b.slug}`)}>
+                <Icon name="terminal" size={13} />
+              </button>
+              <button className="btn btn-sm btn-ghost fr" style={{ flex: "none", width: 28, padding: 0 }} aria-label="Copy brief file path" data-tip={`Copy path: ${b.path}`}
+                onClick={() => copyText("Brief path", b.path)}>
+                <Icon name="folder" size={13} />
+              </button>
+            </div>
+          </div>
+        ))}
+        {briefs.length > 3 && <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", padding: "0 8px" }}>…{briefs.length - 3} more — `baton resume` lists all</div>}
+      </div>
+    </div>
+  );
+}
 
 /** One-line explanation of why routing picked this agent (chip tooltip). */
 function suggestionWhy(s: RouteSuggestion): string {
@@ -111,7 +181,9 @@ export function HandoffDialog({
           </div>
           <div className="tag" style={{ marginBottom: 8 }}>Start the next agent with</div>
           <pre className="mono" style={{ margin: 0, padding: "10px 12px", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-md)", fontSize: "var(--fs-12)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{`cd ${wt}\nbaton take ${slug}`}</pre>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+            <button className="btn fr" onClick={() => copyText("Pickup command", `cd ${wt} && baton take ${slug}`)}><Icon name="copy" size={13} /> Copy command</button>
+            {doneInfo.briefPath && <button className="btn fr" onClick={() => copyText("Brief path", doneInfo.briefPath!)}><Icon name="folder" size={13} /> Copy brief path</button>}
             <button className="btn btn-primary fr" onClick={onClose}>Done</button>
           </div>
         </div>

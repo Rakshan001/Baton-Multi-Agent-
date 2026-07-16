@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "baton pass --auto"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "baton pass --auto"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -275,6 +275,26 @@ export interface HandoffLoadSuggestion {
   loads: Record<string, number>;
 }
 
+/** An open handoff brief — GET /api/handoffs. Task briefs live in worktree
+ *  HANDOFF.md files; session briefs (any agent, incl. repo root) under
+ *  .baton/handoffs/. The dashboard's copy buttons serve these. */
+export interface HandoffBriefEntry {
+  slug: string;
+  kind: "task" | "session";
+  title: string;
+  status: string;
+  from: string;
+  to: string;
+  created: string;
+  path: string;
+  /** Where the resuming agent should work. */
+  cwd: string;
+  /** Full HANDOFF.md (frontmatter + body). */
+  markdown: string;
+  /** Body only — the resume prompt to paste into the next agent. */
+  body: string;
+}
+
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
 export interface EditSignal {
   path: string;
@@ -440,6 +460,8 @@ export interface SkillStatus {
   produces: string[];
   body: string;
   source: "bundled" | "imported";
+  /** 3-line human explainer (what / how / win); absent for imported skills. */
+  explain?: { what: string; how: string; win: string };
   /** Relative paths of the skill's reference files (content omitted); [] for single-file skills. */
   references: string[];
   installs: SkillInstallState[];

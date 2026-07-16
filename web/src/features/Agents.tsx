@@ -89,8 +89,10 @@ function AgentCard({
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", opacity: a.installed ? 1 : 0.78 }}>
       {/* header */}
-      <div style={{ padding: "14px 15px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border-subtle)", background: a.installed ? `linear-gradient(180deg, color-mix(in srgb, ${color} 8%, transparent), transparent)` : "transparent" }}>
-        <span style={{ width: 40, height: 40, borderRadius: 11, display: "grid", placeItems: "center", flex: "none", background: `color-mix(in srgb, ${color} 15%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 36%, transparent)`, filter: a.installed ? "none" : "grayscale(0.7)" }}>
+      {/* Neutral header — the glyph carries the agent's identity color; six
+          tinted gradients side by side read as a carnival, not a console. */}
+      <div style={{ padding: "14px 15px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border-subtle)" }}>
+        <span style={{ width: 40, height: 40, borderRadius: 11, display: "grid", placeItems: "center", flex: "none", background: "var(--bg-surface-2)", border: "1px solid var(--border-default)", filter: a.installed ? "none" : "grayscale(0.7)" }}>
           <AgentGlyph id={a.id} size={20} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -147,7 +149,7 @@ function AgentCard({
 
           {/* live sessions */}
           {a.live.length > 0 && (
-            <div style={{ padding: "8px 9px 2px", display: "flex", flexDirection: "column", gap: 3, maxHeight: 168, overflowY: "auto" }}>
+            <div style={{ padding: "8px 9px 2px", display: "flex", flexDirection: "column", gap: 3, maxHeight: 168, overflowY: "auto", overflowX: "hidden" }}>
               {a.live.map((s) => (
                 <div key={s.slug} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)" }}>
                   <span style={{ width: 6, height: 6, borderRadius: 99, background: color, flex: "none", animation: "pulse-dot 2s var(--ease-in-out) infinite" }} data-tip={s.kind} />
@@ -177,7 +179,7 @@ function StatusPill({ a, color }: { a: AgentRosterEntry; color: string }) {
   }
   if (a.live.length > 0) {
     return (
-      <span style={{ ...pillStyle(color, true), display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", color: "var(--text-secondary)", flex: "none" }}>
         <span style={{ width: 6, height: 6, borderRadius: 99, background: color, animation: "pulse-dot 2s var(--ease-in-out) infinite" }} />
         {a.live.length} live
       </span>
@@ -206,7 +208,7 @@ function McpChip({ a }: { a: AgentRosterEntry }) {
     return <span data-tip="No standard MCP config for this CLI" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-subtle)", borderRadius: 99, padding: "2px 8px" }}>MCP n/a</span>;
   }
   if (a.mcp.connected) {
-    return <span data-tip={a.mcp.path ?? undefined} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-11)", color: "var(--ok-text, #4ade80)", background: "color-mix(in srgb, #4ade80 14%, transparent)", borderRadius: 99, padding: "2px 8px" }}><Icon name="check" size={11} /> MCP connected</span>;
+    return <span data-tip={a.mcp.path ?? undefined} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "var(--fs-11)", color: "var(--clean-text)", padding: "2px 2px" }}><span style={{ width: 5, height: 5, borderRadius: 99, background: "var(--clean)" }} /> MCP connected</span>;
   }
   return <span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "2px 8px" }}>MCP not wired</span>;
 }

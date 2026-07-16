@@ -6,7 +6,7 @@
    for Cursor — or import your own from a path or URL. Mirrors
    GET /api/skills + POST/DELETE /api/skills/:id/install (src/skills).
    ============================================================ */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader, SearchInput } from "./shared";
@@ -24,9 +24,23 @@ const FEATURED_PACK: { id: string; blurb: string }[] = [
   { id: "verify-before-done", blurb: "Skeptic re-checks the diff before anything ships." },
 ];
 
-export function SkillsScreen({ writeEnabled }: { writeEnabled: boolean }) {
+/* Proven skills from the wider Claude ecosystem — every URL verified to serve a
+   raw SKILL.md. Clicking one prefills the import box (nothing installs without
+   the user confirming), so the catalog isn't limited to what Baton bundles. */
+const COMMUNITY_PICKS: { name: string; repo: string; blurb: string; url: string }[] = [
+  { name: "test-driven-development", repo: "obra/superpowers", blurb: "RED → GREEN → REFACTOR, enforced: no production code without a failing test first.", url: "https://raw.githubusercontent.com/obra/superpowers/main/skills/test-driven-development/SKILL.md" },
+  { name: "systematic-debugging", repo: "obra/superpowers", blurb: "Four-phase root-cause analysis — turns guess-and-patch into investigation.", url: "https://raw.githubusercontent.com/obra/superpowers/main/skills/systematic-debugging/SKILL.md" },
+  { name: "brainstorming", repo: "obra/superpowers", blurb: "Socratic design refinement before any code is written.", url: "https://raw.githubusercontent.com/obra/superpowers/main/skills/brainstorming/SKILL.md" },
+  { name: "skill-creator", repo: "anthropics/skills", blurb: "Write your own skills properly — structure, trigger descriptions, references.", url: "https://raw.githubusercontent.com/anthropics/skills/main/skills/skill-creator/SKILL.md" },
+  { name: "webapp-testing", repo: "anthropics/skills", blurb: "Drive and test web apps end-to-end from the agent.", url: "https://raw.githubusercontent.com/anthropics/skills/main/skills/webapp-testing/SKILL.md" },
+  { name: "mcp-builder", repo: "anthropics/skills", blurb: "Build MCP servers that expose your tools to any agent.", url: "https://raw.githubusercontent.com/anthropics/skills/main/skills/mcp-builder/SKILL.md" },
+];
+
+export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boolean; searchSeed?: { q: string; n: number } }) {
   const skills = usePoll<SkillStatus[]>(() => BatonAPI.getSkills(), { interval: 30000 });
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(searchSeed?.q ?? "");
+  // ⌘K deep-link: a picked skill re-seeds the search even if we're already here.
+  useEffect(() => { if (searchSeed) setQ(searchSeed.q); }, [searchSeed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [importing, setImporting] = useState(false);
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
@@ -122,6 +136,40 @@ export function SkillsScreen({ writeEnabled }: { writeEnabled: boolean }) {
           </div>
         )}
 
+        {!q && (
+          <div className="card" style={{ padding: "15px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", flex: "none", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}>
+                <Icon name="share" size={15} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Community picks</div>
+                <div style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
+                  Proven skills from the wider Claude ecosystem — click to prefill the import box, then confirm.
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 8 }}>
+              {COMMUNITY_PICKS.filter((p) => !(skills.data ?? []).some((s) => s.id === p.name)).map((p) => (
+                <button
+                  key={p.url}
+                  className="fr"
+                  disabled={!writeEnabled}
+                  data-tip={!writeEnabled ? "Read-only — run `baton serve --write`" : `From ${p.repo} — prefill import`}
+                  onClick={() => { setImporting(true); setSource(p.url); }}
+                  style={{ textAlign: "left", display: "flex", flexDirection: "column", gap: 3, padding: "9px 11px", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", cursor: writeEnabled ? "pointer" : "not-allowed", color: "inherit", opacity: writeEnabled ? 1 : 0.6 }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span className="mono" style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", color: "var(--text-primary)" }}>{p.name}</span>
+                    <span className="mono" style={{ fontSize: 9.5, color: "var(--text-quaternary)", marginLeft: "auto" }}>{p.repo}</span>
+                  </span>
+                  <span style={{ fontSize: 11.5, color: "var(--text-tertiary)", lineHeight: 1.45 }}>{p.blurb}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {skills.error && !(skills.data ?? []).length ? (
           <div className="card" style={{ padding: 20, color: "var(--conflict-text)" }}>
             Couldn’t load the skill catalog. <button className="btn btn-sm" onClick={skills.refetch} style={{ marginLeft: 8 }}>Retry</button>
@@ -200,7 +248,18 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
           )}
           <span style={{ fontSize: "var(--fs-11)", fontWeight: "var(--fw-semibold)", color: s.source === "imported" ? "var(--accent-text)" : "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "2px 8px", flex: "none" }}>{s.source}</span>
         </div>
-        <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.55, color: "var(--text-secondary)" }}>{s.description}</p>
+        {s.explain ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {([["What", s.explain.what], ["How", s.explain.how], ["Win", s.explain.win]] as const).map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                <span style={{ flex: "none", width: 36, fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "0.06em", textTransform: "uppercase", color: k === "Win" ? "var(--clean-text)" : "var(--text-quaternary)" }}>{k}</span>
+                <span style={{ fontSize: "var(--fs-12)", lineHeight: 1.5, color: "var(--text-secondary)" }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.55, color: "var(--text-secondary)" }}>{s.description}</p>
+        )}
         {s.produces.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
             {s.produces.map((p) => (
@@ -261,7 +320,15 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
       </div>
 
       {open && (
-        <pre className="mono" style={{ margin: 0, padding: "12px 15px", maxHeight: 300, overflow: "auto", fontSize: 11, lineHeight: 1.55, color: "var(--text-secondary)", background: "var(--bg-base)", borderTop: "1px solid var(--border-subtle)", whiteSpace: "pre-wrap" }}>{s.body}</pre>
+        <div style={{ borderTop: "1px solid var(--border-subtle)", background: "var(--bg-base)" }}>
+          {s.explain && (
+            <p style={{ margin: 0, padding: "10px 15px 0", fontSize: "var(--fs-12)", lineHeight: 1.55, color: "var(--text-tertiary)" }}>
+              <span style={{ fontWeight: "var(--fw-semibold)", color: "var(--text-secondary)" }}>Agent trigger description · </span>
+              {s.description}
+            </p>
+          )}
+          <pre className="mono" style={{ margin: 0, padding: "12px 15px", maxHeight: 300, overflow: "auto", fontSize: 11, lineHeight: 1.55, color: "var(--text-secondary)", whiteSpace: "pre-wrap" }}>{s.body}</pre>
+        </div>
       )}
     </div>
   );

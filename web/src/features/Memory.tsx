@@ -37,12 +37,14 @@ function fmtBytes(b: number): string {
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
+export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boolean; searchSeed?: { q: string; n: number } }) {
   const data = usePoll<{ facts: MemoryFactStatus[]; projects: MemoryProject[] }>(() => BatonAPI.getMemories(), { interval: 30000 });
   const facts = data.data?.facts ?? [];
   const projects = data.data?.projects ?? [];
 
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(searchSeed?.q ?? "");
+  // ⌘K deep-link: a picked fact re-seeds the search even if we're already here.
+  useEffect(() => { if (searchSeed) setQ(searchSeed.q); }, [searchSeed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [fresh, setFresh] = useState<Freshness | null>(null);
   const [proj, setProj] = useState<string | null | undefined>(undefined); // undefined=all, null=shared
   const [agent, setAgent] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
       if (fresh && f.freshness !== fresh) return false;
       if (proj !== undefined && f.project !== proj) return false;
       if (agent && f.agent !== agent) return false;
-      if (needle && !`${f.fact} ${f.type} ${f.task ?? ""} ${f.agent ?? ""} ${f.anchors.files.map((a) => a.path).join(" ")}`.toLowerCase().includes(needle)) return false;
+      if (needle && !`${f.id} ${f.fact} ${f.type} ${f.task ?? ""} ${f.agent ?? ""} ${f.anchors.files.map((a) => a.path).join(" ")}`.toLowerCase().includes(needle)) return false;
       return true;
     });
   }, [facts, q, fresh, proj, agent]);
@@ -120,6 +122,26 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
     } catch (e) { showToast({ kind: "error", title: "GC failed", desc: (e as Error).message }); }
   };
 
+  const [repairing, setRepairing] = useState(false);
+  const repair = async () => {
+    setRepairing(true);
+    try {
+      const r = await BatonAPI.repairMemories();
+      const parts = [
+        r.reanchored.length ? `${r.reanchored.length} re-anchored` : null,
+        r.needsReview.length ? `${r.needsReview.length} still need review` : null,
+      ].filter(Boolean);
+      showToast({
+        kind: r.reanchored.length ? "ok" : "info",
+        title: parts.length ? parts.join(" · ") : "Nothing stale to repair",
+        desc: r.needsReview.length ? "Facts whose wording can't be re-verified stay withheld — re-save if still true, or delete." : undefined,
+      });
+      data.refetch();
+    } catch (e) {
+      showToast({ kind: "error", title: "Repair failed", desc: (e as Error).message });
+    } finally { setRepairing(false); }
+  };
+
   const projLabel = (id: string | null) => id ?? "shared";
 
   return (
@@ -135,7 +157,7 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
           </button>
         )}
         {staleCount > 0 && writeEnabled && (
-          <button className="btn btn-sm fr" onClick={gc} data-tip="Remove every fact whose anchored files changed">
+          <button className="btn btn-sm fr" onClick={gc} data-tip="Remove every fact whose anchored files changed — try Repair first">
             <Icon name="trash" size={13} /> GC {staleCount} stale
           </button>
         )}
@@ -150,13 +172,33 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
         {facts.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             <FilterPills label="Freshness" value={fresh} onChange={(v) => setFresh(v as Freshness | null)}
-              options={(["fresh", "aging", "stale"] as Freshness[]).map((f) => ({ id: f, label: f, color: FRESHNESS[f].color }))} />
+              options={(["fresh", "aging", "stale"] as Freshness[]).map((f) => ({ id: f, label: f, color: FRESHNESS[f].color, count: facts.filter((x) => x.freshness === f).length }))} />
             {projects.length > 0 && (
               <FilterPills label="Server" value={proj === undefined ? null : proj === null ? "__shared__" : proj} onChange={(v) => setProj(v === null ? undefined : v === "__shared__" ? null : v)}
-                options={[...projects.map((p) => ({ id: p.id, label: p.id })), { id: "__shared__", label: "shared" }]} />
+                options={[
+                  ...projects.map((p) => ({ id: p.id, label: p.id, count: facts.filter((x) => x.project === p.id).length })),
+                  { id: "__shared__", label: "shared", count: facts.filter((x) => x.project === null).length },
+                ]} />
             )}
             {agents.length > 1 && (
-              <FilterPills label="Agent" value={agent} onChange={setAgent} options={agents.map((a) => ({ id: a, label: getAgent(a as never).short }))} />
+              <FilterPills label="Agent" value={agent} onChange={setAgent} options={agents.map((a) => ({ id: a, label: getAgent(a as never).short, count: facts.filter((x) => x.agent === a).length }))} />
+            )}
+          </div>
+        )}
+
+        {/* stale / needs-review band — the repair queue, surfaced */}
+        {staleCount > 0 && (
+          <div className="card" style={{ padding: "10px 14px", borderLeft: "3px solid var(--conflict)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <Icon name="alertTriangle" size={14} style={{ color: "var(--conflict)", flex: "none" }} />
+            <span style={{ fontSize: "var(--fs-13)", color: "var(--text-secondary)", flex: 1, minWidth: 200 }}>
+              <b style={{ color: "var(--text-primary)", fontWeight: "var(--fw-semibold)" }}>{staleCount} stale fact{staleCount === 1 ? "" : "s"}</b> withheld from agents.
+              {writeEnabled ? " Repair re-anchors the ones still verifiable in code; the rest need a human or agent to re-save or delete them." : " Start `baton serve --write` to repair them."}
+            </span>
+            <button className="btn btn-sm btn-ghost fr" onClick={() => setFresh("stale")}>Show stale</button>
+            {writeEnabled && (
+              <button className="btn btn-sm fr" onClick={repair} disabled={repairing}>
+                <Icon name="refresh" size={13} /> {repairing ? "Repairing…" : "Repair"}
+              </button>
             )}
           </div>
         )}
@@ -223,7 +265,7 @@ export function MemoryScreen({ writeEnabled }: { writeEnabled: boolean }) {
   );
 }
 
-function FilterPills({ label, value, onChange, options }: { label: string; value: string | null; onChange: (v: string | null) => void; options: { id: string; label: string; color?: string }[] }) {
+function FilterPills({ label, value, onChange, options }: { label: string; value: string | null; onChange: (v: string | null) => void; options: { id: string; label: string; color?: string; count?: number }[] }) {
   return (
     <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
       <span style={{ fontSize: 10.5, color: "var(--text-quaternary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
@@ -231,8 +273,9 @@ function FilterPills({ label, value, onChange, options }: { label: string; value
         const on = value === o.id;
         return (
           <button key={o.id} className="chip fr" aria-pressed={on} onClick={() => onChange(on ? null : o.id)}
-            style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, background: on ? "var(--accent-soft)" : "var(--bg-surface-2)", borderColor: on ? "var(--accent-border)" : "var(--border-default)", color: on ? "var(--accent-text)" : "var(--text-secondary)" }}>
+            style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, background: on ? "var(--accent-soft)" : "var(--bg-surface-2)", borderColor: on ? "var(--accent-border)" : "var(--border-default)", color: on ? "var(--accent-text)" : "var(--text-secondary)", opacity: o.count === 0 ? 0.55 : 1 }}>
             {o.color && <span style={{ width: 6, height: 6, borderRadius: 99, background: o.color }} />}{o.label}
+            {o.count !== undefined && <span className="mono" style={{ fontSize: 10, color: on ? "var(--accent-text)" : "var(--text-quaternary)" }}>{o.count}</span>}
           </button>
         );
       })}
@@ -247,26 +290,23 @@ function FactCard({ f, writeEnabled, onDelete, projectLabel, selected, onToggle,
   const fr = FRESHNESS[f.freshness];
   const attribution = [f.agent && `by ${f.agent}`, f.task && `task ${f.task}`].filter(Boolean).join(" · ");
   return (
-    <article style={{ background: selected ? "var(--accent-soft)" : "var(--bg-surface)", border: `1px solid ${selected ? "var(--accent-border)" : f.freshness === "stale" ? "var(--conflict-border)" : "var(--border-subtle)"}`, borderRadius: "var(--r-md)", padding: "13px 15px", display: "flex", gap: 11, opacity: f.freshness === "stale" ? 0.85 : 1 }}>
+    <article style={{ background: selected ? "var(--accent-soft)" : "var(--bg-surface)", border: `1px solid ${selected ? "var(--accent-border)" : "var(--border-subtle)"}`, borderLeft: `3px solid ${selected ? "var(--accent)" : fr.color}`, borderRadius: "var(--r-md)", padding: "12px 15px", display: "flex", gap: 11, opacity: f.freshness === "stale" ? 0.85 : 1 }}>
       {writeEnabled && (
         <input type="checkbox" checked={selected} onChange={onToggle} aria-label={`Select ${f.id}`}
           style={{ marginTop: 3, flex: "none", cursor: "pointer", opacity: selectMode || selected ? 1 : 0.5 }} />
       )}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span className="chip" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--bg-surface-2)", border: "1px solid var(--border-default)" }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 7 }}>
+        {/* One quiet eyebrow line instead of three competing chips. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", minHeight: 20 }}>
+          <span className="eyebrow" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <Icon name={TYPE_ICON[f.type] as never} size={11} /> {f.type}
+            {f.project !== null && <span data-tip="Scoped to this server (by its anchored files)" style={{ color: "var(--text-quaternary)" }}>· {projectLabel(f.project)}</span>}
           </span>
-          {f.project !== null && (
-            <span className="chip" data-tip="Scoped to this server (by its anchored files)" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--bg-surface-2)", border: "1px solid var(--border-default)", color: "var(--text-secondary)" }}>
-              <Icon name="folder" size={11} /> {projectLabel(f.project)}
-            </span>
-          )}
-          <span data-tip={f.staleReason ?? fr.tip} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: "var(--fw-semibold)", color: fr.color }}>
-            <span style={{ width: 7, height: 7, borderRadius: 99, background: fr.color }} /> {fr.label}
-            {f.commitsBehind ? <span style={{ color: "var(--text-quaternary)", fontWeight: 400 }}>· {f.commitsBehind} commits old</span> : null}
+          <span data-tip={f.staleReason ?? fr.tip} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: "var(--fw-medium)", color: fr.color }}>
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: fr.color }} /> {fr.label}
+            {f.commitsBehind ? <span style={{ color: "var(--text-quaternary)", fontWeight: 400 }}> · {f.commitsBehind} commits old</span> : null}
           </span>
-          <span className="mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-quaternary)" }}>{f.id}</span>
+          <span className="mono" style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-quaternary)" }}>{f.id}</span>
           {writeEnabled && (
             <button className="btn btn-ghost btn-icon fr" onClick={() => onDelete(f.id)} aria-label={`Delete ${f.id}`} data-tip="Delete this fact" style={{ width: 26, height: 26 }}>
               <Icon name="trash" size={13} />

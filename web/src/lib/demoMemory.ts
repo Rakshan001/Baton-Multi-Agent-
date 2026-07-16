@@ -46,4 +46,14 @@ export const DEMO_MEMORY: MemoryFactStatus[] = [
     anchors: { commit: "0badf00", files: [{ path: "web/src/middleware/session.ts", hash: "d4e5f6a1b2c3" }] },
     supersedes: null, freshness: "stale", staleReason: "web/src/middleware/session.ts changed since this was saved", commitsBehind: 14, project: "web",
   },
+  {
+    // Deliberately prose-only (no verifiable identifiers/paths in the text):
+    // Repair can't re-anchor it mechanically, so it demos the review queue.
+    id: "mem-exports-stream-not-buffer",
+    type: "decision",
+    fact: "Exports stream rows to the client instead of buffering the whole report — large tenants ran the box out of memory before this change.",
+    agent: "gemini", task: "export-oom-fix", createdAt: ago(30),
+    anchors: { commit: "3e11f09", files: [{ path: "api-server/src/exports/stream.ts", hash: "e5f6a1b2c3d4" }] },
+    supersedes: null, freshness: "stale", staleReason: "api-server/src/exports/stream.ts changed since this was saved", commitsBehind: 22, project: "api-server",
+  },
 ];

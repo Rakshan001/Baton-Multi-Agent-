@@ -224,13 +224,8 @@ function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string
   const seg = (label: string, value: number, dot: string, opts: { onClick?: () => void; tip?: string; danger?: boolean; glow?: boolean } = {}) => {
     const Comp: any = opts.onClick ? "button" : "div";
     return (
-      <Comp className={opts.onClick ? "fr" : ""} onClick={opts.onClick} data-tip={opts.tip} style={{
-        display: "inline-flex", alignItems: "center", gap: 7, height: "100%", padding: "0 12px", border: "none",
-        background: "transparent", cursor: opts.onClick ? "pointer" : "default", fontFamily: "inherit",
-        borderRadius: opts.onClick ? "var(--r-sm)" : 0, transition: "background var(--dur-1)" }}
-        onMouseEnter={opts.onClick ? (e: React.MouseEvent<HTMLElement>) => (e.currentTarget.style.background = "var(--bg-hover)") : undefined}
-        onMouseLeave={opts.onClick ? (e: React.MouseEvent<HTMLElement>) => (e.currentTarget.style.background = "transparent") : undefined}>
-        <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flex: "none", boxShadow: opts.glow ? `0 0 0 3px color-mix(in srgb, ${dot} 22%, transparent)` : "none" }} />
+      <Comp className={opts.onClick ? "bar-seg fr" : "bar-seg"} onClick={opts.onClick} data-tip={opts.tip}>
+        <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flex: "none" }} />
         <span className="mono" style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)", letterSpacing: "-0.02em", color: opts.danger ? "var(--conflict-text)" : "var(--text-primary)" }}>{value}</span>
         <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{label}</span>
       </Comp>
@@ -289,6 +284,13 @@ function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, on
           <Icon name="gitMerge" size={13} /> Write
         </span>
       )}
+      {/* The inverse state matters more: half the buttons quietly disable in
+          read-only, so say it once up here instead of tooltip-by-tooltip. */}
+      {!prefs.writeEnabled && !isMobile && (
+        <span data-tip={demo ? "Write actions are off — toggle them in the ⌘K palette" : "Merge, GC and Repair are disabled.\nRestart with `baton serve --write` to enable."} data-tip-side="bottom" style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 32, padding: "0 10px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", flex: "none" }}>
+          <Icon name="lock" size={12} /> Read-only
+        </span>
+      )}
       <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} reconnecting={reconnecting} />
       <ThemeToggle prefs={prefs} />
     </header>
@@ -311,13 +313,10 @@ function Sidebar({ route, navigate, counts, project }: { route: string; navigate
         const active = route === n.id;
         const badge = n.id === "conflicts" && counts.conflicts > 0 ? counts.conflicts : null;
         return (
-          <button key={n.id} className="fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined} style={{ display: "flex", alignItems: "center", gap: 11, height: 38, padding: "0 11px", borderRadius: "var(--r-sm)", border: "none", cursor: "pointer", textAlign: "left", width: "100%", position: "relative", background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent-text)" : "var(--text-secondary)", fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", fontFamily: "inherit", transition: "background var(--dur-1), color var(--dur-1)" }}
-            onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; } }}
-            onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-secondary)"; } }}>
-            {active && <span style={{ position: "absolute", left: -10, top: 9, bottom: 9, width: 3, borderRadius: 99, background: "var(--accent)" }} />}
+          <button key={n.id} className="nav-item fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined}>
             <Icon name={n.icon} size={17} style={{ flex: "none" }} />
             <span style={{ flex: 1 }}>{n.label}</span>
-            {badge && <span style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, minWidth: 18, height: 18, display: "grid", placeItems: "center", padding: "0 5px" }}>{badge}</span>}
+            {badge && <span className="mono" style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, minWidth: 18, height: 18, display: "grid", placeItems: "center", padding: "0 5px" }}>{badge}</span>}
           </button>
         );
       })}
@@ -407,6 +406,9 @@ export default function App() {
   }, [daemonWrite]);
 
   const navigate = (r: string) => { setRoute(r); ls.set("baton:route", r); };
+  // ⌘K data hits deep-link into a screen with its search pre-filled.
+  const [searchSeed, setSearchSeed] = useState<{ route: string; q: string; n: number }>({ route: "", q: "", n: 0 });
+  const seedSearch = (r: string, q: string) => { setSearchSeed((s) => ({ route: r, q, n: s.n + 1 })); navigate(r); };
   const onOpen = (slug: string) => setSelected(slug);
   const onLaunch = (agent: AgentId | null) => setLaunchOpen({ agent });
   const onLive = (slug: string) => setLiveSlug(slug);
@@ -490,10 +492,10 @@ export default function App() {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
-      case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} />;
-      case "history": return <HistoryScreen history={history} onOpen={onOpen} />;
+      case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
+      case "history": return <HistoryScreen history={history} onOpen={onOpen} searchSeed={searchSeed.route === "history" ? searchSeed : undefined} />;
       case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
-      case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} />;
+      case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "skills" ? searchSeed : undefined} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
       default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
     }
@@ -522,7 +524,7 @@ export default function App() {
       {handoffSlug && <HandoffDialog slug={handoffSlug} session={selectedRow(handoffSlug)} onClose={() => setHandoffSlug(null)} writeEnabled={prefs.writeEnabled} />}
       {liveSlug && <LiveSession slug={liveSlug} session={selectedRow(liveSlug)} sessions={sessions} onClose={() => setLiveSlug(null)} setSlug={setLiveSlug} onOpenDiff={(s) => { setLiveSlug(null); setDiffSlug(s); }} demo={demo} subscribe={events.subscribe} />}
       {launchOpen && <LaunchSession initialAgent={launchOpen.agent} onClose={() => setLaunchOpen(null)} writeEnabled={prefs.writeEnabled} onLaunched={(slug) => setSelected(slug)} />}
-      <CommandBar open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate} onOpen={onOpen} onLaunch={onLaunch} sessions={sessions} prefs={prefs} />
+      <CommandBar open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate} onOpen={onOpen} onLaunch={onLaunch} sessions={sessions} history={history.data || []} prefs={prefs} onSeedSearch={seedSearch} />
       <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
       <ToastViewport />
     </div>

@@ -40,6 +40,28 @@ describe('bundled bug-fix skill — v2 invariants', () => {
       // G1 — graph-freshness golden rule
       ['the graph is only as fresh as its last build', 'only as fresh as its last build'],
       ['re-read files with uncommitted edits instead of trusting the graph', 're-read the file'],
+
+      // v2.1 additions — battle-tested in the field (multi-session collisions,
+      // regressions introduced by the fix itself, branch sprawl)
+      ['fetch with prune so the branch view is accurate', 'fetch origin --prune'],
+      ['map the full branch landscape before auditing', 'git worktree list'],
+      ['detect a newer version of the target files on another branch', 'newer version'],
+      ['prefer an isolated worktree so a concurrent session cannot switch the tree', 'isolated worktree'],
+      ['check for a stuck fix parked in a handoff brief', 'handoff'],
+      ['regressions introduced by the fix are fixed in the same pass', 'in the same pass'],
+      ['bounded retries before stopping', 'bounded retries'],
+      ['ask push AND PR together, with the base branch named by the user', 'which base branch'],
+      ['delete only merged own branches, never force-delete', 'force-delete'],
+      ['end every fix with one clean branch and no leftover worktrees', 'one clean branch'],
+
+      // v2.2 — the actual DEBUGGING METHOD (root-cause investigation is a
+      // science, not a ceremony): hypotheses tested by evidence, history
+      // queries, minimal repro, targeted instrumentation
+      ['shrink to the smallest failing case', 'minimal repro'],
+      ['find the introducing commit via git history', 'bisect'],
+      ['competing hypotheses ranked and tested cheapest-first', 'hypothes'],
+      ['evidence eliminates hypotheses — never fix on an untested guess', 'evidence'],
+      ['targeted instrumentation over staring at code', 'instrument'],
     ];
 
     for (const [why, needle] of required) {
