@@ -50,6 +50,31 @@ function PreviewBanner({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * ISS-16 — demo mode must not silently swallow a real daemon's signals. Demo
+ * defaults ON on the Vite dev origin, and this screen deliberately shows no
+ * fabricated signals (they'd be indistinguishable from real ones), so without
+ * this note a developer running `baton serve` and viewing :5173 sees the panel
+ * simply absent and reads it as "the daemon is broken / there's nothing there".
+ * Say why, and how to see the real thing.
+ */
+function DemoSignalsNote() {
+  return (
+    <section className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon name="zap" size={14} style={{ color: "var(--text-tertiary)" }} />
+        <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Live edit signals</h2>
+        <span className="tag" style={{ marginLeft: "auto" }}>demo</span>
+      </div>
+      <div style={{ padding: "14px 16px", fontSize: "var(--fs-13)", color: "var(--text-tertiary)", textWrap: "pretty" }}>
+        Demo data is on, so this panel isn't querying the daemon — live edits and connected agents are
+        only ever shown from a real <span className="mono">baton serve</span>. Turn off <b style={{ color: "var(--text-secondary)", fontWeight: 600 }}>Demo data</b> in
+        the ⌘K palette to see <span className="mono">/api/signals</span> for this repo.
+      </div>
+    </section>
+  );
+}
+
 /** Real mode: files under live edit right now (from /api/signals). */
 function LiveSignalsSection() {
   const signals = usePoll<EditSignal[]>(() => BatonAPI.getSignals(), { interval: 5000 });
@@ -220,7 +245,7 @@ export function ActivityScreen({
                 ))}
               </div>
 
-              {!demo && <LiveSignalsSection />}
+              {demo ? <DemoSignalsNote /> : <LiveSignalsSection />}
               {!demo && <ConnectedAgentsSection />}
 
               {/* per-agent rollup: tokens in demo, real work counters otherwise */}
