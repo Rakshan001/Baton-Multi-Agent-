@@ -41,6 +41,48 @@ function estCostUsd(tokens: number): number {
   return Math.round(tokens * (3 / 1_000_000) * 100) / 100;
 }
 
+/**
+ * ISS-08 — a hard budget on the brief body (chars), like `orient`'s 3200 cap.
+ * A brief that concatenates every section paradoxically makes the receiver LESS
+ * accurate (context rot), so we drop the lowest-value sections first and tell
+ * the receiver to pull the rest just-in-time. ~1100 tokens: room for the
+ * continuation essentials + memory + git ground truth, but not the graph
+ * excerpt and command log on top when the brief is already large.
+ */
+export const HANDOFF_MAX_CHARS = 4500;
+
+/** A rendered brief section plus how droppable it is under budget. */
+export interface BriefSection {
+  md: string;
+  /** 0 = never drop (continuation essentials + guardrails); higher = dropped
+   *  sooner. Value, not size, sets the order — low-value bloat goes first. */
+  dropOrder: number;
+}
+
+/**
+ * Pure progressive disclosure: keep sections in display order, but when the body
+ * exceeds `maxChars` drop the highest-dropOrder (lowest-value) section still
+ * present, repeating until it fits or only never-drop sections remain. Returns
+ * the fitted body and how many sections were dropped (so the caller can add a
+ * "pull it just-in-time" pointer).
+ */
+export function fitBriefBody(sections: BriefSection[], maxChars: number = HANDOFF_MAX_CHARS): { body: string; dropped: number } {
+  const kept = sections.filter((s) => s.md.trim().length > 0);
+  const render = (): string => kept.map((s) => s.md).join('\n\n');
+  let dropped = 0;
+  while (render().length > maxChars) {
+    let idx = -1;
+    let worst = 0;
+    for (let i = 0; i < kept.length; i++) {
+      if (kept[i].dropOrder > worst) { worst = kept[i].dropOrder; idx = i; }
+    }
+    if (idx === -1) break; // only never-drop sections left — accept the overflow
+    kept.splice(idx, 1);
+    dropped++;
+  }
+  return { body: render(), dropped };
+}
+
 export function handoffPath(worktreePath: string): string {
   return join(worktreePath, 'HANDOFF.md');
 }
@@ -85,7 +127,20 @@ export async function buildBrief(
   const open = todos.filter((t) => t.status !== 'completed');
   const done = todos.filter((t) => t.status === 'completed');
 
-  const body: string[] = [
+  // ISS-08: assemble the brief as priority-tagged sections in display order, then
+  // fit them to a hard char budget (drop lowest-value first). dropOrder 0 =
+  // continuation essentials that must survive the budget.
+  const sections: BriefSection[] = [];
+  const push = (md: string, dropOrder: number): void => { if (md.trim()) sections.push({ md, dropOrder }); };
+
+  const stateLines = [
+    '## State of the work',
+    diffStat.ok && diffStat.stdout ? '### Committed vs base\n```\n' + diffStat.stdout + '\n```' : '_No commits beyond the base branch yet._',
+    dirtyStat.ok && dirtyStat.stdout ? '### Uncommitted\n```\n' + dirtyStat.stdout + '\n```' : '',
+  ].filter(Boolean).join('\n');
+
+  // Objective + where to work — never dropped.
+  push([
     `# Handoff: ${task.task}`,
     '',
     '## Objective',
@@ -100,40 +155,33 @@ export async function buildBrief(
     ...(opts.model
       ? [`Suggested model: \`${opts.model}\` — start the receiving CLI with it if it supports model selection (e.g. \`claude --model ${opts.model}\`); Baton can't enforce this.`]
       : []),
-    '',
-    '## State of the work',
-    diffStat.ok && diffStat.stdout ? '### Committed vs base\n```\n' + diffStat.stdout + '\n```' : '_No commits beyond the base branch yet._',
-    dirtyStat.ok && dirtyStat.stdout ? '### Uncommitted\n```\n' + dirtyStat.stdout + '\n```' : '',
-  ];
+  ].join('\n'), 0);
+
+  // git ground truth — kept longest of the optional sections (ISS-08 prefers
+  // verifiable state over prose).
+  push(stateLines, 1);
 
   const hasContext = !!(session || todos.length || notes.length || filesEdited.length);
   if (hasContext) {
     if (done.length || open.length) {
-      body.push('', '## Plan');
-      for (const t of done) body.push(`- [x] ${t.content}`);
-      for (const t of open) body.push(`- [ ] ${t.content}`);
+      const plan = ['## Plan', ...done.map((t) => `- [x] ${t.content}`), ...open.map((t) => `- [ ] ${t.content}`)];
+      push(plan.join('\n'), 0); // the plan is the continuation — never drop
     }
-    if (nextStep) body.push('', '## Next step', nextStep);
-    if (filesEdited.length) {
-      body.push('', '## Files the previous agent edited', ...filesEdited.map((f) => `- ${f}`));
-    }
-    if (notes.length) {
-      body.push('', '## Last notes from the previous agent', ...notes.map((n) => `> ${n.replace(/\n/g, '\n> ')}`));
-    }
-    if (commands.length) {
-      body.push('', '## Commands it ran (context/verification)', '```', ...commands.slice(-8), '```');
-    }
+    if (nextStep) push(`## Next step\n${nextStep}`, 0);
+    if (filesEdited.length) push(['## Files the previous agent edited', ...filesEdited.map((f) => `- ${f}`)].join('\n'), 4);
+    if (notes.length) push(['## Last notes from the previous agent', ...notes.map((n) => `> ${n.replace(/\n/g, '\n> ')}`)].join('\n'), 3);
+    if (commands.length) push(['## Commands it ran (context/verification)', '```', ...commands.slice(-8), '```'].join('\n'), 6);
   } else {
-    body.push('', '_No session transcript or progress ledger for this worktree — context above is from git alone._');
+    push('_No session transcript or progress ledger for this worktree — context above is from git alone._', 0);
   }
 
-  // Graph excerpt: a token-budgeted map of the code relevant to this task.
+  // Graph excerpt: the biggest optional block — first to go after commands.
   const kb = await loadKb(opts.root);
   if (kb) {
     const graphPath = kb.mergedGraphPath ?? kb.projects[0]?.graphPath;
     if (graphPath) {
       const excerpt = await queryGraph(task.task, graphPath, 1500);
-      if (excerpt) body.push('', '## Codebase map (graph excerpt)', '```', excerpt, '```');
+      if (excerpt) push(['## Codebase map (graph excerpt)', '```', excerpt, '```'].join('\n'), 5);
     }
   }
 
@@ -142,21 +190,26 @@ export async function buildBrief(
   try {
     const recalled = await recallMemories(opts.root, { topic: task.task, limit: 6 });
     const section = memoryBriefSection(recalled.facts, recalled.staleDropped, recalled.staleGrounding);
-    if (section) body.push('', section);
+    if (section) push(section, 2);
   } catch { /* memory is an enhancement — never block a handoff */ }
 
   // Positive-phrased rules (ISS-07): requirement form ("do this") outlasts a
-  // deep session better than prohibition form ("do NOT"). The core three come
-  // from the one shared guardrail source; base-branch safety is brief-specific.
-  body.push(
-    '',
+  // deep session better than prohibition form ("do NOT"). Never dropped.
+  push([
     '## Rules to hold (they matter more the deeper you get)',
     ...guardrailLines(`\`baton done ${task.slug}\``).map((l) => `- ${l}`),
     '- Keep the base branch clean — no force-push or history rewrite on it.',
     '- Include the test/build output in your summary; then `baton done ' + task.slug + '` (or update this file\'s status) when complete.',
-  );
+  ].join('\n'), 0);
 
-  const markdown = matter.stringify(body.filter((l) => l !== '').join('\n').replace(/\n{3,}/g, '\n\n'), meta as unknown as Record<string, unknown>);
+  const { body: fittedBody, dropped } = fitBriefBody(sections, HANDOFF_MAX_CHARS);
+  // ISS-08 progressive disclosure: when we trimmed, tell the receiver to pull
+  // the rest just-in-time rather than trusting an omission as "nothing there".
+  const bodyText = dropped > 0
+    ? fittedBody + '\n\n_Lower-priority detail was trimmed to keep this brief lean — pull it just-in-time (`git diff`, `orient`, `recall_memory`, `search_history`)._'
+    : fittedBody;
+
+  const markdown = matter.stringify(bodyText.replace(/\n{3,}/g, '\n\n'), meta as unknown as Record<string, unknown>);
   return { meta, markdown, path: handoffPath(task.worktreePath) };
 }
 

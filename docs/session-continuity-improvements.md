@@ -24,6 +24,18 @@
 
 ## Progress log
 
+**2026-07-16 (cont.) — ISS-08 done: the handoff brief is now budgeted (progressive disclosure). Completes all P2 items.**
+`buildBrief` concatenated every section with no total cap, unlike `orient`'s 3200-char budget — a big brief measurably
+hurts the receiver (context rot). The body is now assembled as priority-tagged sections and fit to a hard
+`HANDOFF_MAX_CHARS = 4500` budget via a pure `fitBriefBody`: it drops the highest-`dropOrder` (lowest-value) section
+first — commands → graph excerpt → files → notes → memory → git diff — and NEVER drops the continuation essentials
+(objective, where-to-work, next step, plan, ISS-07 guardrails). git diff-stat is kept longest of the optional
+sections because ISS-08 prefers verifiable ground truth over prose. When anything is trimmed, a one-line pointer
+tells the receiver to pull the rest just-in-time (`git diff`, `orient`, `recall_memory`) — the "hold identifiers,
+re-derive on demand" pattern, so an omission never reads as "nothing there". — `src/handoff/brief.ts`. Tests: +5
+(`test/brief-budget.test.ts`: drop-order, never-drop essentials, overflow accepted, JIT pointer, integration). Suite
+615 passing. **Uncommitted.**
+
 **2026-07-16 (cont.) — ISS-07 done: positive-phrased guardrails + mid-session re-injection (completes the ISS-04/06/07 loss cluster).**
 Prohibition ("do NOT") instructions decay hardest across a long session (measured 73%→33% by turn 16). Two fixes:
 (A) one shared source of POSITIVE-phrased guardrails (`src/handoff/guardrails.ts`) — "stay inside this worktree ·
@@ -288,7 +300,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   per-model "safe turn depth"), and phrase them as positive requirements where possible ("commit
   inside `.baton/wt/...`") rather than prohibitions.
 
-### ISS-08 · P2 · Long brief → context rot; needs progressive disclosure
+### ISS-08 · P2 · Long brief → context rot; needs progressive disclosure — **DONE 2026-07-16** (see progress log)
 - **Symptom:** a big, thorough brief paradoxically makes the receiver *less* accurate.
 - **Root cause:** the brief concatenates every non-empty section (`brief.ts:75-146`); there is no
   hard budget on the handoff the way `orient` caps at 3200 chars (`orient.ts:22`).
