@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS edit_signals (
   slug TEXT,
   path TEXT,
   at TEXT,
+  settledAt TEXT,
   PRIMARY KEY (slug, path)
 );
 CREATE INDEX IF NOT EXISTS idx_edit_signals_path ON edit_signals(path);
@@ -63,9 +64,20 @@ function getDb(root: string): DatabaseSync {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
     db.exec(SCHEMA);
+    migrate(db);
     conns.set(path, db);
   }
   return db;
+}
+
+/**
+ * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing history.db, so a column
+ * added after the fact has to be applied by hand. Additive and idempotent: an
+ * older daemon reading the same file simply ignores the column.
+ */
+function migrate(db: DatabaseSync): void {
+  const cols = db.prepare(`PRAGMA table_info(edit_signals)`).all() as unknown as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'settledAt')) db.exec(`ALTER TABLE edit_signals ADD COLUMN settledAt TEXT`);
 }
 
 /**
@@ -83,13 +95,35 @@ function canonicalRoot(p: string | null | undefined): string | null {
   }
 }
 
-/** A signal is "live" if the file was edited within this window. */
+/**
+ * A signal is "active" if the file was edited within this window AND is still
+ * dirty. Bounds how long an uncommitted edit keeps holding a path.
+ */
 export const SIGNAL_WINDOW_MIN = 30;
+
+/**
+ * How long a *settled* signal (its path went clean — committed, merged or
+ * reverted) stays visible as "X finished editing Y 2m ago" before being dropped
+ * for good. Deliberately short: it is a recency hint for the board, not history
+ * (history.db already has the commits). ISS-15.
+ */
+export const SETTLED_WINDOW_MIN = 5;
+
+/** Hard ceiling on retained settled rows, so a busy repo can't grow them without bound. */
+const SETTLED_CAP = 200;
 
 export interface SignalHolder {
   slug: string;
   agent: string | null;
   lastEditAt: string;
+  /**
+   * `active` = holding the path right now (uncommitted, dirty) — the only state
+   * that means "wait". `settled` = touched it recently, since committed/reverted:
+   * shown dimmed on the board, never a reason to wait.
+   */
+  state: 'active' | 'settled';
+  /** When the path went clean. Set only on settled holders. */
+  settledAt?: string;
   /** Free-text intent the holder reported (report_progress), if fresh. */
   note?: string;
   noteAt?: string;
@@ -142,7 +176,7 @@ export interface EditSignal {
   holders: SignalHolder[];
 }
 
-interface SignalRow { slug: string; path: string; at: string }
+interface SignalRow { slug: string; path: string; at: string; settledAt: string | null }
 
 /* ------------------- hook-written signals (root sessions, G2) ------------------- */
 
@@ -171,7 +205,7 @@ export function recordHookEdit(
   getDb(root)
     .prepare(
       `INSERT INTO edit_signals (slug, path, at) VALUES (?, ?, ?)
-       ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at`,
+       ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at, settledAt = NULL`,
     )
     .run(opts.slug, opts.path, at);
   if (opts.session) registerHookSession(root, opts.slug, opts.session.agent, opts.session.sessionRoot, at);
@@ -320,12 +354,15 @@ export class SignalTracker {
         if (e.event.type !== 'file.edited') return;
         this.record(e.event.slug, e.event.path, e.event.at);
       }),
-      // a commit "settles" a session's edits — its signals stop being live noise
+      // A commit/merge "settles" a session's edits: they stop holding their paths,
+      // but the board can still say "X finished editing Y 2m ago" (ISS-15) — so
+      // settle, don't delete. Only a removed worktree is a true hard clear: there
+      // is no longer any work, in progress or finished, to point at.
       bus.onType('commit.created', (e) => {
-        if (e.event.type === 'commit.created') this.clear(e.event.slug);
+        if (e.event.type === 'commit.created') this.settle(e.event.slug);
       }),
       bus.onType('task.merged', (e) => {
-        if (e.event.type === 'task.merged') this.clear(e.event.slug);
+        if (e.event.type === 'task.merged') this.settle(e.event.slug);
       }),
       bus.onType('task.removed', (e) => {
         if (e.event.type === 'task.removed') this.clear(e.event.slug);
@@ -344,14 +381,15 @@ export class SignalTracker {
     getDb(this.root)
       .prepare(
         `INSERT INTO edit_signals (slug, path, at) VALUES (?, ?, ?)
-         ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at`,
+         ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at, settledAt = NULL`,
       )
       .run(slug, path, at);
     void this.checkOverlap(path);
   }
 
   private async checkOverlap(path: string): Promise<void> {
-    const holders = liveRows(this.root).filter((r) => r.path === path);
+    // Settled holders can't overlap with anyone — they've let the path go.
+    const holders = activeRows(this.root).filter((r) => r.path === path);
     const slugs = [...new Set(holders.map((h) => h.slug))];
     if (slugs.length >= 2 && !this.announced.has(path)) {
       this.announced.add(path);
@@ -360,15 +398,29 @@ export class SignalTracker {
     if (slugs.length < 2) this.announced.delete(path);
   }
 
+  /** The session's work landed: its paths are released, but stay visible briefly. */
+  settle(slug: string): void {
+    settleRows(this.root, slug);
+    clearProgress(this.root, slug); // the work landed — its intent note is spent
+    this.reannounce();
+  }
+
+  /** The worktree is gone: erase the signals outright, there is nothing to show. */
   clear(slug: string): void {
     getDb(this.root).prepare(`DELETE FROM edit_signals WHERE slug = ?`).run(slug);
-    clearProgress(this.root, slug); // a commit settles the work — its intent note is spent
+    clearProgress(this.root, slug);
+    this.reannounce();
+  }
 
-    // Re-derive overlap announcements from what's still live: keep a path announced
-    // only while 2+ distinct sessions hold it. A blanket clear() would let an
-    // UNRELATED slug clearing re-fire signal.overlap for overlaps that never ended.
+  /**
+   * Re-derive overlap announcements from what is still actively held: keep a path
+   * announced only while 2+ distinct sessions hold it. Blanket-clearing `announced`
+   * would let an UNRELATED slug settling re-fire signal.overlap for overlaps that
+   * never ended.
+   */
+  private reannounce(): void {
     const bySlug = new Map<string, Set<string>>();
-    for (const r of liveRows(this.root)) {
+    for (const r of activeRows(this.root)) {
       let s = bySlug.get(r.path);
       if (!s) bySlug.set(r.path, (s = new Set()));
       s.add(r.slug);
@@ -379,11 +431,70 @@ export class SignalTracker {
   }
 }
 
+/**
+ * Every signal still worth showing: actively-held paths edited inside the signal
+ * window, plus recently-settled ones inside the (shorter) settled window. Callers
+ * that must only consider genuinely-held paths use `activeRows`.
+ *
+ * Settled rows past their window are deleted here rather than merely filtered:
+ * the read path is the only thing guaranteed to run in a daemon-less setup, so
+ * it owns expiry. `SETTLED_CAP` bounds the table if reads are rare and edits aren't.
+ */
 function liveRows(root: string, windowMin = SIGNAL_WINDOW_MIN): SignalRow[] {
+  const db = getDb(root);
   const cutoff = new Date(Date.now() - windowMin * 60_000).toISOString();
-  return getDb(root)
-    .prepare(`SELECT slug, path, at FROM edit_signals WHERE at >= ? ORDER BY at DESC`)
-    .all(cutoff) as unknown as SignalRow[];
+  const settledCutoff = new Date(Date.now() - SETTLED_WINDOW_MIN * 60_000).toISOString();
+  // Both windows are enforced by the query, so what is shown never depends on
+  // whether the (write-path) expiry sweep has run yet.
+  return db
+    .prepare(
+      `SELECT slug, path, at, settledAt FROM edit_signals
+       WHERE (settledAt IS NULL AND at >= ?) OR (settledAt IS NOT NULL AND settledAt >= ?)
+       ORDER BY at DESC`,
+    )
+    .all(cutoff, settledCutoff) as unknown as SignalRow[];
+}
+
+/**
+ * Reclaim settled rows the queries already hide, and enforce SETTLED_CAP. Runs on
+ * the settle path — rare, and already a write — rather than on reads: getSignals
+ * is on the dashboard's 5s poll and the guard's latency budget, and neither should
+ * pay for a write (or contend with the watcher for the db lock) on every read.
+ */
+function expireSettled(root: string): void {
+  const db = getDb(root);
+  const settledCutoff = new Date(Date.now() - SETTLED_WINDOW_MIN * 60_000).toISOString();
+  db.prepare(`DELETE FROM edit_signals WHERE settledAt IS NOT NULL AND settledAt < ?`).run(settledCutoff);
+  db.prepare(
+    `DELETE FROM edit_signals WHERE settledAt IS NOT NULL AND rowid NOT IN
+       (SELECT rowid FROM edit_signals WHERE settledAt IS NOT NULL ORDER BY settledAt DESC LIMIT ?)`,
+  ).run(SETTLED_CAP);
+}
+
+/** Only paths being held right now — the "should I wait?" set. */
+function activeRows(root: string, windowMin = SIGNAL_WINDOW_MIN): SignalRow[] {
+  return liveRows(root, windowMin).filter((r) => !r.settledAt);
+}
+
+/**
+ * Mark paths as released. Never re-stamps an already-settled row: refreshing the
+ * stamp on every read would keep settled entries alive forever and they'd never expire.
+ */
+function settleRows(root: string, slug: string, paths?: string[], at = new Date().toISOString()): void {
+  const db = getDb(root);
+  if (!paths) {
+    db.prepare(`UPDATE edit_signals SET settledAt = ? WHERE slug = ? AND settledAt IS NULL`).run(at, slug);
+  } else {
+    const stmt = db.prepare(`UPDATE edit_signals SET settledAt = ? WHERE slug = ? AND path = ? AND settledAt IS NULL`);
+    for (const p of paths) stmt.run(at, slug, p);
+  }
+  expireSettled(root); // fold housekeeping into the write we are already doing
+}
+
+/** A settled path went dirty again — it is being worked on once more. */
+function reactivateRows(root: string, rows: SignalRow[]): void {
+  const stmt = getDb(root).prepare(`UPDATE edit_signals SET settledAt = NULL WHERE slug = ? AND path = ?`);
+  for (const r of rows) stmt.run(r.slug, r.path);
 }
 
 /**
@@ -401,20 +512,17 @@ async function worktreeDirtyPaths(worktreePath: string): Promise<Set<string> | n
   return paths;
 }
 
-function pruneSignals(root: string, rows: SignalRow[]): void {
-  const stmt = getDb(root).prepare(`DELETE FROM edit_signals WHERE slug = ? AND path = ?`);
-  for (const r of rows) stmt.run(r.slug, r.path);
-}
-
 /**
  * P6 — lazy read-time reconciliation. A live edit signal means "uncommitted work
- * in progress on this path". With no daemon watching, the events that clear
+ * in progress on this path". With no daemon watching, the events that settle
  * signals (commit/merge) never fire, so a committed-or-reverted file's signal
- * lingers up to the TTL and pollutes the "editing now" view. At read time we drop
- * (and prune) any signal whose path is no longer dirty in its task's worktree —
- * zero background work, and it also catches the edit-then-revert case that
- * commit-detection can't. Fails open: signals for unknown slugs or unreadable
- * worktrees are kept.
+ * would linger in the "editing now" view up to the TTL. At read time we settle any
+ * signal whose path is no longer dirty in its task's worktree — zero background
+ * work, and it also catches the edit-then-revert case that commit-detection can't.
+ *
+ * This is also the ONLY observer that can notice a settled path going dirty again
+ * (a daemon-less session fires no events), so it reactivates those. Fails open:
+ * signals for unknown slugs or unreadable worktrees are kept as-is.
  */
 /**
  * The guard hook records BEFORE the tool writes the file, so a just-recorded
@@ -437,8 +545,10 @@ async function reconcileSignals(
     else bySlug.set(r.slug, [r]);
   }
   const kept: SignalRow[] = [];
-  const stale: SignalRow[] = [];
+  const settled: Array<{ slug: string; path: string }> = [];
+  const revived: SignalRow[] = [];
   const now = Date.now();
+  const settledAt = new Date().toISOString();
   await Promise.all(
     [...bySlug].map(async ([slug, slugRows]) => {
       // Root sessions have no task — their signals verify against the checkout
@@ -449,24 +559,50 @@ async function reconcileSignals(
       const dirty = await worktreeDirtyPaths(checkRoot);
       if (dirty === null) return void kept.push(...slugRows); // git failed → keep
       for (const r of slugRows) {
-        const fresh = now - Date.parse(r.at) < RECONCILE_GRACE_MS;
-        (fresh || dirty.has(r.path) ? kept : stale).push(r);
+        if (dirty.has(r.path)) {
+          if (r.settledAt) { r.settledAt = null; revived.push(r); } // back to work
+          kept.push(r);
+          continue;
+        }
+        // Not dirty. A just-recorded signal isn't settled — the guard hook records
+        // BEFORE the tool writes the file, so the edit may not have landed yet.
+        if (!r.settledAt && now - Date.parse(r.at) < RECONCILE_GRACE_MS) { kept.push(r); continue; }
+        if (!r.settledAt) { r.settledAt = settledAt; settled.push({ slug: r.slug, path: r.path }); }
+        kept.push(r);
       }
     }),
   );
-  if (stale.length) pruneSignals(root, stale);
+  for (const s of settled) settleRows(root, s.slug, [s.path], settledAt);
+  if (revived.length) reactivateRows(root, revived);
   return kept;
 }
 
+export interface SignalOpts {
+  /**
+   * Include recently-settled signals ("finished editing 2m ago"). OFF by default:
+   * every coordination caller (guard, check_files, the handoff brief) must only
+   * ever see paths that are genuinely held, or it would tell agents to wait on
+   * work that is already committed. Only the dashboard opts in. ISS-15.
+   */
+  includeSettled?: boolean;
+}
+
 /** Current edit signals, grouped by path; overlapping paths are warnings. */
-export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): Promise<EditSignal[]> {
+export async function getSignals(
+  root: string,
+  windowMin = SIGNAL_WINDOW_MIN,
+  opts: SignalOpts = {},
+): Promise<EditSignal[]> {
   const tasks = await loadTasks(root);
   // Query the session/checkout registries once and thread them through reconcile
   // and attribution — both read them, and getSignals is on the 5s dashboard poll
   // (finding #6).
   const sessions = hookSessions(root);
   const watched = watchedRoots(root);
-  const rows = await reconcileSignals(root, liveRows(root, windowMin), tasks, sessions, watched);
+  // Reconcile sees settled rows regardless of `includeSettled` — it is the only
+  // thing that can flip a re-dirtied path back to active. Filter at the output.
+  const reconciled = await reconcileSignals(root, liveRows(root, windowMin), tasks, sessions, watched);
+  const rows = opts.includeSettled ? reconciled : reconciled.filter((r) => !r.settledAt);
   const agents = await detectAgents(tasks.map((t) => t.worktreePath));
   // Reverse index: a checkout path → an agent name self-reported by a session
   // registered there, so fs-watch checkout signals (which see *what* changed,
@@ -509,7 +645,13 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
   const byPath = new Map<string, SignalHolder[]>();
   for (const r of rows) {
     if (!byPath.has(r.path)) byPath.set(r.path, []);
-    byPath.get(r.path)!.push({ slug: r.slug, agent: agentFor(r.slug), lastEditAt: r.at });
+    byPath.get(r.path)!.push({
+      slug: r.slug,
+      agent: agentFor(r.slug),
+      lastEditAt: r.at,
+      state: r.settledAt ? 'settled' : 'active',
+      ...(r.settledAt ? { settledAt: r.settledAt } : {}),
+    });
   }
   // ADD-07/A finding #1 — collapse the fs-watch echo. In a plain checkout a
   // hooked/MCP session records an edit under its OWN slug AND the daemon's
@@ -535,7 +677,12 @@ export async function getSignals(root: string, windowMin = SIGNAL_WINDOW_MIN): P
   return [...byPath.entries()]
     .map(([path, holders]) => ({
       path,
-      level: new Set(holders.map((h) => h.slug)).size >= 2 ? ('warning' as const) : ('info' as const),
+      // Only sessions still HOLDING the path can collide — a settled holder has
+      // let go, so pairing it with an active one is not a conflict (ISS-15).
+      level:
+        new Set(holders.filter((h) => h.state === 'active').map((h) => h.slug)).size >= 2
+          ? ('warning' as const)
+          : ('info' as const),
       holders,
     }))
     .sort((a, b) => (a.level === b.level ? a.path.localeCompare(b.path) : a.level === 'warning' ? -1 : 1));
@@ -571,7 +718,7 @@ export async function checkFiles(
     for (const t of tasks) {
       if (t.slug === excludeSlug) continue;
       if (changed.get(t.slug)?.has(p) && !holders.some((h) => h.slug === t.slug)) {
-        holders.push({ slug: t.slug, agent: agents.get(t.worktreePath) ?? null, lastEditAt: '' });
+        holders.push({ slug: t.slug, agent: agents.get(t.worktreePath) ?? null, lastEditAt: '', state: 'active' });
       }
     }
     result[p] = { busy: holders.length > 0, by: holders };

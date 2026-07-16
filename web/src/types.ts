@@ -261,6 +261,14 @@ export interface SignalHolder {
   slug: string;
   agent: AgentId | string | null;
   lastEditAt: string;
+  /**
+   * `active` = holding the path now. `settled` = just finished (committed or
+   * reverted) — shown dimmed for a few minutes, never a reason to wait (ISS-15).
+   * Optional: an older daemon omits it, and those signals are all active.
+   */
+  state?: "active" | "settled";
+  /** When the path went clean. Settled holders only. */
+  settledAt?: string;
   /** The holder's live intent (report_progress / P5), if fresh. */
   note?: string;
   noteAt?: string;

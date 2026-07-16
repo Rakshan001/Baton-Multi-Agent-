@@ -6,7 +6,7 @@
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "../components/Icon";
 import { AgentBadge, EmptyState } from "../components/primitives";
-import { ScreenHeader } from "./shared";
+import { ScreenHeader, isSettled } from "./shared";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
 import { progressEstimate, timeAgo } from "../lib/format";
 import { getUsage, fmtTokens } from "../lib/preview";
@@ -54,13 +54,14 @@ function PreviewBanner({ children }: { children: ReactNode }) {
 function LiveSignalsSection() {
   const signals = usePoll<EditSignal[]>(() => BatonAPI.getSignals(), { interval: 5000 });
   const rows = signals.data ?? [];
+  const active = rows.filter((s) => !isSettled(s));
   return (
     <section className="card" style={{ padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
         <Icon name="zap" size={14} style={{ color: "var(--text-tertiary)" }} />
         <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Live edit signals</h2>
         {signals.error != null && rows.length > 0 && (<span style={{ fontSize: "var(--fs-12)", color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>)}
-        <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{rows.length ? `${rows.length} file${rows.length === 1 ? "" : "s"}` : ""}</span>
+        <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{active.length ? `${active.length} file${active.length === 1 ? "" : "s"}` : ""}</span>
       </div>
       <div style={{ padding: rows.length ? "4px 16px 10px" : 0 }}>
         {signals.error && !signals.data ? (
@@ -71,15 +72,15 @@ function LiveSignalsSection() {
           </div>
         ) : rows.length === 0 ? (
           <div style={{ padding: "14px 16px", fontSize: "var(--fs-13)", color: "var(--text-tertiary)" }}>No files being edited right now.</div>
-        ) : rows.slice(0, 10).map((s) => (
-          <div key={s.path} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border-subtle)", background: "transparent" }}>
+        ) : [...active, ...rows.filter(isSettled)].slice(0, 10).map((s) => (
+          <div key={s.path} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border-subtle)", background: "transparent", opacity: isSettled(s) ? 0.55 : 1 }}>
             {s.level === "warning"
               ? <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
-              : <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--accent)", flex: "none", margin: "0 3px" }} />}
+              : <span style={{ width: 7, height: 7, borderRadius: 99, background: isSettled(s) ? "var(--text-quaternary)" : "var(--accent)", flex: "none", margin: "0 3px" }} />}
             <span className="mono" style={{ fontSize: "var(--fs-12)", color: s.level === "warning" ? "var(--conflict-text)" : "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.path}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
               {s.holders.slice(0, 3).map((h, i) => (
-                <span key={`${h.slug}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 5 }} data-tip={h.lastEditAt ? `last edit ${timeAgo(new Date(h.lastEditAt).getTime())}` : undefined}>
+                <span key={`${h.slug}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 5 }} data-tip={h.settledAt ? `finished ${timeAgo(new Date(h.settledAt).getTime())}` : h.lastEditAt ? `last edit ${timeAgo(new Date(h.lastEditAt).getTime())}` : undefined}>
                   <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
                   <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
                 </span>

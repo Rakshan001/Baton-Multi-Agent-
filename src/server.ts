@@ -41,7 +41,7 @@ import {
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
 import { StatusPoller } from './poller.js';
-import { checkFiles, getSignals, isWatcherActive, SignalTracker } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive, SIGNAL_WINDOW_MIN, SignalTracker } from './signals.js';
 import { getReport, listReports } from './reports.js';
 import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
@@ -421,9 +421,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   if (method === 'GET' && path === '/api/events') return handleEvents(req, res, origin);
 
-  // GET /api/signals — live edit signals across all worktrees
+  // GET /api/signals — live edit signals across all worktrees. The board is the
+  // one consumer that wants recently-settled edits too ("X finished editing Y
+  // 2m ago"); every coordination caller sticks to the active-only default.
   if (method === 'GET' && path === '/api/signals') {
-    return send(res, 200, { signals: await getSignals(root) }, origin);
+    return send(res, 200, { signals: await getSignals(root, SIGNAL_WINDOW_MIN, { includeSettled: true }) }, origin);
   }
   // GET /api/signals/check?files=a,b,c[&exclude=slug] — "ask before editing" for
   // agents without MCP; exclude drops the caller's own task from the answer.

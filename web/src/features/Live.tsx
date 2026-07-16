@@ -205,7 +205,13 @@ export function LiveSession({
       try {
         for (const sig of await BatonAPI.getSignals()) {
           for (const h of sig.holders) {
-            if (h.slug === slug) rows.push({ t: "edit", text: `Editing ${sig.path}`, at: Date.parse(h.lastEditAt) || Date.now() });
+            if (h.slug !== slug) continue;
+            const done = h.state === "settled";
+            rows.push({
+              t: "edit",
+              text: `${done ? "Finished editing" : "Editing"} ${sig.path}`,
+              at: Date.parse((done ? h.settledAt : h.lastEditAt) ?? h.lastEditAt) || Date.now(),
+            });
           }
         }
       } catch { /* signals are best-effort */ }
