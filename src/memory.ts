@@ -173,6 +173,22 @@ export function renderFactFile(f: MemoryFact): string {
   });
 }
 
+/** Monotonic within the process — `process.pid` alone does NOT make a temp file
+ *  unique, because repair runs concurrently from three places inside the SAME
+ *  daemon process (the periodic sweep, the recall-time pass, and
+ *  POST /api/memory/repair). Two passes on one fact then wrote the same temp
+ *  path, and the loser's rename hit ENOENT once the winner moved it away. */
+let tmpSeq = 0;
+
+/** Write a fact file atomically: render to a temp name unique to THIS write,
+ *  then rename over the target. Concurrent writers may race to be last, but a
+ *  reader never sees a partial file and no writer ever fails. */
+async function writeFactFile(dir: string, id: string, body: string): Promise<void> {
+  const tmp = join(dir, `.${id}.${process.pid}.${tmpSeq++}.tmp`);
+  await writeFile(tmp, body, 'utf-8');
+  await rename(tmp, join(dir, `${id}.md`));
+}
+
 export function parseFactFile(raw: string): MemoryFact | null {
   try {
     const { data, content } = parseFrontmatter(raw);
@@ -397,9 +413,7 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
 
   // Atomic write; remove the superseded fact after the new one lands.
   const target = join(dir, `${id}.md`);
-  const tmp = join(dir, `.${id}.${process.pid}.tmp`);
-  await writeFile(tmp, renderFactFile(record), 'utf-8');
-  await rename(tmp, target);
+  await writeFactFile(dir, id, renderFactFile(record));
   // Superseded knowledge is archived (not destroyed) with its successor recorded.
   if (dup && dup.id !== id) {
     await archiveFact(mainRoot, dup.id, 'supersede', 'superseded by newer knowledge', id);
@@ -764,9 +778,7 @@ export async function repairMemories(root: string): Promise<RepairResult> {
       supersedes: f.supersedes, fingerprint: f.fingerprint,
     };
     const target = join(memoryDir(mainRoot), `${f.id}.md`);
-    const tmp = join(memoryDir(mainRoot), `.${f.id}.${process.pid}.tmp`);
-    await writeFile(tmp, renderFactFile(updated), 'utf-8');
-    await rename(tmp, target);
+    await writeFactFile(memoryDir(mainRoot), f.id, renderFactFile(updated));
     factCache.delete(target);
     await appendJournal(mainRoot, {
       op: 'reanchor', id: f.id, supersededBy: null,
