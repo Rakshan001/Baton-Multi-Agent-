@@ -7,7 +7,7 @@ import matter from 'gray-matter';
 import { git } from '../src/util/exec.js';
 import { addTask } from '../src/store.js';
 import { readBrief, setBriefStatus, handoffPath } from '../src/handoff/brief.js';
-import { snapshotTask, snapshotDue, SNAPSHOT_DEBOUNCE_MS } from '../src/commands/snapshot.js';
+import { snapshotTask, snapshotDue, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_LOCK_STALE_MS } from '../src/commands/snapshot.js';
 
 /**
  * ISS-03 — a resumable HANDOFF.md must exist on disk BEFORE a session limit
@@ -125,6 +125,39 @@ describe('snapshotTask — debounced, no-commit, status-preserving checkpoint', 
 
   it('returns null when there is no task worktree here', async () => {
     expect(await snapshotTask('nonexistent-slug', { root })).toBeNull();
+  });
+
+  /**
+   * ISS-03 depth — burst-lock. The mtime debounce reads HANDOFF.md's mtime, but
+   * that mtime only moves once buildBrief's git work has finished, so an edit
+   * burst fires several snapshots that ALL pass the gate and rebuild the same
+   * brief (last-writer-wins). One holder per burst window should do the work.
+   */
+  it('collapses an edit burst to a single rebuild (concurrent snapshots do not pile on)', async () => {
+    await writeFile(join(wt, 'a.ts'), 'export const a = 2; // burst\n', 'utf-8');
+
+    const results = await Promise.all([
+      snapshotTask('add-hourly', { root }),
+      snapshotTask('add-hourly', { root }),
+      snapshotTask('add-hourly', { root }),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1); // exactly one did the work
+    expect(existsSync(handoffPath(wt))).toBe(true); // and the brief still exists
+  });
+
+  it('releases the burst lock — the next due snapshot is not blocked by it', async () => {
+    await Promise.all([snapshotTask('add-hourly', { root }), snapshotTask('add-hourly', { root })]);
+    expect(await snapshotTask('add-hourly', { root, force: true })).not.toBeNull();
+  });
+
+  it('breaks a stale lock left by a crashed snapshot instead of blocking forever', async () => {
+    const lock = join(root, '.baton', 'snapshot-add-hourly.lock');
+    await mkdir(lock, { recursive: true }); // a holder that died mid-flight
+    const old = (Date.now() - SNAPSHOT_LOCK_STALE_MS - 60_000) / 1000;
+    await utimes(lock, old, old);
+
+    expect(await snapshotTask('add-hourly', { root, force: true })).not.toBeNull();
   });
 
   it('writes a git-excluded Cursor auto-load rule alongside the brief (ISS-01 read side)', async () => {
