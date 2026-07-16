@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 is the floor (Active LTS). Below it `node:sqlite` either does not
+        # exist (Node 20, src/history.ts) or ships without FTS5, which silently
+        # drops memory-rank.ts from BM25 to the old word-scan scorer.
+        node: ['24']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # --- Backend (root workspace) ---
+      - name: Install (root)
+        run: npm ci
+
+      - name: Build (root)
+        run: npm run build
+
+      - name: Test (root)
+        run: npm test
+
+      # --- Dashboard (web workspace) ---
+      - name: Install (web)
+        run: npm ci --prefix web
+
+      - name: Build (web)
+        run: npm run build --prefix web

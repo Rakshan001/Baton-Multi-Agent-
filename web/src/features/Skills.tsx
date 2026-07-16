@@ -8,6 +8,7 @@
    ============================================================ */
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
+import { CardSkeleton, ErrorState } from "../components/primitives";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader, SearchInput } from "./shared";
 import { BatonAPI } from "../lib/api";
@@ -171,11 +172,12 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
         )}
 
         {skills.error && !(skills.data ?? []).length ? (
-          <div className="card" style={{ padding: 20, color: "var(--conflict-text)" }}>
-            Couldn’t load the skill catalog. <button className="btn btn-sm" onClick={skills.refetch} style={{ marginLeft: 8 }}>Retry</button>
-          </div>
+          <ErrorState title="Couldn't load the skill catalog" desc={(skills.error as Error).message}
+            command="baton serve" onRetry={skills.refetch} retrying={skills.isFetching} />
         ) : skills.isLoading && !(skills.data ?? []).length ? (
-          <div style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-13)", padding: 24, textAlign: "center" }}>Loading skills…</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14, alignItems: "start" }}>
+            {[0, 1, 2, 3].map((i) => <CardSkeleton key={i} />)}
+          </div>
         ) : list.length === 0 ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "48px 24px", textAlign: "center" }}>
             <span style={{ width: 44, height: 44, borderRadius: 12, display: "grid", placeItems: "center", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)" }}>

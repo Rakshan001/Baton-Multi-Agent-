@@ -152,7 +152,7 @@ export async function passCmd(slug: string | undefined, opts: PassOptions): Prom
       if (routed.mode === 'manual') console.log(`  note: routing mode is "manual" — this is only a suggestion; pick with --to`);
       if (routed.confidence === 'low' && routed.source !== 'single') console.log(`  confidence: low — double-check the target`);
     }
-    console.log(`  to: ${brief.meta.to} · session ≈ ${brief.meta.est_tokens.toLocaleString()} tokens (≈ $${brief.meta.est_cost_usd} to replay raw)`);
+    console.log(`  to: ${brief.meta.to} · saves the next agent ≈ ${brief.meta.est_tokens.toLocaleString()} tokens / ≈ $${brief.meta.est_cost_usd} of replaying this session from scratch`);
     console.log('');
     console.log('  Next agent picks it up with:');
     console.log(`    cd ${brief.path.replace(/\/HANDOFF\.md$/, '')} && baton take`);

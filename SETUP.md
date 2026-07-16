@@ -9,7 +9,8 @@ From zero to the running dashboard in ~10 minutes. (What/why: [STATUS.md](STATUS
 
 ## Prerequisites
 
-- **Node.js ≥ 20** (`node --version`)
+- **Node.js ≥ 24** (`node --version`) — the floor is `node:sqlite` + FTS5, which
+  memory recall ranks with; older runtimes silently degrade it
 - **git**
 - **uv** (Python tool manager, for graphify): https://docs.astral.sh/uv/ — or pipx/pip
 - **tmux** (interactive agent terminals in the dashboard): `brew install tmux` /

@@ -17,7 +17,8 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import matter from 'gray-matter';
+import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
+import { parseFrontmatter } from './util/frontmatter.js';
 import { git } from './util/exec.js';
 import { escapeRegExp } from './util/regex.js';
 import { rankFacts } from './memory-rank.js';
@@ -172,9 +173,25 @@ export function renderFactFile(f: MemoryFact): string {
   });
 }
 
+/** Monotonic within the process — `process.pid` alone does NOT make a temp file
+ *  unique, because repair runs concurrently from three places inside the SAME
+ *  daemon process (the periodic sweep, the recall-time pass, and
+ *  POST /api/memory/repair). Two passes on one fact then wrote the same temp
+ *  path, and the loser's rename hit ENOENT once the winner moved it away. */
+let tmpSeq = 0;
+
+/** Write a fact file atomically: render to a temp name unique to THIS write,
+ *  then rename over the target. Concurrent writers may race to be last, but a
+ *  reader never sees a partial file and no writer ever fails. */
+async function writeFactFile(dir: string, id: string, body: string): Promise<void> {
+  const tmp = join(dir, `.${id}.${process.pid}.${tmpSeq++}.tmp`);
+  await writeFile(tmp, body, 'utf-8');
+  await rename(tmp, join(dir, `${id}.md`));
+}
+
 export function parseFactFile(raw: string): MemoryFact | null {
   try {
-    const { data, content } = matter(raw);
+    const { data, content } = parseFrontmatter(raw);
     if (typeof data.id !== 'string' || !content.trim()) return null;
     const files: FileAnchor[] = Array.isArray(data.files)
       ? (data.files as unknown[]).flatMap((s) => {
@@ -396,9 +413,7 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
 
   // Atomic write; remove the superseded fact after the new one lands.
   const target = join(dir, `${id}.md`);
-  const tmp = join(dir, `.${id}.${process.pid}.tmp`);
-  await writeFile(tmp, renderFactFile(record), 'utf-8');
-  await rename(tmp, target);
+  await writeFactFile(dir, id, renderFactFile(record));
   // Superseded knowledge is archived (not destroyed) with its successor recorded.
   if (dup && dup.id !== id) {
     await archiveFact(mainRoot, dup.id, 'supersede', 'superseded by newer knowledge', id);
@@ -513,8 +528,55 @@ export interface RecallResult {
    *  opportunistic verification — the recalling agent is already in-context
    *  on those files, so re-confirming (or discarding) it is nearly free. */
   review?: { id: string; preview: string; reason: string };
+  /** ISS-04: withheld stale facts surfaced as re-grounding POINTERS, not just a
+   *  count. A bare "N withheld" reads as a gap and invites a confident wrong
+   *  re-derivation; a pointer says what the fact claimed, the commit it was true
+   *  at, and which file to re-check — so the agent verifies instead of guessing.
+   *  Topic-scoped and capped (ISS-08); `staleDropped` remains the full count. */
+  staleGrounding: Regrounding[];
   total: number;
   staleDropped: number;
+}
+
+/** A pointer back to a withheld stale fact so the agent can re-ground it. */
+export interface Regrounding {
+  id: string;
+  /** First line of the fact — what it claimed. */
+  was: string;
+  /** Short commit the fact was last verified true at (null in an empty repo). */
+  trueAsOf: string | null;
+  /** Anchor files to re-check before trusting it again. */
+  verify: string[];
+  /** Why it went stale (which anchor changed). */
+  reason: string;
+}
+
+const REGROUND_CAP = 5;
+const REGROUND_PREVIEW = 100;
+
+function toRegrounding(f: MemoryStatus): Regrounding {
+  return {
+    id: f.id,
+    was: f.fact.split('\n')[0].slice(0, REGROUND_PREVIEW),
+    trueAsOf: f.anchors.commit ? f.anchors.commit.slice(0, 8) : null,
+    verify: f.anchors.files.map((a) => a.path).slice(0, 3),
+    reason: f.staleReason ?? 'anchored evidence changed',
+  };
+}
+
+/**
+ * Rank withheld stale facts for re-grounding: topic-scoped when a topic is given
+ * (only facts relevant to what the agent is doing), else most-recently-valid
+ * first (fewest commits behind). Excludes `reviewId` to avoid duplicating the
+ * opportunistic review pick. Capped for context budget (ISS-08).
+ */
+function groundStale(staleAll: MemoryStatus[], topic: string | undefined, reviewId?: string): Regrounding[] {
+  const ranked = topic?.trim()
+    ? rankFacts(staleAll, topic)
+    : [...staleAll].sort(
+        (a, b) => (a.commitsBehind ?? Infinity) - (b.commitsBehind ?? Infinity) || b.createdAt.localeCompare(a.createdAt),
+      );
+  return ranked.filter((f) => f.id !== reviewId).slice(0, REGROUND_CAP).map(toRegrounding);
 }
 
 const RELATED_CAP = 3;
@@ -539,10 +601,53 @@ export function relatedByAnchors(picked: MemoryStatus[], candidates: MemoryStatu
  * the caller's summary) — a stale "fact" presented as truth is how models
  * hallucinate.
  */
+/**
+ * ISS-05: `repairMemories` is the self-heal pass, but it only ran inside the
+ * daemon (server.ts) — a terminal-first user with no `baton serve` never got
+ * stale-but-still-true facts re-anchored, so recall withheld them forever.
+ * Run repair opportunistically at recall time, debounced to at most once per
+ * window (mirrors the daemon's 10-min cadence) so back-to-back recalls don't
+ * each pay the file-read cost. Marker lives beside facts/ (not inside it, so
+ * the `.md`-only fact reader never sees it). Best-effort throughout: any
+ * failure leaves recall to fall back to plain withholding — repair is an
+ * enhancement, never a blocker.
+ */
+const RECALL_REPAIR_DEBOUNCE_MS = 10 * 60_000;
+
+/** The shared "last repair pass" clock, beside facts/ (not inside it, so the
+ *  `.md`-only fact reader never sees it). Every repair — daemon, CLI, or the
+ *  recall-time pass below — stamps it, so all three share one debounce window. */
+function repairMarker(mainRoot: string): string {
+  return join(dirname(memoryDir(mainRoot)), '.repair-check');
+}
+async function stampRepair(mainRoot: string): Promise<void> {
+  const marker = repairMarker(mainRoot);
+  await mkdir(dirname(marker), { recursive: true }).catch(() => undefined);
+  await writeFile(marker, '', 'utf-8').catch(() => undefined);
+}
+
+async function maybeRepairOnRecall(root: string): Promise<void> {
+  try {
+    const mainRoot = await resolveRoot(root);
+    try {
+      const st = await stat(repairMarker(mainRoot));
+      if (Date.now() - st.mtimeMs < RECALL_REPAIR_DEBOUNCE_MS) return; // within window — skip
+    } catch { /* no marker yet — first recall heals */ }
+    // Pre-stamp BEFORE repairing so a concurrent recall debounces against this
+    // attempt rather than piling on. A failed repair still holds the window —
+    // no worse than the daemon skipping a tick.
+    await stampRepair(mainRoot);
+    await repairMemories(root);
+  } catch { /* repair is an enhancement — never block recall */ }
+}
+
 export async function recallMemories(
   root: string,
   opts: { topic?: string; limit?: number; ids?: string[] } = {},
 ): Promise<RecallResult> {
+  // Heal first so any stale-but-still-true fact is re-anchored and recallable
+  // in THIS call — the terminal-first self-heal (ISS-05). Debounced internally.
+  await maybeRepairOnRecall(root);
   const all = await listMemories(root);
   const usable = all.filter((f) => f.freshness !== 'stale');
   const limit = Math.max(1, Math.min(opts.limit ?? 10, 50));
@@ -558,7 +663,9 @@ export async function recallMemories(
       else if (f.freshness === 'stale') withheld.push({ id, reason: f.staleReason ?? 'anchored evidence changed' });
       else facts.push(f);
     }
-    return { facts: facts.slice(0, limit), withheld, total: all.length, staleDropped: all.length - usable.length };
+    // ids mode already fails loud via `withheld`; grounding is for the topic/
+    // default gap, so leave it empty here.
+    return { facts: facts.slice(0, limit), withheld, staleGrounding: [], total: all.length, staleDropped: all.length - usable.length };
   }
   let picked = usable;
   let related: MemoryStatus[] | undefined;
@@ -581,7 +688,9 @@ export async function recallMemories(
       };
     }
   }
-  return { facts: picked.slice(0, limit), related, review, total: all.length, staleDropped: all.length - usable.length };
+  const staleAll = all.filter((f) => f.freshness === 'stale');
+  const staleGrounding = groundStale(staleAll, opts.topic, review?.id);
+  return { facts: picked.slice(0, limit), related, review, staleGrounding, total: all.length, staleDropped: all.length - usable.length };
 }
 
 export async function removeMemory(root: string, id: string, reason = 'manual removal'): Promise<boolean> {
@@ -669,9 +778,7 @@ export async function repairMemories(root: string): Promise<RepairResult> {
       supersedes: f.supersedes, fingerprint: f.fingerprint,
     };
     const target = join(memoryDir(mainRoot), `${f.id}.md`);
-    const tmp = join(memoryDir(mainRoot), `.${f.id}.${process.pid}.tmp`);
-    await writeFile(tmp, renderFactFile(updated), 'utf-8');
-    await rename(tmp, target);
+    await writeFactFile(memoryDir(mainRoot), f.id, renderFactFile(updated));
     factCache.delete(target);
     await appendJournal(mainRoot, {
       op: 'reanchor', id: f.id, supersededBy: null,
@@ -679,6 +786,9 @@ export async function repairMemories(root: string): Promise<RepairResult> {
     });
     reanchored.push(f.id);
   }
+  // Stamp the shared debounce clock so the recall-time pass (maybeRepairOnRecall)
+  // stays dormant while a daemon/CLI repair is keeping memory healed.
+  await stampRepair(mainRoot);
   return { reanchored, needsReview };
 }
 
@@ -811,13 +921,41 @@ export function recallRows(facts: MemoryStatus[], fullCount = RECALL_FULL_BODIES
   );
 }
 
-/** Compact index block for handoff briefs (~token-cheap, fresh facts only). */
-export function memoryBriefSection(facts: MemoryStatus[], staleDropped: number): string {
-  if (!facts.length) return '';
+/** How many re-grounding pointers to inline in a brief before deferring the
+ *  rest to `recall_memory` — kept tiny so the anti-gap warning doesn't itself
+ *  become context rot (ISS-08). */
+const BRIEF_GROUNDING_CAP = 2;
+
+/**
+ * Compact index block for handoff briefs (~token-cheap, fresh facts only). When
+ * `grounding` pointers are supplied (ISS-04), withheld stale facts are shown as
+ * "was true @ commit — verify <file>" lines instead of a bare count, so the
+ * receiving agent re-checks rather than re-derives. Falls back to the count note
+ * when no grounding is passed (back-compat).
+ */
+export function memoryBriefSection(
+  facts: MemoryStatus[],
+  staleDropped: number,
+  grounding: Regrounding[] = [],
+): string {
+  if (!facts.length && !grounding.length) return '';
   const lines = facts.slice(0, 6).map((f) => {
     const age = f.commitsBehind ? ` (${f.commitsBehind} commits old)` : '';
     return `- [${f.type}] ${f.fact.split('\n')[0]}${age}`;
   });
-  const note = staleDropped > 0 ? `\n\n_${staleDropped} stale memor${staleDropped === 1 ? 'y was' : 'ies were'} withheld (their anchored files changed) — use \`recall_memory\` to inspect._` : '';
-  return `## Project memory (evidence-checked)\n\n${lines.join('\n')}${note}`;
+  let note = '';
+  if (grounding.length) {
+    const shown = grounding.slice(0, BRIEF_GROUNDING_CAP).map((g) => {
+      const when = g.trueAsOf ? ` @ ${g.trueAsOf}` : '';
+      const file = g.verify[0] ? ` — verify \`${g.verify[0]}\`` : '';
+      return `- ⚠ was true${when}: ${g.was}${file}`;
+    });
+    const more = staleDropped - shown.length;
+    const tail = more > 0 ? `\n- _+${more} more withheld — \`recall_memory\` to inspect_` : '';
+    note = `\n\n_Stale — re-ground before trusting (do not re-derive blind):_\n${shown.join('\n')}${tail}`;
+  } else if (staleDropped > 0) {
+    note = `\n\n_${staleDropped} stale memor${staleDropped === 1 ? 'y was' : 'ies were'} withheld (their anchored files changed) — use \`recall_memory\` to inspect._`;
+  }
+  const body = lines.length ? `\n\n${lines.join('\n')}` : '';
+  return `## Project memory (evidence-checked)${body}${note}`;
 }

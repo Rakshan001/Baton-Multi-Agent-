@@ -2,9 +2,13 @@
  * `baton doctor` — audit junk (orphaned worktrees, branches, tmux sessions,
  * leaked temp files). `baton clean [--fix]` — reclaim it (dry-run by default).
  */
+import { readdir, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { gitRoot } from '../git.js';
 import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanup.js';
 import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from '../kb/sprawl.js';
+import { batonDir, loadTasks, resolveBatonRoot } from '../store.js';
+import { loadKb } from '../kb/state.js';
 
 const KIND_LABEL: Record<JunkItem['kind'], string> = {
   'orphan-worktree-task': 'orphaned worktree (stale task)',
@@ -29,7 +33,7 @@ function printReport(report: AuditReport): void {
   }
 }
 
-export async function doctorCmd(opts: { docs?: boolean } = {}): Promise<void> {
+export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): Promise<void> {
   if (opts.docs) return doctorDocsCmd();
   const report = await auditJunk(await gitRoot());
   printReport(report);
@@ -37,6 +41,105 @@ export async function doctorCmd(opts: { docs?: boolean } = {}): Promise<void> {
     const dirty = report.items.some((i) => i.blocked === 'dirty');
     console.log(`\n  Reclaim with: baton clean --fix${dirty ? '   (add --force to remove worktrees with uncommitted changes)' : ''}`);
   }
+  await reportShadowBatons(await resolveBatonRoot(), !!opts.fix);
+}
+
+/**
+ * ADD-07/C (ISS-13) — a `.baton` planted INSIDE a hub sub-project (older buggy
+ * build, or an agent that mis-resolved before the store.ts fix). It splits the
+ * store: tasks/presence written there are invisible to the daemon reading the
+ * hub `.baton`.
+ */
+export interface ShadowBaton {
+  projectId: string;
+  path: string;        // the shadow `.baton` dir
+  projectPath: string; // the sub-project checkout it sits in
+  tasks: number;
+  hasMemory: boolean;
+  hasKb: boolean;
+  /** No durable state (only ephemeral presence / locks) → safe to delete. */
+  removable: boolean;
+}
+
+const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
+
+/**
+ * Shadow `.baton` dirs sitting inside this hub's sub-projects. Empty for a
+ * single repo (no sub-projects to shadow) or a coherent hub. A shadow is
+ * `removable` only when it holds no durable state — the ephemeral `history.db`
+ * (30-min-TTL presence) and locks don't count; tasks, memory facts, and a
+ * project `kb.json` do, and keep it report-only.
+ */
+export async function scanShadowBatons(hubRoot: string): Promise<ShadowBaton[]> {
+  const kb = await loadKb(hubRoot);
+  if (!kb || kb.projects.length === 0) return [];
+  const shadows: ShadowBaton[] = [];
+  for (const p of kb.projects) {
+    const shadow = batonDir(p.path);
+    if (!(await exists(shadow))) continue;
+    const tasks = (await loadTasks(p.path)).length;
+    const facts = await readdir(join(shadow, 'memory', 'facts')).catch(() => [] as string[]);
+    const hasMemory = facts.some((f) => f.endsWith('.md'));
+    const hasKb = await exists(join(shadow, 'kb.json'));
+    shadows.push({
+      projectId: p.id,
+      path: shadow,
+      projectPath: p.path,
+      tasks,
+      hasMemory,
+      hasKb,
+      removable: tasks === 0 && !hasMemory && !hasKb,
+    });
+  }
+  return shadows;
+}
+
+/**
+ * Reconcile shadows: delete only the removable (ephemeral-only) ones when
+ * `apply` is set; never touch a shadow holding real state — folding tasks or
+ * memory across two stores is a human call. Returns what was (or would be)
+ * removed and what was kept.
+ */
+export async function reconcileShadowBatons(
+  hubRoot: string,
+  apply: boolean,
+): Promise<{ removed: ShadowBaton[]; kept: ShadowBaton[] }> {
+  const shadows = await scanShadowBatons(hubRoot);
+  const removed = shadows.filter((s) => s.removable);
+  const kept = shadows.filter((s) => !s.removable);
+  if (apply) {
+    for (const s of removed) await rm(s.path, { recursive: true, force: true });
+  }
+  return { removed, kept };
+}
+
+function describeState(s: ShadowBaton): string {
+  if (s.removable) return 'ephemeral presence only';
+  return [
+    s.tasks ? `${s.tasks} task${s.tasks === 1 ? '' : 's'}` : '',
+    s.hasMemory ? 'memory facts' : '',
+    s.hasKb ? 'kb.json' : '',
+  ].filter(Boolean).join(', ');
+}
+
+async function reportShadowBatons(hubRoot: string, fix: boolean): Promise<void> {
+  const shadows = await scanShadowBatons(hubRoot);
+  if (!shadows.length) return; // single repo or coherent hub — stay quiet
+  const removable = shadows.filter((s) => s.removable);
+  const real = shadows.filter((s) => !s.removable);
+  console.log(`\nHub coherence — ${shadows.length} shadow .baton dir${shadows.length === 1 ? '' : 's'} inside sub-projects (splits the store, ISS-13):\n`);
+  for (const s of shadows) {
+    console.log(`  • [${s.projectId}] ${s.path}`);
+    console.log(`      ${s.removable ? 'safe to remove' : 'HOLDS REAL STATE'}: ${describeState(s)}`);
+  }
+  if (!fix) {
+    if (removable.length) console.log(`\n  ${removable.length} removable — re-run with: baton doctor --fix`);
+    if (real.length) console.log(`\n  ${real.length} hold real state — move their tasks/memory into the hub .baton, then delete the shadow.`);
+    return;
+  }
+  const { removed } = await reconcileShadowBatons(hubRoot, true);
+  for (const s of removed) console.log(`\n  ✓ removed shadow [${s.projectId}] ${s.path}`);
+  if (real.length) console.log(`\n  ${real.length} shadow${real.length === 1 ? '' : 's'} left untouched (real state) — migrate manually before removing.`);
 }
 
 const SPRAWL_LABEL: Record<SprawlFinding['kind'], string> = {

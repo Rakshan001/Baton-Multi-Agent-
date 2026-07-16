@@ -19,10 +19,12 @@ import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
 import { resolveMcpRoot } from './store.js';
 import { queryFile, searchHistory } from './history.js';
-import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
 import { createSessionHandoff } from './handoff/session-brief.js';
+import { saveProgress } from './handoff/progress-ledger.js';
+import { snapshotTask } from './commands/snapshot.js';
 import { buildOrientation } from './kb/orient.js';
 import { asText, capList } from './mcp-format.js';
 import { TOOL_HELP } from './mcp-help.js';
@@ -31,6 +33,12 @@ import { TOOL_HELP } from './mcp-help.js';
 const WHO_TOUCHED_CAP = 20;
 /** A busy hub can hold hundreds of live signals — cap what one answer serves. */
 const SIGNALS_CAP = 30;
+/**
+ * Debounce for refreshing a session's presence on tool calls — well under the
+ * 2-min heartbeat window (WATCHER_HEARTBEAT_STALE_MS) so an active agent always
+ * reads as live, without a DB write on every single tool invocation.
+ */
+const PRESENCE_TOUCH_MS = 30_000;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
@@ -58,7 +66,29 @@ export async function startMcpServer(): Promise<void> {
     { instructions: 'New to this repo? Call orient() first for a budgeted project brief (memory, recent work, structure), then recall_memory before exploring, and check_files before editing shared files.' },
   );
 
-  server.registerTool(
+  // Keep presence fresh on ANY tool call, not just edits (finding #5): an agent
+  // that only reads (orient/check_files/recall) is still connected, but
+  // hook_sessions.at would otherwise advance only on connect/edit — so the
+  // dashboard would show it idle after the heartbeat and drop it after the
+  // window. `reg` wraps every tool registration below to refresh the session's
+  // last-seen, debounced to well under the heartbeat window so a chatty agent
+  // doesn't write on every call. Wrapping via a local helper (not by reassigning
+  // server.registerTool) keeps the SDK's full type at each call site.
+  let lastPresenceTouch = 0;
+  const presenceTouch = (): void => {
+    if (taskSlug) return; // only non-task sessions have a hook_sessions row to touch
+    const now = Date.now();
+    if (now - lastPresenceTouch < PRESENCE_TOUCH_MS) return;
+    lastPresenceTouch = now;
+    try { touchHookSession(root, selfSlug); } catch { /* presence is best-effort */ }
+  };
+  const reg = ((name: string, config: unknown, cb: (...a: unknown[]) => unknown) =>
+    (server.registerTool as (...x: unknown[]) => unknown)(name, config, (...a: unknown[]) => {
+      presenceTouch();
+      return cb(...a);
+    })) as unknown as typeof server.registerTool;
+
+  reg(
     'orient',
     {
       description: TOOL_HELP.orient,
@@ -67,7 +97,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ topic }) => asText({ orientation: await buildOrientation(root, { topic }) }),
   );
 
-  server.registerTool(
+  reg(
     'check_files',
     {
       description: TOOL_HELP.check_files,
@@ -76,7 +106,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
   );
 
-  server.registerTool(
+  reg(
     'list_signals',
     {
       description: TOOL_HELP.list_signals,
@@ -88,7 +118,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'get_report',
     {
       description: TOOL_HELP.get_report,
@@ -98,7 +128,7 @@ export async function startMcpServer(): Promise<void> {
       asText(slug ? (getReport(root, slug) ?? { error: `no report for '${slug}'` }) : listReports(root, 10).map(reportSummary)),
   );
 
-  server.registerTool(
+  reg(
     'who_touched',
     {
       description: TOOL_HELP.who_touched,
@@ -111,7 +141,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'list_tasks',
     {
       description: TOOL_HELP.list_tasks,
@@ -120,7 +150,7 @@ export async function startMcpServer(): Promise<void> {
     async () => asText(await collectStatus(root)),
   );
 
-  server.registerTool(
+  reg(
     'report_progress',
     {
       description: TOOL_HELP.report_progress,
@@ -133,7 +163,31 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
+    'save_progress',
+    {
+      description: TOOL_HELP.save_progress,
+      inputSchema: {
+        plan: z.array(z.object({
+          content: z.string().describe('The checklist item'),
+          status: z.string().optional().describe('pending | in_progress | completed'),
+        })).optional().describe('Your full current plan/checklist (replaces the stored one)'),
+        notes: z.array(z.string()).optional().describe('Decisions/findings the next agent should see'),
+        next: z.string().optional().describe('The single most useful next action for whoever resumes'),
+        files: z.array(z.string()).optional().describe('Repo-relative files you have edited (accumulated)'),
+      },
+    },
+    async ({ plan, notes, next, files }) => {
+      try {
+        const led = await saveProgress(root, selfSlug, { plan, notes, next, filesEdited: files });
+        return asText({ saved: selfSlug, plan: led.plan.length, notes: led.notes.length, files: led.filesEdited.length });
+      } catch (e) {
+        return asText({ rejected: e instanceof Error ? e.message : String(e) });
+      }
+    },
+  );
+
+  reg(
     'touch_files',
     {
       description: TOOL_HELP.touch_files,
@@ -142,11 +196,17 @@ export async function startMcpServer(): Promise<void> {
     async ({ paths }) => {
       const touched = paths.map((p) => p.trim()).filter((p) => p && !p.startsWith('/') && !p.includes('..'));
       for (const p of touched) recordHookEdit(root, { slug: selfSlug, path: p });
+      // ISS-03: keep a resumable HANDOFF.md fresh for agents that reach us via
+      // MCP rather than an edit hook (Codex/Gemini). Only for a real task
+      // (taskSlug); debounced + best-effort so it never blocks or fails the tool.
+      if (taskSlug && touched.length) {
+        void snapshotTask(taskSlug, { root, from: process.env.BATON_AGENT?.trim() }).catch(() => {});
+      }
       return asText({ touched, as: selfSlug });
     },
   );
 
-  server.registerTool(
+  reg(
     'search_history',
     {
       description: TOOL_HELP.search_history,
@@ -158,7 +218,7 @@ export async function startMcpServer(): Promise<void> {
     async ({ query, limit }) => asText({ hits: searchHistory(root, query, limit ?? 10) }),
   );
 
-  server.registerTool(
+  reg(
     'create_handoff',
     {
       description: TOOL_HELP.create_handoff,
@@ -168,14 +228,15 @@ export async function startMcpServer(): Promise<void> {
         pending: z.array(z.string()).optional().describe('Remaining items, most important first'),
         next: z.string().optional().describe('The single most useful next action for whoever resumes'),
         decisions: z.array(z.string()).optional().describe('Decisions made / gotchas found — things git cannot show'),
+        suggested_skills: z.array(z.string()).optional().describe('Skills the next agent should invoke to continue, e.g. "bug-fix", "stack-migration"'),
         to: z.string().optional().describe('Receiving agent, if known (e.g. "codex")'),
       },
     },
-    async ({ title, done, pending, next, decisions, to }) => {
+    async ({ title, done, pending, next, decisions, suggested_skills, to }) => {
       try {
         const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent().catch(() => undefined)) || undefined;
         const brief = await createSessionHandoff(root, {
-          slug: selfSlug, agent, title, done, pending, next, decisions, to, cwd: process.cwd(),
+          slug: selfSlug, agent, title, done, pending, next, decisions, suggestedSkills: suggested_skills, to, cwd: process.cwd(),
         });
         return asText({
           brief: brief.path,
@@ -189,7 +250,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'save_memory',
     {
       description: TOOL_HELP.save_memory,
@@ -221,7 +282,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  reg(
     'recall_memory',
     {
       description: TOOL_HELP.recall_memory,
@@ -248,6 +309,12 @@ export async function startMcpServer(): Promise<void> {
         ...(r.related?.length ? { relatedByFiles: r.related.map((f) => ({ id: f.id, type: f.type, fact: f.fact })) } : {}),
         totalStored: r.total,
         staleWithheld: r.staleDropped,
+        // ISS-04: withheld stale facts as re-grounding pointers, not just a
+        // count — what each claimed, the commit it was true at, and the file to
+        // re-check. Verify before relying; do not re-derive from the gap.
+        ...(r.staleGrounding.length
+          ? { staleGrounding: r.staleGrounding, staleTip: 'These WERE true as of the noted commit. Re-check the `verify` file before trusting; if still true, save_memory to re-anchor; if wrong, ignore. Do not re-derive blind.' }
+          : {}),
         ...(rows.some((row) => row.preview) ? { tip: 'preview rows are truncated — recall_memory({ ids: [...] }) returns full bodies' } : {}),
         // Repair queue (M3): you are on these files anyway — verifying costs ~nothing.
         ...(r.review ? { reviewRequest: { ...r.review, note: 'This stale fact shares files with your hits. If still true, re-save it with save_memory (fresh anchors); if wrong, ignore it.' } } : {}),

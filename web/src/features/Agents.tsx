@@ -7,6 +7,7 @@
    ============================================================ */
 import { useState } from "react";
 import { Icon } from "../components/Icon";
+import { CardSkeleton, EmptyState, ErrorState } from "../components/primitives";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader } from "./shared";
 import { BatonAPI } from "../lib/api";
@@ -38,9 +39,16 @@ export function AgentsScreen({
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 20 }}>
         {agents.error && !roster.length ? (
-          <div className="card" style={{ padding: 20, color: "var(--conflict-text)" }}>
-            Couldn’t reach the daemon to list agents. <button className="btn btn-sm" onClick={agents.refetch} style={{ marginLeft: 8 }}>Retry</button>
+          <ErrorState title="Couldn't list agents" desc="The daemon didn't respond, so the roster can't be scanned."
+            command="baton serve" onRetry={agents.refetch} retrying={agents.isFetching} />
+        ) : agents.isLoading && !roster.length ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, alignItems: "start" }}>
+            {[0, 1, 2, 3, 4, 5].map((i) => <CardSkeleton key={i} />)}
           </div>
+        ) : roster.length === 0 ? (
+          <EmptyState icon="bot" title="No agent CLIs detected"
+            desc="Baton scans your PATH for coding-agent CLIs (claude, codex, aider, …). Install one, then refresh."
+            action={<button className="btn fr" onClick={agents.refetch}><Icon name="refresh" size={14} /> Scan again</button>} />
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, alignItems: "start" }}>
             {roster.map((a) => (

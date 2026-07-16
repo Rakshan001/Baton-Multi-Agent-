@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "Baton — a local coordination hub for multiple AI coding agents"
+message: "If you use Baton in your research or work, please cite it using this metadata."
+type: software
+authors:
+  - family-names: Shetty
+    given-names: Rakshan
+repository-code: "https://github.com/Rakshan001/Baton-Multi-Agent-"
+url: "https://baton-landing.vercel.app"
+abstract: >-
+  Baton is a local coordination hub and knowledge base for running multiple AI
+  coding agents on one repository. It provides isolated git worktrees, a
+  realtime dashboard over Server-Sent Events, edit-signal coordination, a
+  queryable code knowledge graph, shared evidence-anchored memory, installable
+  skills, and one-file session handoff between agents.
+keywords:
+  - ai-agents
+  - coding-agents
+  - developer-tools
+  - git-worktrees
+  - knowledge-graph
+  - agent-handoff
+  - llm
+  - cli
+license: MIT

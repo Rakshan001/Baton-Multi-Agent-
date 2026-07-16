@@ -6,41 +6,25 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { CopyButton } from "../components/primitives";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { BatonAPI } from "../lib/api";
 import type { ContextPackResponse } from "../types";
 
 export function ContextPackModal({ project, onClose }: { project: string | null; onClose: () => void }) {
   const [pack, setPack] = useState<ContextPackResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-  const lastFocus = useRef<Element | null>(null);
+  useFocusTrap(ref, onClose);
 
   useEffect(() => {
     let cancelled = false;
+    setPack(null); setError(null);
     BatonAPI.getKbContext(project ?? undefined)
       .then((p) => { if (!cancelled) setPack(p); })
       .catch((e) => { if (!cancelled) setError((e as Error).message); });
     return () => { cancelled = true; };
-  }, [project]);
-
-  useEffect(() => {
-    lastFocus.current = document.activeElement;
-    const el = ref.current!;
-    const focusable = () => el.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])');
-    const first = focusable()[0];
-    if (first) setTimeout(() => first.focus(), 40);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
-      if (e.key === "Tab") {
-        const f = Array.from(focusable()); if (!f.length) return;
-        const i = f.indexOf(document.activeElement as HTMLElement);
-        if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-        else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => { document.removeEventListener("keydown", onKey, true); (lastFocus.current as HTMLElement)?.focus?.(); };
-  }, [onClose]);
+  }, [project, attempt]);
 
   const download = () => {
     if (!pack) return;
@@ -70,7 +54,13 @@ export function ContextPackModal({ project, onClose }: { project: string | null;
         <div style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
           A paste-able brief of this project for any chatbot (ChatGPT, Grok, DeepSeek…) — no source code included.
         </div>
-        {error && <div style={{ color: "var(--conflict-text)", fontSize: "var(--fs-12)" }}>{error}</div>}
+        {error && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: "var(--r-sm)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", color: "var(--conflict-text)", fontSize: "var(--fs-12)" }}>
+            <Icon name="alertTriangle" size={13} style={{ flex: "none" }} />
+            <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>Couldn't build the context pack: {error}</span>
+            <button className="btn btn-sm fr" onClick={() => setAttempt((n) => n + 1)} style={{ flex: "none" }}>Retry</button>
+          </div>
+        )}
         {!pack && !error && <div className="skeleton" style={{ height: 220, borderRadius: 10 }} />}
         {pack && (
           <>
@@ -100,7 +90,7 @@ export function ContextPackModal({ project, onClose }: { project: string | null;
                 Trimmed to fit the budget: {pack.omitted.join(", ")}
               </div>
             )}
-            <pre style={{ flex: 1, minHeight: 0, overflow: "auto", margin: 0, padding: 12, borderRadius: 10, border: "1px solid var(--border-subtle)", background: "var(--bg-base)", fontSize: "var(--fs-12)", lineHeight: 1.5, whiteSpace: "pre-wrap", userSelect: "text" }}>
+            <pre style={{ flex: 1, minHeight: 0, overflow: "auto", margin: 0, padding: 12, borderRadius: 10, border: "1px solid var(--border-subtle)", background: "var(--bg-base)", fontSize: "var(--fs-12)", lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere", userSelect: "text" }}>
               {pack.markdown}
             </pre>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>

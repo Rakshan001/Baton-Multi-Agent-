@@ -20,6 +20,8 @@ export const TOOL_HELP = {
     'All Baton sessions (worktrees) with status, agent, ahead/behind.',
   report_progress:
     'One line on what you are doing right now — siblings see it on your files and route around you. Expires in 30 min, clears on commit; refresh as you go.',
+  save_progress:
+    'Persist your live plan, notes, and next step for THIS task so a handoff or cutoff snapshot carries them — for agents with no transcript to mine (Cursor/Codex/Gemini). Full plan replaces; files add.',
   touch_files:
     'Declare files YOU are editing (live signals). Call when you start editing shared files — especially at the repo root where no watcher covers you. Self-cleans once committed.',
   save_memory:
@@ -35,5 +37,8 @@ export const TOOL_HELP = {
     'Search merged commit history by keywords (messages + touched file paths). Cheaper and more precise than git-log spelunking: "when/where was X changed and by which task?" in one call.',
 } as const;
 
-/** Hard total budget (chars) across all descriptions — the T1 regression lock. */
-export const TOOL_HELP_BUDGET = 1900;
+/** Hard total budget (chars) across all descriptions — the T1 regression lock.
+ *  Raised 1900 → 2100 when save_progress (ISS-06) joined as the 13th tool: the
+ *  agent-agnostic progress channel is always-on context, so it is budgeted like
+ *  the rest. Keep new tools lean; a further raise needs a deliberate edit. */
+export const TOOL_HELP_BUDGET = 2100;

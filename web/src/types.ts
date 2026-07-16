@@ -261,6 +261,14 @@ export interface SignalHolder {
   slug: string;
   agent: AgentId | string | null;
   lastEditAt: string;
+  /**
+   * `active` = holding the path now. `settled` = just finished (committed or
+   * reverted) — shown dimmed for a few minutes, never a reason to wait (ISS-15).
+   * Optional: an older daemon omits it, and those signals are all active.
+   */
+  state?: "active" | "settled";
+  /** When the path went clean. Settled holders only. */
+  settledAt?: string;
   /** The holder's live intent (report_progress / P5), if fresh. */
   note?: string;
   noteAt?: string;
@@ -293,6 +301,20 @@ export interface HandoffBriefEntry {
   markdown: string;
   /** Body only — the resume prompt to paste into the next agent. */
   body: string;
+}
+
+/** A connected agent with no task worktree — GET /api/sessions (presence layer).
+ *  Surfaces plain-terminal / MCP-connected sessions the worktree-only board
+ *  cannot show (src/board.ts collectPresence). */
+export interface PresenceSession {
+  slug: string;
+  agent: AgentId | string | null;
+  /** The checkout the session registered from. */
+  root: string | null;
+  /** Last connect/edit time (ISO). */
+  lastSeen: string;
+  /** Actively working (seen very recently), vs idle-but-connected. */
+  live: boolean;
 }
 
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */

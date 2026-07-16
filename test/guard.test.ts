@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload } from '../src/commands/guard.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, utimes } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder } from '../src/commands/guard.js';
+import { GUARDRAIL_REINJECT_MS } from '../src/handoff/guardrails.js';
 import type { FileCheck } from '../src/signals.js';
 
 describe('guardTarget — extract the repo-relative file a PreToolUse edit targets', () => {
@@ -106,5 +110,28 @@ describe('selfIdentity — agent parameter (M2)', () => {
     const id = selfIdentity({ session_id: 'conv-42' }, '/repo', undefined, 'cursor');
     expect(id.slug).toBe('sess-conv-42');
     expect(id.session).toEqual({ agent: 'cursor', sessionRoot: '/repo' });
+  });
+});
+
+describe('maybeGuardrailReminder — debounced mid-session re-injection (ISS-07)', () => {
+  let root: string;
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'baton-guardrail-')); });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('returns the positive guardrail on the first edit and stamps the marker', async () => {
+    const first = await maybeGuardrailReminder(root, 'fix-auth');
+    expect(first).toContain('Stay inside this worktree');
+    expect(first).toContain('baton done fix-auth');
+    expect(first).not.toMatch(/do not/i);
+  });
+
+  it('stays quiet within the window, then fires again once it ages past it', async () => {
+    await maybeGuardrailReminder(root, 'fix-auth'); // stamps the marker ~now
+    expect(await maybeGuardrailReminder(root, 'fix-auth')).toBeNull(); // immediately after → debounced
+
+    const marker = join(root, '.baton', 'guardrail', 'fix-auth');
+    const old = (Date.now() - GUARDRAIL_REINJECT_MS - 60_000) / 1000;
+    await utimes(marker, old, old);
+    expect(await maybeGuardrailReminder(root, 'fix-auth')).toContain('Stay inside this worktree');
   });
 });

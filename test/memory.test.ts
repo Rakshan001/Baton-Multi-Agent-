@@ -180,6 +180,27 @@ describe('memory store (real temp git repo)', () => {
     expect(recalled.staleDropped).toBe(1);
   });
 
+  // ISS-04: a withheld stale fact must arrive as a re-grounding POINTER (what it
+  // was, when it was true, what to re-check) — not just as a bare count, which
+  // reads as a gap and invites a confident wrong re-derivation.
+  it('surfaces withheld stale facts as re-grounding pointers (not just a count)', async () => {
+    const recalled = await recallMemories(root, {}); // a.txt is changed → 1 stale
+    expect(recalled.staleDropped).toBe(1); // count still there (back-compat)
+    expect(recalled.staleGrounding).toHaveLength(1);
+    const p = recalled.staleGrounding[0];
+    expect(p.was).toContain('canonical greeting'); // what it claimed
+    expect(p.verify).toContain('a.txt');           // the file to re-check
+    expect(p.reason).toContain('a.txt changed');   // why it went stale
+    expect(p.trueAsOf).toMatch(/^[0-9a-f]{7,}$/);  // short commit it was true at
+    expect(p.id).toMatch(/^mem-/);
+  });
+
+  it('scopes re-grounding pointers to the topic when one is given', async () => {
+    // The stale fact is about the greeting; an unrelated topic should not ground it.
+    expect((await recallMemories(root, { topic: 'greeting release' })).staleGrounding).toHaveLength(1);
+    expect((await recallMemories(root, { topic: 'kubernetes deployment yaml' })).staleGrounding).toHaveLength(0);
+  });
+
   it('same-fingerprint save supersedes the old fact', async () => {
     const first = await saveMemory(root, { fact: 'Deploys happen from main every friday afternoon.' });
     const second = await saveMemory(root, { fact: 'Deploys happen from main every friday at 15:00 UTC, never on holidays.' });
@@ -234,6 +255,61 @@ describe('memory store (real temp git repo)', () => {
   });
 });
 
+// ISS-05: without a running daemon, recall must self-heal — a stale-but-still-
+// true fact (its verifiable terms survive the anchored-file change) is re-anchored
+// the first time it is recalled, not withheld forever. Debounced so back-to-back
+// recalls don't each pay the repair cost.
+describe('recall-time opportunistic repair (ISS-05)', () => {
+  let root: string;
+  const g = (args: string[]) => execa('git', args, { cwd: root });
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'baton-repair-'));
+    await g(['init', '-q']);
+    await g(['config', 'user.email', 't@t.t']);
+    await g(['config', 'user.name', 'T']);
+    await writeFile(join(root, 'config.ts'), 'export const MAX_RETRIES = 3;\n');
+    await g(['add', '.']);
+    await g(['commit', '-qm', 'init']);
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('re-anchors a stale-but-still-true fact on recall when no daemon is running', async () => {
+    await saveMemory(root, {
+      fact: 'The retry ceiling `MAX_RETRIES` lives in `config.ts`; bump it there, not inline.',
+      type: 'convention',
+      files: ['config.ts'],
+    });
+    // Edit the anchored file but KEEP every verifiable term (MAX_RETRIES, config.ts):
+    // the file hash changes → the fact goes stale, though what it asserts is still true.
+    await writeFile(join(root, 'config.ts'), '// tuned for prod\nexport const MAX_RETRIES = 5;\n');
+    expect((await listMemories(root))[0].freshness).toBe('stale');
+
+    // First recall with no daemon: the opportunistic repair pass heals it in place.
+    const recalled = await recallMemories(root, { topic: 'retry ceiling' });
+    expect(recalled.facts).toHaveLength(1);            // served, not withheld
+    expect(recalled.facts[0].freshness).toBe('fresh'); // re-anchored
+    expect(recalled.staleDropped).toBe(0);
+    expect((await listMemories(root))[0].freshness).toBe('fresh'); // persisted to disk
+  });
+
+  it('debounces: a fact that goes stale again within the window is NOT re-repaired', async () => {
+    // The prior test just ran repair → the debounce marker is fresh. Make the
+    // (now fresh) fact go stale again; recall must withhold it, proving the
+    // repair pass is gated and not paid on every recall.
+    await writeFile(join(root, 'config.ts'), '// unrelated churn\nexport const MAX_RETRIES = 5;\nconst other = 1;\n');
+    expect((await listMemories(root))[0].freshness).toBe('stale');
+
+    const recalled = await recallMemories(root, {});
+    expect(recalled.facts).toHaveLength(0);        // withheld — repair debounced
+    expect(recalled.staleDropped).toBe(1);
+    expect(recalled.staleGrounding).toHaveLength(1); // still an ISS-04 pointer, not a silent gap
+  });
+});
+
 describe('memoryBriefSection', () => {
   it('renders a compact, token-cheap block and notes withheld stale facts', () => {
     const section = memoryBriefSection([
@@ -251,5 +327,20 @@ describe('memoryBriefSection', () => {
 
   it('returns empty when there is nothing fresh to say', () => {
     expect(memoryBriefSection([], 0)).toBe('');
+  });
+
+  // ISS-04: when grounding pointers are supplied, the brief shows re-grounding
+  // lines (what/when/verify) capped for budget, not a bare withheld count.
+  it('renders capped re-grounding pointers when grounding is provided', () => {
+    const section = memoryBriefSection([], 3, [
+      { id: 'mem-x', was: 'Daemon stays zero-dependency', trueAsOf: 'aed3292', verify: ['src/server.ts'], reason: 'src/server.ts changed' },
+      { id: 'mem-y', was: 'Realtime is SSE not socket.io', trueAsOf: 'ee02853', verify: ['src/events.ts'], reason: 'src/events.ts changed' },
+      { id: 'mem-z', was: 'should be capped out', trueAsOf: null, verify: ['x.ts'], reason: 'x.ts changed' },
+    ]);
+    expect(section).toContain('re-ground before trusting');
+    expect(section).toContain('was true @ aed3292: Daemon stays zero-dependency');
+    expect(section).toContain('verify `src/server.ts`');
+    expect(section).toContain('+1 more withheld'); // 3 total − 2 shown
+    expect(section).not.toContain('should be capped out'); // beyond BRIEF cap of 2
   });
 });

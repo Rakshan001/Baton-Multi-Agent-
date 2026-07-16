@@ -48,11 +48,14 @@ export function DetailSheet({
   const titleId = "sheet-" + slug;
 
   const [diffFiles, setDiffFiles] = useState<DiffFile[] | null>(null); // null = loading
+  const [diffError, setDiffError] = useState(false); // an errored diff is NOT the same as "no changes"
+  // One spawn action at a time — a double-click must not start two agents.
+  const [spawning, setSpawning] = useState<null | "terminal" | "headless">(null);
 
   useEffect(() => {
-    let on = true; setTask(null); setError(null); setDiffFiles(null);
+    let on = true; setTask(null); setError(null); setDiffFiles(null); setDiffError(false);
     BatonAPI.getTask(slug).then((t) => on && setTask(t)).catch((e) => on && setError(e as Error));
-    BatonAPI.getDiff(slug).then((f) => on && setDiffFiles(f)).catch(() => on && setDiffFiles([]));
+    BatonAPI.getDiff(slug).then((f) => on && setDiffFiles(f)).catch(() => { if (on) { setDiffFiles([]); setDiffError(true); } });
     return () => { on = false; };
   }, [slug]);
 
@@ -182,16 +185,18 @@ export function DetailSheet({
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button className="btn fr" onClick={() => onOpenDiff(slug)} disabled={!diffFiles?.length}
                   style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(diffFiles?.length ? {} : { opacity: 0.55 }) }}
-                  data-tip={diffFiles === null ? "Loading changes…" : diffFiles.length ? "Open the git diff in a code view" : "No changes on this branch yet"}>
+                  data-tip={diffFiles === null ? "Loading changes…" : diffFiles.length ? "Open the git diff in a code view" : diffError ? "Couldn't load the diff — check the daemon, then reopen this session" : "No changes on this branch yet"}>
                   <Icon name="terminal" size={14} style={{ color: "var(--accent-text)" }} />
-                  <span style={{ textAlign: "left" }}>View changes<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>{diffFiles === null ? "…" : `${diffFiles.length} file${diffFiles.length === 1 ? "" : "s"}`} · git diff</span></span>
+                  <span style={{ textAlign: "left" }}>View changes<br /><span style={{ fontSize: "var(--fs-11)", color: diffError ? "var(--conflict-text)" : "var(--text-tertiary)", fontWeight: 400 }}>{diffFiles === null ? "…" : diffError ? "diff unavailable" : `${diffFiles.length} file${diffFiles.length === 1 ? "" : "s"}`} · git diff</span></span>
                 </button>
                 <button className="btn fr" onClick={() => onHandoff(slug)} style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9 }} data-tip="Hand this work to another agent">
                   <Icon name="share" size={14} style={{ color: "var(--accent-text)" }} />
                   <span style={{ textAlign: "left" }}>Hand off<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>route to another agent</span></span>
                 </button>
-                <button className="btn fr" disabled={!writeEnabled}
+                <button className="btn fr" disabled={!writeEnabled || spawning !== null}
                   onClick={gate(async () => {
+                    if (spawning) return;
+                    setSpawning("terminal");
                     try {
                       const t = await BatonAPI.createTerminal(slug, { agent: (task.agent ?? "claude") as NonNullable<typeof task.agent> });
                       showToast({ kind: "ok", title: `${t.agent} terminal open`, desc: "Interactive session on the Live screen" });
@@ -200,27 +205,29 @@ export function DetailSheet({
                       // 409 = a terminal is already live for this task — just go watch it.
                       if (e instanceof ApiError && e.code === "CONFLICT") { onLive(slug); return; }
                       showToast({ kind: "error", title: "Could not open terminal", desc: (e as Error).message });
-                    }
+                    } finally { setSpawning(null); }
                   })}
                   style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }) }}
                   data-tip={writeEnabled ? "Run the agent interactively (tmux) in this worktree" : readOnlyTip}>
                   <Icon name="terminal" size={14} style={{ color: "var(--accent-text)" }} />
-                  <span style={{ textAlign: "left" }}>Open terminal<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>interactive · in Live</span></span>
+                  <span style={{ textAlign: "left" }}>{spawning === "terminal" ? "Opening…" : "Open terminal"}<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>interactive · in Live</span></span>
                 </button>
-                <button className="btn fr" disabled={!writeEnabled}
+                <button className="btn fr" disabled={!writeEnabled || spawning !== null}
                   onClick={gate(async () => {
+                    if (spawning) return;
+                    setSpawning("headless");
                     try {
                       const r = await BatonAPI.startAgentRun(slug, {});
                       showToast({ kind: "ok", title: `${r.agent} running headless`, desc: "Watch on the Live screen" });
                       onLive(slug);
                     } catch (e) {
                       showToast({ kind: "error", title: "Could not start agent", desc: (e as Error).message });
-                    }
+                    } finally { setSpawning(null); }
                   })}
                   style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }) }}
                   data-tip={writeEnabled ? "Run claude -p with the brief/task in this worktree" : readOnlyTip}>
                   <Icon name="zap" size={14} style={{ color: "var(--accent-text)" }} />
-                  <span style={{ textAlign: "left" }}>Start agent<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>headless · output in Live</span></span>
+                  <span style={{ textAlign: "left" }}>{spawning === "headless" ? "Starting…" : "Start agent"}<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>headless · output in Live</span></span>
                 </button>
               </div>
             </div>

@@ -15,7 +15,7 @@
  * Imported skills (from a path/URL) live alongside these at runtime, read out of
  * <repo>/.baton/skills, and carry source: 'imported'.
  */
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../util/frontmatter.js';
 import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -102,8 +102,8 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     produces: ['restraint ladder', 'smallest working diff', 'reuse over rewrite', 'safety carve-outs preserved'],
   },
   'stack-migration': {
-    tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger'],
-    produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)'],
+    tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'cursor', 'codex', 'antigravity', 'handoff'],
+    produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)', 'parallel fan-out plan + per-phase HANDOFF briefs'],
   },
 };
 
@@ -148,8 +148,8 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
   },
   'stack-migration': {
     what: 'Migrate a codebase to another stack (Angular→Next.js, etc.) feature-by-feature without losing parity.',
-    how: 'Inventory every endpoint/component → ordered phases → migrate one phase → ≥95% skeptic-checked parity → next; resumes from a MIGRATION.md ledger.',
-    win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature and no duplicated code.',
+    how: 'Inventory → ordered phases → migrate one at ≥95% checked parity; fans out across agents; resumes from MIGRATION.md.',
+    win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature or duplicate code.',
   },
   'map-codebase': {
     what: 'Builds the repo map every other skill navigates by.',
@@ -245,8 +245,8 @@ async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
   const skillPath = join(BUNDLED_DIR, id, 'SKILL.md');
   if (!existsSync(skillPath)) return null;
   const raw = await readFile(skillPath, 'utf-8');
-  const parsed = matter(raw);
-  const data = parsed.data as Record<string, unknown>;
+  const parsed = parseFrontmatter(raw);
+  const data = parsed.data;
   const name = String(data.name ?? id).trim() || id;
   // Folded/multiline YAML descriptions arrive as one string with newlines — flatten.
   const description = String(data.description ?? '').replace(/\s+/g, ' ').trim();

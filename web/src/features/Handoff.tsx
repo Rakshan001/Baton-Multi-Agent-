@@ -9,6 +9,7 @@ import { Icon } from "../components/Icon";
 import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, getAgent } from "../lib/registry";
 import { BatonAPI, branchFor } from "../lib/api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { showToast } from "../lib/toast";
 import type { StatusRow, AgentId, RouteSuggestion, HandoffLoadSuggestion, HandoffBriefEntry } from "../types";
 
@@ -145,13 +146,8 @@ export function HandoffDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
-  useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
-    document.addEventListener("keydown", onKey, true);
-    setTimeout(() => ref.current?.focus(), 40);
-    return () => { document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
-  }, [onClose]);
+  useFocusTrap(ref, onClose, { autoFocus: false });
+  useEffect(() => { const t = setTimeout(() => ref.current?.focus(), 40); return () => clearTimeout(t); }, []);
 
   const doHandoff = async () => {
     if (!target || !writeEnabled) return;
@@ -169,13 +165,13 @@ export function HandoffDialog({
     return (
       <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: 20 }}>
         <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
-        <div role="dialog" aria-modal="true" aria-label="Handoff brief ready" style={{ position: "relative", width: "min(520px, 100%)", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)", animation: "scale-in var(--dur-2) var(--ease-out)", padding: 22 }}>
+        <div ref={ref} role="dialog" aria-modal="true" aria-label="Handoff brief ready" style={{ position: "relative", width: "min(520px, 100%)", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)", animation: "scale-in var(--dur-2) var(--ease-out)", padding: 22 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <span style={{ width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center", background: "var(--clean-soft)", border: "1px solid var(--clean-border)", color: "var(--clean-text)" }}><Icon name="check" size={18} /></span>
             <div>
               <h2 style={{ margin: 0, fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)" }}>HANDOFF.md is ready</h2>
               <p style={{ margin: "2px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
-                For <AgentBadge id={doneInfo.toAgent} size="sm" />{typeof doneInfo.estTokens === "number" && doneInfo.estTokens > 0 ? <> · condensed from ≈{doneInfo.estTokens.toLocaleString()} tokens of session</> : null}
+                For <AgentBadge id={doneInfo.toAgent} size="sm" />{typeof doneInfo.estTokens === "number" && doneInfo.estTokens > 0 ? <> · saves ≈{doneInfo.estTokens.toLocaleString()} tokens{typeof doneInfo.estCostUsd === "number" && doneInfo.estCostUsd > 0 ? <> / ≈${doneInfo.estCostUsd}</> : null} of replaying this session</> : null}
               </p>
             </div>
           </div>

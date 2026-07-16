@@ -9,6 +9,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, AgentGlyph, getAgent } from "../lib/registry";
 import { BatonAPI } from "../lib/api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { showToast } from "../lib/toast";
 import type { AgentId, RouteSuggestion } from "../types";
 
@@ -36,7 +37,8 @@ export function LaunchSession({
   const [interactiveAgents, setInteractiveAgents] = useState<string[] | null>(null); // null = any agent
   const userPickedAgent = useRef(initialAgent !== null);
   const acceptedModel = useRef<string | undefined>(undefined); // set when the user takes the routing suggestion
-  const taskRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const launching = useRef(false); // same-tick double-click guard (phase state lags a render)
   const alive = useRef(true);
 
   // Capabilities come from the daemon (single source of truth: spawn.ts /
@@ -69,14 +71,8 @@ export function LaunchSession({
   // In a hub, a task can't be created without choosing which sub-project it targets.
   const valid = task.trim().length >= 3 && (!hubProjects || !!project);
 
-  useEffect(() => {
-    alive.current = true;
-    const prev = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && phase === "form") { e.preventDefault(); onClose(); } };
-    document.addEventListener("keydown", onKey, true);
-    setTimeout(() => taskRef.current?.focus(), 60);
-    return () => { alive.current = false; document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
-  }, [onClose, phase]);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useFocusTrap(dialogRef, () => { if (phase === "form") onClose(); });
 
   const canHeadless = writeEnabled && headlessAgents.includes(agent);
   const canTerminal = writeEnabled && !!terminals?.available && (interactiveAgents === null || interactiveAgents.includes(agent));
@@ -95,7 +91,8 @@ export function LaunchSession({
   ];
 
   const launch = async () => {
-    if (!valid) return;
+    if (!valid || launching.current) return;
+    launching.current = true;
     setPhase("provisioning"); setStep(0);
     const apiP = BatonAPI.launchSession({ task: task.trim(), agent, project: project ?? undefined }).then(
       (r) => ({ ok: true as const, r }),
@@ -108,7 +105,7 @@ export function LaunchSession({
     }
     const res = await apiP;
     if (!alive.current) return;
-    if (!res.ok) { showToast({ kind: "error", title: "Launch failed", desc: res.e.message }); setPhase("form"); setStep(-1); return; }
+    if (!res.ok) { showToast({ kind: "error", title: "Launch failed", desc: res.e.message }); setPhase("form"); setStep(-1); launching.current = false; return; }
     if (mode === "headless") {
       try {
         await BatonAPI.startAgentRun(res.r.slug, { agent, model: acceptedModel.current });
@@ -135,7 +132,7 @@ export function LaunchSession({
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: 20 }}>
       <div onClick={() => phase === "form" && onClose()} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
-      <div role="dialog" aria-modal="true" aria-label="Launch session" style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Launch session" style={{
         position: "relative", width: "min(520px, 100%)", maxHeight: "92vh", overflowY: "auto", background: "var(--bg-elevated)",
         border: "1px solid var(--border-strong)", borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)", animation: "scale-in var(--dur-2) var(--ease-out)" }}>
 
@@ -191,7 +188,7 @@ export function LaunchSession({
 
             <div>
               <div className="tag" style={{ marginBottom: 8 }}>Task</div>
-              <textarea ref={taskRef} value={task} onChange={(e) => setTask(e.target.value)} rows={2} placeholder="e.g. Add OAuth sign-in with Google"
+              <textarea data-autofocus value={task} onChange={(e) => setTask(e.target.value)} rows={2} placeholder="e.g. Add OAuth sign-in with Google"
                 onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") launch(); }}
                 style={{ width: "100%", resize: "vertical", padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)", color: "var(--text-primary)", fontSize: "var(--fs-14)", fontFamily: "inherit", lineHeight: 1.5, outline: "none" }} />
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", flexWrap: "wrap" }}>

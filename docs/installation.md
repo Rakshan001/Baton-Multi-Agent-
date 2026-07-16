@@ -6,7 +6,7 @@ How to get Baton running on a fresh machine. For a guided first run afterwards, 
 
 | Tool | Why | Check |
 |---|---|---|
-| **Node.js ≥ 20** | The CLI + daemon (uses built-in `node:sqlite` and recursive `fs.watch`). | `node --version` |
+| **Node.js ≥ 24** | The CLI + daemon (uses built-in `node:sqlite` and recursive `fs.watch`). Node 24 is the first release whose bundled SQLite carries **FTS5**, which memory recall ranks with; older runtimes either lack `node:sqlite` entirely or silently fall back to a weaker scorer. | `node --version` |
 | **git** | Worktrees, branches, history — the whole model is git-native. | `git --version` |
 | **uv** (or pipx/pip) | Installs the [`graphify`](https://pypi.org/project/graphifyy/) CLI for the knowledge graph. | `uv --version` |
 | **tmux** *(optional)* | Interactive agent terminals in the dashboard. Without it, headless runs still work. | `tmux -V` |

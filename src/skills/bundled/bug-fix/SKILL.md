@@ -269,7 +269,11 @@ cheapest experiment that can kill each one.*
 7. **Name the root cause in one sentence** before designing any fix. Can't? You haven't found
    it — loop back with the next hypothesis.
 
-If 3 fixes have failed → STOP, likely architectural; surface to the user.
+**If 3+ fix attempts have failed → STOP. This is not another failed hypothesis — it's likely the WRONG
+ARCHITECTURE.** The tell: each fix reveals new coupling/shared state elsewhere, or each fix needs
+"massive refactoring", or each fix spawns a new symptom in a different place. Do **not** attempt fix #4.
+Question the fundamentals **with the user** — is the pattern sound, or are we keeping it through sheer
+inertia? — and decide *refactor vs keep patching* together before touching code again.
 
 ---
 
@@ -487,6 +491,32 @@ Once the bug is fully done and recorded, if the working context is near full (�
 tokens. Only compact when genuinely finished — a mid-fix compact can drop the plan you still need.
 
 ---
+
+## Red flags & rationalizations — STOP and return to the gates
+
+**Violating the letter of these gates is violating the spirit of debugging.** The gates (reproduce →
+root cause → ≥95% + skeptic → approval → no-new-bugs) only hold if you don't talk yourself out of
+them. If you catch any of these thoughts, STOP and return to the phase you're skipping:
+
+- "quick fix now, investigate later" · "just try changing X and see" · "it's probably X, fix that"
+- "I don't fully understand it but this might work" · "skip the test, I'll verify manually"
+- "it's a one-liner, it doesn't need the gates" · "emergency — no time for the process"
+- "one more fix attempt" (after 2+) · each fix reveals a new problem somewhere else
+- listing fixes before tracing data flow · proposing a fix before the root cause is named
+
+| Rationalization | Reality |
+|---|---|
+| "Simple bug, skip the process" | Simple bugs have root causes too; the process is fast for them. |
+| "Emergency, no time" | Systematic is **faster** than guess-and-check thrashing. |
+| "This fix first, investigate after" | The first fix sets the pattern — do it right from the start. |
+| "I'll write the test after it works" | Untested fixes don't stick; a failing-first test proves the cause. |
+| "Fix several things at once" | You can't tell what worked, and you seed new bugs. |
+| "I see the problem, let me fix it" | Seeing the **symptom** ≠ understanding the **root cause**. |
+| "One more attempt" (3rd+) | 3+ failures = architectural problem — question the pattern, don't patch again. |
+
+**Partner signals you're off-track:** "Is that not happening?" (you assumed without verifying) ·
+"Will it show us…?" (add evidence-gathering) · "Stop guessing" (fixing without understanding) ·
+"Ultra-think this" (question fundamentals, not symptoms). Any of these → STOP, return to Phase 5.
 
 ## Guardrails (always enforced)
 

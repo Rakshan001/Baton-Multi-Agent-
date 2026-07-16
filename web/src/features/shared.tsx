@@ -1,11 +1,18 @@
 /* ============================================================
    BATON — shared screen chrome (ported from insights.jsx)
-   ScreenHeader · SearchInput · AgentFilter
+   ScreenHeader · SearchInput · AgentFilter · isSettled
    ============================================================ */
 import type { ReactNode } from "react";
 import { Icon } from "../components/Icon";
 import { getAgent, AgentGlyph } from "../lib/registry";
-import type { AgentId } from "../types";
+import type { AgentId, EditSignal } from "../types";
+
+/**
+ * A path nobody holds any more: every holder has committed or reverted. Kept on
+ * the board for a few minutes as "just finished" rather than vanishing the moment
+ * someone commits (ISS-15). An older daemon omits `state` — treat that as active.
+ */
+export const isSettled = (s: EditSignal) => s.holders.length > 0 && s.holders.every((h) => h.state === "settled");
 
 export function ScreenHeader({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
   return (

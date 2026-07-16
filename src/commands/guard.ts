@@ -9,11 +9,14 @@
  * Fail-open: any error, missing store, or slow check exits 0 with no output so
  * editing is never stalled by coordination plumbing.
  */
+import { spawn } from 'node:child_process';
 import { relative, isAbsolute, dirname, basename, join } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
-import { resolveMcpRoot } from '../store.js';
+import { resolveMcpRoot, batonDir } from '../store.js';
 import { checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
+import { snapshotDue } from './snapshot.js';
+import { guardrailReminderDue, formatGuardrailReminder } from '../handoff/guardrails.js';
 
 /** Everything the guard must finish within — past this we fail open silently. */
 const GUARD_BUDGET_MS = 1500;
@@ -111,6 +114,31 @@ export function selfIdentity(
   return { slug: undefined };
 }
 
+/**
+ * ISS-07 — mid-session guardrail re-injection. Prohibition-type instructions
+ * decay across a long session, so the guard re-surfaces the (positive-phrased)
+ * rules on a debounce keyed to the task, not on every edit. Returns the reminder
+ * when due (and stamps the marker), else null. Best-effort: any FS error yields
+ * no reminder rather than blocking the edit.
+ */
+function guardrailMarker(root: string, slug: string): string {
+  return join(batonDir(root), 'guardrail', slug.replace(/[^a-z0-9_-]+/gi, '-').slice(0, 80) || 'session');
+}
+
+export async function maybeGuardrailReminder(root: string, slug: string, now: number = Date.now()): Promise<string | null> {
+  const marker = guardrailMarker(root, slug);
+  let lastMs: number | null = null;
+  try {
+    lastMs = (await stat(marker)).mtimeMs;
+  } catch { /* never sent — treat as due */ }
+  if (!guardrailReminderDue(lastMs, now)) return null;
+  try {
+    await mkdir(dirname(marker), { recursive: true });
+    await writeFile(marker, '', 'utf-8');
+  } catch { return null; /* can't debounce reliably → stay quiet rather than spam */ }
+  return formatGuardrailReminder(`\`baton done ${slug}\``);
+}
+
 async function readStdin(): Promise<string> {
   let data = '';
   process.stdin.setEncoding('utf-8');
@@ -149,9 +177,45 @@ async function runGuard(agent: string): Promise<string | null> {
     try {
       recordHookEdit(root, { slug: self.slug, path: rel, session: self.session });
     } catch { /* advisory still runs */ }
+    // ISS-03: keep a resumable HANDOFF.md fresh DURING the session. Only for a
+    // real task worktree (self.session is set only for a synthetic root
+    // session, which has no task to snapshot). Fire-and-forget, gated by the
+    // cheap mtime debounce so the guard never blocks on a brief rebuild.
+    if (!self.session) void maybeSnapshot(self.slug, worktreeRoot, root, agent);
   }
   const check = (await checkFiles(root, [rel], self.slug))[rel];
-  return check ? formatGuardMessage(rel, check) : null;
+  const collision = check ? formatGuardMessage(rel, check) : null;
+  // ISS-07: only a real task worktree session (self.session unset) has a task to
+  // keep on-plan; re-inject its guardrails on the debounce, alongside any advisory.
+  // Claude-only: guardCmd surfaces context only to Claude's hook protocol, and
+  // Cursor already re-injects via its always-apply .mdc rule — so skip the marker
+  // write for other agents rather than stamping a debounce nobody reads.
+  const reminder = agent === 'claude' && self.slug && !self.session
+    ? await maybeGuardrailReminder(root, self.slug).catch(() => null)
+    : null;
+  const combined = [collision, reminder].filter(Boolean).join('\n\n');
+  return combined || null;
+}
+
+/**
+ * Spawn a detached `baton snapshot` when one is due. The mtime gate means the
+ * common case is a single stat() and no spawn; when a rebuild IS due we detach
+ * it so the guard's 1500ms advisory budget is never spent on brief generation.
+ */
+async function maybeSnapshot(slug: string, worktreeRoot: string, root: string, agent: string): Promise<void> {
+  try {
+    if (!(await snapshotDue(worktreeRoot))) return;
+    const cli = process.argv[1];
+    if (!cli) return;
+    const child = spawn(process.execPath, [cli, 'snapshot', slug, '--from', agent, '--quiet'], {
+      cwd: worktreeRoot,
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, BATON_ROOT: root },
+    });
+    child.on('error', () => { /* snapshot is best-effort — never affect the edit */ });
+    child.unref();
+  } catch { /* best-effort */ }
 }
 
 export async function guardCmd(opts: { agent?: string } = {}): Promise<void> {

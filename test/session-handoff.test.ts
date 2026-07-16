@@ -53,6 +53,18 @@ describe('createSessionHandoff — brief for any session', () => {
     expect(r.resume).toContain('baton resume sess-p1234');
   });
 
+  it('renders a "Suggested skills" section telling the next agent what to invoke', async () => {
+    const r = await createSessionHandoff(root, {
+      slug: 'sess-sk', agent: 'cursor', title: 'Migrate the data store',
+      next: 'run the migration script',
+      suggestedSkills: ['stack-migration', 'bug-fix'],
+    });
+    const body = matter(await readFile(r.path, 'utf-8')).content;
+    expect(body).toContain('## Suggested skills');
+    expect(body).toContain('stack-migration');
+    expect(body).toContain('bug-fix');
+  });
+
   it('writes into the task worktree HANDOFF.md when the slug is a baton task (so `baton take` works)', async () => {
     const wt = join(root, 'wt-fix-auth');
     await mkdir(wt, { recursive: true });

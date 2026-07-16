@@ -6,7 +6,7 @@
    ============================================================ */
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { Icon } from "../components/Icon";
-import { AgentBadge, SyncChips } from "../components/primitives";
+import { AgentBadge, SyncChips, ErrorState } from "../components/primitives";
 import { getAgent } from "../lib/registry";
 import { deriveColumn, COLUMN_DEFS } from "../lib/derive";
 import { basename } from "../lib/format";
@@ -41,8 +41,8 @@ function autoLayout(sessions: StatusRow[]): Layout {
 }
 
 export function CanvasView({
-  sessions, loading, onOpen,
-}: { sessions: StatusRow[] | null; loading: boolean; onOpen: (slug: string) => void }) {
+  sessions, loading, onOpen, error = null, onRetry,
+}: { sessions: StatusRow[] | null; loading: boolean; onOpen: (slug: string) => void; error?: unknown; onRetry?: () => void }) {
   const isMobile = useMediaQuery("(max-width: 760px)");
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewState>({ tx: 0, ty: 0, scale: 1 });
@@ -148,7 +148,7 @@ export function CanvasView({
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", color: "var(--text-tertiary)", fontSize: "var(--fs-12)" }}>
           <Icon name="network" size={13} /> Canvas needs a wider screen — showing the board.
         </div>
-        <div style={{ flex: 1, minHeight: 0 }}><Board sessions={sessions} loading={loading} onOpen={onOpen} writeEnabled={false} /></div>
+        <div style={{ flex: 1, minHeight: 0 }}><Board sessions={sessions} loading={loading} error={error} onRetry={onRetry} onOpen={onOpen} writeEnabled={false} /></div>
       </div>
     );
   }
@@ -225,16 +225,22 @@ export function CanvasView({
           <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="var(--conflict)" strokeWidth="1.8" strokeDasharray="4 4" /></svg>
           shared file — merge risk
         </div>
-        {edges.length === 0 && <div style={{ marginTop: 4, color: "var(--text-tertiary)", fontSize: "var(--fs-11)" }}>No overlapping edits right now.</div>}
+        {edges.length === 0 && error == null && <div style={{ marginTop: 4, color: "var(--text-tertiary)", fontSize: "var(--fs-11)" }}>No overlapping edits right now.</div>}
+        {error != null && (sessions?.length ?? 0) > 0 && <div style={{ marginTop: 4, color: "var(--dirty-text)", fontSize: "var(--fs-11)" }} data-tip="The last refresh failed — this view may be stale">may be stale</div>}
       </div>
 
       <Minimap sessions={sessions} positions={positions} view={view} wrapRef={wrapRef} />
 
-      {loading && !sessions?.length && (
+      {error != null && !sessions?.length ? (
+        // A fetch failure must not render as an empty-but-fine canvas.
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "var(--bg-canvas)" }}>
+          <ErrorState title="Couldn't load sessions" desc={(error as Error).message} command="baton serve" onRetry={onRetry} retrying={loading} />
+        </div>
+      ) : loading && !sessions?.length ? (
         <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--text-tertiary)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Icon name="refresh" size={15} style={{ animation: "spin 0.9s linear infinite" }} /> Loading graph…</div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

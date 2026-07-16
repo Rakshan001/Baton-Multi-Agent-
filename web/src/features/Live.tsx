@@ -14,6 +14,7 @@ import { BatonAPI, branchFor } from "../lib/api";
 import { buildActivity, getDiff, type LiveEvent, type LiveEventType } from "../lib/preview";
 import { showToast } from "../lib/toast";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { BatonEventMsg } from "../hooks/useEvents";
 import type { AgentId, StatusRow, TerminalInfo } from "../types";
 
@@ -159,6 +160,8 @@ export function LiveSession({
   const userPickedTab = useRef(false);
   const showRail = useMediaQuery("(min-width: 780px)");
   const logRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, onClose);
   const others = useMemo(() => sessions.filter((s) => s.agent && s.slug !== slug), [sessions, slug]);
   const pick = (s: string) => { setSlug(s); setRailOpen(false); };
   // Real mode: "working" = an agent process is attached to the worktree.
@@ -202,7 +205,13 @@ export function LiveSession({
       try {
         for (const sig of await BatonAPI.getSignals()) {
           for (const h of sig.holders) {
-            if (h.slug === slug) rows.push({ t: "edit", text: `Editing ${sig.path}`, at: Date.parse(h.lastEditAt) || Date.now() });
+            if (h.slug !== slug) continue;
+            const done = h.state === "settled";
+            rows.push({
+              t: "edit",
+              text: `${done ? "Finished editing" : "Editing"} ${sig.path}`,
+              at: Date.parse((done ? h.settledAt : h.lastEditAt) ?? h.lastEditAt) || Date.now(),
+            });
           }
         }
       } catch { /* signals are best-effort */ }
@@ -287,11 +296,6 @@ export function LiveSession({
 
   useEffect(() => { setElapsed(0); const t = setInterval(() => setElapsed((e) => e + 1), 1000); return () => clearInterval(t); }, [slug]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0"), ss = String(elapsed % 60).padStart(2, "0");
 
@@ -377,7 +381,7 @@ export function LiveSession({
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: "min(3vh, 24px) min(3vw, 28px)" }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
-      <div role="dialog" aria-modal="true" aria-label={`Live session — ${task?.task || slug}`} style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Live session — ${task?.task || slug}`} style={{
         position: "relative", width: "min(1240px, 100%)", height: "min(860px, 100%)", background: "var(--bg-surface)",
         border: "1px solid var(--border-strong)", borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)", overflow: "hidden",
         display: "flex", flexDirection: "column", animation: "scale-in var(--dur-3) var(--ease-out)" }}>
@@ -394,7 +398,7 @@ export function LiveSession({
               {demo && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px", flex: "none" }} data-tip="Demo mode — this stream is illustrative. Real sessions stream the daemon's live events.">Preview</span>}
             </div>
             <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
-              <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <Icon name="clock" size={11} /> {mm}:{ss}
+              <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <span data-tip="Time since you opened this view — not the session's age" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="clock" size={11} /> watching {mm}:{ss}</span>
             </div>
           </div>
           {!showRail && (

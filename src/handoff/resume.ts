@@ -5,7 +5,8 @@
  * agent prompt for one. The dashboard's copy buttons read the same list via
  * GET /api/handoffs.
  */
-import matter from 'gray-matter';
+import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
+import { parseFrontmatter, type Frontmatter } from '../util/frontmatter.js';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { batonDir, loadTasks } from '../store.js';
@@ -29,13 +30,13 @@ export interface BriefEntry {
 }
 
 function toEntry(raw: string, path: string, fallback: { slug: string; kind: 'task' | 'session'; title?: string; cwd: string }): BriefEntry | null {
-  let parsed: ReturnType<typeof matter>;
+  let parsed: Frontmatter;
   try {
-    parsed = matter(raw);
+    parsed = parseFrontmatter(raw);
   } catch {
     return null;
   }
-  const data = parsed.data as Record<string, unknown>;
+  const data = parsed.data;
   if (data.baton !== 1) return null; // not a baton brief — ignore junk
   return {
     slug: fallback.slug,
@@ -84,8 +85,8 @@ export async function listBriefs(root: string): Promise<BriefEntry[]> {
 /** Flip a brief's status in place, wherever it lives. */
 export async function setBriefStatusAt(path: string, status: 'ready' | 'in-progress' | 'done'): Promise<boolean> {
   try {
-    const parsed = matter(await readFile(path, 'utf-8'));
-    if ((parsed.data as Record<string, unknown>).baton !== 1) return false;
+    const parsed = parseFrontmatter(await readFile(path, 'utf-8'));
+    if (parsed.data.baton !== 1) return false;
     parsed.data.status = status;
     await writeFile(path, matter.stringify(parsed.content, parsed.data), 'utf-8');
     return true;

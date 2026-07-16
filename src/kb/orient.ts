@@ -133,7 +133,7 @@ export async function buildOrientation(root: string, opts: { topic?: string; cwd
   let memorySection = '';
   try {
     const recalled = await recallMemories(root, { topic: opts.topic, limit: 6 });
-    memorySection = memoryBriefSection(recalled.facts, recalled.staleDropped);
+    memorySection = memoryBriefSection(recalled.facts, recalled.staleDropped, recalled.staleGrounding);
   } catch { /* memory is an enhancement — never block orientation */ }
 
   let reports: CompletionReport[] = [];
