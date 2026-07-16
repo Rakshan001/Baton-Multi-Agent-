@@ -148,8 +148,8 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
   },
   'stack-migration': {
     what: 'Migrate a codebase to another stack (Angular→Next.js, etc.) feature-by-feature without losing parity.',
-    how: 'Inventory → phases → migrate one at ≥95% skeptic-checked parity; after the foundation, fan out independent phases across agents (Cursor/Codex) in baton worktrees; resumes from MIGRATION.md.',
-    win: 'A 100+-file rewrite survives usage limits, parallelizes across agents, and lands with no dropped feature or duplicated code.',
+    how: 'Inventory → ordered phases → migrate one at ≥95% checked parity; fans out across agents; resumes from MIGRATION.md.',
+    win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature or duplicate code.',
   },
   'map-codebase': {
     what: 'Builds the repo map every other skill navigates by.',
