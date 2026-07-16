@@ -15,7 +15,7 @@
  * Imported skills (from a path/URL) live alongside these at runtime, read out of
  * <repo>/.baton/skills, and carry source: 'imported'.
  */
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../util/frontmatter.js';
 import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -245,8 +245,8 @@ async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
   const skillPath = join(BUNDLED_DIR, id, 'SKILL.md');
   if (!existsSync(skillPath)) return null;
   const raw = await readFile(skillPath, 'utf-8');
-  const parsed = matter(raw);
-  const data = parsed.data as Record<string, unknown>;
+  const parsed = parseFrontmatter(raw);
+  const data = parsed.data;
   const name = String(data.name ?? id).trim() || id;
   // Folded/multiline YAML descriptions arrive as one string with newlines — flatten.
   const description = String(data.description ?? '').replace(/\s+/g, ' ').trim();

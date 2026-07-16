@@ -17,7 +17,7 @@
  * Imported skills are written to <repo>/.baton/skills/<id>.md so they survive
  * restarts and appear in the catalog alongside bundled ones.
  */
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../util/frontmatter.js';
 import { mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -131,8 +131,8 @@ export function parseSkillMarkdown(text: string, fallbackId: string): SkillDef {
   let data: Record<string, unknown> = {};
   let content = text;
   try {
-    const parsed = matter(text);
-    data = parsed.data as Record<string, unknown>;
+    const parsed = parseFrontmatter(text);
+    data = parsed.data;
     content = parsed.content;
   } catch { /* not frontmatter — treat whole text as body */ }
 

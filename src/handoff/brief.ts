@@ -4,7 +4,8 @@
  * touched files, the extracted plan, and (when the KB is initialized) a
  * graphify graph excerpt scoped to the task.
  */
-import matter from 'gray-matter';
+import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
+import { parseFrontmatter } from '../util/frontmatter.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gitTry } from '../util/exec.js';
@@ -239,7 +240,7 @@ export async function writeBrief(brief: HandoffBrief): Promise<void> {
 export async function readBrief(worktreePath: string): Promise<{ meta: Partial<HandoffMeta>; body: string } | null> {
   try {
     const raw = await readFile(handoffPath(worktreePath), 'utf-8');
-    const parsed = matter(raw);
+    const parsed = parseFrontmatter(raw);
     return { meta: parsed.data as Partial<HandoffMeta>, body: parsed.content };
   } catch {
     return null;
@@ -249,7 +250,7 @@ export async function readBrief(worktreePath: string): Promise<{ meta: Partial<H
 export async function setBriefStatus(worktreePath: string, status: HandoffMeta['status']): Promise<boolean> {
   try {
     const raw = await readFile(handoffPath(worktreePath), 'utf-8');
-    const parsed = matter(raw);
+    const parsed = parseFrontmatter(raw);
     parsed.data.status = status;
     await writeFile(handoffPath(worktreePath), matter.stringify(parsed.content, parsed.data), 'utf-8');
     return true;

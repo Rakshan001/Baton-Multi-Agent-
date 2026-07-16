@@ -17,7 +17,8 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import matter from 'gray-matter';
+import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
+import { parseFrontmatter } from './util/frontmatter.js';
 import { git } from './util/exec.js';
 import { escapeRegExp } from './util/regex.js';
 import { rankFacts } from './memory-rank.js';
@@ -174,7 +175,7 @@ export function renderFactFile(f: MemoryFact): string {
 
 export function parseFactFile(raw: string): MemoryFact | null {
   try {
-    const { data, content } = matter(raw);
+    const { data, content } = parseFrontmatter(raw);
     if (typeof data.id !== 'string' || !content.trim()) return null;
     const files: FileAnchor[] = Array.isArray(data.files)
       ? (data.files as unknown[]).flatMap((s) => {

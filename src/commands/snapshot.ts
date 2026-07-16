@@ -16,7 +16,7 @@
  * Agent-agnostic: buildBrief derives state from `git diff` (works for Cursor,
  * Codex, hand-edits — anything), enriched by a Claude transcript when present.
  */
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../util/frontmatter.js';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { batonDir, resolveMcpRoot } from '../store.js';
@@ -162,7 +162,7 @@ export async function snapshotTask(slug: string | undefined, opts: SnapshotOptio
  */
 async function writeCursorRule(worktreePath: string, brief: HandoffBrief): Promise<void> {
   try {
-    const head = renderContinuationHead(brief.meta, matter(brief.markdown).content);
+    const head = renderContinuationHead(brief.meta, parseFrontmatter(brief.markdown).content);
     const rule = renderCursorRule(head);
     if (!rule) return;
     const file = join(worktreePath, CURSOR_RULE_REL);
