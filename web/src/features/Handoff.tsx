@@ -171,7 +171,7 @@ export function HandoffDialog({
             <div>
               <h2 style={{ margin: 0, fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)" }}>HANDOFF.md is ready</h2>
               <p style={{ margin: "2px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
-                For <AgentBadge id={doneInfo.toAgent} size="sm" />{typeof doneInfo.estTokens === "number" && doneInfo.estTokens > 0 ? <> · condensed from ≈{doneInfo.estTokens.toLocaleString()} tokens of session</> : null}
+                For <AgentBadge id={doneInfo.toAgent} size="sm" />{typeof doneInfo.estTokens === "number" && doneInfo.estTokens > 0 ? <> · saves ≈{doneInfo.estTokens.toLocaleString()} tokens{typeof doneInfo.estCostUsd === "number" && doneInfo.estCostUsd > 0 ? <> / ≈${doneInfo.estCostUsd}</> : null} of replaying this session</> : null}
               </p>
             </div>
           </div>

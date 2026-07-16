@@ -24,6 +24,18 @@
 
 ## Progress log
 
+**2026-07-16 (cont.) — ISS-09 / ISS-10 / ISS-11 done: the P3 polish. The full ISS-01…ISS-11 backlog is now complete.**
+- **ISS-09 + ISS-10 (one surface):** the brief's graph excerpt is reframed from an implicit mandate into a per-task
+  HINT that also nudges map/recall-first — "a shortcut to navigate: skim this and `recall_memory` before grepping the
+  whole repo, but read the full source where the task needs line-level detail (the map omits it)." One line, no new
+  standing-instruction block (respects ISS-08). Extracted to a pure `graphSectionMd` and tested. Raw-file reading wins
+  on tasks needing exhaustive source, so the map is no longer sold as always-better.
+- **ISS-11:** the replay-cost figure is now unmistakable — `baton pass` prints "saves the next agent ≈N tokens / ≈$X of
+  replaying this session from scratch" (was "to replay raw"), the web done-panel shows the same "saves … of replaying
+  this session", and the `est_cost_usd` field carries a comment that it's the cost the handoff SAVES, not one it incurs.
+— `src/handoff/brief.ts`, `src/commands/pass.ts`, `web/src/features/Handoff.tsx`. Tests: +1 (`graphSectionMd`). Suite
+616 passing; web build clean. **Uncommitted.**
+
 **2026-07-16 (cont.) — ISS-08 done: the handoff brief is now budgeted (progressive disclosure). Completes all P2 items.**
 `buildBrief` concatenated every section with no total cap, unlike `orient`'s 3200-char budget — a big brief measurably
 hurts the receiver (context rot). The body is now assembled as priority-tagged sections and fit to a hard
@@ -312,7 +324,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   what to trust. Prefer **verifiable ground truth** (tests-pass state, `git diff --stat`) over
   prose claims the receiver must believe.
 
-### ISS-09 · P3 · Graph is treated as always-better; it underserves some tasks
+### ISS-09 · P3 · Graph is treated as always-better; it underserves some tasks — **DONE 2026-07-16** (see progress log)
 - **Symptom:** map-first navigation misleads on work that genuinely needs full line-level source.
 - **Root cause:** the workflow/docs push "navigate the map before reading files" unconditionally;
   the graph excerpt is injected into every brief (`brief.ts:116-123`).
@@ -322,7 +334,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
 - **Fix direction:** make map-first a per-task hint, not a mandate; let tasks that need full
   source skip/deprioritise the graph excerpt.
 
-### ISS-10 · P3 · "Use map/recall first" is unenforced (the real placebo lever)
+### ISS-10 · P3 · "Use map/recall first" is unenforced (the real placebo lever) — **DONE 2026-07-16** (nudge; see progress log)
 - **Symptom:** you pay the setup/overhead but agents brute-force grep anyway, capturing none of
   the saving.
 - **Root cause:** whether agents consult graph/memory before reading is governed only by prose in
@@ -333,7 +345,7 @@ causes hallucination / silent context loss · **P3** = efficiency / polish.
   whether agents follow it; consider a lightweight nudge in the injected brief rather than a long
   standing instruction block.
 
-### ISS-11 · P3 · `est_cost_usd` semantics are easy to misread
+### ISS-11 · P3 · `est_cost_usd` semantics are easy to misread — **DONE 2026-07-16** (see progress log)
 - **Symptom:** the number looks like the handoff's cost but is the *whole-transcript replay* cost.
 - **Root cause:** `est_tokens = totalTranscriptChars / 4` (`src/agents/claude-session.ts:85,141`),
   `est_cost_usd` at flat $3/M (`brief.ts:38-40`) — it's the cost *avoided*, not incurred.

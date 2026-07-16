@@ -26,6 +26,9 @@ export interface HandoffMeta {
   created: string;
   repo: string;
   branch: string;
+  /** ISS-11: NOT the handoff's own cost — the size of the session this handoff
+   *  condenses, i.e. what the next agent would spend replaying it from scratch.
+   *  It's the cost the handoff SAVES, not one it incurs. */
   est_tokens: number;
   est_cost_usd: number;
 }
@@ -85,6 +88,22 @@ export function fitBriefBody(sections: BriefSection[], maxChars: number = HANDOF
 
 export function handoffPath(worktreePath: string): string {
   return join(worktreePath, 'HANDOFF.md');
+}
+
+/**
+ * ISS-09 + ISS-10: the graph excerpt is a per-task HINT, not a mandate. Frame it
+ * as a navigation shortcut that also nudges map/recall-first — but tell the
+ * receiver to read full source where the task needs line-level detail (the map
+ * omits it, and raw-file reading wins on tasks that need exhaustive source).
+ */
+export function graphSectionMd(excerpt: string): string {
+  return [
+    '## Codebase map (graph excerpt)',
+    '_A shortcut to navigate: skim this and `recall_memory` before grepping the whole repo — but read the full source where the task needs line-level detail (the map omits it)._',
+    '```',
+    excerpt,
+    '```',
+  ].join('\n');
 }
 
 export async function buildBrief(
@@ -181,7 +200,7 @@ export async function buildBrief(
     const graphPath = kb.mergedGraphPath ?? kb.projects[0]?.graphPath;
     if (graphPath) {
       const excerpt = await queryGraph(task.task, graphPath, 1500);
-      if (excerpt) push(['## Codebase map (graph excerpt)', '```', excerpt, '```'].join('\n'), 5);
+      if (excerpt) push(graphSectionMd(excerpt), 5);
     }
   }
 

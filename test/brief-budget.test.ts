@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
 import { addTask, getTask } from '../src/store.js';
-import { buildBrief, fitBriefBody, HANDOFF_MAX_CHARS, type BriefSection } from '../src/handoff/brief.js';
+import { buildBrief, fitBriefBody, graphSectionMd, HANDOFF_MAX_CHARS, type BriefSection } from '../src/handoff/brief.js';
 import { saveProgress } from '../src/handoff/progress-ledger.js';
 
 /**
@@ -51,6 +51,15 @@ describe('fitBriefBody (ISS-08 progressive disclosure)', () => {
     expect(body).not.toContain('## commands'); // highest dropOrder → first out
     // graph/files drop next as needed; objective always survives
     expect(body.length).toBeLessThanOrEqual(600);
+  });
+});
+
+describe('graphSectionMd (ISS-09/10 — graph as per-task hint + map/recall nudge)', () => {
+  it('frames the map as a hint and nudges recall-first without mandating map-only', () => {
+    const md = graphSectionMd('GRAPH: foo -> bar');
+    expect(md).toContain('GRAPH: foo -> bar');       // the excerpt is still there
+    expect(md).toContain('recall_memory');            // map/recall-first nudge (ISS-10)
+    expect(md).toMatch(/read the full source/i);      // read source when the task needs it (ISS-09, not a mandate)
   });
 });
 
