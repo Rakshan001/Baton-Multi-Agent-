@@ -18,9 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 22.13 is the floor: the first release where `node:sqlite` (src/history.ts)
-        # is available without --experimental-sqlite. 24 is Active LTS.
-        node: ['22.13', '24']
+        # 24 is the floor (Active LTS). Below it `node:sqlite` either does not
+        # exist (Node 20, src/history.ts) or ships without FTS5, which silently
+        # drops memory-rank.ts from BM25 to the old word-scan scorer.
+        node: ['24']
     steps:
       - name: Checkout
         uses: actions/checkout@v5
