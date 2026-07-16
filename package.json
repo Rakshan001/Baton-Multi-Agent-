@@ -29,7 +29,7 @@
     "url": "git+https://github.com/Rakshan001/Baton-Multi-Agent-.git"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "files": [
     "dist",
