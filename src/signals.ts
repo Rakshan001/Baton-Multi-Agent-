@@ -10,7 +10,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { batonDir, loadTasks, type Task } from './store.js';
 import { detectAgents } from './agents.js';
@@ -241,6 +241,35 @@ export function touchHookSession(root: string, slug: string, at: string = new Da
   getDb(root).prepare(`UPDATE hook_sessions SET at = ? WHERE slug = ?`).run(at, slug);
 }
 
+/**
+ * How long a registered session row outlives its last sighting. Sessions are
+ * never explicitly closed — an agent just stops — and each new session takes a
+ * fresh slug, so without a sweep hook_sessions grows one row per session
+ * forever (38 rows on a real hub, freshest 10h stale, all long invisible to
+ * liveSessions yet still scanned by every reconcile).
+ *
+ * Deliberately far longer than both the presence window (30 min — a session
+ * idles out of the board but stays a real, resolvable session) and the signal
+ * window (30 min). reconcile resolves a session's checkout THROUGH this row, so
+ * dropping it while its signals are live would make them look orphaned and erase
+ * paths that are genuinely held. At 24h, an expired session's signals were
+ * themselves reclaimed 23.5h earlier — there is nothing left to misread.
+ */
+export const SESSION_RETENTION_MIN = 24 * 60;
+
+/** Reclaim session rows past SESSION_RETENTION_MIN. Safe to call on any schedule. */
+export function expireSessions(root: string): void {
+  const cutoff = new Date(Date.now() - SESSION_RETENTION_MIN * 60_000).toISOString();
+  getDb(root).prepare(`DELETE FROM hook_sessions WHERE at < ?`).run(cutoff);
+}
+
+/** Every registered session slug, retention included — for tests/diagnostics. */
+export function allHookSessionSlugs(root: string): string[] {
+  return (getDb(root).prepare(`SELECT slug FROM hook_sessions`).all() as unknown as Array<{ slug: string }>).map(
+    (r) => r.slug,
+  );
+}
+
 function hookSessions(root: string): Map<string, HookSession> {
   const rows = getDb(root).prepare(`SELECT slug, agent, root, at FROM hook_sessions`).all() as unknown as Array<
     HookSession & { slug: string }
@@ -346,8 +375,13 @@ export class SignalTracker {
   }
 
   start(): void {
-    touchHeartbeat(this.root);
-    this.heartbeat = setInterval(() => touchHeartbeat(this.root), HEARTBEAT_REFRESH_MS);
+    // The heartbeat is already a periodic write — fold row reclamation into it
+    // rather than paying for housekeeping on the read path (getSignals is on the
+    // dashboard's 5s poll and the guard's latency budget). Sweep on start too:
+    // rows a crashed daemon left behind shouldn't wait a full interval, and the
+    // daemon may not live long enough to reach one.
+    this.housekeep();
+    this.heartbeat = setInterval(() => this.housekeep(), HEARTBEAT_REFRESH_MS);
     this.heartbeat.unref?.();
     this.unsubs.push(
       bus.onType('file.edited', (e) => {
@@ -368,6 +402,13 @@ export class SignalTracker {
         if (e.event.type === 'task.removed') this.clear(e.event.slug);
       }),
     );
+  }
+
+  /** Liveness stamp + row reclamation, on one schedule. */
+  private housekeep(): void {
+    touchHeartbeat(this.root);
+    expireSettled(this.root);
+    expireSessions(this.root);
   }
 
   stop(): void {
@@ -469,6 +510,12 @@ function expireSettled(root: string): void {
     `DELETE FROM edit_signals WHERE settledAt IS NOT NULL AND rowid NOT IN
        (SELECT rowid FROM edit_signals WHERE settledAt IS NOT NULL ORDER BY settledAt DESC LIMIT ?)`,
   ).run(SETTLED_CAP);
+  // Active rows past the signal window are dead weight: liveRows hides them, so
+  // reconcile can never see them to settle or revive them, and a live edit would
+  // re-record the path anyway. Without this they are never reclaimed — a real hub
+  // held 456 rows from tasks deleted nine days earlier.
+  const activeCutoff = new Date(Date.now() - SIGNAL_WINDOW_MIN * 60_000).toISOString();
+  db.prepare(`DELETE FROM edit_signals WHERE settledAt IS NULL AND at < ?`).run(activeCutoff);
 }
 
 /** Only paths being held right now — the "should I wait?" set. */
@@ -494,6 +541,17 @@ function settleRows(root: string, slug: string, paths?: string[], at = new Date(
 /** A settled path went dirty again — it is being worked on once more. */
 function reactivateRows(root: string, rows: SignalRow[]): void {
   const stmt = getDb(root).prepare(`UPDATE edit_signals SET settledAt = NULL WHERE slug = ? AND path = ?`);
+  for (const r of rows) stmt.run(r.slug, r.path);
+}
+
+/**
+ * Erase rows whose holder no longer exists. A hard delete (not settle) on
+ * purpose: settling means "the work landed, show it briefly"; these rows point
+ * at a checkout that is gone, so there is no work — finished or otherwise — to
+ * point at. Same doctrine as SignalTracker.clear().
+ */
+function clearRows(root: string, rows: SignalRow[]): void {
+  const stmt = getDb(root).prepare(`DELETE FROM edit_signals WHERE slug = ? AND path = ?`);
   for (const r of rows) stmt.run(r.slug, r.path);
 }
 
@@ -547,6 +605,7 @@ async function reconcileSignals(
   const kept: SignalRow[] = [];
   const settled: Array<{ slug: string; path: string }> = [];
   const revived: SignalRow[] = [];
+  const orphaned: SignalRow[] = [];
   const now = Date.now();
   const settledAt = new Date().toISOString();
   await Promise.all(
@@ -555,7 +614,21 @@ async function reconcileSignals(
       // the session registered (usually the main repo root); fs-watch checkout
       // signals (`co-*`) verify against the watched checkout path.
       const checkRoot = tasks.find((t) => t.slug === slug)?.worktreePath ?? sessions.get(slug)?.root ?? watched.get(slug);
-      if (!checkRoot) return void kept.push(...slugRows); // unknown holder → can't verify, keep
+      // "Gone" and "can't read right now" are different, and conflating them is
+      // what let a removed worktree hold every path forever (a `baton clean`
+      // sweep pinned 791 paths; an older one sat "editing" for nine days). A
+      // holder with no checkout to name, or whose checkout is off disk, can never
+      // re-dirty anything — so erase it. Fail-open below stays for the case it
+      // was meant for: a checkout that IS there but git can't answer for.
+      if (!checkRoot || !existsSync(checkRoot)) {
+        for (const r of slugRows) {
+          // Grace still applies: the guard hook records before the write lands,
+          // so a signal can legitimately precede its task appearing in tasks.json.
+          if (now - Date.parse(r.at) < RECONCILE_GRACE_MS) kept.push(r);
+          else orphaned.push(r);
+        }
+        return;
+      }
       const dirty = await worktreeDirtyPaths(checkRoot);
       if (dirty === null) return void kept.push(...slugRows); // git failed → keep
       for (const r of slugRows) {
@@ -574,6 +647,7 @@ async function reconcileSignals(
   );
   for (const s of settled) settleRows(root, s.slug, [s.path], settledAt);
   if (revived.length) reactivateRows(root, revived);
+  if (orphaned.length) clearRows(root, orphaned);
   return kept;
 }
 

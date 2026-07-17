@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
 import { createTask } from '../src/commands/new.js';
-import { SignalTracker, getSignals } from '../src/signals.js';
+import { SignalTracker, getSignals, registerHookSession } from '../src/signals.js';
 import { bus } from '../src/events.js';
 
 /**
@@ -83,9 +83,61 @@ describe('getSignals — lazy read-time reconciliation (P6)', () => {
     expect(signals.map((s) => s.path)).toContain('brand-new.ts');
   });
 
-  it('fails open: keeps a signal whose slug has no matching task (cannot verify)', async () => {
-    edit('ghost-slug', 'somewhere.ts');
+  /**
+   * "Cannot verify" and "provably gone" are different states, and the original
+   * fail-open rule collapsed them. A slug with no task, no session and no watched
+   * checkout has no worktree left to re-dirty its paths — keeping its signals
+   * held every path forever. Observed in a real hub: a task removed by
+   * `baton clean --fix` (a separate CLI process, so the daemon's in-memory
+   * `task.removed` never reached SignalTracker.clear) left 791 paths pinned as
+   * "editing right now", and an earlier one sat there for nine days.
+   */
+  it('clears signals for a holder that is provably gone (no task, session or checkout)', async () => {
+    edit('removed-task', 'somewhere.ts');
     const signals = await getSignals(root);
-    expect(signals.map((s) => s.path)).toContain('somewhere.ts');
+    expect(signals.map((s) => s.path)).not.toContain('somewhere.ts');
+  });
+
+  // The grace window still protects the create race: a hook can record an edit a
+  // moment before `baton new` writes tasks.json. Only aged orphans are cleared.
+  it('keeps a just-recorded signal for an unknown slug (create race, within grace)', async () => {
+    bus.publish({ type: 'file.edited', slug: 'not-yet-a-task', path: 'racing.ts', at: new Date().toISOString() });
+    const signals = await getSignals(root);
+    expect(signals.map((s) => s.path)).toContain('racing.ts');
+  });
+
+  /**
+   * The same failure with a task record still present: `baton doctor` calls this
+   * an "orphaned worktree (stale task)". git can't read a directory that isn't
+   * there, so fail-open pinned these paths too. Existence of the checkout — not
+   * whether we know the slug — is what separates "gone" from "unreadable".
+   */
+  it('clears signals for a task whose worktree directory is gone', async () => {
+    const task = await createTask('worktree deleted underneath', root);
+    await writeFile(join(task.worktreePath, 'w.ts'), 'export const w = 1;\n', 'utf-8');
+    edit(task.slug, 'w.ts');
+    await rm(task.worktreePath, { recursive: true, force: true });
+
+    const signals = await getSignals(root);
+    expect(signals.map((s) => s.path)).not.toContain('w.ts');
+  });
+
+  /**
+   * Fail-open is preserved where it is genuinely correct: the checkout EXISTS,
+   * git just cannot answer for it right now (spawn failure, not-a-repo, transient
+   * FS error). Such a signal must survive — dropping it would tell an agent a
+   * held path is free. A registered session root is used because any path under
+   * a repo would resolve upward to that repo instead of failing.
+   */
+  it('fails open: keeps a signal when the checkout exists but git cannot read it', async () => {
+    const notARepo = await mkdtemp(join(tmpdir(), 'baton-notarepo-'));
+    try {
+      registerHookSession(root, 'sess-live', 'claude', notARepo);
+      edit('sess-live', 'z.ts');
+      const signals = await getSignals(root);
+      expect(signals.map((s) => s.path)).toContain('z.ts');
+    } finally {
+      await rm(notARepo, { recursive: true, force: true });
+    }
   });
 });
