@@ -2,6 +2,12 @@
    BATON — Base + globals (shared component classes, keyframes)
    ============================================================ */
 * { box-sizing: border-box; }
+/* overflow-x on html, not just body's overflow:clip below: clip's propagation
+   to the viewport is inconsistent, so window.scrollTo()/focus-scroll can still
+   shove the whole page sideways past an edge-overflowing element (e.g. a
+   [data-tip] tooltip near a narrow-viewport button) unless html itself is
+   pinned. */
+html { overflow-x: hidden; }
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   font-family: var(--font-sans);
@@ -35,7 +41,11 @@ body {
 *::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: content-box; }
 
 button { font-family: inherit; color: inherit; }
-.mono { font-family: var(--font-mono); font-feature-settings: "calt" 0; }
+/* overflow-wrap: long unbroken tokens (paths, branch names) don't reliably
+   break on "/" by default — without this they overflow fixed-width
+   containers like ConfirmDialog instead of wrapping. Rows that truncate to
+   one line set their own white-space: nowrap, which wins over this. */
+.mono { font-family: var(--font-mono); font-feature-settings: "calt" 0; overflow-wrap: anywhere; }
 
 /* Focus — visible AA rings, only on keyboard */
 :focus { outline: none; }

@@ -166,7 +166,7 @@ export function StatCounter({
 }
 
 /* ---------- ApiDot ---------- */
-export function ApiDot({ state, lastUpdated, onRefresh, live = false, reconnecting = false }: { state: "online" | "fetching" | "offline"; lastUpdated: number | null; onRefresh: () => void; live?: boolean; reconnecting?: boolean }) {
+export function ApiDot({ state, lastUpdated, onRefresh, live = false, reconnecting = false, compact = false }: { state: "online" | "fetching" | "offline"; lastUpdated: number | null; onRefresh: () => void; live?: boolean; reconnecting?: boolean; compact?: boolean }) {
   const [, force] = useReducer((x) => x + 1, 0);
   useEffect(() => { const t = setInterval(force, 1000); return () => clearInterval(t); }, []);
   const meta = state !== "offline" && reconnecting
@@ -176,15 +176,17 @@ export function ApiDot({ state, lastUpdated, onRefresh, live = false, reconnecti
   return (
     <button className="fr" onClick={onRefresh} data-tip={`${meta.t} · localhost:7077\nUpdated ${ago} — click to refresh`} data-tip-side="bottom"
       aria-label={`API ${meta.t}, updated ${ago}. Refresh`} style={{
-        display: "inline-flex", alignItems: "center", gap: 7, height: 32, padding: "0 10px",
-        borderRadius: "var(--r-sm)", border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", cursor: "pointer",
+        display: "inline-flex", alignItems: "center", gap: 7, height: 32, padding: compact ? 0 : "0 10px", width: compact ? 32 : "auto",
+        justifyContent: "center", borderRadius: "var(--r-sm)", border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", cursor: "pointer", flex: "none",
       }}>
       <span style={{ position: "relative", width: 8, height: 8, flex: "none" }}>
         <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: meta.c, animation: state !== "offline" ? "pulse-dot 2s var(--ease-in-out) infinite" : "none" }} />
       </span>
-      <span style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
-        {state === "offline" ? "Offline" : reconnecting ? "reconnecting…" : <>updated <span className="mono">{ago === "just now" ? "0s" : timeAgoShort(lastUpdated)}</span></>}
-      </span>
+      {!compact && (
+        <span style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+          {state === "offline" ? "Offline" : reconnecting ? "reconnecting…" : <>updated <span className="mono">{ago === "just now" ? "0s" : timeAgoShort(lastUpdated)}</span></>}
+        </span>
+      )}
     </button>
   );
 }

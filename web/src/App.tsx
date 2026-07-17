@@ -291,7 +291,7 @@ function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, on
           <Icon name="lock" size={12} /> Read-only
         </span>
       )}
-      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} reconnecting={reconnecting} />
+      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} reconnecting={reconnecting} compact={isMobile} />
       <ThemeToggle prefs={prefs} />
     </header>
   );
