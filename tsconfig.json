@@ -11,6 +11,8 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "resolveJsonModule": true,
+    // TS 7 dropped the @types/* auto-discovery 5.x did. This is an allowlist:
+    // a new @types package is invisible until it is named here.
     "types": ["node"]
   },
   "include": ["src/**/*"],
