@@ -239,6 +239,16 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
+/**
+ * USD for the stat strip. Cents are noise next to a five-figure figure and
+ * `$22846.13` is hard to read at a glance, so group the digits and drop the
+ * fraction once we're past pocket change.
+ */
+export function fmtUsd(n: number): string {
+  const digits = n >= 100 ? 0 : 2;
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
 /* ---------------- LIVE ACTIVITY (demo-mode scripted stream) ---------------- */
 export type LiveEventType = "boot" | "think" | "read" | "edit" | "create" | "delete" | "cmd" | "out" | "commit" | "warn";
 export interface LiveEvent { t: LiveEventType; text: string; meta?: string }
