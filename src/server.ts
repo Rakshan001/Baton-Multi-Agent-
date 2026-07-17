@@ -74,7 +74,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { auditJunk, cleanJunk, sweepTmpFiles } from './cleanup.js';
 import { basename } from 'node:path';
-import { isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
+import { isLoopbackHost, isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
 import { GraphifyPool } from './kb/graphify-server.js';
 import { getMcpToken } from './kb/mcp-token.js';
 import { SseGate } from './util/sse-gate.js';
@@ -383,6 +383,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
   const method = req.method ?? 'GET';
+
+  // Anti-DNS-rebinding — FIRST, and on EVERY request including reads, because
+  // this is the one attack the Origin guard below structurally cannot see. A page
+  // on evil.com re-points its DNS at 127.0.0.1; the browser then treats us as
+  // same-origin, sends no cross-origin Origin, and CORS never engages — so the
+  // reads sailed through and handed over the repo's task list, branch names and
+  // file paths. Origin can't help (absent Origin is legitimately allowed for curl
+  // and same-origin), but Host can: the browser sets it to the name it dialled
+  // and script cannot forge it. Reject before routing so no handler, static file
+  // or SSE stream is reachable under a rebound name.
+  if (!isLoopbackHost(req.headers.host)) {
+    return send(res, 403, { error: 'forbidden' }, origin);
+  }
 
   if (method === 'OPTIONS') {
     res.writeHead(204, {
