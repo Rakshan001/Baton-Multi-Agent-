@@ -51,6 +51,28 @@ describe('detectProjects / findNestedGitRepos', () => {
     expect(p[0].path).toBe(base);
   });
 
+  it('REGRESSION FIX: linked worktrees of an indexed repo are not projects of their own', async () => {
+    await initRepo(join(base, 'api'));
+    await initRepo(join(base, 'web'));
+    // What `baton new` (and `git worktree add`) leaves behind, in both layouts
+    // seen in the wild: a worktrees/ container and a sibling at the root.
+    await git(['worktree', 'add', '-q', '-b', 'task-a', join(base, 'worktrees', 'wt-a')], join(base, 'api'));
+    await git(['worktree', 'add', '-q', '-b', 'task-b', join(base, 'wt-b')], join(base, 'api'));
+
+    const p = await detectProjects(base);
+    expect(p.map((x) => x.name).sort()).toEqual(['api', 'web']); // not 4 projects
+  });
+
+  it('a submodule keeps its own project (its .git file points at modules/, not worktrees/)', async () => {
+    await initRepo(join(base, 'lib'));
+    await git(['commit', '-qm', 'init', '--allow-empty'], join(base, 'lib'));
+    await initRepo(join(base, 'app'));
+    await git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', join(base, 'lib'), 'vendored'], join(base, 'app'));
+
+    expect((await findNestedGitRepos(base)).map((x) => x.name).sort()).toEqual(['app', 'lib']);
+    expect((await findNestedGitRepos(join(base, 'app'))).map((x) => x.name)).toEqual(['vendored']);
+  });
+
   it('findNestedGitRepos sees repos regardless of a root marker', async () => {
     await writeFile(join(base, 'package.json'), '{"name":"workspace"}\n', 'utf-8');
     await initRepo(join(base, 'api'));

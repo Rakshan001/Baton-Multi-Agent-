@@ -4,7 +4,7 @@
  * a plain single-project repo gets exactly one graph at its root.
  */
 import { readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 
 export const PROJECT_MARKERS = ['package.json', 'pyproject.toml', 'go.mod', 'Cargo.toml', 'pom.xml'];
@@ -25,6 +25,24 @@ function isProjectDir(dir: string): boolean {
   return PROJECT_MARKERS.some((m) => existsSync(join(dir, m))) || isGitDir(dir);
 }
 
+/**
+ * A linked git worktree — `.git` is a file pointing into the real repo's
+ * `.git/worktrees/<name>`. Baton's own `baton new` creates these by the dozen,
+ * and they carry both `.git` and a package.json, so without this they get
+ * indexed as separate projects: N near-duplicates of a repo already in the KB.
+ * A submodule's `.git` file points at `.git/modules/<name>` instead and stays a
+ * project of its own.
+ */
+function isGitWorktree(dir: string): boolean {
+  const dotGit = join(dir, '.git');
+  try {
+    if (!statSync(dotGit).isFile()) return false;
+    return /^gitdir:.*[\\/]worktrees[\\/]/m.test(readFileSync(dotGit, 'utf-8'));
+  } catch {
+    return false;
+  }
+}
+
 /** Depth-limited DFS collecting directories where `isStop` holds (and not descending into them). */
 async function walk(dir: string, depth: number, found: string[], isStop: (d: string) => boolean): Promise<void> {
   if (depth > MAX_DEPTH) return;
@@ -37,6 +55,8 @@ async function walk(dir: string, depth: number, found: string[], isStop: (d: str
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
     const child = join(dir, e.name);
+    // A worktree mirrors a repo we already index — skip it AND its subtree.
+    if (isGitWorktree(child)) continue;
     if (isStop(child)) {
       found.push(child);
       // Don't descend into a detected project — its own nested packages belong to it.
