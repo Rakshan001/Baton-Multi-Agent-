@@ -55,6 +55,26 @@ function estCostUsd(tokens: number): number {
  */
 export const HANDOFF_MAX_CHARS = 4500;
 
+/**
+ * A brief is a snapshot: its plan, diffstat and memory section freeze at
+ * `baton pass` time. When commits have landed in the checkout since, the
+ * receiver must be told the ground truth has moved — served verbatim, a
+ * days-old brief reads as the current state of the work. Returns null when
+ * fresh, or unknowable (no created stamp, git unreadable): a warning we
+ * cannot substantiate is noise, not safety.
+ */
+export async function briefStalenessWarning(cwd: string, created: string | undefined): Promise<string | null> {
+  if (!created || Number.isNaN(Date.parse(created))) return null;
+  const r = await gitTry(['-C', cwd, 'rev-list', '--count', `--since=${created}`, 'HEAD']);
+  if (!r.ok) return null;
+  const n = Number(r.stdout.trim());
+  if (!Number.isFinite(n) || n === 0) return null;
+  return (
+    `⚠ STALE BRIEF — written ${created.slice(0, 10)}; ${n} commit${n === 1 ? ' has' : 's have'} landed here since.\n` +
+    `Trust \`git log\` and \`git diff\` for the current state — this brief's plan and "state of the work" predate them.`
+  );
+}
+
 /** A rendered brief section plus how droppable it is under budget. */
 export interface BriefSection {
   md: string;
@@ -115,7 +135,17 @@ export async function buildBrief(
   // ISS-06: for a non-Claude agent there is no transcript, so plan/notes/files
   // used to vanish. Merge the agent-agnostic progress ledger (save_progress) —
   // preferring the richer transcript per field when it exists, else the ledger.
-  const ledger = await loadProgress(opts.root, task.slug).catch(() => null);
+  let ledger = await loadProgress(opts.root, task.slug).catch(() => null);
+  // A ledger that predates the worktree's last commit describes work that has
+  // since landed — an abandoned ledger would otherwise resurface in a much
+  // later brief as if it were the current plan. Git ground truth (below) is
+  // what the receiver should trust; the stale ledger adds only misdirection.
+  if (ledger) {
+    const lastCommit = await gitTry(['-C', task.worktreePath, 'log', '-1', '--format=%cI']);
+    if (lastCommit.ok && lastCommit.stdout && Date.parse(ledger.updatedAt) < Date.parse(lastCommit.stdout.trim())) {
+      ledger = null;
+    }
+  }
   const todos = (session?.todos.length ? session.todos : ledger?.plan) ?? [];
   const notes = (session?.lastNotes.length ? session.lastNotes : ledger?.notes) ?? [];
   const filesEdited = (session?.filesEdited.length ? session.filesEdited : ledger?.filesEdited) ?? [];

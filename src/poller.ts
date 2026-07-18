@@ -18,10 +18,22 @@ export class StatusPoller {
   private timer: ReturnType<typeof setInterval> | null = null;
   private listeners = 0;
   private prev: StatusRow[] | null = null;
+  private prevAt = 0;
   private running = false;
 
   constructor(root: string) {
     this.root = root;
+  }
+
+  /**
+   * The latest collected rows, if fresh enough to serve — so HTTP reads ride
+   * the poller's shared scan instead of spawning their own ~10 git processes
+   * per task. Null when the poller is idle (no SSE client) or the snapshot
+   * has aged out; callers then collect directly.
+   */
+  snapshot(maxAgeMs: number = INTERVAL_MS + 500): StatusRow[] | null {
+    if (!this.prev || Date.now() - this.prevAt > maxAgeMs) return null;
+    return this.prev;
   }
 
   /** Call when an SSE client connects; returns a release fn for disconnect. */
@@ -55,6 +67,7 @@ export class StatusPoller {
       const rows = await collectStatus(this.root);
       const prev = this.prev;
       this.prev = rows;
+      this.prevAt = Date.now();
       if (!prev) return; // first snapshot is a baseline, not a change
       if (JSON.stringify(rows) !== JSON.stringify(prev)) {
         bus.publish({ type: 'status.changed', rows });

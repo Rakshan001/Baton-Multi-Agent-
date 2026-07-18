@@ -38,6 +38,9 @@ function getDb(root: string): DatabaseSync {
     // Match history.ts: WAL persists in the file header; synchronous is per-handle,
     // and this is a separate connection to the same .baton/history.db.
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+    // Concurrent writers share this file; without a busy timeout a locked write
+    // throws immediately instead of waiting out a millisecond-scale WAL commit.
+    db.exec('PRAGMA busy_timeout = 5000;');
     conns.set(path, db);
   }
   return db;

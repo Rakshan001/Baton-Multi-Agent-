@@ -3,7 +3,7 @@
  * an in-process build queue so two graphify runs never race on one project.
  * Persisted at <repo>/.baton/kb.json (gitignored, same as tasks.json).
  */
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
 import { batonDir } from '../store.js';
 import { readStats, type GraphStats } from './graphify.js';
@@ -85,7 +85,12 @@ export async function loadKb(root: string): Promise<KbState | null> {
 export async function saveKb(root: string, state: KbState): Promise<void> {
   const file = kbFile(root);
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  // tmp + rename, like saveTasks: a torn kb.json is worse than a stale one —
+  // loadKb() falling back to null makes hubClaimsProject() deny every checkout,
+  // which silently re-enables shadow-.baton adoption (the P1 misrouting bug).
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  await rename(tmp, file);
 }
 
 export interface KbProjectStat extends KbProject {

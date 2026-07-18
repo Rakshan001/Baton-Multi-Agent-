@@ -27,7 +27,7 @@ describe('matchAgentToWorktree', () => {
 });
 
 describe('detectAgents TTL cache', () => {
-  it('reuses the scan within 2s for the same paths, rescans after and on key change', async () => {
+  it('reuses the scan within the TTL for the same paths, rescans after and on key change', async () => {
     resetDetectAgentsCache();
     let calls = 0;
     const scan = async () => { calls++; return new Map([['/wt/a', 'claude']]); };
@@ -43,7 +43,7 @@ describe('detectAgents TTL cache', () => {
     expect(r2).not.toBe(r1); // defensive copy, not the cached Map itself
     expect([...r2.entries()]).toEqual([...r1.entries()]);
 
-    t += 2001; // TTL expired
+    t += 5001; // TTL expired
     await detectAgents(['/wt/a'], { scan, now });
     expect(calls).toBe(2);
 
@@ -115,7 +115,7 @@ describe('detectRootAgents — agents at a hub/repo root, not tied to any task w
     await detectRootAgents(['/hub'], [], { scan, now });
     await detectRootAgents(['/hub'], [], { scan, now });
     expect(calls).toBe(1);
-    t += 2001;
+    t += 5001;
     await detectRootAgents(['/hub'], [], { scan, now });
     expect(calls).toBe(2);
   });

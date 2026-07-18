@@ -385,6 +385,9 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
     .slice(0, 8);
   const files: FileAnchor[] = [];
   for (const path of relFiles) files.push({ path, hash: await fileHash(mainRoot, path) });
+  // No files given → anchor to any real files the fact's own text names.
+  // Without this, the fact bypasses staleness verification permanently.
+  if (files.length === 0) files.push(...(await deriveFileAnchors(mainRoot, fact)));
 
   // Same fingerprint → CANDIDATE for supersede (updated knowledge). But the
   // fingerprint is only the first 6 words; confirm the bodies are actually the
@@ -469,6 +472,14 @@ async function listMemoryFacts(mainRoot: string): Promise<MemoryFact[]> {
   return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/**
+ * Commit distance past which an UNANCHORED fact stops being served as truth.
+ * Generous on purpose: a genuinely file-independent convention should survive
+ * normal churn, but "50 commits and nothing ever verified it" is the point
+ * where confidently serving it becomes the hallucination vector.
+ */
+const UNANCHORED_STALE_BEHIND = 50;
+
 /** rev-list counts cached per (anchor, HEAD) — stable until a new commit lands. */
 const behindCache = new Map<string, number | null>();
 
@@ -496,18 +507,34 @@ export async function listMemories(root: string, opts: { projects?: ProjectRel[]
     }
     let commitsBehind: number | null = null;
     if (f.anchors.commit && head) {
-      const key = `${f.anchors.commit}..${head}`;
+      // Scoped to the anchored paths: in a multi-agent hub, unrelated commits
+      // land constantly, and a global count would flip every fact to "aging"
+      // within hours — "N commits touched what this fact is about" is the
+      // signal that means something. Anchorless facts keep the global count
+      // (there is nothing to scope to; distance is their only aging signal).
+      const paths = f.anchors.files.map((a) => a.path);
+      const range = `${f.anchors.commit}..${head}`;
+      const key = paths.length ? `${range} -- ${paths.join(',')}` : range;
       if (!behindCache.has(key)) {
         // FIFO single-entry eviction — clear() here would re-spawn up to FACT_CAP
         // `git rev-list` subprocesses on the next poll (a re-scan stampede).
         if (behindCache.size >= 2048) behindCache.delete(behindCache.keys().next().value!);
         try {
-          behindCache.set(key, Number(await git(['rev-list', '--count', key], mainRoot)));
+          const argv = ['rev-list', '--count', range, ...(paths.length ? ['--', ...paths] : [])];
+          behindCache.set(key, Number(await git(argv, mainRoot)));
         } catch {
           behindCache.set(key, null); // unknown anchor (gc'd / rewritten history)
         }
       }
       commitsBehind = behindCache.get(key) ?? null;
+    }
+    // A fact with no file anchors has nothing to re-hash — the stale check
+    // above is blind to it, so without this it would be served as fresh
+    // forever, however wrong the repo has made it. Age it out on commit
+    // distance instead: far enough behind, it is withheld like any other
+    // stale fact (and surfaced as a re-grounding pointer, not silently gone).
+    if (!staleReason && f.anchors.files.length === 0 && commitsBehind !== null && commitsBehind > UNANCHORED_STALE_BEHIND) {
+      staleReason = `saved with no file anchors ${commitsBehind} commits ago — nothing verifies it still holds; re-check and re-save with files`;
     }
     const freshness: Freshness = staleReason ? 'stale' : commitsBehind && commitsBehind > 0 ? 'aging' : 'fresh';
     statuses.push({ ...f, freshness, staleReason, commitsBehind, project: deriveProject(f.anchors.files.map((a) => a.path), projects) });
@@ -718,6 +745,27 @@ export function extractVerifiableTerms(fact: string): string[] {
   return [...out].filter((t) => t.length >= 3).slice(0, 12);
 }
 
+/**
+ * Derive file anchors from the fact's own text: path-shaped verifiable terms
+ * that name a file which actually exists. This is what stands between an
+ * agent that skipped `files:` and a fact the withholding pipeline can never
+ * see go stale — no anchors means nothing to re-hash, means served as truth
+ * forever. Only real files count: `foo.bar.baz` is path-shaped but hashes
+ * to nothing, so it is skipped rather than anchored.
+ */
+export async function deriveFileAnchors(mainRoot: string, fact: string): Promise<FileAnchor[]> {
+  const anchors: FileAnchor[] = [];
+  for (const term of extractVerifiableTerms(fact)) {
+    if (!term.includes('/') && !/\.[a-z][a-z0-9]{0,4}$/i.test(term)) continue;
+    const path = term.replace(/^\.\//, '');
+    if (isAbsolute(path) || path.includes('..')) continue;
+    const hash = await fileHash(mainRoot, path);
+    if (hash) anchors.push({ path, hash });
+    if (anchors.length >= 8) break;
+  }
+  return anchors;
+}
+
 /** Exact-token survival: `ORIGIN_GUARD` must NOT count as present when the
  *  file only has `ORIGIN_GUARD_V2` — a rename is exactly the change that can
  *  make the fact false, so a substring check would false-pass the repair. */
@@ -751,12 +799,16 @@ export async function repairMemories(root: string): Promise<RepairResult> {
   for (const f of all) {
     if (f.freshness !== 'stale') continue;
     const terms = extractVerifiableTerms(f.fact);
-    let verified = terms.length > 0;
+    // An anchorless fact went stale on commit distance alone (there was never a
+    // file to invalidate it). Try to give it the anchors it should have had:
+    // real files its own text names. No derivable evidence → review queue.
+    const anchorFiles = f.anchors.files.length > 0 ? f.anchors.files : await deriveFileAnchors(mainRoot, f.fact);
+    let verified = terms.length > 0 && anchorFiles.length > 0;
     if (verified) {
       // Haystack: the anchor paths themselves + current contents of every
       // anchored file. A deleted anchor is unverifiable by definition.
-      let hay = f.anchors.files.map((a) => a.path).join('\n');
-      for (const a of f.anchors.files) {
+      let hay = anchorFiles.map((a) => a.path).join('\n');
+      for (const a of anchorFiles) {
         try {
           hay += '\n' + (await readFile(join(mainRoot, a.path), 'utf-8'));
         } catch {
@@ -771,7 +823,7 @@ export async function repairMemories(root: string): Promise<RepairResult> {
       continue;
     }
     const files: FileAnchor[] = [];
-    for (const a of f.anchors.files) files.push({ path: a.path, hash: await fileHash(mainRoot, a.path) });
+    for (const a of anchorFiles) files.push({ path: a.path, hash: await fileHash(mainRoot, a.path) });
     const updated: MemoryFact = {
       id: f.id, type: f.type, fact: f.fact, agent: f.agent, task: f.task,
       createdAt: f.createdAt, anchors: { commit: head ?? f.anchors.commit, files },

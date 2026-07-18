@@ -4,7 +4,7 @@
  * `baton done [slug]` — mark the brief done.
  */
 import { gitRoot } from '../git.js';
-import { readBrief, setBriefStatus } from '../handoff/brief.js';
+import { briefStalenessWarning, readBrief, setBriefStatus } from '../handoff/brief.js';
 import { resolveTask } from './pass.js';
 
 export async function takeCmd(slug: string | undefined): Promise<void> {
@@ -32,9 +32,12 @@ export async function takeCmd(slug: string | undefined): Promise<void> {
     return;
   }
   await setBriefStatus(task.worktreePath, 'in-progress');
+  const staleWarning = await briefStalenessWarning(task.worktreePath, brief.meta.created);
 
   // The execution prompt — paste (or pipe) this into the receiving agent.
+  // The staleness warning goes INSIDE the delimiters so a piped agent sees it.
   console.log('────────────────────────────────────────────────────────');
+  if (staleWarning) console.log(staleWarning + '\n');
   console.log(brief.body.trim());
   console.log('────────────────────────────────────────────────────────');
   console.log(`(brief: ${task.worktreePath}/HANDOFF.md · status → in-progress)`);

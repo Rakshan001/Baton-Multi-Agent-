@@ -91,6 +91,15 @@ interface ServeOptions {
 /** Lazily-started per-daemon live infrastructure (one per `serve()`). */
 let poller: StatusPoller | null = null;
 
+/**
+ * Board rows for HTTP reads: ride the poller's fresh snapshot when a dashboard
+ * is connected (one shared git scan per tick instead of ~10 spawns per task per
+ * request), fall back to a direct collection when the poller is idle or stale.
+ */
+async function statusRows(root: string) {
+  return poller?.snapshot() ?? collectStatus(root);
+}
+
 /** Shared graphify backend pool — started in serve(), null until then. */
 let graphPool: GraphifyPool | null = null;
 
@@ -226,8 +235,18 @@ async function handleTerminalStream(req: IncomingMessage, res: ServerResponse, s
   });
   res.write(': connected\n\n');
 
-  const write = (type: string, data: unknown) =>
+  // Slow-consumer policy: raw terminal bytes flow at full agent-output rate,
+  // and a stalled tab (backgrounded, frozen laptop lid) accumulates all of it
+  // in this process's socket buffer. Past the cap, drop the connection — a
+  // reconnect gets a fresh snapshot, which is cheaper than unbounded heap.
+  const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+  const write = (type: string, data: unknown) => {
+    if (res.writableLength > MAX_BUFFERED_BYTES) {
+      res.destroy(); // fires req 'close' → heartbeat/unsub/slot cleanup below
+      return;
+    }
     res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
   // Subscribe first and buffer live frames until the snapshot is sent, so the
   // async capture below can't let a delta arrive before its base screen.
@@ -607,6 +626,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       'Vary': 'Origin',
     });
     const child = execa('tar', ['-czf', '-', '-C', staging, '.'], { buffer: false });
+    // The promise is never awaited, and child.kill() below guarantees it rejects
+    // when the client cancels — an unhandled rejection without this catch.
+    child.catch(() => undefined);
     // Client cancelling the download makes res emit EPIPE/ECONNRESET; without a
     // listener that crashes the daemon. Tear down the other side on either error.
     child.stdout?.on('error', () => res.destroy());
@@ -664,7 +686,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, { agents: allSnippets(state, mcpOpts) }, origin);
   }
 
-  if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
+  if (method === 'GET' && path === '/api/status') return send(res, 200, await statusRows(root), origin);
   // GET /api/sessions — connected agents with no task worktree (presence layer)
   if (method === 'GET' && path === '/api/sessions') return send(res, 200, await collectPresence(root), origin);
   if (method === 'GET' && path === '/api/agents/root') {
@@ -723,7 +745,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (m && method === 'GET') {
     const slug = decodeURIComponent(m[1]);
     const [rows, tasks, history] = [
-      await collectStatus(root),
+      await statusRows(root),
       await loadTasks(root),
       listHistory(root),
     ];
@@ -1087,7 +1109,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   const shm = path.match(/^\/api\/tasks\/([^/]+)\/suggest-handoff$/);
   if (shm && method === 'GET') {
     const slug = decodeURIComponent(shm[1]);
-    const rows = await collectStatus(root);
+    const rows = await statusRows(root);
     const row = rows.find((r) => r.slug === slug);
     if (!row) return send(res, 404, { error: `no task '${slug}'` }, origin);
     const loads = agentActiveLoads(rows);
@@ -1203,7 +1225,24 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     );
   });
 
-  await new Promise<void>((resolve) => server.listen(opts.port, '127.0.0.1', resolve));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(opts.port, '127.0.0.1', () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+  } catch (e) {
+    // Without this, a second daemon dies with an unhandled 'error' stack trace
+    // (after already starting watchers and writing heartbeat rows). exit(1)
+    // tears all of that down; the surviving daemon owns the registry rows.
+    if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      console.error(`baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
+      process.exit(1);
+    }
+    throw e;
+  }
   if (existsSync(WEB_DIST)) {
     console.log(`baton serve → dashboard http://localhost:${opts.port}`);
   } else {

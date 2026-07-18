@@ -63,6 +63,12 @@ function getDb(root: string): DatabaseSync {
   if (!db) {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
+    // history.db has concurrent writers (daemon timers, every agent's MCP process,
+    // a transient guard per edit). DatabaseSync's default busy timeout is 0, so a
+    // write that lands while another connection holds the lock THROWS instead of
+    // waiting — inside a setInterval/bus callback that's a daemon crash. WAL writes
+    // are millisecond-scale; a short busy-wait absorbs the contention entirely.
+    db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
     migrate(db);
     conns.set(path, db);
@@ -406,9 +412,15 @@ export class SignalTracker {
 
   /** Liveness stamp + row reclamation, on one schedule. */
   private housekeep(): void {
-    touchHeartbeat(this.root);
-    expireSettled(this.root);
-    expireSessions(this.root);
+    // Runs from setInterval — a throw here (locked/corrupt db) would be an
+    // uncaughtException and kill the daemon over pure housekeeping.
+    try {
+      touchHeartbeat(this.root);
+      expireSettled(this.root);
+      expireSessions(this.root);
+    } catch (err) {
+      console.error('baton: signal housekeeping failed:', err);
+    }
   }
 
   stop(): void {
@@ -425,13 +437,18 @@ export class SignalTracker {
          ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at, settledAt = NULL`,
       )
       .run(slug, path, at);
-    void this.checkOverlap(path);
+    this.checkOverlap(path);
   }
 
-  private async checkOverlap(path: string): Promise<void> {
+  private checkOverlap(path: string): void {
     // Settled holders can't overlap with anyone — they've let the path go.
-    const holders = activeRows(this.root).filter((r) => r.path === path);
-    const slugs = [...new Set(holders.map((h) => h.slug))];
+    // Indexed on path: the previous full live-rows scan per changed file made
+    // burst cost quadratic in burst size.
+    const cutoff = new Date(Date.now() - SIGNAL_WINDOW_MIN * 60_000).toISOString();
+    const holders = getDb(this.root)
+      .prepare(`SELECT DISTINCT slug FROM edit_signals WHERE path = ? AND settledAt IS NULL AND at >= ?`)
+      .all(path, cutoff) as unknown as Array<{ slug: string }>;
+    const slugs = holders.map((h) => h.slug);
     if (slugs.length >= 2 && !this.announced.has(path)) {
       this.announced.add(path);
       bus.publish({ type: 'signal.overlap', path, slugs });
@@ -561,7 +578,27 @@ function clearRows(root: string, rows: SignalRow[]): void {
  * file being freshly created would look settled). Returns null when git can't
  * answer, so callers fail OPEN — a signal we can't verify is kept, not dropped.
  */
+/**
+ * Concurrent dirty-path scans of one checkout share a single pair of git
+ * spawns: reconcile fans out with Promise.all, the dashboard poll and
+ * check_files land together, and a session + its co-* watcher slug verify
+ * against the same checkout — without coalescing that's dozens of identical
+ * spawns in one burst. Deliberately NOT a time-based cache: a sequential
+ * read after an edit must see the new state immediately (the revive path
+ * depends on it), so only truly overlapping calls share a result.
+ */
+const dirtyScanInflight = new Map<string, Promise<Set<string> | null>>();
+
 async function worktreeDirtyPaths(worktreePath: string): Promise<Set<string> | null> {
+  let scan = dirtyScanInflight.get(worktreePath);
+  if (!scan) {
+    scan = scanDirtyPaths(worktreePath).finally(() => dirtyScanInflight.delete(worktreePath));
+    dirtyScanInflight.set(worktreePath, scan);
+  }
+  return scan;
+}
+
+async function scanDirtyPaths(worktreePath: string): Promise<Set<string> | null> {
   const diff = await gitTry(['-C', worktreePath, 'diff', '--name-only', 'HEAD']);
   if (!diff.ok) return null;
   const paths = new Set(diff.stdout.split('\n').filter(Boolean));

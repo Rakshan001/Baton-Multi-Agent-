@@ -79,7 +79,7 @@ export class WorktreeWatcher {
   async start(): Promise<void> {
     await this.resync();
     this.unsubs.push(
-      bus.onType('task.created', () => void this.resync()),
+      bus.onType('task.created', () => this.safeResync()),
       bus.onType('task.removed', (e) => {
         if (e.event.type === 'task.removed') this.remove(e.event.slug);
       }),
@@ -89,13 +89,19 @@ export class WorktreeWatcher {
     // daemon picks them up either way.
     try {
       const storeWatcher = watch(batonDir(this.root), (_evt, filename) => {
-        if (filename?.toString() === 'tasks.json') void this.resync();
+        if (filename?.toString() === 'tasks.json') this.safeResync();
       });
       storeWatcher.on('error', () => undefined);
       this.unsubs.push(() => storeWatcher.close());
     } catch {
       /* .baton dir may not exist yet — bus events still cover the API path */
     }
+  }
+
+  /** resync() for fire-and-forget callers (bus/fs-watch callbacks): a rejection
+   *  there is an unhandledRejection — daemon exit — so it must never propagate. */
+  private safeResync(): void {
+    this.resync().catch((err) => console.error('baton: watcher resync failed:', err));
   }
 
   /**

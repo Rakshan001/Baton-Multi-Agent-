@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-10 (session 14: W-round — worktree GC, honest-graph, downshift routing, antigravity skills, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open; PR #6 = skills+coordination)
+> Last updated: **2026-07-18 (session 15: hardening round after a 4-track audit — security/resources/memory-staleness/concurrency — on `chore/typescript-7-attempt`)**. P0 stability: SQLite `busy_timeout` on all three history.db connections (a locked write THREW and killed the daemon from timer callbacks), event-bus subscriber isolation, atomic `saveKb` (a torn kb.json silently re-enabled shadow-`.baton` adoption), kb-export unhandled-rejection catch. P1 resources: `repoState` marker probes collapsed 5 spawns→cached stats, `/api/status` rides the poller snapshot, ps/lsof TTL 2s→5s, indexed `checkOverlap` (was a full-table scan per changed file). P2 memory: facts saved without `files:` now auto-derive anchors from their own text and age to stale past 50 commits (they previously could NEVER go stale), `baton take`/`resume` prepend a STALE BRIEF warning when commits landed after the brief, progress ledgers predating the last commit are dropped from briefs, `commitsBehind` scoped to anchored paths. P3: flag-lookalike prompts neutralized in positional argv slots, coalesced dirty-path scans, terminal-SSE slow-consumer cap (4MB → drop), clean EADDRINUSE message. Audit verdicts: no exploitable security findings; P1 gitRoot→worktree bug confirmed fixed. (PR #5, #6 status unchanged.)
 
 ## What this project is
 

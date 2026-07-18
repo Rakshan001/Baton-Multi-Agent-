@@ -62,6 +62,9 @@ function getDb(root: string): DatabaseSync {
     // fsync-stalling the daemon's single event loop. synchronous is per-connection,
     // so reports.ts (a separate handle to this same file) sets it too.
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+    // Concurrent writers (signals.ts, reports.ts, agent MCP/guard processes) share
+    // this file; without a busy timeout a locked write throws immediately.
+    db.exec('PRAGMA busy_timeout = 5000;');
     conns.set(path, db);
   }
   return db;
