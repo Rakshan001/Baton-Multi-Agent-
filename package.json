@@ -39,7 +39,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^15.0.0",
-    "execa": "^9.5.1",
+    "execa": "^10.0.0",
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
