@@ -37,10 +37,17 @@ The catalog and rendering logic live in [`src/skills/catalog.ts`](../src/skills/
 baton review save <slug> < findings.json   # the skill's last step (stdin JSON)
 baton review list                          # every review, newest first, open counts per axis
 baton review show <slug>                   # findings grouped by axis
-baton review resolve <slug> <n> [--dismiss]
+baton review resolve <slug> <id|n> [--dismiss]
 ```
 
-Saving emits a `review.completed` event on the bus, and `GET /api/reviews` serves the records. Counts are always **per axis, never summed** — a combined total is the cross-axis ranking the skill exists to prevent. A review recorded against an older HEAD is flagged stale on read, the same discipline [memory](./memory.md) uses for facts.
+Saving emits a `review.completed` event on the bus, `GET /api/reviews` serves the records, and **any still-open findings ride into the handoff brief** — so `baton take` / `baton resume` show the next agent what it's inheriting without them knowing to look.
+
+Four rules make the record trustworthy:
+
+- **Stable identity.** Every finding carries an id derived from axis+file+title, not from its position. A re-review reorders the list, so an index is only valid until the next review; `resolve` accepts either, but scripts should use the id.
+- **Triage survives, stale claims don't.** A re-review **keeps** anything `--dismiss`ed (a human said "not a problem" — don't make them re-triage it) but **resets** a `fixed` finding the reviewer reports again. If it's still found, it isn't fixed; the fresh report is ground truth.
+- **Secrets are redacted, findings are kept.** Findings quote raw hunks, so `detectSecret()` (shared with [memory](./memory.md)) scrubs title, source, and detail before the write. Unlike memory, which *rejects* the whole fact, reviews redact the field — "you hardcoded a key at line 42" is exactly what the Security axis exists to report, and dropping it would blind the check.
+- **Counts are per axis, never summed.** A combined total is the cross-axis ranking the skill exists to prevent. A review recorded against an older HEAD is flagged stale on read, the same discipline memory uses for facts.
 
 Deliberately *not* an MCP tool: a 14th tool would breach `TOOL_HELP_BUDGET` ([`src/mcp-help.ts`](../src/mcp-help.ts)), a context tax every agent session pays forever. Reviews are occasional, so they go through the CLI instead.
 

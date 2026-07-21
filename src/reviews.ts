@@ -19,9 +19,11 @@
  * Stored as small, capped JSON, written atomically (tmp + rename) so two agents
  * reviewing at once can't tear the file.
  */
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { batonDir } from './store.js';
+import { detectSecret } from './memory.js';
 
 /** The axes the code-review skill runs. Kept separate at every layer — a
  *  combined score is exactly what the skill exists to prevent. */
@@ -37,6 +39,10 @@ export const FINDING_ROUTES = ['fix-directly', 'systematic-debugging', 'bug-fix'
 export type FindingRoute = (typeof FINDING_ROUTES)[number];
 
 export interface ReviewFinding {
+  /** Stable identity across re-reviews — derived from axis+file+title, NOT from
+   *  position. A positional index is not a handle: a re-review reorders the
+   *  array, and an index resolved afterwards lands on a different finding. */
+  id: string;
   axis: ReviewAxis;
   /** One line: what is wrong. */
   title: string;
@@ -118,6 +124,19 @@ function str(v: unknown, max: number): string {
   return String(v ?? '').trim().slice(0, max);
 }
 
+/**
+ * Findings quote raw diff hunks, so a hunk touching a config file can carry a
+ * live credential straight to disk. `memory.ts` refuses such text outright, but
+ * refusing here would be wrong: "you hardcoded a key at line 42" is precisely
+ * what the Security axis exists to report, and dropping it would blind the one
+ * check that catches it. So the field is redacted and the finding is kept —
+ * location and citation survive, the secret does not.
+ */
+function redact(text: string): string {
+  const what = detectSecret(text);
+  return what ? `[redacted: ${what} — see the file itself]` : text;
+}
+
 function isAxis(v: unknown): v is ReviewAxis {
   return typeof v === 'string' && (REVIEW_AXES as readonly string[]).includes(v);
 }
@@ -129,6 +148,20 @@ function isStatus(v: unknown): v is FindingStatus {
 }
 
 /**
+ * Stable identity for a finding: what makes it *this* finding rather than
+ * another one — the axis it came from, the file it anchors to, and its title.
+ * Deliberately excludes `detail`, `line`, `status` and `route`: a re-review may
+ * reword the explanation or the line may drift by an edit, and neither makes it
+ * a different finding. Without this, resolution state cannot survive a rewrite.
+ */
+export function findingId(f: Pick<ReviewFinding, 'axis' | 'title'> & { file?: string }): string {
+  return createHash('sha1')
+    .update(`${f.axis}\0${f.file ?? ''}\0${f.title}`)
+    .digest('hex')
+    .slice(0, 10);
+}
+
+/**
  * Normalize one finding. A finding with no axis, no title, or no source is
  * dropped rather than stored: an uncited finding is an opinion, and the whole
  * value of the record is that every entry carries its citation.
@@ -136,22 +169,26 @@ function isStatus(v: unknown): v is FindingStatus {
 export function cleanFinding(raw: Partial<ReviewFinding>): ReviewFinding | null {
   const axis = raw.axis;
   if (!isAxis(axis)) return null;
-  const title = str(raw.title, TITLE_MAX);
-  const source = str(raw.source, SOURCE_MAX);
+  // Redact before the emptiness check, so a title that is nothing but a secret
+  // still yields a usable (redacted) title rather than dropping the finding.
+  const title = redact(str(raw.title, TITLE_MAX));
+  const source = redact(str(raw.source, SOURCE_MAX));
   if (!title || !source) return null;
 
-  const file = str(raw.file, 300);
+  const rawFile = str(raw.file, 300);
+  const file = rawFile && !rawFile.startsWith('/') && !rawFile.includes('..') ? rawFile : '';
   const line = typeof raw.line === 'number' && Number.isFinite(raw.line) && raw.line > 0
     ? Math.floor(raw.line)
     : undefined;
 
   return {
+    id: findingId({ axis, title, file: file || undefined }),
     axis,
     title,
-    ...(file && !file.startsWith('/') && !file.includes('..') ? { file } : {}),
+    ...(file ? { file } : {}),
     ...(line !== undefined ? { line } : {}),
     source,
-    ...(str(raw.detail, DETAIL_MAX) ? { detail: str(raw.detail, DETAIL_MAX) } : {}),
+    ...(str(raw.detail, DETAIL_MAX) ? { detail: redact(str(raw.detail, DETAIL_MAX)) } : {}),
     // Only a documented-standard breach can be hard. Anything on the Spec or
     // Security axis, or any baseline smell, stays a judgement call.
     hard: raw.hard === true && axis === 'standards',
@@ -204,12 +241,28 @@ export async function saveReview(root: string, slug: string, input: ReviewInput)
   if (!fixedPoint) throw new ReviewValidationError('fixedPoint is required — a review without a pinned comparison point is meaningless');
   if (!head) throw new ReviewValidationError('head is required — findings must be tied to the sha they were found against');
 
-  const findings = (input.findings ?? [])
+  const fresh = (input.findings ?? [])
     .map(cleanFinding)
     .filter((f): f is ReviewFinding => f !== null)
     .slice(0, FINDING_CAP);
 
   const prev = await loadReview(root, slug);
+
+  /*
+   * Carry triage decisions across a re-review — but only the ones that are
+   * still true.
+   *
+   * `dismissed` is a human judgement ("this is not a problem"). It must
+   * survive, or every re-review makes someone re-triage the same noise.
+   *
+   * `fixed` must NOT survive. If the reviewer reports the finding again, it
+   * demonstrably is not fixed; the fresh report is ground truth, and carrying
+   * `fixed` would hide a live problem behind a stale claim. It reverts to open.
+   */
+  const dismissed = new Set(
+    (prev?.findings ?? []).filter((f) => f.status === 'dismissed').map((f) => f.id),
+  );
+  const findings = fresh.map((f) => (dismissed.has(f.id) ? { ...f, status: 'dismissed' as const } : f));
   const now = new Date().toISOString();
   const record: ReviewRecord = {
     slug: safeSlug(slug),
@@ -262,17 +315,25 @@ export function countByAxis(findings: ReviewFinding[]): Record<ReviewAxis, numbe
 }
 
 /**
- * Mark one finding fixed or dismissed, by its index in the stored order.
- * Returns null when the slug or index doesn't exist.
+ * Mark one finding fixed or dismissed.
+ *
+ * `ref` is a stable finding id (preferred — survives a re-review) or a
+ * positional index (kept for CLI ergonomics: typing `2` off a printed list is
+ * what people actually do). Returns null when the slug or ref doesn't resolve.
  */
 export async function resolveFinding(
   root: string,
   slug: string,
-  index: number,
+  ref: string | number,
   status: Exclude<FindingStatus, 'open'>,
 ): Promise<ReviewRecord | null> {
   const rec = await loadReview(root, slug);
-  if (!rec || index < 0 || index >= rec.findings.length) return null;
+  if (!rec) return null;
+
+  const index = typeof ref === 'number'
+    ? ref
+    : rec.findings.findIndex((f) => f.id === ref);
+  if (index < 0 || index >= rec.findings.length) return null;
   rec.findings[index] = { ...rec.findings[index], status };
   rec.updatedAt = new Date().toISOString();
 

@@ -3,8 +3,10 @@
  *
  * The `code-review` skill runs its axes as sub-agents and would otherwise end
  * at "print two reports in chat", which dies with the session. These commands
- * are how a review becomes durable shared state: another agent, `baton resume`,
- * and the daemon all read the same record.
+ * are how a review becomes durable shared state: `buildBrief` carries any OPEN
+ * findings into the handoff brief (so `baton take` / `baton resume` surface them
+ * without the next agent knowing to look), the daemon serves them at
+ * `/api/reviews`, and `baton review show` prints the full record.
  *
  *   baton review save <slug> < findings.json   # stdin JSON, the skill's last step
  *   baton review list                          # every recorded review
@@ -46,7 +48,9 @@ function printFinding(f: ReviewFinding, index: number): void {
   // A documented-standard breach is binding; everything else is a judgement
   // call. Keeping them visually distinct is a rule of the skill, not a nicety.
   const kind = f.hard ? 'VIOLATION' : 'judgement';
-  console.log(`  [${index}] ${mark} ${kind}  ${f.title}${where}`);
+  // Both handles: the index is what people type, the id is what survives a
+  // re-review (which reorders the list). `resolve` accepts either.
+  console.log(`  [${index}] ${f.id}  ${mark} ${kind}  ${f.title}${where}`);
   console.log(`        source: ${f.source}`);
   if (f.detail) console.log(`        ${f.detail.split('\n')[0]}`);
   if (f.route && f.status === 'open') console.log(`        → next: ${f.route}`);
@@ -78,6 +82,17 @@ function printRecord(rec: ReviewRecord, currentHead: string): void {
 /** `baton review save <slug>` — read a findings JSON payload on stdin. */
 export async function reviewSaveCmd(slug: string): Promise<void> {
   const root = await gitRoot();
+
+  // An interactive terminal never sends EOF on its own, so waiting for 'end'
+  // here hangs forever with no output. Fail fast with the usage instead.
+  if (process.stdin.isTTY) {
+    console.error('✗ no input piped — this command reads the review JSON from stdin:');
+    console.error(`    baton review save ${slug} < findings.json`);
+    console.error(`    cat findings.json | baton review save ${slug}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const raw = (await readStdin()).trim();
   if (!raw) {
     console.error('✗ nothing on stdin — pipe the review JSON: baton review save <slug> < findings.json');
@@ -148,22 +163,24 @@ export async function reviewShowCmd(slug: string): Promise<void> {
 }
 
 /** `baton review resolve <slug> <index>` — mark a finding fixed (or dismissed). */
-export async function reviewResolveCmd(slug: string, indexArg: string, opts: { dismiss?: boolean } = {}): Promise<void> {
+export async function reviewResolveCmd(slug: string, refArg: string, opts: { dismiss?: boolean } = {}): Promise<void> {
   const root = await gitRoot();
-  const index = Number.parseInt(indexArg, 10);
-  if (!Number.isInteger(index) || index < 0) {
-    console.error(`✗ '${indexArg}' is not a finding index — see the [n] markers in: baton review show ${slug}`);
+  // A bare number is a positional index; anything else is a stable finding id.
+  // Prefer the id when scripting — an index is only valid until the next review.
+  const ref: string | number = /^\d+$/.test(refArg.trim()) ? Number.parseInt(refArg, 10) : refArg.trim();
+  if (!String(ref).length) {
+    console.error(`✗ give a finding index or id — see: baton review show ${slug}`);
     process.exitCode = 1;
     return;
   }
   const status = opts.dismiss ? 'dismissed' : 'fixed';
-  const rec = await resolveFinding(root, slug, index, status);
+  const rec = await resolveFinding(root, slug, ref, status);
   if (!rec) {
-    console.error(`✗ no finding [${index}] in review '${slug}'. See: baton review show ${slug}`);
+    console.error(`✗ no finding '${refArg}' in review '${slug}'. See: baton review show ${slug}`);
     process.exitCode = 1;
     return;
   }
   const counts = countByAxis(openFindings(rec));
-  console.log(`✓ finding [${index}] marked ${status}`);
+  console.log(`✓ finding ${refArg} marked ${status}`);
   console.log(`  open: ${REVIEW_AXES.map((a) => `${AXIS_LABEL[a]} ${counts[a]}`).join(' · ')}`);
 }

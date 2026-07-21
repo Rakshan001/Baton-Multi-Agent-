@@ -163,8 +163,9 @@ A review that ends in prose gets ignored. Every surviving finding gets a route:
 
 ### 9. Persist the review *(Baton — do not skip)*
 
-Chat output dies with the session. Write the findings so the next agent, `baton resume`, and the
-dashboard all see them:
+Chat output dies with the session. Write the findings so any still open ride into the next agent's
+handoff brief automatically (`baton take` / `baton resume`), and the daemon serves them at
+`/api/reviews`:
 
 ```bash
 baton review save <slug> <<'JSON'
@@ -189,9 +190,17 @@ baton review save <slug> <<'JSON'
 JSON
 ```
 
-Then `baton review show <slug>` to confirm, and `baton review resolve <slug> <n>` as each is
-handled. Findings recorded against an older sha are flagged stale automatically — they may already
-be fixed.
+Then `baton review show <slug>` to confirm, and `baton review resolve <slug> <id>` as each is
+handled — use the stable id shown next to each finding, not the positional index, since a
+re-review reorders the list. Two behaviours worth knowing:
+
+- Findings recorded against an older sha are flagged **stale** automatically — they may already be
+  fixed.
+- A re-review **keeps** anything you `--dismiss`ed (so you never re-triage the same noise) but
+  **resets** anything marked fixed that the reviewer reports again — if it's still found, it isn't
+  fixed, and the fresh report wins.
+- Secrets quoted in a hunk are redacted before the record is written; the finding survives, the
+  credential doesn't.
 
 ---
 

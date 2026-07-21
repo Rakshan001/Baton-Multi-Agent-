@@ -15,6 +15,7 @@ import { queryGraph } from '../kb/graphify.js';
 import { memoryBriefSection, recallMemories } from '../memory.js';
 import { sessionContextFor, type SessionContext } from './claude-session.js';
 import { loadProgress } from './progress-ledger.js';
+import { loadReview, openFindings, REVIEW_AXES } from '../reviews.js';
 import { guardrailLines } from './guardrails.js';
 
 export interface HandoffMeta {
@@ -210,6 +211,32 @@ export async function buildBrief(
   // git ground truth — kept longest of the optional sections (ISS-08 prefers
   // verifiable state over prose).
   push(stateLines, 1);
+
+  // Open review findings. A recorded review is only half the fix: the next
+  // agent has to MEET the findings without knowing to go looking for them.
+  // Anything still open is inherited work, so it ranks just under git ground
+  // truth — above the softer prose sections, below the plan.
+  // Grouped by axis and never ranked across axes, same rule as everywhere else.
+  const review = await loadReview(opts.root, task.slug).catch(() => null);
+  const openFinds = openFindings(review);
+  if (review && openFinds.length) {
+    const lines = [
+      '## Open review findings',
+      `Reviewed against \`${review.fixedPoint}\` at \`${review.head.slice(0, 9)}\`. ` +
+      `Full detail: \`baton review show ${task.slug}\` · close one out: \`baton review resolve ${task.slug} <id>\`.`,
+    ];
+    for (const axis of REVIEW_AXES) {
+      const inAxis = openFinds.filter((f) => f.axis === axis);
+      if (!inAxis.length) continue;
+      lines.push('', `### ${axis[0].toUpperCase()}${axis.slice(1)}`);
+      for (const f of inAxis) {
+        const where = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ''})` : '';
+        const route = f.route ? ` → ${f.route}` : '';
+        lines.push(`- [ ] \`${f.id}\` ${f.title}${where} — ${f.source}${route}`);
+      }
+    }
+    push(lines.join('\n'), 2);
+  }
 
   const hasContext = !!(session || todos.length || notes.length || filesEdited.length);
   if (hasContext) {
