@@ -21,10 +21,28 @@ The catalog and rendering logic live in [`src/skills/catalog.ts`](../src/skills/
 | `traceable-changes` | Traceable changes | Atomic conventional commits in an isolated worktree, for a bisectable, blame-able history across multiple agents. |
 | `memory-light` | Memory-light | Recall before exploring, externalize state, write durable facts, and hand off cleanly across sessions. |
 | `verify-before-done` | Verify before done | Re-read the diff, check that symbols exist, run build/test/lint, and do an independent skeptic re-check before calling a task done. |
+| `code-review` | Code review | Review a diff since a fixed point along **three axes that are never merged**: **Standards** (repo conventions + a baseline of 12 classic code smells), **Spec** (does it implement what the issue/spec/handoff brief asked, with no scope creep?), and **Security** (injection, authz, path traversal, secret leaks, SSRF — a source-to-sink baseline). The axes run as parallel sub-agents; every finding must survive an explicit **refute** pass before it is reported; results are reported side by side with no cross-axis ranking, then **routed** (Spec-wrong → `systematic-debugging`, Security → `bug-fix`) and **persisted** with `baton review save` so they outlive the session. Two-axis structure and smell baseline adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT); the Security axis, refute gate, routing table, and durable record are Baton additions. |
 | `map-codebase` | Map this codebase | Build the graphify knowledge graph and `CODEBASE.md` so agents navigate a compact map instead of the whole repo. |
 | `safe-refactor` | Safe refactor | Restructure without changing behaviour — worktrees, a green test baseline, and the graph to find every caller. |
 
-`bug-fix`, `lean-code`, and the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
+`bug-fix`, `lean-code`, `code-review`, and the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
+
+`verify-before-done` and `code-review` are deliberately separate: the first is the author proving their own change works before claiming done; the second reviews a diff against a fixed point. Run them in that order.
+
+### Durable review findings
+
+`code-review` is the only skill with a backing store. Its findings persist to `.baton/reviews/<slug>.json` ([`src/reviews.ts`](../src/reviews.ts)) so a review survives the session that produced it:
+
+```bash
+baton review save <slug> < findings.json   # the skill's last step (stdin JSON)
+baton review list                          # every review, newest first, open counts per axis
+baton review show <slug>                   # findings grouped by axis
+baton review resolve <slug> <n> [--dismiss]
+```
+
+Saving emits a `review.completed` event on the bus, and `GET /api/reviews` serves the records. Counts are always **per axis, never summed** — a combined total is the cross-axis ranking the skill exists to prevent. A review recorded against an older HEAD is flagged stale on read, the same discipline [memory](./memory.md) uses for facts.
+
+Deliberately *not* an MCP tool: a 14th tool would breach `TOOL_HELP_BUDGET` ([`src/mcp-help.ts`](../src/mcp-help.ts)), a context tax every agent session pays forever. Reviews are occasional, so they go through the CLI instead.
 
 ## Install targets
 

@@ -11,7 +11,7 @@ install steps see [SETUP.md](../SETUP.md).
 | `dashboard not built — run: npm run build --prefix web` | The compiled UI is missing. Run `npm run build --prefix web`, then restart `baton serve`. |
 | `graphify is not installed` | The knowledge base needs the external `graphify` CLI. Install it with `uv tool install graphifyy` (or `pipx install graphifyy` / `pip install graphifyy`), then re-run your `baton kb` command. |
 | Agent `query_graph` / `get_node` calls fail or timeout | Graph queries route through the daemon's shared graphify pool. `baton serve` must be running. Start it with `baton serve --write` and ensure your agent's MCP config points at the correct daemon port. |
-| Agent `.mcp.json` still has old `uv run` stdio entries for graphify | Re-run `baton kb init` (or use the **Agents → Connect** action in the dashboard) to rewrite the MCP config to the http proxy format. Codex intentionally stays on stdio and does not need re-connecting. |
+| Agent `.mcp.json` / Codex `config.toml` still has old `uv run` stdio entries for graphify | Re-run `baton kb init` (or use the **Agents → Connect** action in the dashboard) to rewrite the MCP config. Claude/Cursor/Gemini get http URLs; Codex gets `baton mcp-bridge <url>` into the same shared pool. |
 | Port `7077` is busy | Start on another port: `baton serve -p 7079`. Then regenerate the MCP config for the new port: `baton kb init --port 7079` (or `baton kb mcp --port 7079`). In the dashboard, add it as a connection (switcher → **Add connection…** → `http://localhost:7079`). |
 | 403 on every graph query on a teammate's machine (committed `.mcp.json`) | Re-run `baton kb init` (regenerates the config with YOUR `.baton/mcp-token`). |
 | Knowledge Graph has nodes but no docs/PDF content | Code-only extraction needs no key, but graphify only summarizes docs/PDFs when an LLM key is set. Export one (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) and run `baton kb rebuild --full`. |
@@ -28,20 +28,22 @@ those tools:
 
 1. Make sure `baton serve` (or `baton serve --write`) is running and accessible
    on the port your agent's config points at.
-2. Check that the MCP config URL uses the http proxy form, not the old stdio
-   `uv run` form. If it still has `"command": "uv"` for graphify entries, your
-   setup was created before the shared-pool feature. Re-connect:
+2. Check that the MCP config uses the shared-pool form, not the old per-agent
+   `uv run` spawn. If it still has `"command": "uv"` (or Codex TOML
+   `command = "uv"`) for graphify entries, your setup predates the shared pool
+   (or the Codex bridge). Re-connect:
 
    ```bash
    # From the CLI:
-   baton kb init           # re-generates and writes .mcp.json
+   baton kb init                      # re-generates and writes .mcp.json
+   baton kb mcp --agent codex         # print the Codex bridge snippet
 
    # Or from the dashboard:
-   # Agents screen → Connect (for claude / cursor / gemini)
+   # Agents screen → Connect (claude / cursor / gemini / codex)
    ```
 
-   Codex is intentionally kept on stdio (`command`/`args` TOML), so you do not
-   need to re-connect Codex.
+   Codex should show `command = "baton"` / `args = ["mcp-bridge", "http://…"]`
+   — it still uses stdio TOML keys, but those args point at the shared pool.
 
 3. If the daemon is running on a non-default port, make sure the MCP config URL
    matches (`http://127.0.0.1:<port>/mcp/g/<token>/<id>`). Regenerate with:

@@ -18,7 +18,8 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus, collectPresence, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
-import { currentBranch, isGitRepo } from './git.js';
+import { currentBranch, headCommit, isGitRepo } from './git.js';
+import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
 import { loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
@@ -875,6 +876,31 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const result = await cleanJunk(root, report, { apply: body.apply === true, force: body.force === true });
     if (result.applied && result.removed.length) bus.publish({ type: 'junk.cleaned', count: result.removed.length });
     return send(res, 200, result, origin);
+  }
+
+  // GET /api/reviews — recorded code-review findings, newest first. Per-axis
+  // open counts only: the axes are separate by design, so no combined total.
+  if (method === 'GET' && path === '/api/reviews') {
+    const reviews = await listReviews(root);
+    const head = (await headCommit(root).catch(() => null)) ?? '';
+    return send(res, 200, {
+      reviews: reviews.map((r) => ({
+        ...r,
+        open: countByAxis(openFindings(r)),
+        stale: isReviewStale(r, head),
+      })),
+      head,
+    }, origin);
+  }
+  // POST /api/reviews/:slug/resolve — mark a finding fixed/dismissed (write-gated)
+  if (method === 'POST' && /^\/api\/reviews\/[^/]+\/resolve$/.test(path)) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const slug = decodeURIComponent(path.split('/')[3]);
+    const body = await readJsonBody<{ index?: number; dismiss?: boolean }>(req);
+    if (!body || typeof body.index !== 'number') return send(res, 400, { error: 'index (number) required' }, origin);
+    const rec = await resolveFinding(root, slug, body.index, body.dismiss ? 'dismissed' : 'fixed');
+    if (!rec) return send(res, 404, { error: `no finding [${body.index}] in review '${slug}'` }, origin);
+    return send(res, 200, { ...rec, open: countByAxis(openFindings(rec)) }, origin);
   }
 
   // GET /api/memory — all facts with evidence-checked freshness + per-server scoping

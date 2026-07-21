@@ -77,7 +77,7 @@ See [memory.md](./memory.md) for how the evidence-anchored memory store works.
 
 The daemon owns a **shared pool** of graphify HTTP backends: one process per touched project, lazily started on first query and reaped after 15 minutes idle. Agents never spawn their own graphify processes — they POST to the daemon's proxy route and the daemon fans out to the right backend.
 
-**Requirement:** graph tools (`query_graph`, `get_node`) require `baton serve` to be running. Without the daemon, no graph queries work.
+**Requirement:** graph tools (`query_graph`, `get_node`) require `baton serve` to be running — for every agent, including Codex. Without the daemon, no graph queries work.
 
 | Tool | Purpose |
 |------|---------|
@@ -145,7 +145,15 @@ Without a knowledge base, only the coordination server is wired:
 }
 ```
 
-**Codex note:** Codex's TOML MCP format only supports `command` + `args` keys — url-based servers are not part of its config spec. Baton therefore keeps Codex on the per-session `uv` stdio spawn instead of the shared proxy. All other agents (Claude, Cursor, Gemini) use the http route. The Codex TOML form uses one `[mcp_servers."<name>"]` block per server with `command` and `args`.
+**Codex note:** Codex's TOML MCP format only supports `command` + `args` keys — url-based servers are not part of its config spec. Baton wires Codex through a thin stdio↔HTTP bridge (`baton mcp-bridge <url>`) that POSTs to the same shared daemon pool Claude/Cursor/Gemini hit directly. Example TOML block:
+
+```toml
+[mcp_servers."graphify-merged"]
+command = "baton"
+args = ["mcp-bridge", "http://127.0.0.1:7077/mcp/g/<token>/merged"]
+```
+
+Codex graph queries therefore also require `baton serve` (same as every other agent). Re-run `baton kb mcp --agent codex` (or Agents → Connect with confirm) to refresh an older config that still had `command = "uv"`.
 
 ### From the dashboard
 

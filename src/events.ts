@@ -25,6 +25,9 @@ export type BatonEvent =
   | { type: 'agent.connected'; agent: string }
   | { type: 'skill.installed'; skill: string; agent: string }
   | { type: 'junk.cleaned'; count: number }
+  /** A code review was recorded. Per-axis counts only — the axes are separate
+   *  by design, so no combined total rides on the event. */
+  | { type: 'review.completed'; slug: string; standards: number; spec: number; security: number }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
   | { type: 'terminal.output'; slug: string; data: string /* base64 */ }

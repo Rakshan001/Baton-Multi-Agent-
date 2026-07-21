@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mergeJsonConfig, mergeTomlConfig } from '../src/agents/connect.js';
-import { mcpServers, codexSnippet, geminiSnippet } from '../src/kb/mcp.js';
+import { mergeJsonConfig, mergeTomlConfig, serversForStateCodex } from '../src/agents/connect.js';
+import { mcpServers, mcpServersCodex, codexSnippet, geminiSnippet } from '../src/kb/mcp.js';
 
 describe('mergeJsonConfig with an http server def', () => {
   it('writes a { type, url } entry verbatim', () => {
@@ -37,19 +37,20 @@ describe('mcpServers', () => {
 });
 
 describe('codexSnippet TOML block headers and escaping', () => {
-  it('emits correct block headers (no url= for codex, command/args instead)', () => {
+  it('emits baton mcp-bridge + daemon URL (no url= key, no uv spawn)', () => {
     const state = { root: '/r', projects: [{ id: 'api', name: 'api', path: '/r/api', graphPath: '/r/api/g.json' }], mergedGraphPath: '/r/.baton/kb/m.json', lastBuiltAt: null } as any;
     const opts = { baseUrl: 'http://127.0.0.1:7077', token: 'a'.repeat(32) };
+    const proxyUrl = `http://127.0.0.1:7077/mcp/g/${'a'.repeat(32)}/api`;
     const toml = codexSnippet(state, opts);
-    // Codex uses stdio spawn (uv), not http url — verify it has command= and no url= for graphify
+    // Codex uses command+args only — bridge wraps the same shared-pool URL
     expect(toml).toContain('[mcp_servers."graphify-api"]');
-    expect(toml).toContain('command = "uv"');
-    expect(toml).not.toContain(`url = "http://127.0.0.1:7077/mcp/g/${'a'.repeat(32)}/api"`);
-    // baton server must be present
-    expect(toml).toContain('[mcp_servers."baton"]');
-    // no command= line in the graphify-merged block when it would be url-based
-    // but for codex we keep stdio, so no url= at all
+    expect(toml).toContain('command = "baton"');
+    expect(toml).toContain(`args = ["mcp-bridge", "${proxyUrl}"]`);
+    expect(toml).not.toContain('command = "uv"');
     expect(toml).not.toContain('url =');
+    // baton coordination server must be present
+    expect(toml).toContain('[mcp_servers."baton"]');
+    expect(toml).toContain('args = ["mcp"]');
   });
 
   it('emits just the baton block when there are no projects', () => {
@@ -59,6 +60,29 @@ describe('codexSnippet TOML block headers and escaping', () => {
     // Just baton should appear
     expect(toml).toContain('[mcp_servers."baton"]');
     expect(toml).toContain('command = "baton"');
+  });
+});
+
+describe('mcpServersCodex / serversForStateCodex', () => {
+  const state = { root: '/r', projects: [{ id: 'api', name: 'api', path: '/r/api', graphPath: '/r/api/g.json' }], mergedGraphPath: '/r/.baton/kb/m.json', lastBuiltAt: null } as any;
+  const opts = { baseUrl: 'http://127.0.0.1:7077', token: 'a'.repeat(32) };
+
+  it('points graphify entries at baton mcp-bridge with the daemon URL', () => {
+    const servers = mcpServersCodex(state, opts);
+    expect(servers['graphify-api']).toEqual({
+      command: 'baton',
+      args: ['mcp-bridge', `http://127.0.0.1:7077/mcp/g/${'a'.repeat(32)}/api`],
+    });
+    expect(servers['graphify-merged']).toEqual({
+      command: 'baton',
+      args: ['mcp-bridge', `http://127.0.0.1:7077/mcp/g/${'a'.repeat(32)}/merged`],
+    });
+    expect(servers.baton).toEqual({ command: 'baton', args: ['mcp'] });
+  });
+
+  it('serversForStateCodex matches mcpServersCodex (connect-from-dashboard path)', () => {
+    expect(serversForStateCodex(state, opts)).toEqual(mcpServersCodex(state, opts));
+    expect(serversForStateCodex(null)).toEqual({ baton: { command: 'baton', args: ['mcp'] } });
   });
 });
 

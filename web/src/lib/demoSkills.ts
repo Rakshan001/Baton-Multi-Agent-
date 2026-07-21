@@ -146,6 +146,37 @@ CONFIRM THE GOAL → INDEPENDENT SKEPTIC RE-CHECK → ONLY THEN DONE
 > completion report on merge. Pairs with traceable-changes.
 `;
 
+const CODE_REVIEW_BODY = `# Code Review (portable)
+
+A change can follow every convention and still build the wrong thing. It can do exactly what
+was asked while breaking how this codebase writes code. It can pass both and still add a path
+traversal. Three questions, never blended.
+
+\`\`\`
+PIN THE FIXED POINT → FIND SPEC / STANDARDS / SECURITY SOURCES →
+RUN THE AXES IN PARALLEL → REFUTE EVERY FINDING →
+REPORT SIDE BY SIDE, NEVER MERGED → PERSIST + ROUTE
+\`\`\`
+
+**Golden rules (excerpt)**
+1. Pin the fixed point first (\`git rev-parse\`) — a bad ref fails here, not in the sub-agents.
+2. The axes never merge: separate headings, no combined score, no cross-axis ranking.
+3. Every finding cites a standard, a named smell + hunk, a spec line, or a vuln class.
+4. Every finding is refuted before it is reported — unverified findings cost more than they save.
+5. A documented repo standard always overrides the smell baseline.
+6. Baseline smells are judgement calls; only documented standards can be breached outright.
+7. No spec found → say "no spec available". Never invent requirements.
+8. A partial review must say so — silent partial coverage reads as a clean pass.
+
+**Routing** — Standards → fix directly · Spec-missing → implement ·
+Spec-wrong → systematic-debugging (it's a bug) · Security → bug-fix.
+
+> Baton boost: \`baton review save\` persists findings so they outlive the session,
+> handoff brief / progress ledger as the spec source, who_touched to skip findings in
+> files someone is mid-edit, recall_memory for stored conventions.
+> Not verify-before-done — that's the author checking their own work first.
+`;
+
 export const DEMO_SKILLS: SkillStatus[] = [
   {
     id: "bug-fix",
@@ -218,6 +249,20 @@ export const DEMO_SKILLS: SkillStatus[] = [
     ],
   },
   {
+    id: "code-review",
+    name: "code-review",
+    description: "Review a diff since a fixed point (commit, branch, tag, or merge-base) along three axes that are never merged — Standards (repo conventions plus a baseline of classic code smells), Spec (does it implement what the issue, spec, or handoff brief asked for, with no scope creep?), and Security (does it introduce injection, authz, path-traversal, secret-leak, or SSRF risk?). Runs the axes as parallel sub-agents, adversarially refutes every finding before reporting it, and persists the result so findings outlive the session.",
+    tags: ["review", "code review", "pr", "pull request", "diff", "branch", "merge", "standards", "conventions", "spec", "scope creep", "code smell", "fowler", "security", "vulnerability", "injection", "parallel", "sub-agent", "skeptic"],
+    produces: ["pinned fixed point", "standards findings", "spec findings", "security findings", "refuted-first verification", "routed next steps", "durable review record (.baton/reviews)"],
+    body: CODE_REVIEW_BODY,
+    source: "bundled",
+    references: ["references/security-baseline.md", "references/smell-baseline.md"],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/code-review/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/code-review.mdc", installed: false },
+    ],
+  },
+  {
     id: "map-codebase",
     name: "Map this codebase",
     description: "Build the graphify knowledge graph and CODEBASE.md so agents navigate a compact map instead of reading the whole repo.",
@@ -275,6 +320,11 @@ const DEMO_EXPLAIN: Record<string, SkillStatus["explain"]> = {
     what: "A \"done means verified\" gate before any completion claim.",
     how: "Re-read the diff, confirm symbols exist, run build/tests, independent skeptic re-check.",
     win: "Hallucinated \"done\" claims die before they ship.",
+  },
+  "code-review": {
+    what: "Reviews a diff since a fixed point along three axes that are never merged.",
+    how: "Standards, Spec and Security run as parallel sub-agents; every finding must survive a refute pass first.",
+    win: "No axis masks another, findings are verified not guessed, and they outlive the session.",
   },
   "map-codebase": {
     what: "Builds the repo map every other skill navigates by.",

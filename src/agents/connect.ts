@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { KbState } from '../kb/state.js';
-import { mcpServers, mcpServersGemini, type McpOpts, type McpServerDef } from '../kb/mcp.js';
+import { mcpServers, mcpServersCodex, mcpServersGemini, type McpOpts, type McpServerDef } from '../kb/mcp.js';
 import { escapeRegExp } from '../util/regex.js';
 
 export type McpScope = 'project' | 'global';
@@ -100,6 +100,13 @@ export function serversForState(state: KbState | null, opts?: McpOpts): Record<s
 export function serversForStateGemini(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
   if (state && !opts) throw new Error('mcpOpts required when a KB exists');
   if (state && opts) return mcpServersGemini(state, opts);
+  return { baton: { command: 'baton', args: ['mcp'] } };
+}
+
+/** Codex variant: graphify entries use `baton mcp-bridge <url>` (command+args only). */
+export function serversForStateCodex(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && !opts) throw new Error('mcpOpts required when a KB exists');
+  if (state && opts) return mcpServersCodex(state, opts);
   return { baton: { command: 'baton', args: ['mcp'] } };
 }
 
@@ -206,7 +213,9 @@ export async function connectAgentMcp(
   if (!target) throw new McpUnsupportedError(agent);
   const servers = agent === 'gemini'
     ? serversForStateGemini(state, opts.mcpOpts)
-    : serversForState(state, opts.mcpOpts);
+    : agent === 'codex'
+      ? serversForStateCodex(state, opts.mcpOpts)
+      : serversForState(state, opts.mcpOpts);
   const serverNames = Object.keys(servers);
 
   const existing = existsSync(target.path) ? await readFile(target.path, 'utf-8') : '';
