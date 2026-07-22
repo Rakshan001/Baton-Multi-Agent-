@@ -55,11 +55,12 @@ export function mcpServers(state: KbState, opts: McpOpts): Record<string, McpSer
 }
 
 /**
- * Codex stdio variant: same daemon proxy URLs as Claude/Cursor, but wrapped in
- * `baton mcp-bridge <url>` because Codex's TOML MCP format only supports
- * `command` + `args` (no url-based servers).
+ * Same daemon proxy URLs as Claude/Cursor, but every graphify entry wrapped in
+ * `baton mcp-bridge <url>` so the whole config is `command` + `args`. Used by
+ * any client whose config can't express a url-based server, or whose url key we
+ * aren't confident enough about to bet a silent dead server on.
  */
-export function mcpServersCodex(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
+function mcpServersBridged(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
   const servers: Record<string, McpServerDef> = {};
   const url = (id: string) => `${opts.baseUrl}/mcp/g/${opts.token}/${id}`;
   for (const p of projectGraphs(state, opts.perProject)) {
@@ -70,6 +71,23 @@ export function mcpServersCodex(state: KbState, opts: McpOpts): Record<string, M
   }
   servers['baton'] = { command: 'baton', args: ['mcp'] };
   return servers;
+}
+
+/** Codex: its TOML MCP format supports only `command` + `args` — no url servers at all. */
+export function mcpServersCodex(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
+  return mcpServersBridged(state, opts);
+}
+
+/**
+ * Antigravity: its JSON config DOES take remote servers, but under `serverUrl`
+ * — not `url` (Claude/Cursor) or `httpUrl` (Gemini). That key is documented in
+ * exactly one place, and getting it wrong yields a server that loads and
+ * answers nothing. The bridge form is command+args, which every MCP client
+ * agrees on, so we take the same shared pool with none of the risk. Revisit
+ * only once `serverUrl` is verified against a live Antigravity install.
+ */
+export function mcpServersAntigravity(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
+  return mcpServersBridged(state, opts);
 }
 
 /** JSON form used by Claude Code (.mcp.json) and Cursor (.cursor/mcp.json). */
@@ -115,12 +133,19 @@ export function geminiSnippet(state: KbState, opts: McpOpts): string {
   return JSON.stringify({ mcpServers: mcpServersGemini(state, opts) }, null, 2);
 }
 
+/** Antigravity: same `mcpServers` key as Claude/Cursor, bridged graphify entries. */
+export function antigravitySnippet(state: KbState, opts: McpOpts): string {
+  return JSON.stringify({ mcpServers: mcpServersAntigravity(state, opts) }, null, 2);
+}
+
 export function snippetFor(agent: string, state: KbState, opts: McpOpts): string {
   switch (agent) {
     case 'codex':
       return codexSnippet(state, opts);
     case 'gemini':
       return geminiSnippet(state, opts);
+    case 'antigravity':
+      return antigravitySnippet(state, opts);
     case 'claude':
     case 'cursor':
     default:

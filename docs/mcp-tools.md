@@ -94,6 +94,7 @@ Baton writes the MCP config for you. Wiring source: [`src/agents/connect.ts`](..
 |-------|-------------|-------|--------|
 | `claude` | `<repo>/.mcp.json` | project | JSON |
 | `cursor` | `<repo>/.cursor/mcp.json` | project | JSON |
+| `antigravity` | `<repo>/.agents/mcp_config.json` | project | JSON |
 | `gemini` | `~/.gemini/settings.json` | global | JSON |
 | `codex` | `~/.codex/config.toml` | global | TOML |
 | `aider`, `opencode` | — | — | no standard MCP config (unsupported) |
@@ -110,11 +111,11 @@ baton kb mcp --agent gemini
 baton kb mcp --agent codex
 ```
 
-`baton kb init` and `baton setup` can wire MCP automatically (pass `--no-mcp` to skip). Because **global** config files live outside the repo (`gemini`, `codex`), Baton only writes them after an explicit confirmation; project files (`claude`, `cursor`) are safe to write automatically.
+`baton kb init` and `baton setup` can wire MCP automatically (pass `--no-mcp` to skip). Because **global** config files live outside the repo (`gemini`, `codex`), Baton only writes them after an explicit confirmation; project files (`claude`, `cursor`, `antigravity`) are safe to write automatically.
 
 ### What gets written
 
-For an agent with a knowledge base, the config contains one graphify server per project, a merged graph server, and the coordination server. Claude, Cursor, and Gemini get http-based graphify entries that route through the shared daemon proxy; the JSON shape used by `claude` and `cursor`:
+For an agent with a knowledge base, the config contains one graphify server per project, a merged graph server, and the coordination server. Claude, Cursor, and Gemini get http-based graphify entries that route through the shared daemon proxy; Codex and Antigravity reach the same pool through `baton mcp-bridge` (see the note below). The JSON shape used by `claude` and `cursor`:
 
 ```json
 {
@@ -154,6 +155,28 @@ args = ["mcp-bridge", "http://127.0.0.1:7077/mcp/g/<token>/merged"]
 ```
 
 Codex graph queries therefore also require `baton serve` (same as every other agent). Re-run `baton kb mcp --agent codex` (or Agents → Connect with confirm) to refresh an older config that still had `command = "uv"`.
+
+**Antigravity note:** Antigravity's config *does* accept remote servers, but under a
+`serverUrl` key — not `url` (Claude/Cursor) or `httpUrl` (Gemini). That key is documented
+in one place and unverified against a live install, and a wrong key yields a server that
+loads and answers nothing. So Antigravity takes the same `baton mcp-bridge` route as
+Codex: `command` + `args` is the one shape every MCP client agrees on. The coordination
+server (`baton mcp`) is plain stdio and carries no such risk either way.
+
+```json
+{
+  "mcpServers": {
+    "baton": { "command": "baton", "args": ["mcp"] },
+    "graphify-merged": { "command": "baton", "args": ["mcp-bridge", "http://127.0.0.1:7077/mcp/g/<token>/merged"] }
+  }
+}
+```
+
+Antigravity also reads a **global** `~/.gemini/config/mcp_config.json` (it ships that file
+empty on install). Baton writes only the project-scoped file, matching how it treats
+`claude` and `cursor` — nothing in `$HOME` without a confirm. Note that Antigravity's
+config root is `~/.gemini/config/`, shared with the `agy` CLI, but its global *rules* live
+one level up at `~/.gemini/GEMINI.md`.
 
 ### From the dashboard
 

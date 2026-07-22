@@ -7,10 +7,11 @@
  * only written after an explicit confirm (the caller passes confirmGlobal).
  *
  * Supported wiring:
- *   claude → <repo>/.mcp.json                 (project, JSON)
- *   cursor → <repo>/.cursor/mcp.json          (project, JSON)
- *   gemini → ~/.gemini/settings.json          (global,  JSON)
- *   codex  → ~/.codex/config.toml             (global,  TOML)
+ *   claude      → <repo>/.mcp.json                 (project, JSON)
+ *   cursor      → <repo>/.cursor/mcp.json          (project, JSON)
+ *   antigravity → <repo>/.agents/mcp_config.json   (project, JSON)
+ *   gemini      → ~/.gemini/settings.json          (global,  JSON)
+ *   codex       → ~/.codex/config.toml             (global,  TOML)
  *   aider, opencode → no standard MCP config  (unsupported — surfaced as such)
  *
  * Writes are non-destructive: JSON files keep every existing key and merge our
@@ -21,7 +22,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { KbState } from '../kb/state.js';
-import { mcpServers, mcpServersCodex, mcpServersGemini, type McpOpts, type McpServerDef } from '../kb/mcp.js';
+import { mcpServers, mcpServersAntigravity, mcpServersCodex, mcpServersGemini, type McpOpts, type McpServerDef } from '../kb/mcp.js';
 import { escapeRegExp } from '../util/regex.js';
 
 export type McpScope = 'project' | 'global';
@@ -80,12 +81,17 @@ export function mcpTargetFor(agent: string, root: string, home = homedir()): Age
       return { agent, scope: 'project', format: 'json', path: join(root, '.mcp.json') };
     case 'cursor':
       return { agent, scope: 'project', format: 'json', path: join(root, '.cursor', 'mcp.json') };
+    // Antigravity reads a project file at .agents/mcp_config.json and a global
+    // one at ~/.gemini/config/mcp_config.json. Project-scoped is the safe half
+    // (inside the repo, no confirm needed) and is what the IDE prefers.
+    case 'antigravity':
+      return { agent, scope: 'project', format: 'json', path: join(root, '.agents', 'mcp_config.json') };
     case 'gemini':
       return { agent, scope: 'global', format: 'json', path: join(home, '.gemini', 'settings.json') };
     case 'codex':
       return { agent, scope: 'global', format: 'toml', path: join(home, '.codex', 'config.toml') };
     default:
-      return null; // aider, opencode — no standard MCP wiring
+      return null; // aider, opencode — no standard MCP config file to write
   }
 }
 
@@ -109,6 +115,21 @@ export function serversForStateCodex(state: KbState | null, opts?: McpOpts): Rec
   if (state && opts) return mcpServersCodex(state, opts);
   return { baton: { command: 'baton', args: ['mcp'] } };
 }
+
+/** Antigravity variant: bridged graphify entries — see mcpServersAntigravity for why. */
+export function serversForStateAntigravity(state: KbState | null, opts?: McpOpts): Record<string, McpServerDef> {
+  if (state && !opts) throw new Error('mcpOpts required when a KB exists');
+  if (state && opts) return mcpServersAntigravity(state, opts);
+  return { baton: { command: 'baton', args: ['mcp'] } };
+}
+
+/** Agents whose graphify entries need a non-default shape; everything else
+ *  gets serversForState (the `{type:'http', url}` form Claude/Cursor take). */
+const SERVERS_FOR_AGENT: Record<string, (s: KbState | null, o?: McpOpts) => Record<string, McpServerDef>> = {
+  gemini: serversForStateGemini,
+  codex: serversForStateCodex,
+  antigravity: serversForStateAntigravity,
+};
 
 /* ------------------------------------------------------------------ */
 /* Pure render/merge helpers (unit-tested)                             */
@@ -211,11 +232,7 @@ export async function connectAgentMcp(
 ): Promise<ConnectResult> {
   const target = mcpTargetFor(agent, root, home);
   if (!target) throw new McpUnsupportedError(agent);
-  const servers = agent === 'gemini'
-    ? serversForStateGemini(state, opts.mcpOpts)
-    : agent === 'codex'
-      ? serversForStateCodex(state, opts.mcpOpts)
-      : serversForState(state, opts.mcpOpts);
+  const servers = SERVERS_FOR_AGENT[agent] ? SERVERS_FOR_AGENT[agent](state, opts.mcpOpts) : serversForState(state, opts.mcpOpts);
   const serverNames = Object.keys(servers);
 
   const existing = existsSync(target.path) ? await readFile(target.path, 'utf-8') : '';

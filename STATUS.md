@@ -294,6 +294,44 @@ cheaper light/local chain + reason attached; mirrored in web routing, parity sui
 in the plan). All in docs/plans/2026-07-09-multi-agent-coordination.md W-round section.
 479 tests green ×2.
 
+**Antigravity MCP parity (2026-07-22, session 17).** Antigravity could already *receive*
+skills (`.agents/skills/`, W4) but had no MCP wiring — it was being handed playbooks that
+say "call `check_files`" with no way to call anything. `mcpTargetFor` now returns
+`<repo>/.agents/mcp_config.json` (project-scoped, so it auto-writes like claude/cursor —
+nothing in `$HOME` without a confirm). Evidence, since W4-era guesses were deliberately
+deferred: official docs give the path + `mcpServers` key, and a live install on the dev
+machine ships exactly that file (`~/.gemini/config/mcp_config.json`, 0 bytes) plus
+`~/.agents/skills/` in the layout Baton already writes.
+
+Antigravity's graphify entries go through `baton mcp-bridge` like Codex, NOT its documented
+`serverUrl` key: that key has a single source, is unverified against a live install, and a
+wrong url key yields a server that loads and answers nothing. `command`+`args` is the one
+shape every MCP client agrees on, so parity costs zero confidence. `mcpServersCodex` and
+`mcpServersAntigravity` now both delegate to a shared `mcpServersBridged`; the nested
+agent ternary in `connectAgentMcp` became a `SERVERS_FOR_AGENT` lookup. Revisit `serverUrl`
+only once verified live. **Launchers stay unguessed** — `agy -p` has an open non-TTY hang
+bug (exactly how Baton would spawn it) and Antigravity's ToS reportedly forbids
+third-party access. Two independent reasons; detection-only was the right call.
+
+Verified end-to-end on temp repos: fresh write, idempotent re-connect preserving an
+unrelated `chrome-devtools` server **and** a non-`mcpServers` top-level key, and the 0-byte
+file a real install ships (merges — `mergeJsonConfig` guards with `if (existing.trim())`,
+so it never trips the parse-error path). Also fixed `web/src/lib/api.ts`'s demo mirror of
+`mcpTargetFor`, which would otherwise have shown Antigravity as MCP-n/a in the dashboard.
+
+Docs drift fixed in the same pass: `docs/skills.md` listed only claude+cursor as skill
+targets and named antigravity in neither the supported nor the excluded list — it had been
+a third target since `0569178`. Also recorded that `.agents/skills/` is the emerging
+neutral cross-tool path (Antigravity, Cursor, opencode, Zed all read it), so that install
+target reaches more agents than its id suggests. 702 tests green, both workspaces build.
+
+**Known gaps after this round:** Antigravity hooks (`.agents/hooks.json`, unique
+hook-name→event→matcher nesting; its exit-code/stdout-injection contract is undocumented,
+so only the *signal-recording* half is safely shippable — the advisory half is unproven).
+opencode has MCP (`opencode.json`, key `mcp`) and reads `.agents/skills/` — a cheap next
+add. GitHub Copilot/VS Code (`.vscode/mcp.json`, key `servers`) is absent from the registry
+entirely, so it is invisible to detection, routing, and `/api/agents/:id`.
+
 ## Pending / next 🔜
 
 1. **Headless one-shot runs still aren't shown as "active" on the status board**

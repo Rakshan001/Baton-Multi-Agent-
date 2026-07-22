@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mergeJsonConfig, mergeTomlConfig, serversForStateCodex } from '../src/agents/connect.js';
-import { mcpServers, mcpServersCodex, codexSnippet, geminiSnippet } from '../src/kb/mcp.js';
+import { mcpTargetFor, mergeJsonConfig, mergeTomlConfig, serversForStateAntigravity, serversForStateCodex } from '../src/agents/connect.js';
+import { mcpServers, mcpServersCodex, codexSnippet, geminiSnippet, snippetFor } from '../src/kb/mcp.js';
 
 describe('mergeJsonConfig with an http server def', () => {
   it('writes a { type, url } entry verbatim', () => {
@@ -116,5 +116,50 @@ describe('mcpServers port in URL', () => {
     const servers = mcpServers(state, { baseUrl: 'http://127.0.0.1:7079', token: 'c'.repeat(32) });
     const url = (servers['graphify-api'] as { type: 'http'; url: string }).url;
     expect(url).toContain(':7079');
+  });
+});
+
+describe('antigravity MCP wiring', () => {
+  const state = { root: '/r', projects: [{ id: 'api', name: 'api', path: '/r/api', graphPath: '/r/api/g.json' }], mergedGraphPath: '/r/.baton/kb/m.json', lastBuiltAt: null } as any;
+  const opts = { baseUrl: 'http://127.0.0.1:7077', token: 'a'.repeat(32) };
+
+  it('targets the project-scoped .agents/mcp_config.json', () => {
+    expect(mcpTargetFor('antigravity', '/repo')).toEqual({
+      agent: 'antigravity', scope: 'project', format: 'json',
+      path: '/repo/.agents/mcp_config.json',
+    });
+  });
+
+  // Antigravity documents `serverUrl` for remote servers — a single-source claim,
+  // and a wrong key silently yields a dead graph server. The bridge is
+  // command+args, which every MCP client agrees on, so we spend zero confidence.
+  it('routes graphify through baton mcp-bridge, never a bare URL key', () => {
+    const servers = serversForStateAntigravity(state, opts);
+    expect(servers['graphify-api']).toEqual({
+      command: 'baton',
+      args: ['mcp-bridge', `http://127.0.0.1:7077/mcp/g/${'a'.repeat(32)}/api`],
+    });
+    for (const def of Object.values(servers)) {
+      for (const k of ['url', 'httpUrl', 'serverUrl', 'type']) {
+        expect(def).not.toHaveProperty(k);
+      }
+    }
+  });
+
+  it('the coordination server is plain stdio, and works with no KB', () => {
+    expect(serversForStateAntigravity(null)).toEqual({ baton: { command: 'baton', args: ['mcp'] } });
+  });
+
+  it('snippetFor emits mcpServers-keyed JSON (Antigravity’s documented key)', () => {
+    const parsed = JSON.parse(snippetFor('antigravity', state, opts));
+    expect(Object.keys(parsed)).toEqual(['mcpServers']);
+    expect(parsed.mcpServers.baton).toEqual({ command: 'baton', args: ['mcp'] });
+  });
+
+  // Antigravity ships this file as 0 bytes on a fresh install (verified on a
+  // real machine) — an empty file must merge, not trip the parse-error guard.
+  it('merges into the empty file Antigravity ships', () => {
+    const out = mergeJsonConfig('', serversForStateAntigravity(null), '/repo/.agents/mcp_config.json');
+    expect(JSON.parse(out).mcpServers.baton).toEqual({ command: 'baton', args: ['mcp'] });
   });
 });

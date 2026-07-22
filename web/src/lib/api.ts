@@ -364,6 +364,7 @@ class BatonClient {
     switch (id) {
       case "claude": return { scope: "project", path: ".mcp.json" };
       case "cursor": return { scope: "project", path: ".cursor/mcp.json" };
+      case "antigravity": return { scope: "project", path: ".agents/mcp_config.json" };
       case "gemini": return { scope: "global", path: "~/.gemini/settings.json" };
       case "codex": return { scope: "global", path: "~/.codex/config.toml" };
       default: return null; // aider, opencode — no MCP wiring

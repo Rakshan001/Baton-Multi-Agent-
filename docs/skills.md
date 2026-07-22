@@ -59,8 +59,14 @@ Baton can write skills for two agent CLIs. Each gets the on-disk format it under
 | --- | --- | --- |
 | `claude` | `.claude/skills/<id>/SKILL.md` (+ `references/` alongside) | Claude Code skill — `name` + `description` frontmatter, then the playbook. |
 | `cursor` | `.cursor/rules/<id>.mdc` (+ sibling `<id>/references/`) | Cursor project rule — `description` + `alwaysApply: false` frontmatter. |
+| `antigravity` | `.agents/skills/<id>/SKILL.md` (+ `references/` alongside) | Agent Skills format — same `name` + `description` frontmatter as Claude, installed byte-for-byte. |
 
 The other agents (`codex`, `gemini`, `aider`, `opencode`) have no standard skill directory Baton can write, and installing for them returns an unsupported-agent error. (Deliberately: cramming a full playbook into their always-on instruction files would cost tokens on every turn — skills should load on demand.)
+
+`.agents/skills/` is worth knowing about: it is emerging as the **neutral, cross-tool
+skill path**, read by Antigravity, Cursor, opencode, and Zed. Baton writes it for the
+`antigravity` target, so installing there in practice reaches more agents than the id
+suggests.
 
 ## Install into every agent at once
 
