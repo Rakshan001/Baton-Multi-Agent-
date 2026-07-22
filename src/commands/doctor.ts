@@ -9,6 +9,7 @@ import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanu
 import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from '../kb/sprawl.js';
 import { batonDir, loadTasks, resolveBatonRoot } from '../store.js';
 import { loadKb } from '../kb/state.js';
+import { auditKb, type KbFinding } from '../kb/health.js';
 
 const KIND_LABEL: Record<JunkItem['kind'], string> = {
   'orphan-worktree-task': 'orphaned worktree (stale task)',
@@ -33,6 +34,24 @@ function printReport(report: AuditReport): void {
   }
 }
 
+const KB_GLYPH: Record<KbFinding['level'], string> = { error: '✗', warn: '⚠', info: '·' };
+
+/**
+ * The KB section. Printed even when it is healthy, because the failure this
+ * exists to catch is silent: the graph answers with nothing and looks fine.
+ */
+function printKb(findings: KbFinding[]): void {
+  if (!findings.length) {
+    console.log('✓ knowledge base looks healthy');
+    return;
+  }
+  console.log('Knowledge base:\n');
+  for (const f of findings) {
+    console.log(`  ${KB_GLYPH[f.level]} ${f.message}`);
+    if (f.fix) console.log(`      → ${f.fix}`);
+  }
+}
+
 export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): Promise<void> {
   if (opts.docs) return doctorDocsCmd();
   const report = await auditJunk(await gitRoot());
@@ -41,7 +60,10 @@ export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): P
     const dirty = report.items.some((i) => i.blocked === 'dirty');
     console.log(`\n  Reclaim with: baton clean --fix${dirty ? '   (add --force to remove worktrees with uncommitted changes)' : ''}`);
   }
-  await reportShadowBatons(await resolveBatonRoot(), !!opts.fix);
+  const root = await resolveBatonRoot();
+  console.log('');
+  printKb(await auditKb(root));
+  await reportShadowBatons(root, !!opts.fix);
 }
 
 /**

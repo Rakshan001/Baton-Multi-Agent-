@@ -332,6 +332,42 @@ opencode has MCP (`opencode.json`, key `mcp`) and reads `.agents/skills/` — a 
 add. GitHub Copilot/VS Code (`.vscode/mcp.json`, key `servers`) is absent from the registry
 entirely, so it is invisible to detection, routing, and `/api/agents/:id`.
 
+### Session 18 — `baton disconnect`, KB health in doctor, drift guard
+
+**`baton disconnect [--agents …] [--yes]`** — `connect` wrote two `$HOME` files and
+nothing could undo them, so removing Baton left `command = "baton"` in
+`~/.codex/config.toml` and `~/.gemini/settings.json` on every project forever, pointing
+at a binary that no longer exists. Removal proves ownership from each entry's *contents*
+rather than its name (`baton` only when `command` is `baton`; `graphify-*` only when it
+runs `mcp-bridge` or points at the loopback `/mcp/g/` proxy), so a server you wired
+yourself is kept — and named in the output, because a silent partial removal is worse
+than none. Other servers and top-level keys survive, `mcpServers` is left `{}` rather
+than deleted, an unparseable config is refused, and the write is tmp+rename. TOML block
+removal slices section boundaries before judging ownership, so it cannot swallow the
+block that follows. 36 tests (unit + on-disk).
+
+**KB health in `baton doctor`** (`src/kb/health.ts`) — doctor audited junk only, so it
+printed `✓ no junk found` while this repo's `kb.json` had pointed at
+`~/Freelancing/baton` for 41 days, a directory with no `graph.json` in it. `loadKb`
+knew (it skips the project and warns once on a 2s poll path) but nothing diagnosed it.
+Now reported as errors with fixes: root built for another repo, project outside the
+repo / missing / graphless, empty project list, missing merged graph. Staleness is a
+*warning* — an old graph is still usable. A missing kb.json is info, not failure.
+Read-only, like `doctor --docs`.
+
+**Drift guard** (`test/agent-map-drift.test.ts`) — `web/src/lib/api.ts` hand-mirrors
+`mcpTargetFor` (two tsconfigs, no monorepo tool). Adding an agent to one side only is
+silent: the daemon wires it while the UI calls it unsupported. The test parses both and
+compares; verified it fails on induced drift, not just on paper.
+
+**Platform support documented** (SETUP.md) — macOS/Linux/WSL2 yes, native Windows no,
+with the reasons (`ps`/`lsof`, `/proc/<pid>/cwd`, `commonBinDirs` returning `[]` on
+win32). It had appeared in no doc at all.
+
+754 tests green, both workspaces build. **Not included:** a dashboard Unlink button and
+`DELETE /api/agents/:id/connect` — the CLI is the complete tested surface; the UI half
+is a clean follow-up.
+
 ## Pending / next 🔜
 
 1. **Headless one-shot runs still aren't shown as "active" on the status board**
