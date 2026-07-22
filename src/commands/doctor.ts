@@ -2,7 +2,7 @@
  * `baton doctor` — audit junk (orphaned worktrees, branches, tmux sessions,
  * leaked temp files). `baton clean [--fix]` — reclaim it (dry-run by default).
  */
-import { readdir, rm, stat } from 'node:fs/promises';
+import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gitRoot } from '../git.js';
 import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanup.js';
@@ -91,12 +91,20 @@ const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => f
  * `removable` only when it holds no durable state — the ephemeral `history.db`
  * (30-min-TTL presence) and locks don't count; tasks, memory facts, and a
  * project `kb.json` do, and keep it report-only.
+ *
+ * A project whose path IS the hub root is skipped: in a single-repo setup
+ * `baton kb init` registers the repo itself as the one project, and its
+ * `.baton` is the hub store — not a shadow of it. Reporting it told the user to
+ * delete their own tasks and memory. Compared through realpath so a symlinked
+ * or `/var`-vs-`/private/var` path can't slip past the check.
  */
 export async function scanShadowBatons(hubRoot: string): Promise<ShadowBaton[]> {
   const kb = await loadKb(hubRoot);
   if (!kb || kb.projects.length === 0) return [];
+  const hubReal = await realpath(hubRoot).catch(() => hubRoot);
   const shadows: ShadowBaton[] = [];
   for (const p of kb.projects) {
+    if ((await realpath(p.path).catch(() => p.path)) === hubReal) continue; // the hub's own store
     const shadow = batonDir(p.path);
     if (!(await exists(shadow))) continue;
     const tasks = (await loadTasks(p.path)).length;
