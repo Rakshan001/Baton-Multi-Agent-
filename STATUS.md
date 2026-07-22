@@ -332,19 +332,20 @@ opencode has MCP (`opencode.json`, key `mcp`) and reads `.agents/skills/` — a 
 add. GitHub Copilot/VS Code (`.vscode/mcp.json`, key `servers`) is absent from the registry
 entirely, so it is invisible to detection, routing, and `/api/agents/:id`.
 
-### Session 18 — `baton disconnect`, KB health in doctor, drift guard
+### Session 18 — KB health in doctor, drift guard, a "flaky" test that wasn't
 
-**`baton disconnect [--agents …] [--yes]`** — `connect` wrote two `$HOME` files and
-nothing could undo them, so removing Baton left `command = "baton"` in
-`~/.codex/config.toml` and `~/.gemini/settings.json` on every project forever, pointing
-at a binary that no longer exists. Removal proves ownership from each entry's *contents*
-rather than its name (`baton` only when `command` is `baton`; `graphify-*` only when it
-runs `mcp-bridge` or points at the loopback `/mcp/g/` proxy), so a server you wired
-yourself is kept — and named in the output, because a silent partial removal is worse
-than none. Other servers and top-level keys survive, `mcpServers` is left `{}` rather
-than deleted, an unparseable config is refused, and the write is tmp+rename. TOML block
-removal slices section boundaries before judging ownership, so it cannot swallow the
-block that follows. 36 tests (unit + on-disk).
+**`baton disconnect` — built, then reverted. Decision worth keeping.** `connect` writes
+two `$HOME` files with no undo, which looked like a real gap. It isn't worth automating.
+Subtracting from a config is categorically riskier than appending to one: appending never
+has to understand what is already there. The removal path produced 7 bugs in ~270 lines,
+and two of them damaged files — a `0600` config silently widened to `0644` by tmp+rename
+(`~/.codex/config.toml` can hold API keys), and a TOML file *corrupted past parsing* when
+a multi-line string contained a line reading `[mcp_servers."baton"]`, because Node has no
+TOML parser and text surgery cannot know it is inside a string. A third: global configs
+are shared across repos, so disconnecting from one repo removed another's graphify
+servers. For a command run once in a project's lifetime, whose manual alternative is
+deleting three lines, that risk isn't worth carrying. **If this is ever revisited: JSON is
+fine (real parser, fails closed) — it is TOML that must be propose-only.**
 
 **KB health in `baton doctor`** (`src/kb/health.ts`) — doctor audited junk only, so it
 printed `✓ no junk found` while this repo's `kb.json` had pointed at
@@ -364,9 +365,7 @@ compares; verified it fails on induced drift, not just on paper.
 with the reasons (`ps`/`lsof`, `/proc/<pid>/cwd`, `commonBinDirs` returning `[]` on
 win32). It had appeared in no doc at all.
 
-754 tests green, both workspaces build. **Not included:** a dashboard Unlink button and
-`DELETE /api/agents/:id/connect` — the CLI is the complete tested surface; the UI half
-is a clean follow-up.
+718 tests green, both workspaces build.
 
 ## Pending / next 🔜
 

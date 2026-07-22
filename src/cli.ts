@@ -37,7 +37,6 @@ import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
-import { disconnectCmd } from './commands/disconnect.js';
 import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
 import { orientCmd } from './commands/orient.js';
@@ -78,13 +77,6 @@ program
   .option('--yes', 'also write global ($HOME) configs for codex/gemini')
   .description('wire the baton coordination MCP server into every agent, so they can see each other')
   .action((opts: { agents?: string; yes?: boolean }) => run(() => connectCmd(opts)));
-
-program
-  .command('disconnect')
-  .option('--agents <list>', 'comma-separated: claude,cursor,codex,gemini (default: all four)')
-  .option('--yes', 'also rewrite global ($HOME) configs for codex/gemini')
-  .description("remove the MCP servers baton wired, leaving every other server untouched")
-  .action((opts: { agents?: string; yes?: boolean }) => run(() => disconnectCmd(opts)));
 
 program
   .command('new')

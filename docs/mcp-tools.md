@@ -113,27 +113,19 @@ baton kb mcp --agent codex
 
 `baton kb init` and `baton setup` can wire MCP automatically (pass `--no-mcp` to skip). Because **global** config files live outside the repo (`gemini`, `codex`), Baton only writes them after an explicit confirmation; project files (`claude`, `cursor`, `antigravity`) are safe to write automatically.
 
-### Undoing it — `baton disconnect`
+### Undoing it
 
-```bash
-baton disconnect                       # all four default agents
-baton disconnect --agents codex        # just one
-baton disconnect --agents codex --yes  # confirm the $HOME rewrite
-```
+There is no `baton disconnect`, deliberately. Removing Baton's servers means
+deleting the `baton` and `graphify-*` entries from the config file by hand —
+a few lines, and `baton connect` prints the exact path it wrote to.
 
-The inverse of `connect`, and the supported way to undo a write into `$HOME`.
-Without it, removing Baton would leave `command = "baton"` in
-`~/.codex/config.toml` and `~/.gemini/settings.json` forever, so every later
-session would try to launch a binary that no longer exists.
-
-Removal proves ownership from each entry's **contents**, never its name — it
-takes `baton` only when `command` is `baton`, and a `graphify-*` server only
-when it runs `baton mcp-bridge` or points at the loopback `/mcp/g/` proxy. A
-server you wired yourself is kept and named in the output, so a partial removal
-is never silent. Every other server and top-level key is preserved, `mcpServers`
-is left as `{}` rather than deleted, an unparseable config is refused rather
-than overwritten, and the write is tmp+rename — a half-written MCP config would
-break the agent on its next launch.
+An automated remover was built and reverted. Subtracting from these files is far
+riskier than appending to them: `~/.codex/config.toml` is TOML, and removing a
+block by text surgery (Node has no TOML parser) corrupted a file whose
+multi-line string happened to contain a `[mcp_servers."baton"]` line. For a
+command run once in a project's lifetime, whose manual alternative is deleting
+three lines, that risk wasn't worth carrying. Appending is safe because it never
+has to understand what is already there; removal does.
 
 ### What gets written
 
