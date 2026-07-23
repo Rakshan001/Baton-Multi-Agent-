@@ -51,8 +51,20 @@ const CHECKOUT_PROBE_TTL_MS = 4_000;
  * prune it. Deletion must stay recordable — an agent deleting a file genuinely
  * holds that path — and nothing cheap distinguishes the two at this point.
  */
-function isDirectory(abs: string): boolean {
-  return statSync(abs, { throwIfNoEntry: false })?.isDirectory() ?? false;
+export function isDirectory(abs: string): boolean {
+  // `throwIfNoEntry: false` suppresses ENOENT/ENOTDIR ONLY — statSync still
+  // throws on ELOOP (a self-referential symlink in the checkout) and EACCES (a
+  // parent whose permissions changed between the fs event and this debounce).
+  // This runs in a bare setTimeout with no uncaughtException handler in the
+  // process, so an unguarded throw takes the whole daemon down: watchers, SSE,
+  // poller, coordination. Unknown → treat as a file, which is the recordable
+  // side: read-time reconcile prunes a directory, but nothing recovers an edit
+  // we never published.
+  try {
+    return statSync(abs, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
 }
 
 function shouldIgnore(rel: string): boolean {

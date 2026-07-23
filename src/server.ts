@@ -897,9 +897,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const slug = decodeURIComponent(path.split('/')[3]);
     const body = await readJsonBody<{ index?: number; dismiss?: boolean }>(req);
-    if (!body || typeof body.index !== 'number') return send(res, 400, { error: 'index (number) required' }, origin);
-    const rec = await resolveFinding(root, slug, body.index, body.dismiss ? 'dismissed' : 'fixed');
-    if (!rec) return send(res, 404, { error: `no finding [${body.index}] in review '${slug}'` }, origin);
+    // Integer, not merely `number`: resolveFinding's bounds check passes 1.5 and
+    // NaN (NaN compares false to everything), and the assignment then creates a
+    // NAMED property on the array instead of hitting an element — the endpoint
+    // answered 200 with the record unchanged and rewrote the file, so the caller
+    // believed a finding was resolved when nothing was.
+    const index = body?.index;
+    if (typeof index !== 'number' || !Number.isInteger(index)) return send(res, 400, { error: 'index (integer) required' }, origin);
+    const rec = await resolveFinding(root, slug, index, body?.dismiss ? 'dismissed' : 'fixed');
+    if (!rec) return send(res, 404, { error: `no finding [${index}] in review '${slug}'` }, origin);
     return send(res, 200, { ...rec, open: countByAxis(openFindings(rec)) }, origin);
   }
 

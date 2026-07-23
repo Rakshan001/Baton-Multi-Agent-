@@ -333,7 +333,12 @@ export async function resolveFinding(
   const index = typeof ref === 'number'
     ? ref
     : rec.findings.findIndex((f) => f.id === ref);
-  if (index < 0 || index >= rec.findings.length) return null;
+  // Number.isInteger, not just a range check: 1.5 and NaN both PASS `index < 0
+  // || index >= length` (NaN compares false to everything), and the assignment
+  // below then creates a named property (`findings['1.5']`) instead of touching
+  // an element — so the caller got a successful-looking record back, the file
+  // was rewritten, and nothing was actually resolved.
+  if (!Number.isInteger(index) || index < 0 || index >= rec.findings.length) return null;
   rec.findings[index] = { ...rec.findings[index], status };
   rec.updatedAt = new Date().toISOString();
 

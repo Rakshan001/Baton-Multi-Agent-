@@ -105,22 +105,29 @@ export async function runMcpBridge(
 
       try {
         const result = await forwardJsonRpc(url, line, fetchImpl);
-        if (result.body !== null) {
+        if (result.ok && result.body !== null) {
           const out = result.body.endsWith('\n') ? result.body : result.body + '\n';
           if (!stdout.write(out)) {
             await new Promise<void>((resolve) => stdout.once('drain', resolve));
           }
         } else if (!result.ok) {
-          // Empty error body (e.g. 503 with no content) — synthesize a JSON-RPC
-          // error so Codex sees a structured failure instead of silence.
+          // A FAILING response body is not JSON-RPC and must never reach the
+          // client's framer: the daemon answers 403 {"error":"bad token"} on a
+          // stale .baton/mcp-token, 502 with plain text for an unknown project,
+          // 503, 405, 413. Forwarded verbatim, the framer sees a line that
+          // carries no id, so the pending request never resolves — the agent
+          // hangs to timeout with nothing on stderr. Synthesize a JSON-RPC
+          // error carrying the request's own id, and keep the upstream text as
+          // the message so the cause is visible rather than guessed.
           const id = requestId(line);
+          const detail = result.body ? `: ${result.body.trim().slice(0, 200)}` : ' (empty body)';
           if (id !== null) {
-            const errLine = synthesizeError(id, `daemon returned HTTP ${result.status}`) + '\n';
+            const errLine = synthesizeError(id, `daemon returned HTTP ${result.status}${detail}`) + '\n';
             if (!stdout.write(errLine)) {
               await new Promise<void>((resolve) => stdout.once('drain', resolve));
             }
           }
-          stderr.write(`mcp-bridge: daemon returned HTTP ${result.status} (empty body)\n`);
+          stderr.write(`mcp-bridge: daemon returned HTTP ${result.status}${detail}\n`);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

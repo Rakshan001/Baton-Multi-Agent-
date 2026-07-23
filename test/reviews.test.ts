@@ -129,6 +129,29 @@ describe('counting and staleness', () => {
     expect(await resolveFinding(root, 'nope', 0, 'fixed')).toBeNull();
   });
 
+  /**
+   * A non-integer index passed the old range check (NaN compares false to
+   * everything), and `findings[1.5] = …` then created a NAMED property rather
+   * than touching an element. The caller got a successful-looking record back
+   * and the file was rewritten, so a dashboard would report a finding resolved
+   * while it stayed open.
+   */
+  it('rejects a non-integer index instead of silently resolving nothing', async () => {
+    await saveReview(root, 't', {
+      fixedPoint: 'main', head: 'aaa',
+      findings: [finding(), finding({ title: 'second' })],
+    });
+
+    expect(await resolveFinding(root, 't', 1.5, 'fixed')).toBeNull();
+    expect(await resolveFinding(root, 't', NaN, 'fixed')).toBeNull();
+
+    const after = await loadReview(root, 't');
+    expect(after!.findings).toHaveLength(2);
+    expect(after!.findings.every((f) => f.status === 'open')).toBe(true);
+    // No stray named properties on the array — the old bug's fingerprint.
+    expect(Object.keys(after!.findings)).toEqual(['0', '1']);
+  });
+
   it('flags a review whose head no longer matches — findings may already be fixed', async () => {
     const rec = await saveReview(root, 't', { fixedPoint: 'main', head: 'aaa', findings: [] });
     expect(isReviewStale(rec, 'aaa')).toBe(false);

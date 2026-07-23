@@ -97,6 +97,71 @@ describe('runMcpBridge', () => {
     expect(Buffer.concat(errChunks).toString('utf8')).toContain('fetch failed');
   });
 
+  /**
+   * A failing response body is NOT JSON-RPC. Forwarded verbatim it reaches the
+   * client's stdio framer as a line carrying no `id`, so the pending request
+   * never resolves and the agent hangs to timeout with nothing on stderr. The
+   * 403 case is the realistic one: regenerate .baton/mcp-token and every
+   * already-written Codex config hits it forever.
+   */
+  it.each([
+    ['403 stale token', 403, '{"error":"bad token"}'],
+    ['502 unknown project', 502, 'no graph for merged\n'],
+    ['405 wrong method', 405, '{"error":"POST only"}'],
+  ])('converts a %s error body into a JSON-RPC error instead of forwarding it', async (_label, status, upstream) => {
+    const request = '{"jsonrpc":"2.0","id":7,"method":"tools/call"}\n';
+    const fetchImpl = vi.fn(async () => new Response(upstream, { status }));
+
+    const stdin = Readable.from([request]);
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    stdout.on('data', (c) => outChunks.push(Buffer.from(c)));
+    stderr.on('data', (c) => errChunks.push(Buffer.from(c)));
+
+    await runMcpBridge('http://127.0.0.1:7077/mcp/g/tok/merged', {
+      stdin,
+      stdout,
+      stderr,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const raw = Buffer.concat(outChunks).toString('utf8');
+    // Exactly one line, and it PARSES as JSON-RPC carrying the request's id —
+    // that is what the framer needs to resolve the pending call. The upstream
+    // text is allowed through only as the error message, never as the frame.
+    expect(raw.trimEnd().split('\n')).toHaveLength(1);
+    const out = JSON.parse(raw.trim());
+    expect(out).toMatchObject({ jsonrpc: '2.0', id: 7, error: { code: -32000 } });
+    // The upstream text survives as the message — the cause stays visible.
+    expect(out.error.message).toContain(String(status));
+    expect(out.error.message).toContain(upstream.trim().slice(0, 20));
+    expect(Buffer.concat(errChunks).toString('utf8')).toContain(String(status));
+  });
+
+  it('still synthesizes an error for an empty failing body', async () => {
+    const request = '{"jsonrpc":"2.0","id":8,"method":"tools/list"}\n';
+    const fetchImpl = vi.fn(async () => new Response('', { status: 503 }));
+
+    const stdin = Readable.from([request]);
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const chunks: Buffer[] = [];
+    stdout.on('data', (c) => chunks.push(Buffer.from(c)));
+
+    await runMcpBridge('http://127.0.0.1:7077/mcp/g/tok/merged', {
+      stdin,
+      stdout,
+      stderr,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const out = JSON.parse(Buffer.concat(chunks).toString('utf8').trim());
+    expect(out).toMatchObject({ jsonrpc: '2.0', id: 8, error: { code: -32000 } });
+    expect(out.error.message).toContain('503');
+  });
+
   it('writes nothing for an empty 202 notification ack', async () => {
     const request = '{"jsonrpc":"2.0","method":"notifications/initialized"}\n';
     const fetchImpl = vi.fn(async () => new Response('', { status: 202 }));

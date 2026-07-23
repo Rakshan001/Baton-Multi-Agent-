@@ -73,6 +73,37 @@ describe('detectProjects / findNestedGitRepos', () => {
     expect((await findNestedGitRepos(join(base, 'app'))).map((x) => x.name)).toEqual(['vendored']);
   });
 
+  /**
+   * The id is interpolated into a TOML table header in the user's GLOBAL
+   * ~/.codex/config.toml and into the daemon's proxy route, whose regex is
+   * [A-Za-z0-9._-]+. A newline in a directory name produced an illegal TOML
+   * basic string that left the whole file unparseable — breaking every MCP
+   * server the user had, not just Baton's — and a space produced an id that
+   * could never match its own route (a silently dead graph server).
+   */
+  it('sanitizes project ids to the charset the proxy route and TOML can carry', async () => {
+    await initRepo(join(base, 'my app'));      // space → dead route
+    await initRepo(join(base, 'we\nird"one')); // newline + quote → unparseable TOML
+    await initRepo(join(base, 'plain'));
+
+    const ids = (await findNestedGitRepos(base)).map((p) => p.id).sort();
+    for (const id of ids) {
+      expect(id).toMatch(/^[A-Za-z0-9._-]+$/); // the route regex, exactly
+    }
+    expect(ids).toEqual(['my-app', 'plain', 'we-ird-one']);
+    // The human-facing name is untouched — only the id is constrained.
+    const names = (await findNestedGitRepos(base)).map((p) => p.name).sort();
+    expect(names).toContain('my app');
+  });
+
+  it('keeps ids unique and non-empty after sanitizing collapses them together', async () => {
+    await initRepo(join(base, 'a b'));
+    await initRepo(join(base, 'a-b'));
+    const ids = (await findNestedGitRepos(base)).map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length); // no collision
+    expect(ids.every((i) => i.length > 0)).toBe(true);
+  });
+
   it('findNestedGitRepos sees repos regardless of a root marker', async () => {
     await writeFile(join(base, 'package.json'), '{"name":"workspace"}\n', 'utf-8');
     await initRepo(join(base, 'api'));
