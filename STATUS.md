@@ -2,7 +2,7 @@
 
 > Snapshot of what is BUILT, what is PENDING, and where things live.
 > Update this file at the end of every working session.
-> Last updated: **2026-07-10 (session 14: W-round — worktree GC, honest-graph, downshift routing, antigravity skills, on `feat/skills-v2`)** (PR #5 = the P1–P12 coordination audit on `feat/worktree-orchestration`, still open; PR #6 = skills+coordination)
+> Last updated: **2026-07-21 (session 16b: review-store hardening)**. Four fixes on the store shipped earlier the same session, each reproduced by a failing test first: (1) **findings had no identity** — `resolveFinding` addressed by array position while `saveReview` replaced the array, so a re-review erased triage decisions AND an index could resolve the wrong finding; findings now carry a stable id (axis+file+title) and `--dismiss` survives a re-review while a `fixed` finding the reviewer reports again resets to open (if it's still found, it isn't fixed). (2) **No secret redaction** — findings quote raw hunks, and unlike memory nothing scrubbed them; `detectSecret()` is now shared, and title/source/detail are redacted while the finding itself survives (a hardcoded-key finding is the Security axis's whole job). (3) **Open findings now ride into `buildBrief`** — `baton take`/`resume` surface inherited findings instead of the previous docs merely claiming they did. (4) `baton review save` no longer hangs forever on an interactive TTY. 87 files / 697 tests. Prior in session 16: Added the 9th bundled skill — three-axis (Standards / Spec / Security) diff review with a refute-before-report gate and a routing table, adapted from mattpocock/skills (MIT) and wired to Baton's handoff brief, memory, and edit signals. Backed by a **new durable store**: `src/reviews.ts` → `.baton/reviews/<slug>.json` (atomic writes, capped, citation-mandatory — a finding with no axis/title/source is dropped; only the Standards axis may claim a hard violation; per-axis counts are never summed), `baton review save|list|show|resolve`, `review.completed` on the event bus, `GET /api/reviews` + write-gated resolve route, HEAD-mismatch staleness flagging. Not an MCP tool by design — a 14th would breach `TOOL_HELP_BUDGET`, a context tax every session pays. New files: `src/reviews.ts`, `src/commands/review.ts`, `src/skills/bundled/code-review/{SKILL.md,references/smell-baseline.md,references/security-baseline.md}`, `test/reviews.test.ts` (15), `test/code-review-skill.test.ts` (6). Backend build + web build green. Prior session (2026-07-20, research: 1MCP): Cloned [1mcp-app/agent](https://github.com/1mcp-app/agent) (`@1mcp/agent` 0.34.3) to `.refs/1mcp-agent` and mapped the aggregated runtime — note in `docs/notes/1mcp-agent.md`. Prior session 15 (2026-07-18): hardening round after a 4-track audit — security/resources/memory-staleness/concurrency — on `chore/typescript-7-attempt`. P0 stability: SQLite `busy_timeout` on all three history.db connections (a locked write THREW and killed the daemon from timer callbacks), event-bus subscriber isolation, atomic `saveKb` (a torn kb.json silently re-enabled shadow-`.baton` adoption), kb-export unhandled-rejection catch. P1 resources: `repoState` marker probes collapsed 5 spawns→cached stats, `/api/status` rides the poller snapshot, ps/lsof TTL 2s→5s, indexed `checkOverlap` (was a full-table scan per changed file). P2 memory: facts saved without `files:` now auto-derive anchors from their own text and age to stale past 50 commits (they previously could NEVER go stale), `baton take`/`resume` prepend a STALE BRIEF warning when commits landed after the brief, progress ledgers predating the last commit are dropped from briefs, `commitsBehind` scoped to anchored paths. P3: flag-lookalike prompts neutralized in positional argv slots, coalesced dirty-path scans, terminal-SSE slow-consumer cap (4MB → drop), clean EADDRINUSE message. Audit verdicts: no exploitable security findings; P1 gitRoot→worktree bug confirmed fixed. (PR #5, #6 status unchanged.)
 
 ## What this project is
 
@@ -43,10 +43,10 @@ Vision docs: [README.md](README.md) · [BUILD.md](BUILD.md) · [MVP.md](MVP.md).
 | **Headless agent launch** | `baton start <slug> [--agent claude\|codex\|gemini]` runs the agent's print mode in the worktree (prompt = HANDOFF.md brief when present), output streamed as `agent.output` SSE events into the Live screen; `baton stop`; Detail "Start agent" button; Launch dialog "start headless after create" (its Preview badge disappears on that path); 409 on double-start; never adds permission-bypass flags. Prior art: Rover | `baton start <slug> --prompt "say hi"` |
 | **Interactive agent terminals** | Real PTY sessions in the dashboard: tmux hosts each session (`baton-<repoHash>-<slug>`, zero new daemon deps, survives daemon restarts), driven via one control-mode client per session; output → per-session SSE stream (`/api/tasks/:slug/terminal/stream`, snapshot+live), input/resize → POST (hex-encoded send-keys, injection-proof); xterm.js panel in the Live screen (Terminal tab, auto-selected when live), Launch dialog 3-way start mode (worktree only / interactive / headless), Detail "Open terminal" button; mutual 409 with headless runs; kill-on-task-remove; tmux-missing → capability flag + install hint; demo mode plays a canned transcript. All six agents launchable (`cursor-agent` for cursor; aider/opencode bare). Prior art: handler.dev (tmux+capture-pane), claude-squad | Launch → "Open interactive terminal" → type into the live claude TUI; `tmux ls`; kill daemon, restart → session reattaches |
 | **Write mode follows the daemon** | The dashboard's write capability auto-follows `/api/meta.writeEnabled` in real mode (fresh browsers get terminals/merge out of the box when the daemon runs `--write`); an explicit toggle choice still wins, a read-only daemon always forces read-only; read-only/demo states explain themselves (`baton serve --write` hints in Launch, Live terminal tab, TerminalPanel footer) instead of hiding options | clear localStorage → open :7077 → Launch shows all 3 start modes with no toggle |
-| **Skills (catalog + install)** | Searchable catalog of reusable agent playbooks. **File-backed** multi-file skills live under `src/skills/bundled/<id>/` — a real `SKILL.md` (gray-matter frontmatter, incl. folded multi-line descriptions) + an optional `references/` folder; the flagship `bug-fix` skill (reproduce-first → audit → blast radius → root cause → ≥95% skeptic-corroborated confidence + approved plan → fix → re-verify → auto-commit, never push) ships 3 reference files. The **efficiency & traceability pack** adds four more file-backed skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) — each a portable SKILL.md + one `references/` cheat-sheet, with optional "Baton boost" sections (CODEBASE.md/query_graph/recall_memory/who_touched). Tags/produces for file-backed skills live in `BUNDLED_META` (catalog.ts) so the source SKILL.md stays a clean name+description-only Claude skill. Plus short **inline** skills (`map-codebase`, `safe-refactor`) and **imported** skills read from `.baton/skills/*.md`. Bundled skills are cached + copied into `dist/` at build (`scripts/copy-assets.mjs`). `GET /api/skills` returns each skill with per-agent install state + reference paths (content/raw never serialized); `POST/DELETE /api/skills/:id/install` writes/removes in the agent's own format — Claude → `.claude/skills/<id>/SKILL.md` (+ `references/`, hand-authored SKILL.md written verbatim when faithful), Cursor → `.cursor/rules/<id>.mdc` (`alwaysApply:false`) with references copied to a sibling `<id>/` folder the rule points at; other CLIs unsupported. `POST /api/skills/import` adds from a path/http(s) URL (256KB cap, can't shadow a bundled id). All writes gated on `--write`. Dashboard **Skills** screen: search, source/produces/reference chips + multi-file badge, per-agent install toggles, playbook preview, import; an **"Efficiency & traceability pack"** showcase band highlights the four pack skills on the unsearched landing state (click a chip to filter to it); demo mirror (`web/src/lib/demoSkills.ts`). | dashboard → Skills; `curl -XPOST localhost:7077/api/skills/bug-fix/install -d '{"agent":"claude"}'` writes `.claude/skills/bug-fix/SKILL.md` + `references/` |
+| **Skills (catalog + install)** | Searchable catalog of reusable agent playbooks. **File-backed** multi-file skills live under `src/skills/bundled/<id>/` — a real `SKILL.md` (gray-matter frontmatter, incl. folded multi-line descriptions) + an optional `references/` folder; the flagship `bug-fix` skill (reproduce-first → audit → blast radius → root cause → ≥95% skeptic-corroborated confidence + approved plan → fix → re-verify → auto-commit, never push) ships 3 reference files. The **efficiency & traceability pack** adds four more file-backed skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) — each a portable SKILL.md + one `references/` cheat-sheet, with optional "Baton boost" sections (CODEBASE.md/query_graph/recall_memory/who_touched). The `code-review` skill reviews a diff since a fixed point along **three axes that are never merged** — Standards (repo conventions + a 12-smell Fowler baseline), Spec (does it match the issue/spec/handoff brief, no scope creep?), and Security (source-to-sink vulnerability baseline) — run as parallel sub-agents, with **every finding refuted before it is reported** (the bug-fix skill's ≥95% skeptic gate applied to findings), reported side by side with no cross-axis ranking, then **routed** (Spec-wrong → systematic-debugging, Security → bug-fix) and **persisted**. Two-axis structure + smell baseline adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT); the Security axis, refute gate, routing table, and durable record are Baton additions. Deliberately distinct from `verify-before-done` (author proves their own change works) — the boundary is stated in both SKILL.md files and pinned by a test. Tags/produces for file-backed skills live in `BUNDLED_META` (catalog.ts) so the source SKILL.md stays a clean name+description-only Claude skill. Plus short **inline** skills (`map-codebase`, `safe-refactor`) and **imported** skills read from `.baton/skills/*.md`. Bundled skills are cached + copied into `dist/` at build (`scripts/copy-assets.mjs`). `GET /api/skills` returns each skill with per-agent install state + reference paths (content/raw never serialized); `POST/DELETE /api/skills/:id/install` writes/removes in the agent's own format — Claude → `.claude/skills/<id>/SKILL.md` (+ `references/`, hand-authored SKILL.md written verbatim when faithful), Cursor → `.cursor/rules/<id>.mdc` (`alwaysApply:false`) with references copied to a sibling `<id>/` folder the rule points at; other CLIs unsupported. `POST /api/skills/import` adds from a path/http(s) URL (256KB cap, can't shadow a bundled id). All writes gated on `--write`. Dashboard **Skills** screen: search, source/produces/reference chips + multi-file badge, per-agent install toggles, playbook preview, import; an **"Efficiency & traceability pack"** showcase band highlights the four pack skills on the unsearched landing state (click a chip to filter to it); demo mirror (`web/src/lib/demoSkills.ts`). | dashboard → Skills; `curl -XPOST localhost:7077/api/skills/bug-fix/install -d '{"agent":"claude"}'` writes `.claude/skills/bug-fix/SKILL.md` + `references/` |
 | **Project memory** | Evidence-anchored shared memory at `.baton/memory/facts/` (one md file per fact, atomic writes, always the MAIN repo even from worktrees): every fact stores the commit + content-hashes of the files it describes; on every read the anchors are re-checked — changed file ⇒ fact served as `stale` with the reason and **withheld from agents** (anti-hallucination). Agents write via `save_memory` / read via `recall_memory` MCP tools (keyword-ranked, stale-filtered); supersede-by-fingerprint dedup; secret-pattern rejection (keys/tokens/JWTs refused); 1.2k-char + 500-fact caps; handoff briefs embed a token-cheap "Project memory" section; daemon watches the store → `memory.updated` SSE; dashboard Memory page (search, fresh/aging/stale badges, quick-add, GC, delete; demo facts in demo mode); `baton memory list\|add\|rm\|gc` CLI; AGENTS.md guide tells agents to recall-before-exploring and save-after-learning | `baton memory add "…" --files src/x.ts` → edit src/x.ts → `baton memory list` shows STALE → `baton memory gc`; dashboard → Memory |
 
-| **Shared graphify backend pool** | The daemon owns one graphify HTTP backend per **touched** project (lazy start on first query, reaped after 15 min idle); agents POST to `POST /mcp/g/<token>/<projectId>` and never spawn their own processes. Token-gated (`.baton/mcp-token`, mode 0600, embedded in the config URL); backends bind `127.0.0.1`. Claude/Cursor get `{type:'http', url}` MCP entries; Gemini gets `{httpUrl}` (Gemini CLI's streamable-HTTP schema); Codex stays on stdio. Existing setups migrate by re-running `baton kb init` (or the Agents → Connect action). RAM: ~720 MB (3 agents × 6 stdio processes on a 5-project hub) → at most 1–2 backends per touched project regardless of agent count (~120–180 MB shared vs ~720 MB–1.8 GB before). Graph freshness: graphify `--stateless` re-reads on every request (empirically verified: node count drops immediately after file modification, no flush needed). | `node dist/cli.js serve --write --port 7079` against FAT_FOX (5 projects): `/api/kb/mcp` → http URLs; POST tools/list to `merged` + `fatfox-api-server` → 2 Python backends started (HTTP 200 both); wrong token → 403; SIGTERM daemon → 0 backends remain |
+| **Shared graphify backend pool** | The daemon owns one graphify HTTP backend per **touched** project (lazy start on first query, reaped after 15 min idle); agents POST to `POST /mcp/g/<token>/<projectId>` and never spawn their own processes. Token-gated (`.baton/mcp-token`, mode 0600, embedded in the config URL); backends bind `127.0.0.1`. Claude/Cursor get `{type:'http', url}` MCP entries; Gemini gets `{httpUrl}` (Gemini CLI's streamable-HTTP schema); Codex uses `baton mcp-bridge <url>` (stdio TOML → same shared pool). Existing setups migrate by re-running `baton kb init` (or the Agents → Connect action). RAM: ~720 MB (3 agents × 6 stdio processes on a 5-project hub) → at most 1–2 backends per touched project regardless of agent count (~120–180 MB shared vs ~720 MB–1.8 GB before). Graph freshness: graphify `--stateless` re-reads on every request (empirically verified: node count drops immediately after file modification, no flush needed). | `node dist/cli.js serve --write --port 7079` against FAT_FOX (5 projects): `/api/kb/mcp` → http URLs; POST tools/list to `merged` + `fatfox-api-server` → 2 Python backends started (HTTP 200 both); wrong token → 403; SIGTERM daemon → 0 backends remain |
 
 | **Context pack** | `baton kb context`, `GET /api/kb/context`, dashboard "Share context" modal — budgeted (≤ ~8k tokens), deterministic, secret-redacted markdown brief of the project/hub for pasting into external chatbots. Spec: docs/superpowers/specs/2026-07-04-context-pack-design.md. | `baton kb context \| pbcopy`; dashboard → Knowledge Graph → Share context |
 | **Site hosting readiness + dashboard edge cases** | env-driven site URL (`NEXT_PUBLIC_SITE_URL`), PNG OG image + favicon, correct quick-start commands, mobile nav menu, noscript reveal fallback; SSE reconnect indicator, honest error/loading/empty states on Memory/Activity/Conflicts/Knowledge Graph pages, overflow fix | `cd site && npm run build` → `/opengraph-image` + `/apple-icon` routes listed; dashboard → Memory/Activity/Conflicts/Knowledge Graph with demo OFF |
@@ -162,9 +162,10 @@ Backends bind `127.0.0.1` only, run `--stateless --json-response` (no session
 affinity), and are reaped via SIGTERM after 15 min idle (60s poll). Daemon
 SIGTERM/SIGINT fires `graphPool.shutdown()` so backends never outlive the daemon.
 MCP config for Claude, Cursor, Gemini rewritten to `{type:'http', url}` form;
-Codex intentionally stays on stdio (its TOML has no url support). Existing
-setups migrate via `baton kb init` or Agents → Connect. Deliberate trade-off:
-graph queries now require `baton serve` to be running — documented in
+Codex uses `baton mcp-bridge <url>` (stdio TOML → same shared pool; its TOML has
+no url key). Existing setups migrate via `baton kb init` or Agents → Connect.
+Deliberate trade-off: graph queries now require `baton serve` to be running
+for every agent (including Codex) — documented in
 `docs/knowledge-graph.md`, `docs/mcp-tools.md`, `docs/architecture.md`,
 `docs/troubleshooting.md`. Verified live against FAT_FOX (5-project hub, port
 7079): 0 HTTP graphify backends before first query; `merged` query → 2 processes
@@ -292,6 +293,79 @@ cheaper light/local chain + reason attached; mirrored in web routing, parity sui
 **W6 deferred below the 95% gate** (Stop-hook decision:block contract unverified; documented
 in the plan). All in docs/plans/2026-07-09-multi-agent-coordination.md W-round section.
 479 tests green ×2.
+
+**Antigravity MCP parity (2026-07-22, session 17).** Antigravity could already *receive*
+skills (`.agents/skills/`, W4) but had no MCP wiring — it was being handed playbooks that
+say "call `check_files`" with no way to call anything. `mcpTargetFor` now returns
+`<repo>/.agents/mcp_config.json` (project-scoped, so it auto-writes like claude/cursor —
+nothing in `$HOME` without a confirm). Evidence, since W4-era guesses were deliberately
+deferred: official docs give the path + `mcpServers` key, and a live install on the dev
+machine ships exactly that file (`~/.gemini/config/mcp_config.json`, 0 bytes) plus
+`~/.agents/skills/` in the layout Baton already writes.
+
+Antigravity's graphify entries go through `baton mcp-bridge` like Codex, NOT its documented
+`serverUrl` key: that key has a single source, is unverified against a live install, and a
+wrong url key yields a server that loads and answers nothing. `command`+`args` is the one
+shape every MCP client agrees on, so parity costs zero confidence. `mcpServersCodex` and
+`mcpServersAntigravity` now both delegate to a shared `mcpServersBridged`; the nested
+agent ternary in `connectAgentMcp` became a `SERVERS_FOR_AGENT` lookup. Revisit `serverUrl`
+only once verified live. **Launchers stay unguessed** — `agy -p` has an open non-TTY hang
+bug (exactly how Baton would spawn it) and Antigravity's ToS reportedly forbids
+third-party access. Two independent reasons; detection-only was the right call.
+
+Verified end-to-end on temp repos: fresh write, idempotent re-connect preserving an
+unrelated `chrome-devtools` server **and** a non-`mcpServers` top-level key, and the 0-byte
+file a real install ships (merges — `mergeJsonConfig` guards with `if (existing.trim())`,
+so it never trips the parse-error path). Also fixed `web/src/lib/api.ts`'s demo mirror of
+`mcpTargetFor`, which would otherwise have shown Antigravity as MCP-n/a in the dashboard.
+
+Docs drift fixed in the same pass: `docs/skills.md` listed only claude+cursor as skill
+targets and named antigravity in neither the supported nor the excluded list — it had been
+a third target since `0569178`. Also recorded that `.agents/skills/` is the emerging
+neutral cross-tool path (Antigravity, Cursor, opencode, Zed all read it), so that install
+target reaches more agents than its id suggests. 702 tests green, both workspaces build.
+
+**Known gaps after this round:** Antigravity hooks (`.agents/hooks.json`, unique
+hook-name→event→matcher nesting; its exit-code/stdout-injection contract is undocumented,
+so only the *signal-recording* half is safely shippable — the advisory half is unproven).
+opencode has MCP (`opencode.json`, key `mcp`) and reads `.agents/skills/` — a cheap next
+add. GitHub Copilot/VS Code (`.vscode/mcp.json`, key `servers`) is absent from the registry
+entirely, so it is invisible to detection, routing, and `/api/agents/:id`.
+
+### Session 18 — KB health in doctor, drift guard, a "flaky" test that wasn't
+
+**`baton disconnect` — built, then reverted. Decision worth keeping.** `connect` writes
+two `$HOME` files with no undo, which looked like a real gap. It isn't worth automating.
+Subtracting from a config is categorically riskier than appending to one: appending never
+has to understand what is already there. The removal path produced 7 bugs in ~270 lines,
+and two of them damaged files — a `0600` config silently widened to `0644` by tmp+rename
+(`~/.codex/config.toml` can hold API keys), and a TOML file *corrupted past parsing* when
+a multi-line string contained a line reading `[mcp_servers."baton"]`, because Node has no
+TOML parser and text surgery cannot know it is inside a string. A third: global configs
+are shared across repos, so disconnecting from one repo removed another's graphify
+servers. For a command run once in a project's lifetime, whose manual alternative is
+deleting three lines, that risk isn't worth carrying. **If this is ever revisited: JSON is
+fine (real parser, fails closed) — it is TOML that must be propose-only.**
+
+**KB health in `baton doctor`** (`src/kb/health.ts`) — doctor audited junk only, so it
+printed `✓ no junk found` while this repo's `kb.json` had pointed at
+`~/Freelancing/baton` for 41 days, a directory with no `graph.json` in it. `loadKb`
+knew (it skips the project and warns once on a 2s poll path) but nothing diagnosed it.
+Now reported as errors with fixes: root built for another repo, project outside the
+repo / missing / graphless, empty project list, missing merged graph. Staleness is a
+*warning* — an old graph is still usable. A missing kb.json is info, not failure.
+Read-only, like `doctor --docs`.
+
+**Drift guard** (`test/agent-map-drift.test.ts`) — `web/src/lib/api.ts` hand-mirrors
+`mcpTargetFor` (two tsconfigs, no monorepo tool). Adding an agent to one side only is
+silent: the daemon wires it while the UI calls it unsupported. The test parses both and
+compares; verified it fails on induced drift, not just on paper.
+
+**Platform support documented** (SETUP.md) — macOS/Linux/WSL2 yes, native Windows no,
+with the reasons (`ps`/`lsof`, `/proc/<pid>/cwd`, `commonBinDirs` returning `[]` on
+win32). It had appeared in no doc at all.
+
+718 tests green, both workspaces build.
 
 ## Pending / next 🔜
 

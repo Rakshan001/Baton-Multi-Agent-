@@ -1,16 +1,12 @@
 /**
  * MCP config snippets so each agent CLI (Claude Code, Cursor, Codex, Gemini)
- * can query the graphify knowledge graph natively. Graphify entries now point
- * at the shared daemon proxy (`/mcp/g/<token>/<id>`) instead of spawning
- * per-agent `uv` processes. Codex is special-cased to keep stdio spawn because
- * its TOML MCP config does not support url-based servers (only `command` +
- * `args` keys are documented in the Codex config spec).
+ * can query the graphify knowledge graph natively. Graphify entries point at
+ * the shared daemon proxy (`/mcp/g/<token>/<id>`). Claude/Cursor/Gemini get
+ * url-based HTTP entries; Codex's TOML MCP format only supports `command` +
+ * `args`, so it gets `baton mcp-bridge <url>` — a thin stdio↔HTTP bridge into
+ * the same shared pool (requires `baton serve`, same as the HTTP agents).
  */
 import type { KbState } from './state.js';
-
-function serveArgs(graphPath: string): string[] {
-  return ['run', '--with', 'graphifyy', '--with', 'mcp', '-m', 'graphify.serve', graphPath];
-}
 
 export type McpServerDef =
   | { command: string; args: string[] }
@@ -59,19 +55,39 @@ export function mcpServers(state: KbState, opts: McpOpts): Record<string, McpSer
 }
 
 /**
- * Codex stdio variant: returns server defs using `uv` spawn instead of http
- * urls, because Codex's TOML MCP format only supports `command` + `args`.
+ * Same daemon proxy URLs as Claude/Cursor, but every graphify entry wrapped in
+ * `baton mcp-bridge <url>` so the whole config is `command` + `args`. Used by
+ * any client whose config can't express a url-based server, or whose url key we
+ * aren't confident enough about to bet a silent dead server on.
  */
-function mcpServersCodex(state: KbState, perProject = false): Record<string, McpServerDef> {
+function mcpServersBridged(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
   const servers: Record<string, McpServerDef> = {};
-  for (const p of projectGraphs(state, perProject)) {
-    servers[`graphify-${p.id}`] = { command: 'uv', args: serveArgs(p.graphPath) };
+  const url = (id: string) => `${opts.baseUrl}/mcp/g/${opts.token}/${id}`;
+  for (const p of projectGraphs(state, opts.perProject)) {
+    servers[`graphify-${p.id}`] = { command: 'baton', args: ['mcp-bridge', url(p.id)] };
   }
   if (state.mergedGraphPath) {
-    servers['graphify-merged'] = { command: 'uv', args: serveArgs(state.mergedGraphPath) };
+    servers['graphify-merged'] = { command: 'baton', args: ['mcp-bridge', url('merged')] };
   }
   servers['baton'] = { command: 'baton', args: ['mcp'] };
   return servers;
+}
+
+/** Codex: its TOML MCP format supports only `command` + `args` — no url servers at all. */
+export function mcpServersCodex(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
+  return mcpServersBridged(state, opts);
+}
+
+/**
+ * Antigravity: its JSON config DOES take remote servers, but under `serverUrl`
+ * — not `url` (Claude/Cursor) or `httpUrl` (Gemini). That key is documented in
+ * exactly one place, and getting it wrong yields a server that loads and
+ * answers nothing. The bridge form is command+args, which every MCP client
+ * agrees on, so we take the same shared pool with none of the risk. Revisit
+ * only once `serverUrl` is verified against a live Antigravity install.
+ */
+export function mcpServersAntigravity(state: KbState, opts: McpOpts): Record<string, McpServerDef> {
+  return mcpServersBridged(state, opts);
 }
 
 /** JSON form used by Claude Code (.mcp.json) and Cursor (.cursor/mcp.json). */
@@ -79,13 +95,11 @@ export function jsonSnippet(state: KbState, opts: McpOpts): string {
   return JSON.stringify({ mcpServers: mcpServers(state, opts) }, null, 2);
 }
 
-/** TOML form for Codex (~/.codex/config.toml). Uses stdio spawn (uv) because
- *  Codex's TOML MCP format does not support url-based servers. */
+/** TOML form for Codex (~/.codex/config.toml). Uses `baton mcp-bridge <url>`
+ *  so Codex's command+args-only format still hits the shared daemon pool. */
 export function codexSnippet(state: KbState, opts: McpOpts): string {
-  // Codex keeps stdio — special-cased because Codex only supports command+args,
-  // not url-based MCP servers. Claude/Cursor/Gemini get the http defs.
   const lines: string[] = [];
-  for (const [name, def] of Object.entries(mcpServersCodex(state, opts.perProject))) {
+  for (const [name, def] of Object.entries(mcpServersCodex(state, opts))) {
     lines.push(`[mcp_servers.${tomlStr(name)}]`);
     if ('command' in def) {
       lines.push(`command = ${tomlStr(def.command)}`);
@@ -119,12 +133,19 @@ export function geminiSnippet(state: KbState, opts: McpOpts): string {
   return JSON.stringify({ mcpServers: mcpServersGemini(state, opts) }, null, 2);
 }
 
+/** Antigravity: same `mcpServers` key as Claude/Cursor, bridged graphify entries. */
+export function antigravitySnippet(state: KbState, opts: McpOpts): string {
+  return JSON.stringify({ mcpServers: mcpServersAntigravity(state, opts) }, null, 2);
+}
+
 export function snippetFor(agent: string, state: KbState, opts: McpOpts): string {
   switch (agent) {
     case 'codex':
       return codexSnippet(state, opts);
     case 'gemini':
       return geminiSnippet(state, opts);
+    case 'antigravity':
+      return antigravitySnippet(state, opts);
     case 'claude':
     case 'cursor':
     default:

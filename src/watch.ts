@@ -6,7 +6,7 @@
  * Uses node:fs.watch({recursive}) — supported on macOS/Windows/Linux on the
  * Node 20 engine floor — so the daemon stays dependency-free.
  */
-import { watch, type FSWatcher } from 'node:fs';
+import { watch, statSync, type FSWatcher } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { bus } from './events.js';
 import { batonDir, loadTasks } from './store.js';
@@ -17,6 +17,17 @@ import { registerWatchedRoot, unregisterWatchedRoot, watchedRoots } from './sign
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'graphify-out', '.baton', 'dist', 'build', '.next', '__pycache__', '.venv']);
 /** Editor/tool noise: vim swaps, backup~, temp files, OS cruft. */
 const IGNORED_FILES = /(\.sw[a-p]x?|~|\.tmp|\.DS_Store|\.lock)$|^\.#|^#.*#$/;
+/**
+ * Baton's own generated artifacts, written INTO the projects it watches — a
+ * `kb rebuild` drops a CODEBASE.md in every one. Watching them turns baton's
+ * housekeeping into "6 agents are editing CODEBASE.md", a conflict warning with
+ * no agent anywhere behind it, and reconcile can't undo it because baton really
+ * did just dirty the file. The sibling artifacts (`graphify-out/`, `.baton/`)
+ * are already excluded via IGNORED_DIRS; these are the ones that live at the
+ * project root. Hand-edits to them are lost signals by design: `baton kb`
+ * overwrites the file wholesale, so there is no edit here worth protecting.
+ */
+const GENERATED_FILES = new Set(['CODEBASE.md']);
 const DEBOUNCE_MS = 300;
 /**
  * How long a checkout probe (kb read + git rev-parse) is reused. resync fires on
@@ -26,11 +37,41 @@ const DEBOUNCE_MS = 300;
  */
 const CHECKOUT_PROBE_TTL_MS = 4_000;
 
+/**
+ * fs.watch({recursive}) reports directories, not just files: `mkdir -p a/b/c`
+ * fires a rename for `a`, `a/b` AND `a/b/c`, and removing a tree fires one for
+ * the tree root. Recorded verbatim those become "agent is editing `controllers`"
+ * — and, worse, `check_files(['controllers'])` answers busy:true for the ~15s
+ * before read-time reconcile can verify them, blocking an agent on a directory.
+ * git never calls a bare directory dirty, so reconcile prunes these; this keeps
+ * them out of the DB in the first place.
+ *
+ * KNOWN LIMIT: a path that is already GONE (a deleted tree) can't be typed by
+ * stat, so a removed directory still gets recorded and waits for reconcile to
+ * prune it. Deletion must stay recordable — an agent deleting a file genuinely
+ * holds that path — and nothing cheap distinguishes the two at this point.
+ */
+export function isDirectory(abs: string): boolean {
+  // `throwIfNoEntry: false` suppresses ENOENT/ENOTDIR ONLY — statSync still
+  // throws on ELOOP (a self-referential symlink in the checkout) and EACCES (a
+  // parent whose permissions changed between the fs event and this debounce).
+  // This runs in a bare setTimeout with no uncaughtException handler in the
+  // process, so an unguarded throw takes the whole daemon down: watchers, SSE,
+  // poller, coordination. Unknown → treat as a file, which is the recordable
+  // side: read-time reconcile prunes a directory, but nothing recovers an edit
+  // we never published.
+  try {
+    return statSync(abs, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
 function shouldIgnore(rel: string): boolean {
   const parts = rel.split(sep);
   if (parts.some((p) => IGNORED_DIRS.has(p))) return true;
   const base = parts[parts.length - 1] ?? '';
-  return IGNORED_FILES.test(base) || base.startsWith('.');
+  return IGNORED_FILES.test(base) || GENERATED_FILES.has(base) || base.startsWith('.');
 }
 
 export class WorktreeWatcher {
@@ -50,7 +91,7 @@ export class WorktreeWatcher {
   async start(): Promise<void> {
     await this.resync();
     this.unsubs.push(
-      bus.onType('task.created', () => void this.resync()),
+      bus.onType('task.created', () => this.safeResync()),
       bus.onType('task.removed', (e) => {
         if (e.event.type === 'task.removed') this.remove(e.event.slug);
       }),
@@ -60,13 +101,19 @@ export class WorktreeWatcher {
     // daemon picks them up either way.
     try {
       const storeWatcher = watch(batonDir(this.root), (_evt, filename) => {
-        if (filename?.toString() === 'tasks.json') void this.resync();
+        if (filename?.toString() === 'tasks.json') this.safeResync();
       });
       storeWatcher.on('error', () => undefined);
       this.unsubs.push(() => storeWatcher.close());
     } catch {
       /* .baton dir may not exist yet — bus events still cover the API path */
     }
+  }
+
+  /** resync() for fire-and-forget callers (bus/fs-watch callbacks): a rejection
+   *  there is an unhandledRejection — daemon exit — so it must never propagate. */
+  private safeResync(): void {
+    this.resync().catch((err) => console.error('baton: watcher resync failed:', err));
   }
 
   /**
@@ -172,7 +219,7 @@ export class WorktreeWatcher {
         if (!filename) return;
         const rel = relative(worktreePath, join(worktreePath, filename.toString()));
         if (shouldIgnore(rel)) return;
-        this.debounced(slug, rel);
+        this.debounced(slug, rel, worktreePath);
       });
     } catch {
       return; // worktree dir vanished — nothing to watch
@@ -181,7 +228,7 @@ export class WorktreeWatcher {
     this.watchers.set(slug, watcher);
   }
 
-  private debounced(slug: string, rel: string): void {
+  private debounced(slug: string, rel: string, worktreePath: string): void {
     const key = `${slug}:${rel}`;
     const existing = this.pending.get(key);
     if (existing) clearTimeout(existing);
@@ -189,6 +236,7 @@ export class WorktreeWatcher {
       key,
       setTimeout(() => {
         this.pending.delete(key);
+        if (isDirectory(join(worktreePath, rel))) return;
         bus.publish({ type: 'file.edited', slug, path: rel, at: new Date().toISOString() });
       }, DEBOUNCE_MS),
     );

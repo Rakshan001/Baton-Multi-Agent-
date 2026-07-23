@@ -6,6 +6,7 @@
  * resume covers everything, including root sessions with no worktree.
  */
 import { gitRoot } from '../git.js';
+import { briefStalenessWarning } from '../handoff/brief.js';
 import { listBriefs, setBriefStatusAt } from '../handoff/resume.js';
 
 function age(iso: string): string {
@@ -55,9 +56,12 @@ export async function resumeCmd(slug: string | undefined, opts: { json?: boolean
   }
 
   await setBriefStatusAt(brief.path, 'in-progress');
+  const staleWarning = await briefStalenessWarning(brief.cwd, brief.created);
 
   // The resume prompt — paste (or pipe) this into the receiving agent.
+  // The staleness warning goes INSIDE the delimiters so a piped agent sees it.
   console.log('────────────────────────────────────────────────────────');
+  if (staleWarning) console.log(staleWarning + '\n');
   console.log(brief.body);
   console.log('────────────────────────────────────────────────────────');
   console.log(`(brief: ${brief.path} · status → in-progress)`);

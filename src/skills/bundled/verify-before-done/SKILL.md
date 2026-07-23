@@ -101,6 +101,9 @@ For each function/import/method/route/field/env var the change introduces or cal
 
 - **`check_files` / `who_touched`** (Baton MCP) — confirm no other live session is mid-edit in a
   file you're about to call done, and see who last touched a consumer you're verifying.
+- **The `code-review` skill** — this skill is the *author* proving their own change works before
+  claiming done. `code-review` is the separate job of *reviewing a diff* since a fixed point on two
+  axes (repo standards, and whether it matches the spec). Verify first, then review.
 - **The `bug-fix` skill** — for a *bug specifically*, use it; it bakes in this verify-before-done
   gate plus reproduce-first, the 95% confidence gate, and an approved plan. This skill is the
   general "verify any change" version for features, refactors, and chores.

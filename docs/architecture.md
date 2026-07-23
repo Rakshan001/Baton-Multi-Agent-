@@ -191,8 +191,10 @@ running**. Without the daemon, `query_graph` / `get_node` fail. This is the
 documented operating model; the daemon is the coordination hub agents run
 alongside anyway.
 
-**Codex exception:** Codex's TOML MCP format has no `url` key. Codex keeps the
-per-session `uv run graphify.serve` stdio spawn and is unaffected by the pool.
+**Codex bridge:** Codex's TOML MCP format has no `url` key, so Baton wires it
+through `baton mcp-bridge <url>` — a thin stdio↔HTTP forwarder into the same
+`/mcp/g/<token>/<id>` pool. Codex therefore also requires `baton serve` for
+graph queries (same as Claude/Cursor/Gemini).
 
 ## Two TypeScript workspaces (no monorepo tool)
 

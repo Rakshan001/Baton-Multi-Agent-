@@ -7,6 +7,22 @@ From zero to the running dashboard in ~10 minutes. (What/why: [STATUS.md](STATUS
 > walks the agent through the same steps interactively, including wiring up the
 > target project and generating a personalized guide.
 
+## Supported platforms
+
+| Platform | Status |
+| --- | --- |
+| macOS | supported |
+| Linux | supported |
+| Windows (WSL2) | supported — it is Linux as far as Baton is concerned |
+| Windows (native) | **not supported** |
+
+Agent detection is POSIX-only: Baton finds a running agent by walking process
+tables with `ps`/`lsof` on macOS and `/proc/<pid>/cwd` on Linux
+([`src/agents.ts`](src/agents.ts)), and PATH repair returns nothing on `win32`
+([`src/util/path-env.ts`](src/util/path-env.ts)). On native Windows the CLI and
+the knowledge base still work, but the roster stays empty and terminals do not
+attach — so run it under WSL2.
+
 ## Prerequisites
 
 - **Node.js ≥ 24** (`node --version`) — the floor is `node:sqlite` + FTS5, which

@@ -51,6 +51,59 @@ describe('detectProjects / findNestedGitRepos', () => {
     expect(p[0].path).toBe(base);
   });
 
+  it('REGRESSION FIX: linked worktrees of an indexed repo are not projects of their own', async () => {
+    await initRepo(join(base, 'api'));
+    await initRepo(join(base, 'web'));
+    // What `baton new` (and `git worktree add`) leaves behind, in both layouts
+    // seen in the wild: a worktrees/ container and a sibling at the root.
+    await git(['worktree', 'add', '-q', '-b', 'task-a', join(base, 'worktrees', 'wt-a')], join(base, 'api'));
+    await git(['worktree', 'add', '-q', '-b', 'task-b', join(base, 'wt-b')], join(base, 'api'));
+
+    const p = await detectProjects(base);
+    expect(p.map((x) => x.name).sort()).toEqual(['api', 'web']); // not 4 projects
+  });
+
+  it('a submodule keeps its own project (its .git file points at modules/, not worktrees/)', async () => {
+    await initRepo(join(base, 'lib'));
+    await git(['commit', '-qm', 'init', '--allow-empty'], join(base, 'lib'));
+    await initRepo(join(base, 'app'));
+    await git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', join(base, 'lib'), 'vendored'], join(base, 'app'));
+
+    expect((await findNestedGitRepos(base)).map((x) => x.name).sort()).toEqual(['app', 'lib']);
+    expect((await findNestedGitRepos(join(base, 'app'))).map((x) => x.name)).toEqual(['vendored']);
+  });
+
+  /**
+   * The id is interpolated into a TOML table header in the user's GLOBAL
+   * ~/.codex/config.toml and into the daemon's proxy route, whose regex is
+   * [A-Za-z0-9._-]+. A newline in a directory name produced an illegal TOML
+   * basic string that left the whole file unparseable — breaking every MCP
+   * server the user had, not just Baton's — and a space produced an id that
+   * could never match its own route (a silently dead graph server).
+   */
+  it('sanitizes project ids to the charset the proxy route and TOML can carry', async () => {
+    await initRepo(join(base, 'my app'));      // space → dead route
+    await initRepo(join(base, 'we\nird"one')); // newline + quote → unparseable TOML
+    await initRepo(join(base, 'plain'));
+
+    const ids = (await findNestedGitRepos(base)).map((p) => p.id).sort();
+    for (const id of ids) {
+      expect(id).toMatch(/^[A-Za-z0-9._-]+$/); // the route regex, exactly
+    }
+    expect(ids).toEqual(['my-app', 'plain', 'we-ird-one']);
+    // The human-facing name is untouched — only the id is constrained.
+    const names = (await findNestedGitRepos(base)).map((p) => p.name).sort();
+    expect(names).toContain('my app');
+  });
+
+  it('keeps ids unique and non-empty after sanitizing collapses them together', async () => {
+    await initRepo(join(base, 'a b'));
+    await initRepo(join(base, 'a-b'));
+    const ids = (await findNestedGitRepos(base)).map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length); // no collision
+    expect(ids.every((i) => i.length > 0)).toBe(true);
+  });
+
   it('findNestedGitRepos sees repos regardless of a root marker', async () => {
     await writeFile(join(base, 'package.json'), '{"name":"workspace"}\n', 'utf-8');
     await initRepo(join(base, 'api'));

@@ -130,9 +130,11 @@ async function scanAgents(worktreePaths: string[]): Promise<Map<string, string>>
 
 // The process-table sweep (ps + per-pid lsof) is the daemon's most expensive
 // poll-path call and gets hit by the board poller, /api/status and
-// /api/signals concurrently — up to 12×/s measured. One shared 2s cache
-// collapses those bursts; ≤2s staleness is invisible at the board's own 2s tick.
-const DETECT_TTL_MS = 2000;
+// /api/signals concurrently — up to 12×/s measured. One shared cache collapses
+// those bursts. 5s (not the poller's 2s): a TTL equal to the poll interval
+// expires on every tick, so the ps+lsof sweep still ran at full poll rate;
+// agent attach/detach appearing ≤5s late is invisible in practice.
+const DETECT_TTL_MS = 5000;
 let detectCache: { key: string; at: number; result: Map<string, string> } | null = null;
 
 /** Test-only: drop the cache between test cases. */
@@ -194,7 +196,8 @@ async function scanAllAgentProcesses(): Promise<RootAgentSession[]> {
   return resolved.filter((r): r is RootAgentSession => r !== null);
 }
 
-const ROOT_SCAN_TTL_MS = 2000;
+// Same ps+lsof sweep as detectAgents, same 5s reasoning (see DETECT_TTL_MS).
+const ROOT_SCAN_TTL_MS = 5000;
 let rootScanCache: { key: string; at: number; result: RootAgentSession[] } | null = null;
 
 /** Test-only: drop the root-agent scan cache between test cases. */

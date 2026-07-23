@@ -200,18 +200,44 @@ export function parseConflicts(raw: string): ConflictEntry[] {
   return out;
 }
 
+const STATE_MARKERS: [string, RepoState][] = [
+  ['MERGE_HEAD', 'merging'],
+  ['rebase-merge', 'rebasing'],
+  ['rebase-apply', 'rebasing'],
+  ['CHERRY_PICK_HEAD', 'cherry-picking'],
+  ['REVERT_HEAD', 'reverting'],
+];
+
+/**
+ * Worktree → resolved marker paths. A worktree's gitdir never moves while it
+ * exists, so resolve once and stat thereafter: repoState is on the status
+ * poller's 2s tick for every task, and five `rev-parse --git-path` spawns per
+ * task per tick was the daemon's single largest CPU cost. A recreated worktree
+ * at the same path gets the same gitdir (keyed by worktree name), so the cache
+ * never goes wrong — a stale entry just stats paths that no longer exist.
+ */
+const markerPathCache = new Map<string, string[]>();
+
 /** Detect an in-progress git operation in a worktree via its marker files. */
 export async function repoState(path: string): Promise<RepoState> {
-  const markers: [string, RepoState][] = [
-    ['MERGE_HEAD', 'merging'],
-    ['rebase-merge', 'rebasing'],
-    ['rebase-apply', 'rebasing'],
-    ['CHERRY_PICK_HEAD', 'cherry-picking'],
-    ['REVERT_HEAD', 'reverting'],
-  ];
-  for (const [marker, state] of markers) {
-    const r = await gitTry(['-C', path, 'rev-parse', '--git-path', marker]);
-    if (r.ok && r.stdout && (await pathExists(r.stdout))) return state;
+  let resolved = markerPathCache.get(path);
+  if (!resolved) {
+    // One spawn resolves all five markers: --git-path repeats, one line each.
+    const r = await gitTry([
+      '-C', path, 'rev-parse',
+      ...STATE_MARKERS.flatMap(([marker]) => ['--git-path', marker]),
+    ]);
+    if (!r.ok || !r.stdout) return 'clean';
+    const lines = r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length !== STATE_MARKERS.length) return 'clean';
+    // --git-path output is relative to the -C dir for a plain checkout and
+    // absolute for a linked worktree — anchor the relative form explicitly.
+    resolved = lines.map((l) => (isAbsolute(l) ? l : resolve(path, l)));
+    markerPathCache.set(path, resolved);
+  }
+  const exists = await Promise.all(resolved.map((p) => pathExists(p)));
+  for (let i = 0; i < STATE_MARKERS.length; i++) {
+    if (exists[i]) return STATE_MARKERS[i]![1];
   }
   return 'clean';
 }

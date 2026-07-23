@@ -93,6 +93,10 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     tags: ['verify', 'verification', 'double-check', 'hallucination', 'regression', 'skeptic', 'review', 'tests', 'build', 'done', 'symbol exists'],
     produces: ['re-read diff', 'symbol-existence check', 'build/test/lint run', 'independent skeptic re-check'],
   },
+  'code-review': {
+    tags: ['review', 'code review', 'pr', 'pull request', 'diff', 'branch', 'merge', 'standards', 'conventions', 'spec', 'scope creep', 'code smell', 'fowler', 'security', 'vulnerability', 'injection', 'parallel', 'sub-agent', 'skeptic'],
+    produces: ['pinned fixed point', 'standards findings', 'spec findings', 'security findings', 'refuted-first verification', 'routed next steps', 'durable review record (.baton/reviews)'],
+  },
   handoff: {
     tags: ['handoff', 'relay', 'usage limit', 'context limit', 'resume', 'continue', 'session', 'brief', 'pass', 'take', 'blocked', 'multi-agent'],
     produces: ['handoff brief', 'pickup command', 'resumed session'],
@@ -140,6 +144,11 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     what: 'A "done means verified" gate before any completion claim.',
     how: 'Re-read the diff, confirm symbols exist, run build/tests, independent skeptic re-check.',
     win: 'Hallucinated "done" claims die before they ship.',
+  },
+  'code-review': {
+    what: 'Reviews a diff since a fixed point along three axes that are never merged.',
+    how: 'Standards, Spec and Security run as parallel sub-agents; every finding must survive a refute pass first.',
+    win: 'No axis masks another, findings are verified not guessed, and they outlive the session.',
   },
   handoff: {
     what: 'The relay: pass unfinished work to another agent instead of losing it.',

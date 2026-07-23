@@ -25,6 +25,8 @@ import { cleanCmd, doctorCmd } from './commands/doctor.js';
 import { pathCmd } from './commands/path.js';
 import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
+import { mcpBridgeCmd } from './commands/mcp-bridge.js';
+import { reviewListCmd, reviewResolveCmd, reviewSaveCmd, reviewShowCmd } from './commands/review.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
 import { doneCmd, takeCmd } from './commands/take.js';
@@ -374,6 +376,41 @@ program
   .command('mcp')
   .description('run the Baton coordination MCP server over stdio (check_files, get_report, who_touched…)')
   .action(() => run(mcpCmd));
+
+program
+  .command('mcp-bridge')
+  .argument('<url>', 'daemon graphify proxy URL (http://127.0.0.1:<port>/mcp/g/<token>/<id>)')
+  .description('stdio↔HTTP bridge so Codex can query the shared graphify pool (requires baton serve)')
+  .action((url: string) => run(() => mcpBridgeCmd(url)));
+
+const review = program
+  .command('review')
+  .description('durable code-review findings (from the code-review skill): save, list, show, resolve');
+
+review
+  .command('save')
+  .argument('<slug>', 'task/branch slug this review is about')
+  .description('persist review findings from stdin JSON (the code-review skill\'s last step)')
+  .action((slug: string) => run(() => reviewSaveCmd(slug)));
+
+review
+  .command('list')
+  .description('every recorded review, newest first, with open findings per axis')
+  .action(() => run(reviewListCmd));
+
+review
+  .command('show')
+  .argument('<slug>', 'the review to display')
+  .description('findings grouped by axis (Standards / Spec / Security — never ranked across axes)')
+  .action((slug: string) => run(() => reviewShowCmd(slug)));
+
+review
+  .command('resolve')
+  .argument('<slug>', 'the review')
+  .argument('<index>', 'finding index, as shown by `baton review show`')
+  .option('--dismiss', 'mark dismissed instead of fixed')
+  .description('mark a finding fixed (or dismissed)')
+  .action((slug: string, index: string, opts: { dismiss?: boolean }) => run(() => reviewResolveCmd(slug, index, opts)));
 
 program
   .command('signals')

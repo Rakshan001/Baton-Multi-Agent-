@@ -18,7 +18,8 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus, collectPresence, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
-import { currentBranch, isGitRepo } from './git.js';
+import { currentBranch, headCommit, isGitRepo } from './git.js';
+import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
 import { loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
@@ -74,7 +75,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { auditJunk, cleanJunk, sweepTmpFiles } from './cleanup.js';
 import { basename } from 'node:path';
-import { isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
+import { isLoopbackHost, isLoopbackOrigin, isMutatingMethod } from './util/origin.js';
 import { GraphifyPool } from './kb/graphify-server.js';
 import { getMcpToken } from './kb/mcp-token.js';
 import { SseGate } from './util/sse-gate.js';
@@ -90,6 +91,15 @@ interface ServeOptions {
 
 /** Lazily-started per-daemon live infrastructure (one per `serve()`). */
 let poller: StatusPoller | null = null;
+
+/**
+ * Board rows for HTTP reads: ride the poller's fresh snapshot when a dashboard
+ * is connected (one shared git scan per tick instead of ~10 spawns per task per
+ * request), fall back to a direct collection when the poller is idle or stale.
+ */
+async function statusRows(root: string) {
+  return poller?.snapshot() ?? collectStatus(root);
+}
 
 /** Shared graphify backend pool — started in serve(), null until then. */
 let graphPool: GraphifyPool | null = null;
@@ -226,8 +236,18 @@ async function handleTerminalStream(req: IncomingMessage, res: ServerResponse, s
   });
   res.write(': connected\n\n');
 
-  const write = (type: string, data: unknown) =>
+  // Slow-consumer policy: raw terminal bytes flow at full agent-output rate,
+  // and a stalled tab (backgrounded, frozen laptop lid) accumulates all of it
+  // in this process's socket buffer. Past the cap, drop the connection — a
+  // reconnect gets a fresh snapshot, which is cheaper than unbounded heap.
+  const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+  const write = (type: string, data: unknown) => {
+    if (res.writableLength > MAX_BUFFERED_BYTES) {
+      res.destroy(); // fires req 'close' → heartbeat/unsub/slot cleanup below
+      return;
+    }
     res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
   // Subscribe first and buffer live frames until the snapshot is sent, so the
   // async capture below can't let a delta arrive before its base screen.
@@ -383,6 +403,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
   const method = req.method ?? 'GET';
+
+  // Anti-DNS-rebinding — FIRST, and on EVERY request including reads, because
+  // this is the one attack the Origin guard below structurally cannot see. A page
+  // on evil.com re-points its DNS at 127.0.0.1; the browser then treats us as
+  // same-origin, sends no cross-origin Origin, and CORS never engages — so the
+  // reads sailed through and handed over the repo's task list, branch names and
+  // file paths. Origin can't help (absent Origin is legitimately allowed for curl
+  // and same-origin), but Host can: the browser sets it to the name it dialled
+  // and script cannot forge it. Reject before routing so no handler, static file
+  // or SSE stream is reachable under a rebound name.
+  if (!isLoopbackHost(req.headers.host)) {
+    return send(res, 403, { error: 'forbidden' }, origin);
+  }
 
   if (method === 'OPTIONS') {
     res.writeHead(204, {
@@ -594,6 +627,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       'Vary': 'Origin',
     });
     const child = execa('tar', ['-czf', '-', '-C', staging, '.'], { buffer: false });
+    // The promise is never awaited, and child.kill() below guarantees it rejects
+    // when the client cancels — an unhandled rejection without this catch.
+    child.catch(() => undefined);
     // Client cancelling the download makes res emit EPIPE/ECONNRESET; without a
     // listener that crashes the daemon. Tear down the other side on either error.
     child.stdout?.on('error', () => res.destroy());
@@ -651,7 +687,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, { agents: allSnippets(state, mcpOpts) }, origin);
   }
 
-  if (method === 'GET' && path === '/api/status') return send(res, 200, await collectStatus(root), origin);
+  if (method === 'GET' && path === '/api/status') return send(res, 200, await statusRows(root), origin);
   // GET /api/sessions — connected agents with no task worktree (presence layer)
   if (method === 'GET' && path === '/api/sessions') return send(res, 200, await collectPresence(root), origin);
   if (method === 'GET' && path === '/api/agents/root') {
@@ -710,7 +746,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (m && method === 'GET') {
     const slug = decodeURIComponent(m[1]);
     const [rows, tasks, history] = [
-      await collectStatus(root),
+      await statusRows(root),
       await loadTasks(root),
       listHistory(root),
     ];
@@ -840,6 +876,37 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const result = await cleanJunk(root, report, { apply: body.apply === true, force: body.force === true });
     if (result.applied && result.removed.length) bus.publish({ type: 'junk.cleaned', count: result.removed.length });
     return send(res, 200, result, origin);
+  }
+
+  // GET /api/reviews — recorded code-review findings, newest first. Per-axis
+  // open counts only: the axes are separate by design, so no combined total.
+  if (method === 'GET' && path === '/api/reviews') {
+    const reviews = await listReviews(root);
+    const head = (await headCommit(root).catch(() => null)) ?? '';
+    return send(res, 200, {
+      reviews: reviews.map((r) => ({
+        ...r,
+        open: countByAxis(openFindings(r)),
+        stale: isReviewStale(r, head),
+      })),
+      head,
+    }, origin);
+  }
+  // POST /api/reviews/:slug/resolve — mark a finding fixed/dismissed (write-gated)
+  if (method === 'POST' && /^\/api\/reviews\/[^/]+\/resolve$/.test(path)) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const slug = decodeURIComponent(path.split('/')[3]);
+    const body = await readJsonBody<{ index?: number; dismiss?: boolean }>(req);
+    // Integer, not merely `number`: resolveFinding's bounds check passes 1.5 and
+    // NaN (NaN compares false to everything), and the assignment then creates a
+    // NAMED property on the array instead of hitting an element — the endpoint
+    // answered 200 with the record unchanged and rewrote the file, so the caller
+    // believed a finding was resolved when nothing was.
+    const index = body?.index;
+    if (typeof index !== 'number' || !Number.isInteger(index)) return send(res, 400, { error: 'index (integer) required' }, origin);
+    const rec = await resolveFinding(root, slug, index, body?.dismiss ? 'dismissed' : 'fixed');
+    if (!rec) return send(res, 404, { error: `no finding [${index}] in review '${slug}'` }, origin);
+    return send(res, 200, { ...rec, open: countByAxis(openFindings(rec)) }, origin);
   }
 
   // GET /api/memory — all facts with evidence-checked freshness + per-server scoping
@@ -1074,7 +1141,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   const shm = path.match(/^\/api\/tasks\/([^/]+)\/suggest-handoff$/);
   if (shm && method === 'GET') {
     const slug = decodeURIComponent(shm[1]);
-    const rows = await collectStatus(root);
+    const rows = await statusRows(root);
     const row = rows.find((r) => r.slug === slug);
     if (!row) return send(res, 404, { error: `no task '${slug}'` }, origin);
     const loads = agentActiveLoads(rows);
@@ -1190,7 +1257,24 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     );
   });
 
-  await new Promise<void>((resolve) => server.listen(opts.port, '127.0.0.1', resolve));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(opts.port, '127.0.0.1', () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+  } catch (e) {
+    // Without this, a second daemon dies with an unhandled 'error' stack trace
+    // (after already starting watchers and writing heartbeat rows). exit(1)
+    // tears all of that down; the surviving daemon owns the registry rows.
+    if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      console.error(`baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
+      process.exit(1);
+    }
+    throw e;
+  }
   if (existsSync(WEB_DIST)) {
     console.log(`baton serve → dashboard http://localhost:${opts.port}`);
   } else {

@@ -33,24 +33,34 @@ export interface AgentDef {
 
 const modelFlag = (flag: string, model?: string): string[] => (model ? [flag, model] : []);
 
+/**
+ * A prompt in a POSITIONAL argv slot that starts with '-' would be parsed by
+ * the agent CLI as a flag (`--dangerously-skip-permissions` as a "prompt"
+ * would defeat Baton's no-bypass-flags invariant). A leading space keeps it
+ * plain text to every CLI's parser — and is invisible to the model. Prompts
+ * following a flag (-p/-i/exec's -m) are consumed as that flag's value and
+ * don't need this.
+ */
+const positional = (p?: string): string[] => (p ? [p.startsWith('-') ? ` ${p}` : p] : []);
+
 export const AGENTS: Record<string, AgentDef> = {
   claude: {
     id: 'claude', label: 'Claude Code', binary: 'claude',
     detect: /(^|\/|\s)claude(\s|$)/,
     headless: { cmd: 'claude', args: (p, m) => [...modelFlag('--model', m), '-p', p] },
-    interactive: { cmd: 'claude', args: (p, m) => [...modelFlag('--model', m), ...(p ? [p] : [])] },
+    interactive: { cmd: 'claude', args: (p, m) => [...modelFlag('--model', m), ...positional(p)] },
   },
   codex: {
     id: 'codex', label: 'Codex CLI', binary: 'codex',
     detect: /(^|\/|\s)codex(\s|$)/,
-    headless: { cmd: 'codex', args: (p, m) => ['exec', ...modelFlag('-m', m), p] },
-    interactive: { cmd: 'codex', args: (p, m) => [...modelFlag('-m', m), ...(p ? [p] : [])] },
+    headless: { cmd: 'codex', args: (p, m) => ['exec', ...modelFlag('-m', m), ...positional(p)] },
+    interactive: { cmd: 'codex', args: (p, m) => [...modelFlag('-m', m), ...positional(p)] },
   },
   cursor: {
     id: 'cursor', label: 'Cursor Agent', binary: 'cursor-agent',
     detect: /cursor-agent/,
     // `cursor` opens the IDE; Cursor's terminal agent is the separate cursor-agent CLI.
-    interactive: { cmd: 'cursor-agent', args: (p, m) => [...modelFlag('--model', m), ...(p ? [p] : [])] },
+    interactive: { cmd: 'cursor-agent', args: (p, m) => [...modelFlag('--model', m), ...positional(p)] },
   },
   gemini: {
     id: 'gemini', label: 'Gemini CLI', binary: 'gemini',

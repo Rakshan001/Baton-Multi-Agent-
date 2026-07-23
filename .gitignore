@@ -41,3 +41,8 @@ graphify-out/
 # Test coverage
 coverage/
 .refs/
+
+# Local research notes — audits of reference code in .refs/. Not shipped:
+# they cite file:line into repos we do not control, so they rot silently and
+# would read as project docs to anyone who found them in git.
+docs/notes/

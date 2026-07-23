@@ -77,7 +77,7 @@ See [memory.md](./memory.md) for how the evidence-anchored memory store works.
 
 The daemon owns a **shared pool** of graphify HTTP backends: one process per touched project, lazily started on first query and reaped after 15 minutes idle. Agents never spawn their own graphify processes — they POST to the daemon's proxy route and the daemon fans out to the right backend.
 
-**Requirement:** graph tools (`query_graph`, `get_node`) require `baton serve` to be running. Without the daemon, no graph queries work.
+**Requirement:** graph tools (`query_graph`, `get_node`) require `baton serve` to be running — for every agent, including Codex. Without the daemon, no graph queries work.
 
 | Tool | Purpose |
 |------|---------|
@@ -94,6 +94,7 @@ Baton writes the MCP config for you. Wiring source: [`src/agents/connect.ts`](..
 |-------|-------------|-------|--------|
 | `claude` | `<repo>/.mcp.json` | project | JSON |
 | `cursor` | `<repo>/.cursor/mcp.json` | project | JSON |
+| `antigravity` | `<repo>/.agents/mcp_config.json` | project | JSON |
 | `gemini` | `~/.gemini/settings.json` | global | JSON |
 | `codex` | `~/.codex/config.toml` | global | TOML |
 | `aider`, `opencode` | — | — | no standard MCP config (unsupported) |
@@ -110,11 +111,25 @@ baton kb mcp --agent gemini
 baton kb mcp --agent codex
 ```
 
-`baton kb init` and `baton setup` can wire MCP automatically (pass `--no-mcp` to skip). Because **global** config files live outside the repo (`gemini`, `codex`), Baton only writes them after an explicit confirmation; project files (`claude`, `cursor`) are safe to write automatically.
+`baton kb init` and `baton setup` can wire MCP automatically (pass `--no-mcp` to skip). Because **global** config files live outside the repo (`gemini`, `codex`), Baton only writes them after an explicit confirmation; project files (`claude`, `cursor`, `antigravity`) are safe to write automatically.
+
+### Undoing it
+
+There is no `baton disconnect`, deliberately. Removing Baton's servers means
+deleting the `baton` and `graphify-*` entries from the config file by hand —
+a few lines, and `baton connect` prints the exact path it wrote to.
+
+An automated remover was built and reverted. Subtracting from these files is far
+riskier than appending to them: `~/.codex/config.toml` is TOML, and removing a
+block by text surgery (Node has no TOML parser) corrupted a file whose
+multi-line string happened to contain a `[mcp_servers."baton"]` line. For a
+command run once in a project's lifetime, whose manual alternative is deleting
+three lines, that risk wasn't worth carrying. Appending is safe because it never
+has to understand what is already there; removal does.
 
 ### What gets written
 
-For an agent with a knowledge base, the config contains one graphify server per project, a merged graph server, and the coordination server. Claude, Cursor, and Gemini get http-based graphify entries that route through the shared daemon proxy; the JSON shape used by `claude` and `cursor`:
+For an agent with a knowledge base, the config contains one graphify server per project, a merged graph server, and the coordination server. Claude, Cursor, and Gemini get http-based graphify entries that route through the shared daemon proxy; Codex and Antigravity reach the same pool through `baton mcp-bridge` (see the note below). The JSON shape used by `claude` and `cursor`:
 
 ```json
 {
@@ -145,7 +160,37 @@ Without a knowledge base, only the coordination server is wired:
 }
 ```
 
-**Codex note:** Codex's TOML MCP format only supports `command` + `args` keys — url-based servers are not part of its config spec. Baton therefore keeps Codex on the per-session `uv` stdio spawn instead of the shared proxy. All other agents (Claude, Cursor, Gemini) use the http route. The Codex TOML form uses one `[mcp_servers."<name>"]` block per server with `command` and `args`.
+**Codex note:** Codex's TOML MCP format only supports `command` + `args` keys — url-based servers are not part of its config spec. Baton wires Codex through a thin stdio↔HTTP bridge (`baton mcp-bridge <url>`) that POSTs to the same shared daemon pool Claude/Cursor/Gemini hit directly. Example TOML block:
+
+```toml
+[mcp_servers."graphify-merged"]
+command = "baton"
+args = ["mcp-bridge", "http://127.0.0.1:7077/mcp/g/<token>/merged"]
+```
+
+Codex graph queries therefore also require `baton serve` (same as every other agent). Re-run `baton kb mcp --agent codex` (or Agents → Connect with confirm) to refresh an older config that still had `command = "uv"`.
+
+**Antigravity note:** Antigravity's config *does* accept remote servers, but under a
+`serverUrl` key — not `url` (Claude/Cursor) or `httpUrl` (Gemini). That key is documented
+in one place and unverified against a live install, and a wrong key yields a server that
+loads and answers nothing. So Antigravity takes the same `baton mcp-bridge` route as
+Codex: `command` + `args` is the one shape every MCP client agrees on. The coordination
+server (`baton mcp`) is plain stdio and carries no such risk either way.
+
+```json
+{
+  "mcpServers": {
+    "baton": { "command": "baton", "args": ["mcp"] },
+    "graphify-merged": { "command": "baton", "args": ["mcp-bridge", "http://127.0.0.1:7077/mcp/g/<token>/merged"] }
+  }
+}
+```
+
+Antigravity also reads a **global** `~/.gemini/config/mcp_config.json` (it ships that file
+empty on install). Baton writes only the project-scoped file, matching how it treats
+`claude` and `cursor` — nothing in `$HOME` without a confirm. Note that Antigravity's
+config root is `~/.gemini/config/`, shared with the `agy` CLI, but its global *rules* live
+one level up at `~/.gemini/GEMINI.md`.
 
 ### From the dashboard
 

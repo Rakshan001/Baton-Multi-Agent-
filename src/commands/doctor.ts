@@ -2,13 +2,14 @@
  * `baton doctor` — audit junk (orphaned worktrees, branches, tmux sessions,
  * leaked temp files). `baton clean [--fix]` — reclaim it (dry-run by default).
  */
-import { readdir, rm, stat } from 'node:fs/promises';
+import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gitRoot } from '../git.js';
 import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanup.js';
 import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from '../kb/sprawl.js';
 import { batonDir, loadTasks, resolveBatonRoot } from '../store.js';
 import { loadKb } from '../kb/state.js';
+import { auditKb, type KbFinding } from '../kb/health.js';
 
 const KIND_LABEL: Record<JunkItem['kind'], string> = {
   'orphan-worktree-task': 'orphaned worktree (stale task)',
@@ -33,6 +34,24 @@ function printReport(report: AuditReport): void {
   }
 }
 
+const KB_GLYPH: Record<KbFinding['level'], string> = { error: '✗', warn: '⚠', info: '·' };
+
+/**
+ * The KB section. Printed even when it is healthy, because the failure this
+ * exists to catch is silent: the graph answers with nothing and looks fine.
+ */
+function printKb(findings: KbFinding[]): void {
+  if (!findings.length) {
+    console.log('✓ knowledge base looks healthy');
+    return;
+  }
+  console.log('Knowledge base:\n');
+  for (const f of findings) {
+    console.log(`  ${KB_GLYPH[f.level]} ${f.message}`);
+    if (f.fix) console.log(`      → ${f.fix}`);
+  }
+}
+
 export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): Promise<void> {
   if (opts.docs) return doctorDocsCmd();
   const report = await auditJunk(await gitRoot());
@@ -41,7 +60,10 @@ export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): P
     const dirty = report.items.some((i) => i.blocked === 'dirty');
     console.log(`\n  Reclaim with: baton clean --fix${dirty ? '   (add --force to remove worktrees with uncommitted changes)' : ''}`);
   }
-  await reportShadowBatons(await resolveBatonRoot(), !!opts.fix);
+  const root = await resolveBatonRoot();
+  console.log('');
+  printKb(await auditKb(root));
+  await reportShadowBatons(root, !!opts.fix);
 }
 
 /**
@@ -69,12 +91,20 @@ const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => f
  * `removable` only when it holds no durable state — the ephemeral `history.db`
  * (30-min-TTL presence) and locks don't count; tasks, memory facts, and a
  * project `kb.json` do, and keep it report-only.
+ *
+ * A project whose path IS the hub root is skipped: in a single-repo setup
+ * `baton kb init` registers the repo itself as the one project, and its
+ * `.baton` is the hub store — not a shadow of it. Reporting it told the user to
+ * delete their own tasks and memory. Compared through realpath so a symlinked
+ * or `/var`-vs-`/private/var` path can't slip past the check.
  */
 export async function scanShadowBatons(hubRoot: string): Promise<ShadowBaton[]> {
   const kb = await loadKb(hubRoot);
   if (!kb || kb.projects.length === 0) return [];
+  const hubReal = await realpath(hubRoot).catch(() => hubRoot);
   const shadows: ShadowBaton[] = [];
   for (const p of kb.projects) {
+    if ((await realpath(p.path).catch(() => p.path)) === hubReal) continue; // the hub's own store
     const shadow = batonDir(p.path);
     if (!(await exists(shadow))) continue;
     const tasks = (await loadTasks(p.path)).length;

@@ -10,7 +10,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { batonDir, loadTasks, type Task } from './store.js';
 import { detectAgents } from './agents.js';
@@ -63,6 +63,12 @@ function getDb(root: string): DatabaseSync {
   if (!db) {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
+    // history.db has concurrent writers (daemon timers, every agent's MCP process,
+    // a transient guard per edit). DatabaseSync's default busy timeout is 0, so a
+    // write that lands while another connection holds the lock THROWS instead of
+    // waiting — inside a setInterval/bus callback that's a daemon crash. WAL writes
+    // are millisecond-scale; a short busy-wait absorbs the contention entirely.
+    db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
     migrate(db);
     conns.set(path, db);
@@ -241,6 +247,35 @@ export function touchHookSession(root: string, slug: string, at: string = new Da
   getDb(root).prepare(`UPDATE hook_sessions SET at = ? WHERE slug = ?`).run(at, slug);
 }
 
+/**
+ * How long a registered session row outlives its last sighting. Sessions are
+ * never explicitly closed — an agent just stops — and each new session takes a
+ * fresh slug, so without a sweep hook_sessions grows one row per session
+ * forever (38 rows on a real hub, freshest 10h stale, all long invisible to
+ * liveSessions yet still scanned by every reconcile).
+ *
+ * Deliberately far longer than both the presence window (30 min — a session
+ * idles out of the board but stays a real, resolvable session) and the signal
+ * window (30 min). reconcile resolves a session's checkout THROUGH this row, so
+ * dropping it while its signals are live would make them look orphaned and erase
+ * paths that are genuinely held. At 24h, an expired session's signals were
+ * themselves reclaimed 23.5h earlier — there is nothing left to misread.
+ */
+export const SESSION_RETENTION_MIN = 24 * 60;
+
+/** Reclaim session rows past SESSION_RETENTION_MIN. Safe to call on any schedule. */
+export function expireSessions(root: string): void {
+  const cutoff = new Date(Date.now() - SESSION_RETENTION_MIN * 60_000).toISOString();
+  getDb(root).prepare(`DELETE FROM hook_sessions WHERE at < ?`).run(cutoff);
+}
+
+/** Every registered session slug, retention included — for tests/diagnostics. */
+export function allHookSessionSlugs(root: string): string[] {
+  return (getDb(root).prepare(`SELECT slug FROM hook_sessions`).all() as unknown as Array<{ slug: string }>).map(
+    (r) => r.slug,
+  );
+}
+
 function hookSessions(root: string): Map<string, HookSession> {
   const rows = getDb(root).prepare(`SELECT slug, agent, root, at FROM hook_sessions`).all() as unknown as Array<
     HookSession & { slug: string }
@@ -346,8 +381,13 @@ export class SignalTracker {
   }
 
   start(): void {
-    touchHeartbeat(this.root);
-    this.heartbeat = setInterval(() => touchHeartbeat(this.root), HEARTBEAT_REFRESH_MS);
+    // The heartbeat is already a periodic write — fold row reclamation into it
+    // rather than paying for housekeeping on the read path (getSignals is on the
+    // dashboard's 5s poll and the guard's latency budget). Sweep on start too:
+    // rows a crashed daemon left behind shouldn't wait a full interval, and the
+    // daemon may not live long enough to reach one.
+    this.housekeep();
+    this.heartbeat = setInterval(() => this.housekeep(), HEARTBEAT_REFRESH_MS);
     this.heartbeat.unref?.();
     this.unsubs.push(
       bus.onType('file.edited', (e) => {
@@ -370,6 +410,19 @@ export class SignalTracker {
     );
   }
 
+  /** Liveness stamp + row reclamation, on one schedule. */
+  private housekeep(): void {
+    // Runs from setInterval — a throw here (locked/corrupt db) would be an
+    // uncaughtException and kill the daemon over pure housekeeping.
+    try {
+      touchHeartbeat(this.root);
+      expireSettled(this.root);
+      expireSessions(this.root);
+    } catch (err) {
+      console.error('baton: signal housekeeping failed:', err);
+    }
+  }
+
   stop(): void {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
@@ -384,13 +437,18 @@ export class SignalTracker {
          ON CONFLICT(slug, path) DO UPDATE SET at = excluded.at, settledAt = NULL`,
       )
       .run(slug, path, at);
-    void this.checkOverlap(path);
+    this.checkOverlap(path);
   }
 
-  private async checkOverlap(path: string): Promise<void> {
+  private checkOverlap(path: string): void {
     // Settled holders can't overlap with anyone — they've let the path go.
-    const holders = activeRows(this.root).filter((r) => r.path === path);
-    const slugs = [...new Set(holders.map((h) => h.slug))];
+    // Indexed on path: the previous full live-rows scan per changed file made
+    // burst cost quadratic in burst size.
+    const cutoff = new Date(Date.now() - SIGNAL_WINDOW_MIN * 60_000).toISOString();
+    const holders = getDb(this.root)
+      .prepare(`SELECT DISTINCT slug FROM edit_signals WHERE path = ? AND settledAt IS NULL AND at >= ?`)
+      .all(path, cutoff) as unknown as Array<{ slug: string }>;
+    const slugs = holders.map((h) => h.slug);
     if (slugs.length >= 2 && !this.announced.has(path)) {
       this.announced.add(path);
       bus.publish({ type: 'signal.overlap', path, slugs });
@@ -469,6 +527,12 @@ function expireSettled(root: string): void {
     `DELETE FROM edit_signals WHERE settledAt IS NOT NULL AND rowid NOT IN
        (SELECT rowid FROM edit_signals WHERE settledAt IS NOT NULL ORDER BY settledAt DESC LIMIT ?)`,
   ).run(SETTLED_CAP);
+  // Active rows past the signal window are dead weight: liveRows hides them, so
+  // reconcile can never see them to settle or revive them, and a live edit would
+  // re-record the path anyway. Without this they are never reclaimed — a real hub
+  // held 456 rows from tasks deleted nine days earlier.
+  const activeCutoff = new Date(Date.now() - SIGNAL_WINDOW_MIN * 60_000).toISOString();
+  db.prepare(`DELETE FROM edit_signals WHERE settledAt IS NULL AND at < ?`).run(activeCutoff);
 }
 
 /** Only paths being held right now — the "should I wait?" set. */
@@ -498,12 +562,43 @@ function reactivateRows(root: string, rows: SignalRow[]): void {
 }
 
 /**
+ * Erase rows whose holder no longer exists. A hard delete (not settle) on
+ * purpose: settling means "the work landed, show it briefly"; these rows point
+ * at a checkout that is gone, so there is no work — finished or otherwise — to
+ * point at. Same doctrine as SignalTracker.clear().
+ */
+function clearRows(root: string, rows: SignalRow[]): void {
+  const stmt = getDb(root).prepare(`DELETE FROM edit_signals WHERE slug = ? AND path = ?`);
+  for (const r of rows) stmt.run(r.slug, r.path);
+}
+
+/**
  * Paths still "dirty" in a worktree: tracked modifications vs HEAD plus brand-new
  * untracked files (which `git diff HEAD` omits, so we must union them in or a
  * file being freshly created would look settled). Returns null when git can't
  * answer, so callers fail OPEN — a signal we can't verify is kept, not dropped.
  */
+/**
+ * Concurrent dirty-path scans of one checkout share a single pair of git
+ * spawns: reconcile fans out with Promise.all, the dashboard poll and
+ * check_files land together, and a session + its co-* watcher slug verify
+ * against the same checkout — without coalescing that's dozens of identical
+ * spawns in one burst. Deliberately NOT a time-based cache: a sequential
+ * read after an edit must see the new state immediately (the revive path
+ * depends on it), so only truly overlapping calls share a result.
+ */
+const dirtyScanInflight = new Map<string, Promise<Set<string> | null>>();
+
 async function worktreeDirtyPaths(worktreePath: string): Promise<Set<string> | null> {
+  let scan = dirtyScanInflight.get(worktreePath);
+  if (!scan) {
+    scan = scanDirtyPaths(worktreePath).finally(() => dirtyScanInflight.delete(worktreePath));
+    dirtyScanInflight.set(worktreePath, scan);
+  }
+  return scan;
+}
+
+async function scanDirtyPaths(worktreePath: string): Promise<Set<string> | null> {
   const diff = await gitTry(['-C', worktreePath, 'diff', '--name-only', 'HEAD']);
   if (!diff.ok) return null;
   const paths = new Set(diff.stdout.split('\n').filter(Boolean));
@@ -547,6 +642,7 @@ async function reconcileSignals(
   const kept: SignalRow[] = [];
   const settled: Array<{ slug: string; path: string }> = [];
   const revived: SignalRow[] = [];
+  const orphaned: SignalRow[] = [];
   const now = Date.now();
   const settledAt = new Date().toISOString();
   await Promise.all(
@@ -555,7 +651,21 @@ async function reconcileSignals(
       // the session registered (usually the main repo root); fs-watch checkout
       // signals (`co-*`) verify against the watched checkout path.
       const checkRoot = tasks.find((t) => t.slug === slug)?.worktreePath ?? sessions.get(slug)?.root ?? watched.get(slug);
-      if (!checkRoot) return void kept.push(...slugRows); // unknown holder → can't verify, keep
+      // "Gone" and "can't read right now" are different, and conflating them is
+      // what let a removed worktree hold every path forever (a `baton clean`
+      // sweep pinned 791 paths; an older one sat "editing" for nine days). A
+      // holder with no checkout to name, or whose checkout is off disk, can never
+      // re-dirty anything — so erase it. Fail-open below stays for the case it
+      // was meant for: a checkout that IS there but git can't answer for.
+      if (!checkRoot || !existsSync(checkRoot)) {
+        for (const r of slugRows) {
+          // Grace still applies: the guard hook records before the write lands,
+          // so a signal can legitimately precede its task appearing in tasks.json.
+          if (now - Date.parse(r.at) < RECONCILE_GRACE_MS) kept.push(r);
+          else orphaned.push(r);
+        }
+        return;
+      }
       const dirty = await worktreeDirtyPaths(checkRoot);
       if (dirty === null) return void kept.push(...slugRows); // git failed → keep
       for (const r of slugRows) {
@@ -574,6 +684,7 @@ async function reconcileSignals(
   );
   for (const s of settled) settleRows(root, s.slug, [s.path], settledAt);
   if (revived.length) reactivateRows(root, revived);
+  if (orphaned.length) clearRows(root, orphaned);
   return kept;
 }
 

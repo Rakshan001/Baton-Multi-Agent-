@@ -21,10 +21,35 @@ The catalog and rendering logic live in [`src/skills/catalog.ts`](../src/skills/
 | `traceable-changes` | Traceable changes | Atomic conventional commits in an isolated worktree, for a bisectable, blame-able history across multiple agents. |
 | `memory-light` | Memory-light | Recall before exploring, externalize state, write durable facts, and hand off cleanly across sessions. |
 | `verify-before-done` | Verify before done | Re-read the diff, check that symbols exist, run build/test/lint, and do an independent skeptic re-check before calling a task done. |
+| `code-review` | Code review | Review a diff since a fixed point along **three axes that are never merged**: **Standards** (repo conventions + a baseline of 12 classic code smells), **Spec** (does it implement what the issue/spec/handoff brief asked, with no scope creep?), and **Security** (injection, authz, path traversal, secret leaks, SSRF — a source-to-sink baseline). The axes run as parallel sub-agents; every finding must survive an explicit **refute** pass before it is reported; results are reported side by side with no cross-axis ranking, then **routed** (Spec-wrong → `systematic-debugging`, Security → `bug-fix`) and **persisted** with `baton review save` so they outlive the session. Two-axis structure and smell baseline adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT); the Security axis, refute gate, routing table, and durable record are Baton additions. |
 | `map-codebase` | Map this codebase | Build the graphify knowledge graph and `CODEBASE.md` so agents navigate a compact map instead of the whole repo. |
 | `safe-refactor` | Safe refactor | Restructure without changing behaviour — worktrees, a green test baseline, and the graph to find every caller. |
 
-`bug-fix`, `lean-code`, and the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
+`bug-fix`, `lean-code`, `code-review`, and the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
+
+`verify-before-done` and `code-review` are deliberately separate: the first is the author proving their own change works before claiming done; the second reviews a diff against a fixed point. Run them in that order.
+
+### Durable review findings
+
+`code-review` is the only skill with a backing store. Its findings persist to `.baton/reviews/<slug>.json` ([`src/reviews.ts`](../src/reviews.ts)) so a review survives the session that produced it:
+
+```bash
+baton review save <slug> < findings.json   # the skill's last step (stdin JSON)
+baton review list                          # every review, newest first, open counts per axis
+baton review show <slug>                   # findings grouped by axis
+baton review resolve <slug> <id|n> [--dismiss]
+```
+
+Saving emits a `review.completed` event on the bus, `GET /api/reviews` serves the records, and **any still-open findings ride into the handoff brief** — so `baton take` / `baton resume` show the next agent what it's inheriting without them knowing to look.
+
+Four rules make the record trustworthy:
+
+- **Stable identity.** Every finding carries an id derived from axis+file+title, not from its position. A re-review reorders the list, so an index is only valid until the next review; `resolve` accepts either, but scripts should use the id.
+- **Triage survives, stale claims don't.** A re-review **keeps** anything `--dismiss`ed (a human said "not a problem" — don't make them re-triage it) but **resets** a `fixed` finding the reviewer reports again. If it's still found, it isn't fixed; the fresh report is ground truth.
+- **Secrets are redacted, findings are kept.** Findings quote raw hunks, so `detectSecret()` (shared with [memory](./memory.md)) scrubs title, source, and detail before the write. Unlike memory, which *rejects* the whole fact, reviews redact the field — "you hardcoded a key at line 42" is exactly what the Security axis exists to report, and dropping it would blind the check.
+- **Counts are per axis, never summed.** A combined total is the cross-axis ranking the skill exists to prevent. A review recorded against an older HEAD is flagged stale on read, the same discipline memory uses for facts.
+
+Deliberately *not* an MCP tool: a 14th tool would breach `TOOL_HELP_BUDGET` ([`src/mcp-help.ts`](../src/mcp-help.ts)), a context tax every agent session pays forever. Reviews are occasional, so they go through the CLI instead.
 
 ## Install targets
 
@@ -34,8 +59,14 @@ Baton can write skills for two agent CLIs. Each gets the on-disk format it under
 | --- | --- | --- |
 | `claude` | `.claude/skills/<id>/SKILL.md` (+ `references/` alongside) | Claude Code skill — `name` + `description` frontmatter, then the playbook. |
 | `cursor` | `.cursor/rules/<id>.mdc` (+ sibling `<id>/references/`) | Cursor project rule — `description` + `alwaysApply: false` frontmatter. |
+| `antigravity` | `.agents/skills/<id>/SKILL.md` (+ `references/` alongside) | Agent Skills format — same `name` + `description` frontmatter as Claude, installed byte-for-byte. |
 
 The other agents (`codex`, `gemini`, `aider`, `opencode`) have no standard skill directory Baton can write, and installing for them returns an unsupported-agent error. (Deliberately: cramming a full playbook into their always-on instruction files would cost tokens on every turn — skills should load on demand.)
+
+`.agents/skills/` is worth knowing about: it is emerging as the **neutral, cross-tool
+skill path**, read by Antigravity, Cursor, opencode, and Zed. Baton writes it for the
+`antigravity` target, so installing there in practice reaches more agents than the id
+suggests.
 
 ## Install into every agent at once
 

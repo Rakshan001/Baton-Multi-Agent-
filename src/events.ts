@@ -25,6 +25,9 @@ export type BatonEvent =
   | { type: 'agent.connected'; agent: string }
   | { type: 'skill.installed'; skill: string; agent: string }
   | { type: 'junk.cleaned'; count: number }
+  /** A code review was recorded. Per-axis counts only — the axes are separate
+   *  by design, so no combined total rides on the event. */
+  | { type: 'review.completed'; slug: string; standards: number; spec: number; security: number }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
   | { type: 'terminal.output'; slug: string; data: string /* base64 */ }
@@ -76,14 +79,32 @@ class BatonBus extends EventEmitter {
   }
 
   onAny(fn: (e: StampedEvent) => void): () => void {
-    this.on('event', fn);
-    return () => this.off('event', fn);
+    const safe = guard(fn);
+    this.on('event', safe);
+    return () => this.off('event', safe);
   }
 
   onType(type: BatonEventType, fn: (e: StampedEvent) => void): () => void {
-    this.on(type, fn);
-    return () => this.off(type, fn);
+    const safe = guard(fn);
+    this.on(type, safe);
+    return () => this.off(type, safe);
   }
+}
+
+/**
+ * A subscriber that throws must not take down the publisher: publish() is called
+ * from fs.watch debounce timers and setInterval callbacks, where a propagated
+ * exception (e.g. a locked SQLite write) is an uncaughtException — daemon exit.
+ * One bad subscriber loses its own event, never the process.
+ */
+function guard(fn: (e: StampedEvent) => void): (e: StampedEvent) => void {
+  return (e) => {
+    try {
+      fn(e);
+    } catch (err) {
+      console.error(`baton: event subscriber failed on ${e.event.type}:`, err);
+    }
+  };
 }
 
 export const bus = new BatonBus();

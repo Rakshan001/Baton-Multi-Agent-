@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
 import { saveKb } from '../src/kb/state.js';
 import { WorktreeWatcher } from '../src/watch.js';
+import { bus } from '../src/events.js';
 import {
   watchedRoots, registerWatchedRoot, recordHookEdit, registerHookSession, getSignals, checkFiles,
   SIGNAL_WINDOW_MIN, PRESENCE_WINDOW_MIN,
@@ -102,6 +103,162 @@ describe('WorktreeWatcher — which checkouts it watches', () => {
     watcher.stop(); watcher = null;
     expect(watchedRoots(root).size).toBe(0);
   });
+});
+
+/**
+ * What the watcher is allowed to call an "edit". fs.watch({recursive}) reports
+ * the DIRECTORY as well as the file when a path inside it changes, and reports
+ * a deletion as a change event. Recording those verbatim is how a real hub
+ * ended up holding `bin`, `controllers`, `agent/superpowers` as "files being
+ * edited right now" — 65 of one task's 791 pinned paths were directories.
+ */
+describe('WorktreeWatcher — what counts as an edit', () => {
+  let root: string;
+  let watcher: WorktreeWatcher | null = null;
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'baton-watchrec-')); await initRepo(root); });
+  afterEach(async () => { watcher?.stop(); watcher = null; await rm(root, { recursive: true, force: true }); });
+
+  /**
+   * Collect file.edited paths published while `fn` runs. Waits for `signal` — a
+   * path the watcher MUST report — to arrive, then settles briefly so any
+   * sibling events (the directory renames these tests are about) land too.
+   *
+   * Condition-based, not a fixed sleep: fs.watch latency plus the 300ms debounce
+   * fits comfortably in a fixed wait when this file runs alone, and becomes a
+   * coin flip when all 83 test files run in parallel. Polling for the signal
+   * keeps the fast path fast and the loaded path correct.
+   *
+   * Every caller must pass EDITS_TIMEOUT. Vitest's default per-test limit is
+   * 5s — less than the budget below — so under full-suite load the runner
+   * killed the test while this helper was still legitimately waiting, and the
+   * condition-based wait could never actually reach its own deadline.
+   */
+  const EDITS_TIMEOUT = 40_000; // > arm() + the 8s poll + 400ms settle, with headroom
+
+  /**
+   * Wait until the watcher is provably delivering events before the test makes
+   * the change it cares about.
+   *
+   * fs.watch({recursive}) is backed by FSEvents on macOS, which is not yet
+   * streaming when watch() returns — a change made in that window is lost
+   * outright, not delayed. That is why the failure looked like a timeout but
+   * was really `seen` still EMPTY after a full 8s wait: the event was never
+   * coming. Rewriting the probe on a loop is deliberate — a single write issued
+   * before the watch arms is gone forever, so we keep poking until one lands.
+   */
+  async function arm(): Promise<void> {
+    const probe = '__arm.ts';
+    let live = false;
+    const off = bus.onType('file.edited', (e) => {
+      if (e.event.type === 'file.edited' && e.event.path === probe) live = true;
+    });
+    try {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline && !live) {
+        await writeFile(join(root, probe), `export const t = ${Date.now()};\n`, 'utf-8');
+        // Longer than DEBOUNCE_MS (300): polling faster would keep resetting
+        // the debounce and no event would ever fire.
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      if (!live) throw new Error('fs.watch never armed — no file.edited event in 15s');
+    } finally {
+      off();
+    }
+  }
+
+  async function edits(fn: () => Promise<void>, signal: string): Promise<string[]> {
+    const seen: string[] = [];
+    const off = bus.onType('file.edited', (e) => {
+      if (e.event.type === 'file.edited') seen.push(e.event.path);
+    });
+    try {
+      await fn();
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline && !seen.includes(signal)) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await new Promise((r) => setTimeout(r, 400)); // settle: let sibling events land
+      return seen;
+    } finally {
+      off();
+    }
+  }
+
+  // Creating a nested tree reports EVERY level as a rename event — `agent`,
+  // `agent/superpowers`, `agent/superpowers/specs` all arrived this way in the
+  // real hub, from a single scaffold that only wrote leaf files.
+  it('does not record created directories as edited files', async () => {
+    watcher = new WorktreeWatcher(root);
+    await watcher.start();
+    await arm();
+
+    const paths = await edits(async () => {
+      await mkdir(join(root, 'controllers', 'qr'), { recursive: true });
+      await writeFile(join(root, 'controllers', 'qr', 'gen.ts'), 'export const q = 1;\n', 'utf-8');
+    }, 'controllers/qr/gen.ts');
+
+    expect(paths).toContain('controllers/qr/gen.ts'); // the real edit still lands
+    expect(paths).not.toContain('controllers');       // the directory levels do not
+    expect(paths).not.toContain('controllers/qr');
+  }, EDITS_TIMEOUT);
+
+  /**
+   * CODEBASE.md is baton's OWN generated artifact — `kb rebuild` writes one into
+   * every project. The watcher then reported each write as an agent edit, so a
+   * real 6-project hub showed "CODEBASE.md — 6 agents editing" with every holder
+   * a `co-*` slug and no agent involved. Reconcile can't save us here: baton just
+   * modified the file, so it IS genuinely dirty in git. `.baton/` and
+   * `graphify-out/` are already ignored for exactly this reason; CODEBASE.md only
+   * escaped because it sits at the project root instead of inside a baton dir.
+   */
+  it('does not record baton\'s own generated CODEBASE.md as an agent edit', async () => {
+    watcher = new WorktreeWatcher(root);
+    await watcher.start();
+    await arm();
+
+    const paths = await edits(async () => {
+      await writeFile(join(root, 'CODEBASE.md'), '# generated by baton kb\n', 'utf-8');
+      await mkdir(join(root, 'sub'), { recursive: true });
+      await writeFile(join(root, 'sub', 'CODEBASE.md'), '# generated\n', 'utf-8');
+      await writeFile(join(root, 'real.ts'), 'export const r = 1;\n', 'utf-8');
+    }, 'real.ts');
+
+    expect(paths).toContain('real.ts');            // genuine agent edits unaffected
+    expect(paths).not.toContain('CODEBASE.md');    // baton's own write
+    expect(paths).not.toContain('sub/CODEBASE.md'); // ...at any project level
+  }, EDITS_TIMEOUT);
+
+  // The stat can only type a path that still EXISTS, so a removed tree's root is
+  // still recorded (see isDirectory's known limit) — read-time reconcile prunes
+  // it, since git never reports a bare directory as dirty. Pinned here so the
+  // gap is a documented boundary rather than a surprise.
+  it('records a removed directory (cannot be typed once gone) — reconcile prunes it', async () => {
+    await mkdir(join(root, 'pkg'), { recursive: true });
+    await writeFile(join(root, 'pkg', 'x.ts'), 'export const x = 1;\n', 'utf-8');
+    watcher = new WorktreeWatcher(root);
+    await watcher.start();
+    await arm();
+
+    const paths = await edits(async () => {
+      await rm(join(root, 'pkg'), { recursive: true, force: true });
+    }, 'pkg');
+
+    expect(paths).toContain('pkg');
+  }, EDITS_TIMEOUT);
+
+  // A deletion IS a real edit — an agent removing a file is holding that path,
+  // and `git status` will show it. Existence is not the test; being a directory is.
+  it('still records a deleted file as an edit', async () => {
+    watcher = new WorktreeWatcher(root);
+    await watcher.start();
+    await arm();
+
+    const paths = await edits(async () => {
+      await rm(join(root, 'a.ts'));
+    }, 'a.ts');
+
+    expect(paths).toContain('a.ts');
+  }, EDITS_TIMEOUT);
 });
 
 describe('checkout signals — reconcile + agent attribution', () => {

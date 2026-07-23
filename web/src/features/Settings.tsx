@@ -12,7 +12,7 @@ import { showToast } from "../lib/toast";
 import { BatonAPI } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
-import type { AgentId, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import type { AgentId, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
 
 const MODE_HINTS: Record<RoutingMode, string> = {
   auto: "Rules first, then severity picks a tier automatically.",
@@ -70,16 +70,52 @@ function RoutingSettings() {
           </span>
         </div>
       ))}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
-        <span style={{ flex: 1, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>No keyword match → default</span>
-        <AgentBadge id={info.config.default as AgentId} size="sm" />
-      </div>
+      <NoMatchRow config={info.config} mode={mode} />
       <div style={{ padding: "10px 16px", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
         {info.path
           ? <>Rules from <span className="mono" style={{ color: "var(--text-secondary)" }}>baton.config.json</span> — edit it in your editor; it's committed and shared with your team.</>
           : <>Built-in defaults — create <span className="mono" style={{ color: "var(--text-secondary)" }}>baton.config.json</span> at the repo root to customize (committed, team-shared).</>}
       </div>
     </SettingsBlock>
+  );
+}
+
+/**
+ * What ACTUALLY happens to a task no rule matches — which is not what this row
+ * used to claim. It rendered `config.default` unconditionally ("No keyword match
+ * → Cursor"), but suggestRoute only consults `default` in manual mode or when no
+ * tier resolves: in auto mode (the default) an unmatched task is scored by
+ * severity and routed into a tier, so `baton route "update the readme wording"`
+ * answers aider/local while this row promised cursor. `default` is also a TIER
+ * name when tiers exist, which AgentBadge would render as a bogus agent.
+ */
+function NoMatchRow({ config, mode }: { config: RoutingConfig; mode: RoutingMode }) {
+  const row = { display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)" } as const;
+  const label = { flex: 1, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" } as const;
+  const token = { fontSize: 11, color: "var(--text-secondary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "1px 7px" } as const;
+
+  // Rules aren't consulted at all in single mode — the mode row above already
+  // shows the one agent everything goes to, so there is no fallback to describe.
+  if (mode === "single") return null;
+
+  const hasTiers = !!config.tiers && Object.values(config.tiers).some((c) => c?.length);
+  if (mode === "auto" && hasTiers) {
+    return (
+      <div style={row}>
+        <span style={label}>No keyword match → scored by severity, routed to the matching tier</span>
+        <span className="mono" style={{ ...token, flex: "none" }} data-tip="Task text is scored 0–100; the score picks a tier above, then that tier's chain picks the agent.">severity → tier</span>
+      </div>
+    );
+  }
+  // manual mode, or no tiers defined → `default` genuinely is the answer.
+  const defaultIsTier = !!config.tiers?.[config.default]?.length;
+  return (
+    <div style={row}>
+      <span style={label}>No keyword match → default</span>
+      {defaultIsTier
+        ? <span className="mono" style={{ ...token, flex: "none" }} data-tip="Routes to this tier's fallback chain">tier:{config.default}</span>
+        : <AgentBadge id={config.default as AgentId} size="sm" />}
+    </div>
   );
 }
 

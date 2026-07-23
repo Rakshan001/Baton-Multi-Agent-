@@ -3,7 +3,10 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
-import { sessionSlug, recordHookEdit, getSignals, checkFiles } from '../src/signals.js';
+import {
+  sessionSlug, recordHookEdit, getSignals, checkFiles, registerHookSession, expireSessions,
+  allHookSessionSlugs, SESSION_RETENTION_MIN, SIGNAL_WINDOW_MIN, PRESENCE_WINDOW_MIN,
+} from '../src/signals.js';
 
 /**
  * G2 — root-session coordination. The edit-guard hook WRITES a signal for every
@@ -75,5 +78,51 @@ describe('hook-written signals for root sessions', () => {
     recordHookEdit(root, { slug: 'sess-dddddddd', path: 'src.ts', session: { agent: 'claude', sessionRoot: root } });
     const signals = await getSignals(root);
     expect(signals).toHaveLength(1); // too fresh to verify → kept, not dropped
+  });
+});
+
+/**
+ * Row reclamation for hook_sessions. Every agent session registers under a NEW
+ * slug (`sess-<id>`), and nothing ever deleted the row — so the table grows
+ * without bound, one row per session, forever. A real hub carried 38 rows whose
+ * freshest was 10 hours stale, all invisible to liveSessions (30-min presence
+ * window) yet still scanned on every reconcile.
+ */
+describe('expireSessions — hook_sessions reclamation', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'baton-sessreclaim-'));
+    await mkdir(join(root, '.baton'), { recursive: true });
+  });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+
+  it('deletes sessions past the retention window and keeps recent ones', () => {
+    registerHookSession(root, 'sess-dead', 'claude', root, ago(SESSION_RETENTION_MIN + 60));
+    registerHookSession(root, 'sess-idle', 'claude', root, ago(SESSION_RETENTION_MIN - 60));
+
+    expireSessions(root);
+
+    const slugs = allHookSessionSlugs(root);
+    expect(slugs).not.toContain('sess-dead');
+    expect(slugs).toContain('sess-idle');
+  });
+
+  /**
+   * Retention must outlive the signal window by a wide margin. reconcile resolves
+   * a session's checkout via its row: delete the row while its signals are still
+   * live and reconcile reads them as orphans and erases paths a session is really
+   * holding. At 24h vs a 30-min signal window, any expired session's signals were
+   * themselves reclaimed 23.5h earlier.
+   */
+  it('retains sessions far longer than a signal could stay live', () => {
+    expect(SESSION_RETENTION_MIN).toBeGreaterThan(SIGNAL_WINDOW_MIN);
+    expect(SESSION_RETENTION_MIN).toBeGreaterThan(PRESENCE_WINDOW_MIN);
+
+    // A session idle well past the presence window still resolves for reconcile.
+    registerHookSession(root, 'sess-quiet', 'claude', root, ago(PRESENCE_WINDOW_MIN + 30));
+    expireSessions(root);
+    expect(allHookSessionSlugs(root)).toContain('sess-quiet');
   });
 });
