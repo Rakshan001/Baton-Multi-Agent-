@@ -8,6 +8,11 @@ import { detectProjects, findNestedGitRepos } from '../src/kb/projects.js';
 async function initRepo(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   await git(['init', '-q'], dir);
+  // These temp repos live outside any checkout, so they inherit no identity.
+  // A dev machine has a global one and hides this; CI runners do not, and the
+  // submodule test's `git commit` fails there with "empty ident name".
+  await git(['config', 'user.email', 'test@baton.dev'], dir);
+  await git(['config', 'user.name', 'Baton Test'], dir);
   await writeFile(join(dir, 'package.json'), '{"name":"x"}\n', 'utf-8');
 }
 async function pkgDir(dir: string): Promise<void> {
