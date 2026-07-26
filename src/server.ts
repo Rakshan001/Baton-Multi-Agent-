@@ -636,7 +636,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     res.on('error', () => child.kill());
     child.stdout?.pipe(res);
     const cleanup = () => void rm(staging, { recursive: true, force: true });
-    child.once('exit', cleanup);
+    // execa 10 dropped the EventEmitter surface from the returned promise; the
+    // underlying ChildProcess still carries it, so `exit` semantics are unchanged.
+    child.nodeChildProcess.once('exit', cleanup);
     req.once('close', () => child.kill());
     return;
   }
