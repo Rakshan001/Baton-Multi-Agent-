@@ -65,7 +65,7 @@ function Card({
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -inset-px rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-        style={{ background: "radial-gradient(400px circle at 30% 0%, #ff9d2e14, transparent 70%)" }}
+        style={{ background: "radial-gradient(400px circle at 30% 0%, color-mix(in oklab, var(--color-amber) 8%, transparent), transparent 70%)" }}
       />
       <div className="relative">
         <p className="eyebrow mb-3">{eyebrow}</p>
@@ -96,7 +96,7 @@ function GraphMini() {
     <svg viewBox="0 0 320 220" className="h-44 w-full" aria-hidden="true">
       {nodes.map((n, i) =>
         nodes.slice(i + 1, i + 3).map((m, j) => (
-          <line key={`${i}-${j}`} x1={n.x} y1={n.y} x2={m.x} y2={m.y} stroke="#ffffff14" strokeWidth="0.75" />
+          <line key={`${i}-${j}`} x1={n.x} y1={n.y} x2={m.x} y2={m.y} stroke="var(--color-line)" strokeWidth="0.75" />
         )),
       )}
       {nodes.map((n) => (
@@ -105,7 +105,7 @@ function GraphMini() {
           cx={n.x}
           cy={n.y}
           r={n.key % 5 === 0 ? 3.5 : 2}
-          fill={n.key % 5 === 0 ? "#ff9d2e" : "#36d1dc"}
+          fill={n.key % 5 === 0 ? "var(--color-amber)" : "var(--color-cyan)"}
           initial={{ opacity: 0.5 }}
           animate={{ opacity: [0.4, 1, 0.6] }}
           transition={{ duration: 2, delay: (n.key % 6) * 0.15, repeat: Infinity, repeatType: "reverse" }}
@@ -177,14 +177,14 @@ function HandoffSnippet() {
 function BranchMini() {
   return (
     <svg viewBox="0 0 220 90" className="h-20 w-full" aria-hidden="true">
-      <line x1="10" y1="45" x2="210" y2="45" stroke="#ffffff26" strokeWidth="1.5" />
-      <path d="M70,45 C90,45 90,18 120,18" fill="none" stroke="#ff9d2e" strokeWidth="1.5" />
-      <path d="M70,45 C90,45 90,72 120,72" fill="none" stroke="#36d1dc" strokeWidth="1.5" />
+      <line x1="10" y1="45" x2="210" y2="45" stroke="var(--color-line-strong)" strokeWidth="1.5" />
+      <path d="M70,45 C90,45 90,18 120,18" fill="none" stroke="var(--color-amber)" strokeWidth="1.5" />
+      <path d="M70,45 C90,45 90,72 120,72" fill="none" stroke="var(--color-cyan)" strokeWidth="1.5" />
       {[10, 40, 70].map((x) => (
-        <circle key={x} cx={x} cy="45" r="3.5" fill="#a1a1aa" />
+        <circle key={x} cx={x} cy="45" r="3.5" fill="var(--color-muted)" />
       ))}
-      <circle cx="120" cy="18" r="3.5" fill="#ff9d2e" />
-      <circle cx="120" cy="72" r="3.5" fill="#36d1dc" />
+      <circle cx="120" cy="18" r="3.5" fill="var(--color-amber)" />
+      <circle cx="120" cy="72" r="3.5" fill="var(--color-cyan)" />
     </svg>
   );
 }
@@ -197,7 +197,7 @@ function SignalRows() {
         <div key={f} className="flex items-center gap-2">
           <motion.span
             className="h-1.5 w-1.5 rounded-full"
-            style={{ background: i === 2 ? "#ff9d2e" : "#36d1dc" }}
+            style={{ background: i === 2 ? "var(--color-amber)" : "var(--color-cyan)" }}
             animate={{ opacity: [0.4, 1, 0.4] }}
             transition={{ duration: 1.4, delay: i * 0.3, repeat: Infinity }}
           />

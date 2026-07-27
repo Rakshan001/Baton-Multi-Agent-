@@ -5,7 +5,10 @@ export const REPO_URL = "https://github.com/Rakshan001/Baton-Multi-Agent-";
 export const ISSUES_URL = `${REPO_URL}/issues`;
 export const GOOD_FIRST_ISSUES_URL = `${ISSUES_URL}?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22`;
 export const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
-export const DOCS_URL = `${REPO_URL}#readme`;
+
+/** The docs now live on the site. The README stays linked as a secondary source. */
+export const DOCS_URL = "/docs";
+export const README_URL = `${REPO_URL}#readme`;
 
 /** The one command a visitor needs — clone the repo. */
 export const CLONE_CMD = `git clone ${REPO_URL}.git`;
@@ -18,11 +21,13 @@ export const QUICKSTART_CMD = [
   "node dist/cli.js serve --write",
 ].join("\n");
 
+// Root-relative anchors, not bare "#id" — the nav renders on /docs/* too, where
+// a bare fragment would jump within the docs page instead of going home.
 export const NAV_LINKS = [
-  { label: "How it works", href: "#how-it-works" },
-  { label: "Features", href: "#features" },
-  { label: "Open Source", href: "#open-source" },
-  { label: "Docs", href: DOCS_URL, external: true },
+  { label: "How it works", href: "/#how-it-works" },
+  { label: "Features", href: "/#features" },
+  { label: "Open Source", href: "/#open-source" },
+  { label: "Docs", href: DOCS_URL },
 ] as const;
 
 export const AGENTS = [

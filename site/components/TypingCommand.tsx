@@ -41,9 +41,9 @@ export default function TypingCommand({ text }: { text: string }) {
   return (
     <div className="panel inline-flex items-center gap-3 px-4 py-2.5 font-mono text-sm">
       <span aria-hidden="true" className="flex gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-full bg-white/10" />
-        <span className="h-2.5 w-2.5 rounded-full bg-white/10" />
-        <span className="h-2.5 w-2.5 rounded-full bg-white/10" />
+        <span className="h-2.5 w-2.5 rounded-full bg-fg/10" />
+        <span className="h-2.5 w-2.5 rounded-full bg-fg/10" />
+        <span className="h-2.5 w-2.5 rounded-full bg-fg/10" />
       </span>
       <span className="text-faint">$</span>
       <span className={reduce ? "text-fg" : "text-fg caret"}>{shown}</span>

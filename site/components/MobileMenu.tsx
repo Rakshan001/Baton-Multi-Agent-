@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { NAV_LINKS } from "./site";
 
@@ -59,19 +60,13 @@ export default function MobileMenu() {
         >
           {NAV_LINKS.map((link) => (
             <li key={link.href}>
-              <a
+              <Link
                 href={link.href}
-                target={"external" in link && link.external ? "_blank" : undefined}
-                rel={
-                  "external" in link && link.external
-                    ? "noopener noreferrer"
-                    : undefined
-                }
                 onClick={() => setOpen(false)}
-                className="block rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-white/5 hover:text-fg"
+                className="block rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-fg/5 hover:text-fg"
               >
                 {link.label}
-              </a>
+              </Link>
             </li>
           ))}
         </ul>

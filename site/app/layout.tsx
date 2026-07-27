@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import ThemeScript from "@/components/ThemeScript";
 import { SITE_URL } from "@/lib/site-url";
 
 const grotesk = Space_Grotesk({
@@ -54,8 +55,11 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0a0a0b",
-  colorScheme: "dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0b" },
+    { media: "(prefers-color-scheme: light)", color: "#faf9f7" },
+  ],
+  colorScheme: "light dark",
 };
 
 // JSON-LD: SoftwareApplication schema for richer search results.
@@ -78,14 +82,26 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${grotesk.variable} ${mono.variable}`}>
+    <html
+      lang="en"
+      className={`${grotesk.variable} ${mono.variable}`}
+      // ThemeScript sets data-theme before React hydrates, so the server HTML
+      // and the live DOM legitimately differ on <html>.
+      suppressHydrationWarning
+    >
+      <head>
+        <ThemeScript />
+      </head>
       <body>
         <noscript>
           <style>{`.reveal{opacity:1 !important;transform:none !important}`}</style>
         </noscript>
         <a
           href="#main"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-amber focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-black"
+          // text-ink, not text-black: on the light palette the amber deepens and
+          // black-on-amber drops below 3:1. --color-ink inverts with the theme,
+          // so this stays legible in both.
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-amber focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink"
         >
           Skip to content
         </a>

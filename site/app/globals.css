@@ -26,8 +26,87 @@
 }
 
 @layer base {
+  /* ------------------------------------------------------------------ */
+  /* Light theme.                                                        */
+  /*                                                                     */
+  /* The dark palette above is the default and stays byte-identical.     */
+  /* Light values live here once, as --l-* , and are remapped onto the    */
+  /* --color-* tokens by the two selectors below. Every utility already   */
+  /* reads var(--color-*) at runtime, so no class names change.          */
+  /*                                                                     */
+  /* Amber is DEEPENED rather than reused: #ff9d2e on an off-white page   */
+  /* is ~2.2:1 and unreadable as text. #c2410c is 5.9:1 on --l-ink and    */
+  /* still unmistakably the baton's amber.                               */
+  /* ------------------------------------------------------------------ */
   :root {
     color-scheme: dark;
+
+    /* Texture + glow intensity. The grid, grain and amber bloom are tuned
+       for a near-black page; on off-white the same values read as dirt.
+       Both themes set these, the effects below just consume them. */
+    --texture-grid: 0.5;
+    --texture-grain: 0.035;
+    --glow-near: 60%;
+    --glow-far: 40%;
+
+    --l-ink: #faf9f7;
+    --l-ink-2: #f3f1ec;
+    --l-panel: #ffffff;
+    --l-line: #2b210f1f;
+    --l-line-strong: #2b210f3d;
+
+    --l-fg: #1c1917;
+    --l-muted: #57534e;
+    --l-faint: #78716c;
+
+    --l-amber: #c2410c;
+    --l-amber-bright: #ea580c;
+    --l-amber-deep: #9a3412;
+    --l-cyan: #0e7490;
+  }
+
+  /* Explicit choice — set by ThemeScript / ThemeToggle. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+
+    --color-ink: var(--l-ink);
+    --color-ink-2: var(--l-ink-2);
+    --color-panel: var(--l-panel);
+    --color-line: var(--l-line);
+    --color-line-strong: var(--l-line-strong);
+    --color-fg: var(--l-fg);
+    --color-muted: var(--l-muted);
+    --color-faint: var(--l-faint);
+    --color-amber: var(--l-amber);
+    --color-amber-bright: var(--l-amber-bright);
+    --color-amber-deep: var(--l-amber-deep);
+    --color-cyan: var(--l-cyan);
+
+    --texture-grid: 0.35;
+    --texture-grain: 0.018;
+    --glow-near: 24%;
+    --glow-far: 12%;
+  }
+
+  /* No stamped choice yet — follow the OS. This is also the no-JS path,
+     so the site still honors prefers-color-scheme with scripting off. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+
+      --color-ink: var(--l-ink);
+      --color-ink-2: var(--l-ink-2);
+      --color-panel: var(--l-panel);
+      --color-line: var(--l-line);
+      --color-line-strong: var(--l-line-strong);
+      --color-fg: var(--l-fg);
+      --color-muted: var(--l-muted);
+      --color-faint: var(--l-faint);
+      --color-amber: var(--l-amber);
+      --color-amber-bright: var(--l-amber-bright);
+      --color-amber-deep: var(--l-amber-deep);
+      --color-cyan: var(--l-cyan);
+    }
   }
 
   * {
@@ -52,7 +131,9 @@
 
   ::selection {
     background-color: color-mix(in oklab, var(--color-amber) 35%, transparent);
-    color: #fff;
+    /* --color-fg tracks the theme, so this reads correctly on both the
+       near-black and the off-white page without a second rule. */
+    color: var(--color-fg);
   }
 
   /* Visible, on-brand focus ring for keyboard users */
@@ -110,11 +191,37 @@
     color: var(--color-amber);
   }
 
+  /* Theme-toggle icon swap.
+     Driven by the root attribute rather than React state so the correct glyph
+     is in the first painted frame — the toggle never flickers on hydration.
+     Sun = "dark is on, click for light". Moon = the reverse. */
+  .theme-icon-sun {
+    display: block;
+  }
+  .theme-icon-moon {
+    display: none;
+  }
+  :root[data-theme="light"] .theme-icon-sun {
+    display: none;
+  }
+  :root[data-theme="light"] .theme-icon-moon {
+    display: block;
+  }
+  /* No stamped choice — mirror the OS, matching the token rules above. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) .theme-icon-sun {
+      display: none;
+    }
+    :root:not([data-theme]) .theme-icon-moon {
+      display: block;
+    }
+  }
+
   /* Soft amber glow used behind hero / dashboard */
   .glow-amber {
     box-shadow:
-      0 0 80px -20px color-mix(in oklab, var(--color-amber) 60%, transparent),
-      0 0 30px -10px color-mix(in oklab, var(--color-amber) 40%, transparent);
+      0 0 80px -20px color-mix(in oklab, var(--color-amber) var(--glow-near), transparent),
+      0 0 30px -10px color-mix(in oklab, var(--color-amber) var(--glow-far), transparent);
   }
 
   .text-gradient {
@@ -157,7 +264,7 @@ body::before {
   background-size: 64px 64px;
   -webkit-mask-image: radial-gradient(ellipse 100% 60% at 50% 0%, #000 0%, transparent 75%);
   mask-image: radial-gradient(ellipse 100% 60% at 50% 0%, #000 0%, transparent 75%);
-  opacity: 0.5;
+  opacity: var(--texture-grid);
 }
 
 /* Film grain — a tiny inline SVG noise, tiled, very low opacity. */
@@ -167,16 +274,25 @@ body::after {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  opacity: 0.035;
+  opacity: var(--texture-grain);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 /* Keep real content above the texture layers */
 main,
 nav,
+aside,
 footer {
   position: relative;
   z-index: 2;
+}
+
+/* Ease the swap between themes instead of hard-cutting the whole page.
+   The reduced-motion safety net above neutralizes this automatically. */
+body {
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
 
 /* Keyframes shared across components */

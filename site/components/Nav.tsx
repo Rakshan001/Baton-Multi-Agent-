@@ -2,6 +2,7 @@ import Link from "next/link";
 import CopyChip from "./CopyChip";
 import NavShell from "./NavShell";
 import MobileMenu from "./MobileMenu";
+import ThemeToggle from "./ThemeToggle";
 import { NAV_LINKS, REPO_URL, CLONE_CMD } from "./site";
 
 // Fetch the live star count at build time. Falls back gracefully if the
@@ -45,26 +46,23 @@ export default async function Nav() {
         <ul className="hidden items-center gap-7 text-sm text-muted md:flex">
           {NAV_LINKS.map((link) => (
             <li key={link.href}>
-              <a
+              <Link
                 href={link.href}
-                target={"external" in link && link.external ? "_blank" : undefined}
-                rel={
-                  "external" in link && link.external
-                    ? "noopener noreferrer"
-                    : undefined
-                }
-                className="transition-colors hover:text-fg"
+                className="whitespace-nowrap transition-colors hover:text-fg"
               >
                 {link.label}
-              </a>
+              </Link>
             </li>
           ))}
         </ul>
 
         <div className="flex items-center gap-3">
-          <div className="hidden lg:block">
+          {/* The clone chip is wide; below 2xl it squeezes the nav links into
+              two-line wraps, so it only appears once there's real room. */}
+          <div className="hidden 2xl:block">
             <CopyChip command={CLONE_CMD} prefix="$" />
           </div>
+          <ThemeToggle />
           <a
             href={REPO_URL}
             target="_blank"

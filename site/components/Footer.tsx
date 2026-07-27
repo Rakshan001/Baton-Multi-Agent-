@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { REPO_URL, DOCS_URL, LICENSE_URL } from "./site";
 
 export default function Footer() {
@@ -15,9 +16,9 @@ export default function Footer() {
           <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-fg">
             GitHub
           </a>
-          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-fg">
+          <Link href={DOCS_URL} className="transition-colors hover:text-fg">
             Docs
-          </a>
+          </Link>
           <a href={LICENSE_URL} target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-fg">
             License
           </a>

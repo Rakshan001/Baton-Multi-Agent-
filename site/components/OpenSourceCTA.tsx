@@ -13,7 +13,7 @@ export default function OpenSourceCTA() {
       <div
         aria-hidden="true"
         className="pointer-events-none absolute left-1/2 top-1/2 h-80 w-[40rem] max-w-full -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-        style={{ background: "radial-gradient(ellipse, #ff9d2e22, transparent 70%)" }}
+        style={{ background: "radial-gradient(ellipse, color-mix(in oklab, var(--color-amber) 13%, transparent), transparent 70%)" }}
       />
 
       <Reveal className="relative">
@@ -37,7 +37,7 @@ export default function OpenSourceCTA() {
             href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="glow-amber rounded-full bg-amber px-6 py-3 text-sm font-semibold text-black transition-transform hover:scale-[1.02]"
+            className="glow-amber rounded-full bg-amber px-6 py-3 text-sm font-semibold text-ink transition-transform hover:scale-[1.02]"
           >
             Star on GitHub
           </a>
@@ -45,7 +45,7 @@ export default function OpenSourceCTA() {
             href={GOOD_FIRST_ISSUES_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded-full border border-line-strong px-6 py-3 text-sm font-medium text-fg transition-colors hover:bg-white/5"
+            className="rounded-full border border-line-strong px-6 py-3 text-sm font-medium text-fg transition-colors hover:bg-fg/5"
           >
             Good first issues
           </a>

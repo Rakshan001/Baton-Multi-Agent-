@@ -148,8 +148,8 @@ function HandoffDiagram({ active }: { active: number }) {
       <svg viewBox="0 0 420 320" className="h-full w-full" aria-hidden="true">
         <defs>
           <linearGradient id="card-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#ffb454" />
-            <stop offset="100%" stopColor="#f97316" />
+            <stop offset="0%" stopColor="var(--color-amber-bright)" />
+            <stop offset="100%" stopColor="var(--color-amber-deep)" />
           </linearGradient>
         </defs>
 
@@ -159,7 +159,7 @@ function HandoffDiagram({ active }: { active: number }) {
           y1="60"
           x2="350"
           y2="60"
-          stroke="#ff9d2e"
+          stroke="var(--color-amber)"
           strokeWidth="1.5"
           strokeDasharray="4 7"
           opacity="0.4"
@@ -190,16 +190,16 @@ function HandoffDiagram({ active }: { active: number }) {
             width="70"
             height="54"
             rx="6"
-            fill="#0e0e10"
+            fill="var(--color-ink-2)"
             stroke="url(#card-grad)"
             strokeWidth="1.5"
           />
-          <text x="35" y="138" textAnchor="middle" fontSize="8" fontFamily="var(--font-mono)" fill="#ffb454">
+          <text x="35" y="138" textAnchor="middle" fontSize="8" fontFamily="var(--font-mono)" fill="var(--color-amber-bright)">
             HANDOFF.md
           </text>
-          <line x1="10" y1="148" x2="60" y2="148" stroke="#ffffff26" strokeWidth="1" />
-          <line x1="10" y1="156" x2="50" y2="156" stroke="#ffffff1a" strokeWidth="1" />
-          <text x="35" y="168" textAnchor="middle" fontSize="6.5" fontFamily="var(--font-mono)" fill="#a1a1aa">
+          <line x1="10" y1="148" x2="60" y2="148" stroke="var(--color-line-strong)" strokeWidth="1" />
+          <line x1="10" y1="156" x2="50" y2="156" stroke="var(--color-line)" strokeWidth="1" />
+          <text x="35" y="168" textAnchor="middle" fontSize="6.5" fontFamily="var(--font-mono)" fill="var(--color-muted)">
             est_cost_usd: 0.05
           </text>
         </motion.g>
@@ -211,8 +211,8 @@ function HandoffDiagram({ active }: { active: number }) {
             animate={{ opacity: [0.4, 1, 0.4] }}
             transition={{ duration: 1.2, repeat: Infinity }}
           >
-            <rect x="150" y="245" width="120" height="22" rx="5" fill="#ff9d2e22" stroke="#ff9d2e" strokeWidth="1" />
-            <text x="210" y="259" textAnchor="middle" fontSize="8" fontFamily="var(--font-mono)" fill="#ffb454">
+            <rect x="150" y="245" width="120" height="22" rx="5" fill="color-mix(in oklab, var(--color-amber) 13%, transparent)" stroke="var(--color-amber)" strokeWidth="1" />
+            <text x="210" y="259" textAnchor="middle" fontSize="8" fontFamily="var(--font-mono)" fill="var(--color-amber-bright)">
               ⚠ same file
             </text>
           </motion.g>
@@ -225,8 +225,8 @@ function HandoffDiagram({ active }: { active: number }) {
             animate={{ scale: 1, opacity: 1 }}
             transition={{ type: "spring", stiffness: 200, damping: 14 }}
           >
-            <circle cx="210" cy="256" r="16" fill="#ff9d2e22" stroke="#ff9d2e" strokeWidth="1.5" />
-            <path d="M202,256 l5,5 l9,-11" fill="none" stroke="#ffb454" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="210" cy="256" r="16" fill="color-mix(in oklab, var(--color-amber) 13%, transparent)" stroke="var(--color-amber)" strokeWidth="1.5" />
+            <path d="M202,256 l5,5 l9,-11" fill="none" stroke="var(--color-amber-bright)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </motion.g>
         )}
       </svg>
@@ -247,12 +247,12 @@ function Lane({
 }) {
   return (
     <g opacity={active ? 1 : 0.4}>
-      <circle cx={x + 45} cy="60" r="22" fill="#121214" stroke={active ? "#ff9d2e" : "#ffffff26"} strokeWidth={active ? "1.5" : "1"} />
-      <circle cx={x + 45} cy="60" r="6" fill={active ? "#ff9d2e" : "#52525b"} />
-      <text x={x + 45} y="98" textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="#f4f4f5">
+      <circle cx={x + 45} cy="60" r="22" fill="var(--color-panel)" stroke={active ? "var(--color-amber)" : "var(--color-line-strong)"} strokeWidth={active ? "1.5" : "1"} />
+      <circle cx={x + 45} cy="60" r="6" fill={active ? "var(--color-amber)" : "var(--color-faint)"} />
+      <text x={x + 45} y="98" textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--color-fg)">
         {label}
       </text>
-      <text x={x + 45} y="112" textAnchor="middle" fontSize="7" fontFamily="var(--font-mono)" fill="#71717a">
+      <text x={x + 45} y="112" textAnchor="middle" fontSize="7" fontFamily="var(--font-mono)" fill="var(--color-faint)">
         {sub}
       </text>
     </g>
@@ -281,10 +281,10 @@ function FileRows({ x, show, conflict }: { x: number; show: boolean; conflict: b
             width="78"
             height="12"
             rx="3"
-            fill={conflict && i === 0 ? "#ff9d2e22" : "#ffffff0d"}
+            fill={conflict && i === 0 ? "color-mix(in oklab, var(--color-amber) 13%, transparent)" : "var(--color-line)"}
           />
-          <circle cx={x + 13} cy={206 + i * 16} r="2.5" fill={conflict && i === 0 ? "#ff9d2e" : "#36d1dc"} />
-          <text x={x + 22} y={209 + i * 16} fontSize="7" fontFamily="var(--font-mono)" fill="#a1a1aa">
+          <circle cx={x + 13} cy={206 + i * 16} r="2.5" fill={conflict && i === 0 ? "var(--color-amber)" : "var(--color-cyan)"} />
+          <text x={x + 22} y={209 + i * 16} fontSize="7" fontFamily="var(--font-mono)" fill="var(--color-muted)">
             {r}
           </text>
         </motion.g>
