@@ -43,7 +43,9 @@ export interface VerifiedDaemon extends DaemonRecord {
 }
 
 export function daemonsDir(): string {
-  return join(homedir(), '.baton', 'daemons');
+  // The override exists for tests (a hermetic registry per test run) and for
+  // the odd setup that wants the fleet somewhere else. Env is trusted input.
+  return process.env.BATON_DAEMONS_DIR || join(homedir(), '.baton', 'daemons');
 }
 
 /** `<pid>-<port>.json` — both in the name so a reused pid on another port

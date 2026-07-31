@@ -86,7 +86,10 @@ import {
 import {
   TeamError, addTeam, findTeam, loadTeams, removeTeam, teamId as slugTeamId, updateTeam,
 } from './teams.js';
-import { listDaemonRecords, removeDaemonRecordSync, writeDaemonRecord } from './daemons.js';
+import {
+  listDaemonRecords, listVerifiedDaemons, removeDaemonRecord, removeDaemonRecordSync,
+  stopDaemon, writeDaemonRecord,
+} from './daemons.js';
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
 import { decideAccess, requiresOwner, type AccessDecision } from './access.js';
@@ -1028,6 +1031,58 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       if (e instanceof MemberError) return send(res, 409, { error: e.message }, origin);
       throw e;
     }
+  }
+
+  /*
+   * The daemon fleet (src/daemons.ts) — every Baton on this machine.
+   *
+   * Loopback-only, all three routes, and deliberately stricter than owner: a
+   * `--host` member — even one you would call an owner — must not learn what
+   * else runs on this machine, and must never be able to stop it. On loopback,
+   * `decideAccess` already treats the caller as owner, so `access.local` is
+   * the entire test. The global anti-CSRF Origin gate above covers the POSTs.
+   */
+  if (method === 'GET' && path === '/api/daemons') {
+    if (!access.local) return send(res, 403, { error: 'the daemon fleet is visible from this machine only' }, origin);
+    const daemons = (await listVerifiedDaemons()).map((d) => ({ ...d, self: d.pid === process.pid }));
+    return send(res, 200, { daemons }, origin);
+  }
+
+  if (method === 'POST' && path === '/api/shutdown') {
+    if (!access.local) return send(res, 403, { error: 'shutdown is accepted from this machine only' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    // Answer FIRST, then die: exiting inside the handler would race the
+    // response onto a socket the process no longer owns, and the caller —
+    // whose next step is "did that work?" — would see a reset instead of a yes.
+    send(res, 200, { ok: true, note: 'shutting down' }, origin);
+    setTimeout(() => {
+      removeDaemonRecordSync(process.pid, opts.port);
+      process.exit(0);
+    }, 150);
+    return;
+  }
+
+  const daemonStopM = path.match(/^\/api\/daemons\/(\d{1,5})\/stop$/);
+  if (daemonStopM && method === 'POST') {
+    if (!access.local) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const port = Number(daemonStopM[1]);
+    if (port === opts.port) {
+      // Not a guess about intent — stopping *this* daemon has its own route
+      // with its own, blunter confirmation in the UI.
+      return send(res, 400, { error: 'that port is this daemon — POST /api/shutdown to stop the daemon you are talking to' }, origin);
+    }
+    const target = (await listVerifiedDaemons()).find((d) => d.port === port);
+    if (!target) return send(res, 404, { error: `no daemon record for port ${port}`, hint: 'baton ps lists what this machine knows about' }, origin);
+    if (target.status === 'stale') {
+      // A stale record is only ever deleted, never signalled — the pid it
+      // names is not one verification can vouch for.
+      await removeDaemonRecord(target.pid, target.port);
+      return send(res, 200, { ok: true, outcome: 'cleaned', root: target.root }, origin);
+    }
+    const outcome = await stopDaemon(target);
+    if (outcome === 'failed') return send(res, 500, { error: `could not stop pid ${target.pid} on port ${port}` }, origin);
+    return send(res, 200, { ok: true, outcome, root: target.root }, origin);
   }
 
   /*
