@@ -83,4 +83,19 @@ describe('buildBrief — open review findings', () => {
     const brief = await buildBrief(task!, { to: 'claude', root });
     expect(brief.markdown).not.toContain('Open review findings');
   });
+
+  /*
+   * `from`/`to` name the agent TOOLS, which on a shared hub are the same string
+   * for everyone — so a brief passed between two people records neither of them
+   * without `author`. It must also land in the frontmatter as a single line: the
+   * brief is parsed back by `readBrief`, and a value carrying a newline would
+   * break every field after it.
+   */
+  it('stamps the author into the brief frontmatter as one clean line', async () => {
+    const task = await getTask(root, 'rev');
+    const brief = await buildBrief(task!, { to: 'claude', root });
+    expect(brief.meta.author).toBeTruthy();
+    expect(brief.meta.author).not.toContain('\n');
+    expect(brief.markdown).toContain(`author: ${brief.meta.author}`);
+  });
 });

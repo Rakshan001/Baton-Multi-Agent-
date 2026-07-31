@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { batonDir } from './store.js';
+import { readAuthor, resolveAuthor } from './identity.js';
 import { detectSecret } from './memory.js';
 
 /** The axes the code-review skill runs. Kept separate at every layer — a
@@ -81,6 +82,12 @@ export interface ReviewRecord {
    *  review reads as a clean one, so this is recorded and surfaced. */
   partial?: string;
   agent?: string;
+  /** WHO ran this review, as opposed to `agent` (WHAT ran it). Reviews are
+   *  shared artifacts — "who reported this and can I ask them about it" is the
+   *  question a finding raises. Unlike memory's author, this tracks the LATEST
+   *  review: a re-review replaces the record outright, so it belongs with
+   *  `updatedAt`, not `createdAt`. Pre-author records read as `unknown`. */
+  author: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -222,6 +229,7 @@ export async function loadReview(root: string, slug: string): Promise<ReviewReco
       findings,
       ...(str(r.partial, PARTIAL_MAX) ? { partial: str(r.partial, PARTIAL_MAX) } : {}),
       ...(str(r.agent, 60) ? { agent: str(r.agent, 60) } : {}),
+      author: readAuthor(r.author),
       createdAt: str(r.createdAt, 40) || new Date(0).toISOString(),
       updatedAt: str(r.updatedAt, 40) || new Date(0).toISOString(),
     };
@@ -273,6 +281,7 @@ export async function saveReview(root: string, slug: string, input: ReviewInput)
     findings,
     ...(str(input.partial, PARTIAL_MAX) ? { partial: str(input.partial, PARTIAL_MAX) } : {}),
     ...(str(input.agent, 60) ? { agent: str(input.agent, 60) } : {}),
+    author: await resolveAuthor(root),
     createdAt: prev?.createdAt && prev.createdAt !== new Date(0).toISOString() ? prev.createdAt : now,
     updatedAt: now,
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -94,6 +94,32 @@ describe('saveReview / loadReview', () => {
 
   it('returns null for an unknown slug rather than throwing', async () => {
     expect(await loadReview(root, 'never-reviewed')).toBeNull();
+  });
+
+  /*
+   * Attribution. `agent` says WHAT ran the review; `author` says WHO — and on a
+   * shared knowledge base those differ, because two people both run "claude".
+   * The temp dir has no git repo, so this also pins the contract that an
+   * unresolvable identity still yields a usable label instead of throwing: a
+   * review that fails to save is far worse than one attributed to a fallback.
+   */
+  it('stamps an author on save and round-trips it', async () => {
+    const saved = await saveReview(root, 'attributed', {
+      fixedPoint: 'main', head: 'abc123', findings: [finding()], agent: 'claude',
+    });
+    expect(saved.author.length).toBeGreaterThan(0);
+    expect(saved.author).not.toContain('\n');
+    expect((await loadReview(root, 'attributed'))!.author).toBe(saved.author);
+  });
+
+  // No migration step: a record written before authorship existed must load.
+  it('reads a record with no author field as unknown', async () => {
+    await saveReview(root, 'legacy', { fixedPoint: 'main', head: 'abc123', findings: [finding()] });
+    const path = join(root, '.baton', 'reviews', 'legacy.json');
+    const raw = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>;
+    delete raw.author;
+    await writeFile(path, JSON.stringify(raw), 'utf-8');
+    expect((await loadReview(root, 'legacy'))!.author).toBe('unknown');
   });
 
   it('keeps a hostile slug inside .baton/reviews', () => {

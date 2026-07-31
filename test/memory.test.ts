@@ -94,6 +94,7 @@ describe('fact file round-trip', () => {
     type: 'gotcha',
     fact: 'The SSE ring buffer holds only 200 events; terminal output is excluded.',
     agent: 'claude',
+    author: 'dev@example.com',
     task: 'some-task',
     createdAt: '2026-06-12T00:00:00.000Z',
     anchors: { commit: 'abc123', files: [{ path: 'src/events.ts', hash: 'deadbeef0000' }] },
@@ -107,6 +108,7 @@ describe('fact file round-trip', () => {
     expect(parsed!.id).toBe(fact.id);
     expect(parsed!.type).toBe('gotcha');
     expect(parsed!.fact).toBe(fact.fact);
+    expect(parsed!.author).toBe('dev@example.com');
     expect(parsed!.anchors.commit).toBe('abc123');
     expect(parsed!.anchors.files).toEqual([{ path: 'src/events.ts', hash: 'deadbeef0000' }]);
   });
@@ -114,11 +116,34 @@ describe('fact file round-trip', () => {
   it('parse rejects garbage', () => {
     expect(parseFactFile('not a fact file')).toBeNull();
   });
+
+  // Facts written before author existed must still load. Reading them as
+  // `unknown` is the whole reason there is no migration step.
+  it('a fact file with no author field reads as unknown, not undefined', () => {
+    const legacy = [
+      '---', 'id: legacy-fact', 'type: gotcha', 'agent: claude', 'task: null',
+      "created: '2026-01-01T00:00:00.000Z'", 'commit: abc123', 'files: []',
+      'supersedes: null', 'fingerprint: legacy', '---', '', 'A fact from before authorship existed.',
+    ].join('\n');
+    const parsed = parseFactFile(legacy);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.author).toBe('unknown');
+  });
+
+  // Regression: js-yaml throws on an undefined value (it dumps null fine), so an
+  // author that went missing would abort the write and lose the entire fact.
+  it('renders even when author is missing at runtime', () => {
+    const noAuthor = { ...fact, author: undefined as unknown as string };
+    const parsed = parseFactFile(renderFactFile(noAuthor));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.author).toBe('unknown');
+    expect(parsed!.fact).toBe(fact.fact);
+  });
 });
 
 describe('scoreMemory', () => {
   const fact: MemoryFact = {
-    id: 'mem-x', type: 'convention', agent: null, task: 'fix-auth-flow',
+    id: 'mem-x', type: 'convention', agent: null, author: 'dev@example.com', task: 'fix-auth-flow',
     fact: 'All git calls go through util/exec.ts — shell-free, hardened.',
     createdAt: '2026-06-12T00:00:00.000Z',
     anchors: { commit: null, files: [{ path: 'src/util/exec.ts', hash: 'aa' }] },

@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
 import { parseFrontmatter } from './util/frontmatter.js';
 import { git } from './util/exec.js';
+import { readAuthor, resolveAuthor, UNKNOWN_AUTHOR } from './identity.js';
 import { escapeRegExp } from './util/regex.js';
 import { rankFacts } from './memory-rank.js';
 
@@ -36,6 +37,11 @@ export interface MemoryFact {
   type: MemoryType;
   fact: string;
   agent: string | null;
+  /** WHO claimed this, as opposed to `agent` (WHAT wrote it down). Two people on
+   *  a shared KB both run "claude", so agent alone cannot attribute a fact — and
+   *  an unattributable fact is one nobody can challenge. Always present:
+   *  pre-author facts read as `unknown` rather than being migrated. */
+  author: string;
   task: string | null;
   createdAt: string;
   anchors: { commit: string | null; files: FileAnchor[] };
@@ -164,6 +170,11 @@ export function renderFactFile(f: MemoryFact): string {
     id: f.id,
     type: f.type,
     agent: f.agent,
+    // `|| UNKNOWN_AUTHOR` is not belt-and-braces: js-yaml THROWS on an
+    // undefined value (it dumps null happily), so one missing label would
+    // abort the write and lose the whole fact. Losing the fact is strictly
+    // worse than losing the attribution.
+    author: f.author || UNKNOWN_AUTHOR,
     task: f.task,
     created: f.createdAt,
     commit: f.anchors.commit,
@@ -205,6 +216,7 @@ export function parseFactFile(raw: string): MemoryFact | null {
       type: MEMORY_TYPES.includes(data.type as MemoryType) ? (data.type as MemoryType) : 'reference',
       fact: content.trim(),
       agent: typeof data.agent === 'string' ? data.agent : null,
+      author: readAuthor(data.author),
       task: typeof data.task === 'string' ? data.task : null,
       createdAt: typeof data.created === 'string' ? data.created : new Date(0).toISOString(),
       anchors: { commit: typeof data.commit === 'string' ? data.commit : null, files },
@@ -407,6 +419,7 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
     type,
     fact,
     agent: input.agent?.trim() || null,
+    author: await resolveAuthor(mainRoot),
     task: input.task?.trim() || null,
     createdAt: new Date().toISOString(),
     anchors: { commit, files },
@@ -824,8 +837,12 @@ export async function repairMemories(root: string): Promise<RepairResult> {
     }
     const files: FileAnchor[] = [];
     for (const a of anchorFiles) files.push({ path: a.path, hash: await fileHash(mainRoot, a.path) });
+    // `author` is carried over deliberately: re-anchoring is a mechanical
+    // refresh of evidence, not a new claim. Restamping it with whoever's daemon
+    // happened to run repair would quietly reassign authorship of every fact on
+    // a shared hub to its most active machine.
     const updated: MemoryFact = {
-      id: f.id, type: f.type, fact: f.fact, agent: f.agent, task: f.task,
+      id: f.id, type: f.type, fact: f.fact, agent: f.agent, author: f.author, task: f.task,
       createdAt: f.createdAt, anchors: { commit: head ?? f.anchors.commit, files },
       supersedes: f.supersedes, fingerprint: f.fingerprint,
     };

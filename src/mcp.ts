@@ -21,6 +21,7 @@ import { resolveMcpRoot } from './store.js';
 import { queryFile, searchHistory } from './history.js';
 import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
+import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
 import { createSessionHandoff } from './handoff/session-brief.js';
 import { saveProgress } from './handoff/progress-ledger.js';
@@ -103,7 +104,47 @@ export async function startMcpServer(): Promise<void> {
       description: TOOL_HELP.check_files,
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths to check') },
     },
-    async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
+    async ({ paths }) => {
+      /*
+       * Local signals AND the host's federated claims. Without the second half
+       * a teammate's claim is visible to a human on the dashboard and invisible
+       * to the agent about to overwrite their work.
+       *
+       * `remote` is always present when a host is linked, including when it
+       * could not be reached — an agent must be able to tell "nobody else is on
+       * this file" from "I could not find out", and only the first is a reason
+       * to proceed confidently.
+       */
+      const [files, view] = await Promise.all([
+        checkFiles(root, paths, selfSlug),
+        remoteClaims(root),
+      ]);
+      const elsewhere = remoteHoldersFor(view, paths);
+      for (const [p, holders] of Object.entries(elsewhere)) {
+        if (files[p]) files[p] = { ...files[p], busy: true, elsewhere: holders };
+      }
+      const note = remoteNote(view);
+      /*
+       * The remote semantics are taught HERE, in the answer, and only when they
+       * apply — never in TOOL_HELP. Same reasoning as recall_memory's `ids`
+       * (see the comment in mcp-help.ts): a description is a tax every session
+       * pays before doing any work, whereas a tip costs nothing until the day
+       * there is actually a teammate on the other end of the file.
+       */
+      const tip = Object.keys(elsewhere).length
+        ? 'A path with `elsewhere` is held by a teammate on another machine. Claims are advisory, not locks — prefer other work, or agree with them first.'
+        : note
+          ? 'Remote claims could not be fetched, so "not busy" covers THIS machine only.'
+          : null;
+      return asText({
+        watcherActive: isWatcherActive(root),
+        files,
+        ...(view.linked
+          ? { remote: { reachable: view.reachable, ...(note ? { note } : {}) } }
+          : {}),
+        ...(tip ? { tip } : {}),
+      });
+    },
   );
 
   reg(
@@ -296,8 +337,13 @@ export async function startMcpServer(): Promise<void> {
       const r = await recallMemories(memRoot, { topic, limit, ids });
       // Hydration mode: full bodies for the requested ids, failures named.
       if (ids?.length) {
+        // `author` rides the HYDRATION path only, never `recallRows` below.
+        // Rows are served on every recall in every session, so a field there is
+        // a permanent context tax; asking for a fact by id is the moment you are
+        // actually scrutinizing it, and "whose claim is this" is what you need
+        // to challenge it.
         return asText({
-          facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
+          facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, author: f.author, freshness: f.freshness, commitsBehind: f.commitsBehind })),
           ...(r.withheld?.length ? { withheld: r.withheld } : {}),
         });
       }
