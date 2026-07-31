@@ -16,10 +16,11 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
+import { DEMO_FLEET } from "./fleet";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
@@ -669,6 +670,7 @@ class BatonClient {
   private demoReviewStore: ReviewRecord[] | null = null;
   /** Mutable demo copy so warn / disconnect / revoke actually change something. */
   private demoTeam: TeamState | null = null;
+  private demoFleet: FleetDaemon[] | null = null;
   private demoReviewRecords(): ReviewRecord[] {
     return (this.demoReviewStore ??= JSON.parse(JSON.stringify(DEMO_REVIEWS)) as ReviewRecord[]);
   }
@@ -1169,6 +1171,51 @@ class BatonClient {
       };
     }
     return this.request(`/api/teams/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  /* ---- daemon fleet (loopback-only; src/daemons.ts) ---- */
+
+  /** Every Baton daemon on this machine, or null when this daemon cannot say
+   *  (older daemon, or a remote viewer the endpoint refuses) — null hides the
+   *  card, which beats drawing a panel that can only error. */
+  async getDaemons(): Promise<FleetDaemon[] | null> {
+    if (this.demo) {
+      await this.demoGate();
+      return structuredClone(this.demoFleet ??= structuredClone(DEMO_FLEET));
+    }
+    try {
+      return (await this.request<{ daemons: FleetDaemon[] }>("/api/daemons")).daemons;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Stop ANOTHER daemon (never this one — that is shutdownSelf). The server
+   *  re-verifies before acting; a stale record is cleaned, never signalled. */
+  async stopFleetDaemon(port: number): Promise<{ ok: boolean; outcome: "graceful" | "signal" | "refused-stale" | "cleaned"; root: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(200);
+      const fleet = (this.demoFleet ??= structuredClone(DEMO_FLEET));
+      const row = fleet.find((d) => d.port === port);
+      if (!row) throw new ApiError("NOT_FOUND", `no daemon record for port ${port}`);
+      this.demoFleet = fleet.filter((d) => d.port !== port);
+      this.emit();
+      return { ok: true, outcome: row.status === "stale" ? "cleaned" : "graceful", root: row.root };
+    }
+    return this.request(`/api/daemons/${port}/stop`, { method: "POST" });
+  }
+
+  /** Stop the daemon serving THIS dashboard. The daemon answers, then exits;
+   *  the staleness banner takes the screen over from there. */
+  async shutdownSelf(): Promise<{ ok: boolean }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(200);
+      // The demo has no daemon to stop; the card says so instead of pretending.
+      throw new ApiError("BAD_REQUEST", "Demo mode — this dashboard is a preview, there is no daemon behind it to stop.");
+    }
+    return this.request("/api/shutdown", { method: "POST" });
   }
 
   /** Move one member. `null` takes them out of every team. */

@@ -114,6 +114,23 @@ export interface Meta {
   };
 }
 
+/** One Baton daemon on this machine — GET /api/daemons (src/daemons.ts).
+ *  Loopback-only: a remote viewer never sees the fleet at all. `stale` means
+ *  the record failed verification (crash leftover, or a reused pid/port) and
+ *  may only be cleaned up, never stopped. */
+export interface FleetDaemon {
+  pid: number;
+  port: number;
+  root: string;
+  startedAt: string;
+  version: string;
+  writeEnabled: boolean;
+  host: boolean;
+  status: "live" | "stale";
+  /** True on the row describing the daemon that answered this request. */
+  self: boolean;
+}
+
 /** One live interactive terminal — GET /api/terminals (src/terminals.ts). */
 export interface TerminalInfo {
   slug: string;

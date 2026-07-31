@@ -12,8 +12,10 @@ import { showToast } from "../lib/toast";
 import { BatonAPI } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
-import type { AgentId, Meta, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import type { AgentId, FleetDaemon, Meta, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
 import { auth } from "../lib/auth";
+import { usePoll } from "../hooks/usePoll";
+import { fleetOrder, folderName, middleTruncate, uptimeLabel } from "../lib/fleet";
 
 const MODE_HINTS: Record<RoutingMode, string> = {
   auto: "Rules first, then severity picks a tier automatically.",
@@ -337,6 +339,104 @@ function SessionSettings({ viewer }: { viewer?: Meta["viewer"] }) {
   );
 }
 
+/**
+ * Every Baton daemon on this machine — and the button that stops the one you
+ * started by mistake. Loopback-only: `getDaemons` returns null for a remote
+ * viewer (or an older daemon), and null unmounts the card rather than drawing
+ * a panel that can only error. The server is the authority on live vs stale;
+ * this card only decides how to draw it — a stale row gets *Clean up*, never
+ * Stop, because the pid behind it is one nobody can vouch for.
+ */
+function DaemonsCard() {
+  const fleet = usePoll<FleetDaemon[] | null>(() => BatonAPI.getDaemons(), { interval: 5000 });
+  const [confirm, setConfirm] = useState<FleetDaemon | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState<number[]>([]);
+  const rows = fleetOrder(fleet.data ?? []);
+  if (!fleet.data || rows.length === 0) return null;
+
+  const act = async (d: FleetDaemon) => {
+    setBusy(true);
+    try {
+      if (d.self) {
+        await BatonAPI.shutdownSelf();
+        // No toast for success: the staleness banner is about to own the
+        // screen, and that banner is the honest report.
+      } else {
+        const r = await BatonAPI.stopFleetDaemon(d.port);
+        setStopping((s) => [...s, d.port]);
+        showToast(r.outcome === "cleaned"
+          ? { kind: "ok", title: "Cleaned up", desc: `${folderName(d.root)} — the daemon was already gone; only its record remained.` }
+          : { kind: "ok", title: `Stopped ${folderName(d.root)}`, desc: r.outcome === "signal" ? "Stopped by signal — that daemon predates graceful shutdown." : `Port ${d.port} is free again.` });
+      }
+      setConfirm(null);
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not stop it", desc: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsBlock title="Daemons on this machine" desc="Every project running `baton serve`, across all folders. Stopping one never touches its code or its git state.">
+      {rows.map((d) => {
+        const live = d.status === "live";
+        const pending = stopping.includes(d.port);
+        const color = live ? "var(--clean)" : "var(--text-quaternary)";
+        return (
+          <div key={`${d.pid}-${d.port}`} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)", opacity: pending ? 0.5 : 1 }}>
+            <span data-tip={live ? "Verified: the process is alive and answering as this repo" : "Crash leftover — the daemon behind this record is gone"}
+              style={{ width: 8, height: 8, borderRadius: 99, flex: "none", background: color, boxShadow: live ? `0 0 0 3px color-mix(in srgb, ${color} 22%, transparent)` : "none" }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", whiteSpace: "nowrap" }}>{folderName(d.root)}</span>
+                {d.self && <span className="tag" style={{ flex: "none" }}>this dashboard</span>}
+                {!live && <span className="tag" style={{ flex: "none", color: "var(--text-tertiary)" }}>stale record</span>}
+                {d.host && live && <span className="tag" style={{ flex: "none", color: "var(--warn, #b58900)" }} data-tip="Exposed beyond this machine with --host">shared</span>}
+              </div>
+              <div className="mono" data-tip={d.root} style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {middleTruncate(d.root, 58)}
+              </div>
+            </div>
+            <span className="mono" style={{ flex: "none", fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>:{d.port}</span>
+            <span style={{ flex: "none", fontSize: "var(--fs-12)", color: "var(--text-tertiary)", width: 74, textAlign: "right" }}>{live ? uptimeLabel(d.startedAt) : "—"}</span>
+            <div style={{ flex: "none", display: "flex", gap: 6 }}>
+              {live && !d.self && (
+                <a className="btn btn-sm btn-ghost fr" href={`http://127.0.0.1:${d.port}`} target="_blank" rel="noreferrer" data-tip="Open that project's dashboard">
+                  <Icon name="externalLink" size={13} />
+                </a>
+              )}
+              <button className={`btn btn-sm fr ${live ? "btn-danger" : "btn-ghost"}`} disabled={pending} onClick={() => setConfirm(d)}>
+                {live ? "Stop" : "Clean up"}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      <ConfirmDialog
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => { if (confirm) void act(confirm); }}
+        busy={busy}
+        tone={confirm?.status === "live" ? "danger" : "default"}
+        icon={confirm?.status === "live" ? "wifiOff" : "trash"}
+        title={confirm?.status !== "live" ? "Clean up stale record?" : confirm?.self ? "Stop this dashboard's daemon?" : `Stop ${confirm ? folderName(confirm.root) : ""}?`}
+        confirmLabel={confirm?.status !== "live" ? "Clean up" : confirm?.self ? "Stop it anyway" : "Stop daemon"}
+        body={confirm && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", wordBreak: "break-all" }}>{confirm.root} · port {confirm.port}</span>
+            {confirm.status !== "live"
+              ? <span>The daemon behind this record is already gone — this only deletes the leftover file.</span>
+              : confirm.self
+                ? <span><b>This stops the daemon serving the dashboard you are looking at.</b> The screen will go stale until you run <span className="mono">baton serve</span> in that folder again.</span>
+                : <span>Agents, worktrees and git state in that project are untouched — only the daemon and its dashboard stop.</span>}
+          </div>
+        )}
+      />
+    </SettingsBlock>
+  );
+}
+
 export function SettingsScreen({ prefs, repo, viewer }: { prefs: Prefs; repo: string | null; viewer?: Meta["viewer"] }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -365,6 +465,13 @@ export function SettingsScreen({ prefs, repo, viewer }: { prefs: Prefs; repo: st
           </SettingsBlock>
 
           <ConnectionSettings prefs={prefs} />
+
+          {/* Loopback-only twice over: the endpoint refuses a remote viewer,
+              and a viewer the daemon has TOLD us is remote never mounts the
+              card at all. Demo mode shows the fixture fleet — the showcase
+              includes the stale-record path, because Clean up is half the
+              feature. */}
+          {(BatonAPI.demo || viewer?.local !== false) && <DaemonsCard />}
 
           <SessionSettings viewer={viewer} />
 
