@@ -23,6 +23,7 @@ import { lsCmd } from './commands/ls.js';
 import { statusCmd } from './commands/status.js';
 import { historyCmd } from './commands/history.js';
 import { serveCmd } from './commands/serve.js';
+import { psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
 import { worktreeGcCmd } from './commands/clean.js';
@@ -146,6 +147,24 @@ program
   .option('--allowed-host <name>', 'Host header to accept besides loopback (repeatable) — needed when reached by DNS name', (v: string, acc: string[]) => [...acc, v], [] as string[])
   .description('start the local daemon: JSON API + the built web dashboard')
   .action((opts: { port?: string; write?: boolean; host?: string; allowedHost?: string[] }) => run(() => serveCmd(opts)));
+
+// `baton stop <slug>` already stops a headless agent, so the fleet gets its
+// own group — with `baton ps` kept as the short way to ask "what's running".
+program
+  .command('ps')
+  .description('list every Baton daemon on this machine (all projects), verified live or stale')
+  .action(() => run(psCmd));
+
+const daemon = program.command('daemon').description('the Baton daemons running on this machine, across every project');
+daemon
+  .command('list', { isDefault: true })
+  .description('same as `baton ps`')
+  .action(() => run(psCmd));
+daemon
+  .command('stop')
+  .argument('<target>', 'port number, or the path of the repo the daemon serves')
+  .description('stop a daemon anywhere on this machine (graceful, SIGTERM fallback); cleans up stale records')
+  .action((target: string) => run(() => daemonStopCmd(target)));
 
 const host = program.command('host').description('link this machine to a hub host, so its file claims join the shared picture');
 host

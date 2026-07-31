@@ -86,6 +86,7 @@ import {
 import {
   TeamError, addTeam, findTeam, loadTeams, removeTeam, teamId as slugTeamId, updateTeam,
 } from './teams.js';
+import { listDaemonRecords, removeDaemonRecordSync, writeDaemonRecord } from './daemons.js';
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
 import { decideAccess, requiresOwner, type AccessDecision } from './access.js';
@@ -1955,7 +1956,14 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   });
   const reaper = setInterval(() => { void graphPool?.reapIdle(); }, 60_000);
   reaper.unref?.();
-  const stop = () => { clearInterval(reaper); void graphPool?.shutdown(); process.exit(0); };
+  const stop = () => {
+    clearInterval(reaper);
+    void graphPool?.shutdown();
+    // Sync, because the event loop is about to die with us. Best-effort: a
+    // record left behind is exactly what verification exists to catch.
+    removeDaemonRecordSync(process.pid, opts.port);
+    process.exit(0);
+  };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
 
   poller = new StatusPoller(root);
@@ -2099,11 +2107,25 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     // (after already starting watchers and writing heartbeat rows). exit(1)
     // tears all of that down; the surviving daemon owns the registry rows.
     if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      console.error(`baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
+      // Name the holder when the fleet registry knows it — "which daemon is
+      // that" is the whole question this error used to leave open.
+      const holder = (await listDaemonRecords().catch(() => []))
+        .find((r) => r.port === opts.port);
+      console.error(holder
+        ? `baton serve: port ${opts.port} is already serving ${holder.root} — stop it with: baton daemon stop ${opts.port}`
+        : `baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
       process.exit(1);
     }
     throw e;
   }
+  // Announce to the fleet — after listen succeeds, so a record always names a
+  // port this pid actually holds. Best-effort: the fleet is a convenience,
+  // never a precondition for serving.
+  await writeDaemonRecord({
+    pid: process.pid, port: opts.port, root,
+    startedAt: new Date().toISOString(), version: VERSION,
+    writeEnabled: !!opts.writeEnabled, host: bindAddr !== '127.0.0.1',
+  }).catch((e) => console.error(`baton serve: fleet record not written (${(e as Error).message}) — \`baton ps\` will not see this daemon`));
   if (existsSync(WEB_DIST)) {
     console.log(`baton serve → dashboard http://localhost:${opts.port}`);
   } else {
