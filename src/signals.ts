@@ -802,6 +802,13 @@ export async function getSignals(
 export interface FileCheck {
   busy: boolean;
   by: SignalHolder[];
+  /**
+   * Holders on OTHER machines, when this daemon is linked to a hub host
+   * (src/remote-claims.ts fills it in; `checkFiles` itself stays local-only and
+   * makes no network call). Absent means "not asked", never "nobody" — the
+   * caller reports reachability separately for exactly that reason.
+   */
+  elsewhere?: Array<{ memberId: string; memberName: string; agent: string | null; branch: string | null; since: string }>;
 }
 
 /**
