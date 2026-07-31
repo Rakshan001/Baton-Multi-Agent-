@@ -44,7 +44,7 @@ Baton detects whichever of `uv` / `pipx` is available and prints tailored guidan
 
 ## Wire up your agents
 
-Baton talks to six agent CLIs. Install whichever you use; Baton detects them on your `PATH`.
+Baton ships knowing these agent CLIs. Install whichever you use; Baton detects them on your `PATH`.
 
 | Agent | Binary | Headless | Interactive |
 |---|---|---|---|
@@ -54,6 +54,40 @@ Baton talks to six agent CLIs. Install whichever you use; Baton detects them on 
 | Cursor Agent | `cursor-agent` | — | ✅ |
 | Aider | `aider` | — | ✅ |
 | OpenCode | `opencode` | — | ✅ |
+| OpenClaw | `openclaw` | — | — (detection-only) |
+
+*Detection-only* means the agent shows up in the roster and process view, but
+Baton won't launch it for you yet — launch flags are only added once they've
+been verified against a real install.
+
+### Add your own agent (no Baton release needed)
+
+Any agent CLI not in the table can be taught to Baton with
+`~/.baton/agents.json`. Entries are validated on load and `baton doctor`
+reports anything that didn't:
+
+```json
+{
+  "agents": [
+    {
+      "id": "myagent",
+      "label": "My Agent",
+      "binary": "myagent",
+      "headless":    { "args": ["run", "--model={model}", "-p", "{prompt}"] },
+      "interactive": { "args": ["--model={model}"] }
+    }
+  ]
+}
+```
+
+- `id` — lowercase letters/digits/dashes; a collision with a built-in is
+  refused (a config file must not redefine how `claude` runs).
+- `binary` — probed on `PATH`, and matched in the process table for detection
+  (add a `detect` regex string only if the default binary-name match is wrong).
+- Launcher `args` are an **argv template**, never a shell string: `{prompt}`
+  substitutes the prompt, and any token containing `{model}` is dropped when no
+  model override was asked for — write `--model={model}` as one token so
+  nothing dangles. Omit `headless`/`interactive` for detection-only.
 
 Give each agent the Baton + graphify MCP tools:
 

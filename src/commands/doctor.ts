@@ -10,6 +10,7 @@ import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from
 import { batonDir, loadTasks, resolveBatonRoot } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { auditKb, type KbFinding } from '../kb/health.js';
+import { AGENTS, CUSTOM_AGENT_IDS, CUSTOM_AGENT_ISSUES, customAgentsPath } from '../agents/registry.js';
 
 const KIND_LABEL: Record<JunkItem['kind'], string> = {
   'orphan-worktree-task': 'orphaned worktree (stale task)',
@@ -64,6 +65,22 @@ export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): P
   console.log('');
   printKb(await auditKb(root));
   await reportShadowBatons(root, !!opts.fix);
+  printCustomAgents();
+}
+
+/** Custom agents (~/.baton/agents.json, src/agents/registry.ts). Silent when
+ *  the file is absent — that is the normal case, not a finding. A file that
+ *  half-loaded must say so HERE, because the load itself never throws. */
+function printCustomAgents(): void {
+  if (!CUSTOM_AGENT_IDS.length && !CUSTOM_AGENT_ISSUES.length) return;
+  console.log('\nCustom agents:\n');
+  for (const id of CUSTOM_AGENT_IDS) {
+    const a = AGENTS[id];
+    const modes = [a.headless ? 'headless' : '', a.interactive ? 'interactive' : ''].filter(Boolean).join(' + ') || 'detection-only';
+    console.log(`  ✓ ${a.label} (${id}) — binary '${a.binary}', ${modes}`);
+  }
+  for (const issue of CUSTOM_AGENT_ISSUES) console.log(`  ✗ ${issue}`);
+  if (CUSTOM_AGENT_ISSUES.length) console.log(`\n  Fix ${customAgentsPath()} and re-run — entries load again on the next start.`);
 }
 
 /**
