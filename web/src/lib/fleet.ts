@@ -21,8 +21,12 @@ export function middleTruncate(path: string, max: number): string {
 }
 
 export function uptimeLabel(startedAt: string, now = Date.now()): string {
-  const ms = now - Date.parse(startedAt);
-  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const t = Date.parse(startedAt);
+  // t <= 0 is the epoch sentinel a record missing startedAt falls back to —
+  // "up 20661d" would be a confident lie about a file we know nothing about.
+  if (!Number.isFinite(t) || t <= 0) return "—";
+  const ms = now - t;
+  if (ms < 0) return "—";
   const m = Math.floor(ms / 60_000);
   if (m < 1) return "just started";
   if (m < 60) return `up ${m}m`;

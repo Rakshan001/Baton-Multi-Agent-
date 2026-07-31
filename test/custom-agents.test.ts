@@ -113,6 +113,18 @@ describe('loadCustomAgents', () => {
     expect(issues.join(' ')).toMatch(/never use \{prompt\}/);
   });
 
+  it('refuses a token that mixes {model} and {prompt}', async () => {
+    // The {model} drop rule discards the whole token when no model is set —
+    // a token also carrying {prompt} would silently lose the prompt with it,
+    // recreating the TUI-under-a-pipe hang the {prompt} guard exists for.
+    const { into, issues, added } = await load({
+      agents: [{ id: 'mx', binary: 'mx', headless: { args: ['--opt={model}:{prompt}'] } }],
+    });
+    expect(added).toEqual(['mx']); // the agent survives, detection-only
+    expect(into.mx.headless).toBeUndefined();
+    expect(issues.join(' ')).toMatch(/must not mix \{model\} and \{prompt\}/);
+  });
+
   it('caps custom agents and says what was dropped', async () => {
     const many = Array.from({ length: 25 }, (_, i) => ({ id: `agent-${String.fromCharCode(97 + i)}`, binary: 'x' }));
     const { added, issues } = await load({ agents: many });

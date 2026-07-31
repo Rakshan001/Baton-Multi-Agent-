@@ -161,7 +161,15 @@ function cleanArgsTemplate(raw: unknown, where: string, issues: string[]): strin
     issues.push(`${where}: args must be an array of up to ${ARGS_MAX} strings — entry skipped`);
     return null;
   }
-  return raw as string[];
+  const tpl = raw as string[];
+  // A token holding BOTH placeholders is a trap: {model} tokens are dropped
+  // whole when no model is set, which would silently discard the prompt too —
+  // recreating the exact TUI-under-a-pipe hang the {prompt} guard exists for.
+  if (tpl.some((a) => a.includes('{model}') && a.includes('{prompt}'))) {
+    issues.push(`${where}: a token must not mix {model} and {prompt} (the whole token is dropped when no model is set, prompt included) — launcher skipped`);
+    return null;
+  }
+  return tpl;
 }
 
 function cleanCustomAgent(raw: unknown, issues: string[]): AgentDef | null {

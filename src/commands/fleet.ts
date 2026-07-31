@@ -12,8 +12,12 @@ import {
 } from '../daemons.js';
 
 function uptime(startedAt: string): string {
-  const ms = Date.now() - Date.parse(startedAt);
-  if (!Number.isFinite(ms) || ms < 0) return '?';
+  const t = Date.parse(startedAt);
+  // t <= 0 is the epoch sentinel a record missing startedAt falls back to —
+  // "20661d" would be a confident lie about a file we know nothing about.
+  if (!Number.isFinite(t) || t <= 0) return '?';
+  const ms = Date.now() - t;
+  if (ms < 0) return '?';
   const m = Math.floor(ms / 60_000);
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
@@ -63,6 +67,6 @@ export async function stopCmd(target: string): Promise<void> {
     if (outcome === 'graceful') console.log(`✓ stopped daemon on port ${d.port} (${d.root})`);
     else if (outcome === 'signal') console.log(`✓ stopped daemon on port ${d.port} (${d.root}) by SIGTERM — it predates /api/shutdown or was not answering`);
     else if (outcome === 'refused-stale') console.log(`· port ${d.port} went away on its own before we acted`);
-    else throw new Error(`could not stop pid ${d.pid} on port ${d.port} — not permitted to signal it`);
+    else throw new Error(`could not stop pid ${d.pid} on port ${d.port} — it did not exit (or this process may not signal it); its record stays until it is truly gone`);
   }
 }

@@ -177,28 +177,33 @@ export type StopOutcome = 'graceful' | 'signal' | 'refused-stale' | 'failed';
  * Stop a verified daemon. Graceful first; SIGTERM only as the fallback, and
  * only because verification just vouched for the pid. Returns which path ran,
  * so callers can say so instead of pretending there is one kind of stop.
+ *
+ * Success is EARNED, not assumed: the record is removed and 'graceful'/'signal'
+ * returned only after the pid is confirmed gone. A daemon that outlives the
+ * wait keeps its record — the registry must never forget a daemon that still
+ * exists, or `baton ps` goes blind to the very process holding the port.
  */
-export async function stopDaemon(rec: DaemonRecord, dir = daemonsDir()): Promise<StopOutcome> {
+export async function stopDaemon(rec: DaemonRecord, dir = daemonsDir(), waitMs = 5000): Promise<StopOutcome> {
   if ((await verifyDaemon(rec)) !== 'live') return 'refused-stale';
+  let path: Exclude<StopOutcome, 'refused-stale' | 'failed'> = 'signal';
   try {
     const res = await fetch(`http://127.0.0.1:${rec.port}/api/shutdown`, {
       method: 'POST',
       signal: AbortSignal.timeout(3000),
     });
-    if (res.ok) {
-      await waitForExit(rec.pid, 5000);
-      await removeDaemonRecord(rec.pid, rec.port, dir);
-      return 'graceful';
-    }
+    if (res.ok) path = 'graceful';
   } catch { /* endpoint absent, daemon wedged — fall through to the signal */ }
-  try {
-    process.kill(rec.pid, 'SIGTERM');
-  } catch {
-    return 'failed';
+  if (path === 'signal') {
+    try {
+      process.kill(rec.pid, 'SIGTERM');
+    } catch {
+      return 'failed';
+    }
   }
-  await waitForExit(rec.pid, 5000);
+  await waitForExit(rec.pid, waitMs);
+  if (pidAlive(rec.pid)) return 'failed';
   await removeDaemonRecord(rec.pid, rec.port, dir);
-  return 'signal';
+  return path;
 }
 
 async function waitForExit(pid: number, timeoutMs: number): Promise<void> {

@@ -58,6 +58,8 @@ describe('uptimeLabel', () => {
     expect(uptimeLabel(new Date(now - 90 * 60_000).toISOString(), now)).toBe('up 1h 30m');
     expect(uptimeLabel(new Date(now + 60_000).toISOString(), now)).toBe('—'); // clock skew
     expect(uptimeLabel('not-a-date', now)).toBe('—');
+    // The epoch sentinel a record missing startedAt falls back to — never "up 20661d".
+    expect(uptimeLabel(new Date(0).toISOString(), now)).toBe('—');
   });
 });
 

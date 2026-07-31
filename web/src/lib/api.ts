@@ -1191,19 +1191,22 @@ class BatonClient {
   }
 
   /** Stop ANOTHER daemon (never this one — that is shutdownSelf). The server
-   *  re-verifies before acting; a stale record is cleaned, never signalled. */
-  async stopFleetDaemon(port: number): Promise<{ ok: boolean; outcome: "graceful" | "signal" | "refused-stale" | "cleaned"; root: string }> {
+   *  re-verifies before acting; a stale record is cleaned, never signalled.
+   *  The pid rides along because a port is not a daemon: a crash leftover and
+   *  a live daemon can both claim it, and the row the user clicked is a
+   *  (pid, port) pair. */
+  async stopFleetDaemon(port: number, pid: number): Promise<{ ok: boolean; outcome: "graceful" | "signal" | "refused-stale" | "cleaned"; root: string }> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(200);
       const fleet = (this.demoFleet ??= structuredClone(DEMO_FLEET));
-      const row = fleet.find((d) => d.port === port);
-      if (!row) throw new ApiError("NOT_FOUND", `no daemon record for port ${port}`);
-      this.demoFleet = fleet.filter((d) => d.port !== port);
+      const row = fleet.find((d) => d.port === port && d.pid === pid);
+      if (!row) throw new ApiError("NOT_FOUND", `no daemon record for port ${port} with pid ${pid}`);
+      this.demoFleet = fleet.filter((d) => !(d.port === port && d.pid === pid));
       this.emit();
       return { ok: true, outcome: row.status === "stale" ? "cleaned" : "graceful", root: row.root };
     }
-    return this.request(`/api/daemons/${port}/stop`, { method: "POST" });
+    return this.request(`/api/daemons/${port}/stop`, { method: "POST", body: JSON.stringify({ pid }) });
   }
 
   /** Stop the daemon serving THIS dashboard. The daemon answers, then exits;

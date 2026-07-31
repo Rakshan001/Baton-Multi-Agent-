@@ -347,11 +347,11 @@ function SessionSettings({ viewer }: { viewer?: Meta["viewer"] }) {
  * this card only decides how to draw it — a stale row gets *Clean up*, never
  * Stop, because the pid behind it is one nobody can vouch for.
  */
-function DaemonsCard() {
+function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
   const fleet = usePoll<FleetDaemon[] | null>(() => BatonAPI.getDaemons(), { interval: 5000 });
   const [confirm, setConfirm] = useState<FleetDaemon | null>(null);
   const [busy, setBusy] = useState(false);
-  const [stopping, setStopping] = useState<number[]>([]);
+  const [stopping, setStopping] = useState<string[]>([]);
   const rows = fleetOrder(fleet.data ?? []);
   if (!fleet.data || rows.length === 0) return null;
 
@@ -363,8 +363,10 @@ function DaemonsCard() {
         // No toast for success: the staleness banner is about to own the
         // screen, and that banner is the honest report.
       } else {
-        const r = await BatonAPI.stopFleetDaemon(d.port);
-        setStopping((s) => [...s, d.port]);
+        // pid + port, not port alone — a crash leftover and a live daemon can
+        // share a port, and this row is exactly one of them.
+        const r = await BatonAPI.stopFleetDaemon(d.port, d.pid);
+        setStopping((s) => [...s, `${d.pid}-${d.port}`]);
         showToast(r.outcome === "cleaned"
           ? { kind: "ok", title: "Cleaned up", desc: `${folderName(d.root)} — the daemon was already gone; only its record remained.` }
           : { kind: "ok", title: `Stopped ${folderName(d.root)}`, desc: r.outcome === "signal" ? "Stopped by signal — that daemon predates graceful shutdown." : `Port ${d.port} is free again.` });
@@ -381,7 +383,7 @@ function DaemonsCard() {
     <SettingsBlock title="Daemons on this machine" desc="Every project running `baton serve`, across all folders. Stopping one never touches its code or its git state.">
       {rows.map((d) => {
         const live = d.status === "live";
-        const pending = stopping.includes(d.port);
+        const pending = stopping.includes(`${d.pid}-${d.port}`);
         const color = live ? "var(--clean)" : "var(--text-quaternary)";
         return (
           <div key={`${d.pid}-${d.port}`} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)", opacity: pending ? 0.5 : 1 }}>
@@ -406,9 +408,13 @@ function DaemonsCard() {
                   <Icon name="externalLink" size={13} />
                 </a>
               )}
-              <button className={`btn btn-sm fr ${live ? "btn-danger" : "btn-ghost"}`} disabled={pending} onClick={() => setConfirm(d)}>
-                {live ? "Stop" : "Clean up"}
-              </button>
+              {/* Same contract as every other mutating control: greyed out in
+                  read-only mode, never a danger dialog that ends in an error. */}
+              <span data-tip={writeEnabled ? undefined : "Read-only — enable Write actions (the daemon needs baton serve --write)"}>
+                <button className={`btn btn-sm fr ${live ? "btn-danger" : "btn-ghost"}`} disabled={pending || !writeEnabled} onClick={() => setConfirm(d)}>
+                  {live ? "Stop" : "Clean up"}
+                </button>
+              </span>
             </div>
           </div>
         );
@@ -471,7 +477,7 @@ export function SettingsScreen({ prefs, repo, viewer }: { prefs: Prefs; repo: st
               card at all. Demo mode shows the fixture fleet — the showcase
               includes the stale-record path, because Clean up is half the
               feature. */}
-          {(BatonAPI.demo || viewer?.local !== false) && <DaemonsCard />}
+          {(BatonAPI.demo || viewer?.local !== false) && <DaemonsCard writeEnabled={prefs.writeEnabled} />}
 
           <SessionSettings viewer={viewer} />
 

@@ -88,7 +88,7 @@ import {
 } from './teams.js';
 import {
   listDaemonRecords, listVerifiedDaemons, removeDaemonRecord, removeDaemonRecordSync,
-  stopDaemon, writeDaemonRecord,
+  stopDaemon, verifyDaemon, writeDaemonRecord,
 } from './daemons.js';
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
@@ -1044,7 +1044,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
    */
   if (method === 'GET' && path === '/api/daemons') {
     if (!access.local) return send(res, 403, { error: 'the daemon fleet is visible from this machine only' }, origin);
-    const daemons = (await listVerifiedDaemons()).map((d) => ({ ...d, self: d.pid === process.pid }));
+    // Both pid AND port: after pid reuse, a crash leftover can carry this
+    // process's pid — matching pid alone would tag a corpse "this dashboard".
+    const daemons = (await listVerifiedDaemons()).map((d) => ({ ...d, self: d.pid === process.pid && d.port === opts.port }));
     return send(res, 200, { daemons }, origin);
   }
 
@@ -1067,22 +1069,50 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!access.local) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const port = Number(daemonStopM[1]);
-    if (port === opts.port) {
+    // Optional `{ "pid": n }` body narrows to ONE record. A port is not a
+    // daemon: a crash leftover and a live daemon can both claim it, and the
+    // row the caller clicked is a (pid, port) pair — without the pid, cleaning
+    // the corpse and stopping the living are the same request.
+    let pidWanted: number | undefined;
+    const rawBody = await readBody(req);
+    if (rawBody.trim()) {
+      try {
+        const parsed = JSON.parse(rawBody) as { pid?: unknown };
+        if (parsed.pid !== undefined) {
+          if (!Number.isInteger(parsed.pid) || (parsed.pid as number) <= 0) {
+            return send(res, 400, { error: 'pid must be a positive integer' }, origin);
+          }
+          pidWanted = parsed.pid as number;
+        }
+      } catch {
+        return send(res, 400, { error: 'body must be JSON like { "pid": 12345 }, or empty' }, origin);
+      }
+    }
+    if (port === opts.port && (pidWanted === undefined || pidWanted === process.pid)) {
       // Not a guess about intent — stopping *this* daemon has its own route
-      // with its own, blunter confirmation in the UI.
+      // with its own, blunter confirmation in the UI. A pid-targeted request
+      // for a DIFFERENT pid on our port is a crash leftover being cleaned,
+      // and falls through to the stale path below.
       return send(res, 400, { error: 'that port is this daemon — POST /api/shutdown to stop the daemon you are talking to' }, origin);
     }
-    const target = (await listVerifiedDaemons()).find((d) => d.port === port);
-    if (!target) return send(res, 404, { error: `no daemon record for port ${port}`, hint: 'baton ps lists what this machine knows about' }, origin);
-    if (target.status === 'stale') {
-      // A stale record is only ever deleted, never signalled — the pid it
-      // names is not one verification can vouch for.
-      await removeDaemonRecord(target.pid, target.port);
-      return send(res, 200, { ok: true, outcome: 'cleaned', root: target.root }, origin);
+    const matches = (await listVerifiedDaemons())
+      .filter((d) => d.port === port && (pidWanted === undefined || d.pid === pidWanted));
+    if (!matches.length) {
+      return send(res, 404, { error: `no daemon record for port ${port}${pidWanted !== undefined ? ` with pid ${pidWanted}` : ''}`, hint: 'baton ps lists what this machine knows about' }, origin);
     }
-    const outcome = await stopDaemon(target);
-    if (outcome === 'failed') return send(res, 500, { error: `could not stop pid ${target.pid} on port ${port}` }, origin);
-    return send(res, 200, { ok: true, outcome, root: target.root }, origin);
+    // Never let a corpse shadow the living: when the port carries both a live
+    // daemon and stale leftovers, an un-narrowed stop means the live one.
+    const live = matches.find((d) => d.status === 'live' && d.pid !== process.pid);
+    if (!live) {
+      // Only stale records match — delete them all; a stale record is only
+      // ever deleted, never signalled, because verification cannot vouch for
+      // the pid it names.
+      for (const m of matches) await removeDaemonRecord(m.pid, m.port);
+      return send(res, 200, { ok: true, outcome: 'cleaned', root: matches[0]!.root }, origin);
+    }
+    const outcome = await stopDaemon(live);
+    if (outcome === 'failed') return send(res, 500, { error: `could not stop pid ${live.pid} on port ${port} — it did not exit (or this process may not signal it); its record stays until it is truly gone` }, origin);
+    return send(res, 200, { ok: true, outcome, root: live.root }, origin);
   }
 
   /*
@@ -2163,10 +2193,13 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     // tears all of that down; the surviving daemon owns the registry rows.
     if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
       // Name the holder when the fleet registry knows it — "which daemon is
-      // that" is the whole question this error used to leave open.
+      // that" is the whole question this error used to leave open. Verified
+      // first: a stale record plus some OTHER app on the port would otherwise
+      // produce a confident lie, and a `baton daemon stop` that frees nothing.
       const holder = (await listDaemonRecords().catch(() => []))
         .find((r) => r.port === opts.port);
-      console.error(holder
+      const vouched = holder && (await verifyDaemon(holder).catch(() => 'stale')) === 'live';
+      console.error(vouched
         ? `baton serve: port ${opts.port} is already serving ${holder.root} — stop it with: baton daemon stop ${opts.port}`
         : `baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
       process.exit(1);

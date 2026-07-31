@@ -87,7 +87,9 @@ reports anything that didn't:
 - Launcher `args` are an **argv template**, never a shell string: `{prompt}`
   substitutes the prompt, and any token containing `{model}` is dropped when no
   model override was asked for — write `--model={model}` as one token so
-  nothing dangles. Omit `headless`/`interactive` for detection-only.
+  nothing dangles. A token must not mix `{model}` and `{prompt}` (the drop
+  would silently discard the prompt too — the launcher is refused). Omit
+  `headless`/`interactive` for detection-only.
 
 Give each agent the Baton + graphify MCP tools:
 

@@ -26,7 +26,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
-import { pidAlive } from '../src/daemons.js';
+import { type DaemonRecord, pidAlive, writeDaemonRecord } from '../src/daemons.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -68,7 +68,15 @@ async function waitUp(port: number): Promise<void> {
 describe.runIf(hasDist)('fleet endpoints', () => {
   let base = '';
   let registry = '';
+  let repoB = '';
   const children: ResultPromise[] = [];
+
+  /** A crash leftover: a record whose pid is beyond pid_max, so it is dead by
+   *  construction and can only ever verify as stale. */
+  const corpse = (port: number, root: string): DaemonRecord => ({
+    pid: 2 ** 24, port, root, startedAt: new Date().toISOString(),
+    version: '0.0.1', writeEnabled: true, host: false,
+  });
 
   // Returns void ON PURPOSE. An execa child is a thenable, and an async
   // function that returns one hands it to the caller's `await` — which then
@@ -90,6 +98,7 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     const [a, b, ro] = await Promise.all([
       makeRepo(base, 'repo-a'), makeRepo(base, 'repo-b'), makeRepo(base, 'repo-ro'),
     ]);
+    repoB = b;
     await spawnDaemon(a, PORT_A, true);
     await spawnDaemon(b, PORT_B, true);
     await spawnDaemon(ro, PORT_RO, false);
@@ -129,16 +138,65 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect((await api(PORT_RO, '/api/daemons')).status).toBe(200);
   });
 
-  it('daemon A stops daemon B gracefully, and says so', async () => {
-    const bPid = (await api(PORT_A, '/api/daemons')).body.daemons.find((d: any) => d.port === PORT_B).pid;
+  it('a pid-targeted stop cleans ONLY the corpse sharing a live daemon\'s port', async () => {
+    // The regression this pins: a crash leftover and a live daemon both claim
+    // PORT_B. Cleaning the corpse must not read as (or worse, become)
+    // stopping the daemon; the pid in the body says which record is meant.
+    await writeDaemonRecord(corpse(PORT_B, repoB), registry);
+    const { status, body } = await api(PORT_A, `/api/daemons/${PORT_B}/stop`, {
+      method: 'POST', body: JSON.stringify({ pid: 2 ** 24 }),
+    });
+    expect(status).toBe(200);
+    expect(body.outcome).toBe('cleaned');
+    // B never noticed.
+    expect((await api(PORT_B, '/api/meta')).status).toBe(200);
+    const fleet = (await api(PORT_A, '/api/daemons')).body.daemons.filter((d: any) => d.port === PORT_B);
+    expect(fleet.length).toBe(1);
+    expect(fleet[0].status).toBe('live');
+  });
+
+  it('a pid-targeted clean of a leftover on the daemon\'s OWN port is not mistaken for self-shutdown', async () => {
+    // Restart-after-crash: a corpse claims the very port this daemon now
+    // holds. Without the pid the route must still refuse (that is
+    // /api/shutdown's job); with the corpse's pid it is just a cleanup.
+    await writeDaemonRecord(corpse(PORT_A, repoB), registry);
+    expect((await api(PORT_A, `/api/daemons/${PORT_A}/stop`, { method: 'POST' })).status).toBe(400);
+    const { status, body } = await api(PORT_A, `/api/daemons/${PORT_A}/stop`, {
+      method: 'POST', body: JSON.stringify({ pid: 2 ** 24 }),
+    });
+    expect(status).toBe(200);
+    expect(body.outcome).toBe('cleaned');
+    // A is alive, and its own record still stands.
+    const self = (await api(PORT_A, '/api/daemons')).body.daemons.filter((d: any) => d.port === PORT_A);
+    expect(self.length).toBe(1);
+    expect(self[0].self).toBe(true);
+  });
+
+  it('a garbage body is refused, not guessed at', async () => {
+    expect((await api(PORT_A, `/api/daemons/${PORT_B}/stop`, { method: 'POST', body: '{ not json' })).status).toBe(400);
+    expect((await api(PORT_A, `/api/daemons/${PORT_B}/stop`, { method: 'POST', body: JSON.stringify({ pid: -4 }) })).status).toBe(400);
+  });
+
+  it('daemon A stops daemon B gracefully, and says so — corpse on the same port notwithstanding', async () => {
+    // An un-narrowed stop with BOTH a live daemon and a stale record on the
+    // port must pick the living one — record-file sort order decided this
+    // before the fix, and could silently "clean" while B kept running.
+    await writeDaemonRecord(corpse(PORT_B, repoB), registry);
+    const bPid = (await api(PORT_A, '/api/daemons')).body.daemons
+      .find((d: any) => d.port === PORT_B && d.status === 'live').pid;
     const { status, body } = await api(PORT_A, `/api/daemons/${PORT_B}/stop`, { method: 'POST' });
     expect(status).toBe(200);
     expect(body.outcome).toBe('graceful');
     expect(body.root).toMatch(/repo-b/);
-    // B is genuinely gone — process dead, record removed, fleet list shrunk.
+    // B is genuinely gone — process dead, record removed.
     const deadline = Date.now() + 5000;
     while (pidAlive(bPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
     expect(pidAlive(bPid)).toBe(false);
+    // The corpse is all that is left on PORT_B; a second un-narrowed stop now
+    // matches only stale records and cleans them all.
+    const again = await api(PORT_A, `/api/daemons/${PORT_B}/stop`, { method: 'POST' });
+    expect(again.status).toBe(200);
+    expect(again.body.outcome).toBe('cleaned');
     const after = await api(PORT_A, '/api/daemons');
     expect(after.body.daemons.map((d: any) => d.port).sort()).toEqual([PORT_A, PORT_RO]);
   });

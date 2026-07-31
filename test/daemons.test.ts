@@ -130,6 +130,38 @@ describe('stopDaemon', () => {
     expect(await stopDaemon(rec({ pid: 2 ** 24, port: 1 }), dir)).toBe('refused-stale');
   });
 
+  it('a daemon that outlives the wait is FAILED, and keeps its record', async () => {
+    // A wedged daemon: verification passes (it answers /api/meta), it has no
+    // /api/shutdown, and it ignores SIGTERM. Reporting 'signal' here would be
+    // a lie twice over — and deleting the record would blind `baton ps` to
+    // the very process still holding the port.
+    const { execa } = await import('execa');
+    const child = execa('node', ['-e', `
+      process.on('SIGTERM', () => {}); // wedged on purpose
+      const http = require('node:http');
+      const srv = http.createServer((req, res) => {
+        if (req.url === '/api/meta') { res.writeHead(200); res.end(JSON.stringify({ repo: '/tmp/repo' })); }
+        else { res.writeHead(404); res.end(); }
+      });
+      srv.listen(0, '127.0.0.1', () => console.log((srv.address()).port));
+    `], { reject: false });
+    try {
+      const port = await new Promise<number>((resolvePort, rejectPort) => {
+        const t = setTimeout(() => rejectPort(new Error('child never listened')), 5000);
+        child.stdout?.once('data', (b) => { clearTimeout(t); resolvePort(Number(String(b).trim())); });
+      });
+      const r = rec({ pid: child.pid!, port });
+      await writeDaemonRecord(r, dir);
+      expect(await stopDaemon(r, dir, 400)).toBe('failed');
+      expect(pidAlive(child.pid!)).toBe(true);
+      // The record survives: the registry never forgets a daemon that exists.
+      expect((await listDaemonRecords(dir)).length).toBe(1);
+    } finally {
+      child.kill('SIGKILL');
+      await child;
+    }
+  }, 15_000);
+
   it('falls back to SIGTERM when the daemon has no /api/shutdown', async () => {
     // A child that serves /api/meta (so verification passes) but 404s the
     // shutdown endpoint — exactly an older daemon. It must die by signal.
