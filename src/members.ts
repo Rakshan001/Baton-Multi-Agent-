@@ -25,6 +25,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { batonDir } from './store.js';
+import { withLock } from './util/lock.js';
 import { slugify } from './util/slug.js';
 import { teamId } from './teams.js';
 
@@ -122,7 +123,10 @@ export function cleanRegistry(raw: unknown): MemberRegistry {
   const r = raw as Partial<MemberRegistry>;
   if (r.version !== MEMBERS_VERSION || !Array.isArray(r.members)) return EMPTY_REGISTRY();
   const members: Member[] = [];
-  for (const m of r.members.slice(0, MAX_MEMBERS)) {
+  // The cap counts members KEPT, not rows scanned: a file padded with malformed
+  // entries must not push real credentials past the cap and lock them out.
+  for (const m of r.members) {
+    if (members.length >= MAX_MEMBERS) break;
     const id = typeof m?.id === 'string' ? memberId(m.id) : '';
     const tokenHash = typeof m?.tokenHash === 'string' ? m.tokenHash.trim().toLowerCase() : '';
     // A malformed hash can never match a presented token, but dropping it here
@@ -227,36 +231,41 @@ export interface AddedMember {
  * becomes `owner` regardless of what was asked for — a registry with no owner
  * could never manage itself.
  */
-export async function addMember(
+export function addMember(
   root: string,
   name: string,
   role?: MemberRole,
   opts: { expiresInMs?: number; team?: string } = {},
 ): Promise<AddedMember> {
-  const reg = await loadMembers(root);
-  const display = name.trim().slice(0, NAME_MAX);
-  const id = memberId(display);
-  if (!id) throw new MemberError(`'${name}' has no usable letters or digits for an id`);
-  if (reg.members.some((m) => m.id === id && !m.revokedAt)) {
-    throw new MemberError(`member '${id}' already exists — revoke them first, or pick another name`);
-  }
-  if (activeMembers(reg).length >= MAX_MEMBERS) throw new MemberError(`member cap reached (${MAX_MEMBERS})`);
+  // Every mutator below runs its whole load→mutate→save cycle inside the same
+  // lock (src/util/lock.ts): interleaved cycles are lost updates, and the one
+  // that matters is a stale save erasing a revocation.
+  return withLock(membersPath(root), async () => {
+    const reg = await loadMembers(root);
+    const display = name.trim().slice(0, NAME_MAX);
+    const id = memberId(display);
+    if (!id) throw new MemberError(`'${name}' has no usable letters or digits for an id`);
+    if (reg.members.some((m) => m.id === id && !m.revokedAt)) {
+      throw new MemberError(`member '${id}' already exists — revoke them first, or pick another name`);
+    }
+    if (activeMembers(reg).length >= MAX_MEMBERS) throw new MemberError(`member cap reached (${MAX_MEMBERS})`);
 
-  const token = mintToken();
-  const now = Date.now();
-  const member: Member = {
-    id,
-    name: display,
-    role: reg.members.length === 0 ? 'owner' : (role ?? 'member'),
-    tokenHash: hashToken(token),
-    createdAt: new Date(now).toISOString(),
-    ...(opts.expiresInMs ? { expiresAt: new Date(now + opts.expiresInMs).toISOString() } : {}),
-    ...(opts.team && teamId(opts.team) ? { team: teamId(opts.team) } : {}),
-  };
-  // A re-added id replaces its revoked tombstone rather than accumulating them.
-  reg.members = [...reg.members.filter((m) => m.id !== id), member];
-  await saveMembers(root, reg);
-  return { member, token };
+    const token = mintToken();
+    const now = Date.now();
+    const member: Member = {
+      id,
+      name: display,
+      role: reg.members.length === 0 ? 'owner' : (role ?? 'member'),
+      tokenHash: hashToken(token),
+      createdAt: new Date(now).toISOString(),
+      ...(opts.expiresInMs ? { expiresAt: new Date(now + opts.expiresInMs).toISOString() } : {}),
+      ...(opts.team && teamId(opts.team) ? { team: teamId(opts.team) } : {}),
+    };
+    // A re-added id replaces its revoked tombstone rather than accumulating them.
+    reg.members = [...reg.members.filter((m) => m.id !== id), member];
+    await saveMembers(root, reg);
+    return { member, token };
+  });
 }
 
 /**
@@ -266,26 +275,28 @@ export async function addMember(
  * rather than an additional credential: two live tokens for one identity means
  * revoking the leaked one is guesswork.
  */
-export async function rotateMember(
+export function rotateMember(
   root: string,
   idOrName: string,
   opts: { expiresInMs?: number } = {},
 ): Promise<AddedMember> {
-  const reg = await loadMembers(root);
-  const id = memberId(idOrName);
-  const target = reg.members.find((m) => m.id === id && !m.revokedAt);
-  if (!target) throw new MemberError(`no active member '${idOrName}'`);
+  return withLock(membersPath(root), async () => {
+    const reg = await loadMembers(root);
+    const id = memberId(idOrName);
+    const target = reg.members.find((m) => m.id === id && !m.revokedAt);
+    if (!target) throw new MemberError(`no active member '${idOrName}'`);
 
-  const token = mintToken();
-  const now = Date.now();
-  target.tokenHash = hashToken(token);
-  // Back to being an un-redeemed invite: a rotated token has never been used,
-  // so the same deadline that protects a fresh one should protect this one.
-  delete target.firstUsedAt;
-  if (opts.expiresInMs) target.expiresAt = new Date(now + opts.expiresInMs).toISOString();
-  else delete target.expiresAt;
-  await saveMembers(root, reg);
-  return { member: target, token };
+    const token = mintToken();
+    const now = Date.now();
+    target.tokenHash = hashToken(token);
+    // Back to being an un-redeemed invite: a rotated token has never been used,
+    // so the same deadline that protects a fresh one should protect this one.
+    delete target.firstUsedAt;
+    if (opts.expiresInMs) target.expiresAt = new Date(now + opts.expiresInMs).toISOString();
+    else delete target.expiresAt;
+    await saveMembers(root, reg);
+    return { member: target, token };
+  });
 }
 
 /**
@@ -293,13 +304,17 @@ export async function rotateMember(
  * applying. Returns false when there was nothing to change, so the caller can
  * skip the write on the overwhelmingly common already-used path.
  */
-export async function markTokenUsed(root: string, id: string): Promise<boolean> {
-  const reg = await loadMembers(root);
-  const target = reg.members.find((m) => m.id === id && !m.revokedAt);
-  if (!target || target.firstUsedAt) return false;
-  target.firstUsedAt = new Date().toISOString();
-  await saveMembers(root, reg);
-  return true;
+export function markTokenUsed(root: string, id: string): Promise<boolean> {
+  // The mutator most likely to interleave with a revoke: it fires on the
+  // member's OWN first request, exactly when an owner may be acting on them.
+  return withLock(membersPath(root), async () => {
+    const reg = await loadMembers(root);
+    const target = reg.members.find((m) => m.id === id && !m.revokedAt);
+    if (!target || target.firstUsedAt) return false;
+    target.firstUsedAt = new Date().toISOString();
+    await saveMembers(root, reg);
+    return true;
+  });
 }
 
 /**
@@ -307,18 +322,20 @@ export async function markTokenUsed(root: string, id: string): Promise<boolean> 
  * no owner can never add a member or revoke anyone again, which is a
  * self-inflicted lockout rather than a security improvement.
  */
-export async function revokeMember(root: string, idOrName: string): Promise<Member> {
-  const reg = await loadMembers(root);
-  const id = memberId(idOrName);
-  const target = reg.members.find((m) => m.id === id && !m.revokedAt);
-  if (!target) throw new MemberError(`no active member '${idOrName}'`);
-  const owners = activeMembers(reg).filter((m) => m.role === 'owner');
-  if (target.role === 'owner' && owners.length === 1) {
-    throw new MemberError(`'${target.id}' is the only owner — promote someone else before revoking them`);
-  }
-  target.revokedAt = new Date().toISOString();
-  await saveMembers(root, reg);
-  return target;
+export function revokeMember(root: string, idOrName: string): Promise<Member> {
+  return withLock(membersPath(root), async () => {
+    const reg = await loadMembers(root);
+    const id = memberId(idOrName);
+    const target = reg.members.find((m) => m.id === id && !m.revokedAt);
+    if (!target) throw new MemberError(`no active member '${idOrName}'`);
+    const owners = activeMembers(reg).filter((m) => m.role === 'owner');
+    if (target.role === 'owner' && owners.length === 1) {
+      throw new MemberError(`'${target.id}' is the only owner — promote someone else before revoking them`);
+    }
+    target.revokedAt = new Date().toISOString();
+    await saveMembers(root, reg);
+    return target;
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -337,30 +354,34 @@ export async function revokeMember(root: string, idOrName: string): Promise<Memb
  * something better than this module could. A member is in at most one team;
  * assigning replaces, so there is no "remove from team X" to get wrong.
  */
-export async function setMemberTeam(root: string, idOrName: string, team: string | null): Promise<Member> {
-  const reg = await loadMembers(root);
-  const id = memberId(idOrName);
-  const target = reg.members.find((m) => m.id === id && !m.revokedAt);
-  if (!target) throw new MemberError(`no active member '${idOrName}'`);
-  const next = team ? teamId(team) : '';
-  if (team && !next) throw new MemberError(`'${team}' is not a usable team id`);
-  if (next) target.team = next;
-  else delete target.team;
-  await saveMembers(root, reg);
-  return target;
+export function setMemberTeam(root: string, idOrName: string, team: string | null): Promise<Member> {
+  return withLock(membersPath(root), async () => {
+    const reg = await loadMembers(root);
+    const id = memberId(idOrName);
+    const target = reg.members.find((m) => m.id === id && !m.revokedAt);
+    if (!target) throw new MemberError(`no active member '${idOrName}'`);
+    const next = team ? teamId(team) : '';
+    if (team && !next) throw new MemberError(`'${team}' is not a usable team id`);
+    if (next) target.team = next;
+    else delete target.team;
+    await saveMembers(root, reg);
+    return target;
+  });
 }
 
 /** Take every member out of a team — the second half of deleting one.
  *  Returns how many rows changed so the caller can report it honestly. */
-export async function clearTeamAssignments(root: string, team: string): Promise<number> {
-  const reg = await loadMembers(root);
-  const id = teamId(team);
-  let changed = 0;
-  for (const m of reg.members) {
-    if (m.team !== id) continue;
-    delete m.team;
-    changed++;
-  }
-  if (changed) await saveMembers(root, reg);
-  return changed;
+export function clearTeamAssignments(root: string, team: string): Promise<number> {
+  return withLock(membersPath(root), async () => {
+    const reg = await loadMembers(root);
+    const id = teamId(team);
+    let changed = 0;
+    for (const m of reg.members) {
+      if (m.team !== id) continue;
+      delete m.team;
+      changed++;
+    }
+    if (changed) await saveMembers(root, reg);
+    return changed;
+  });
 }

@@ -542,20 +542,25 @@ function denyNotOwner(res: ServerResponse, origin: string): void {
  * when its mtime moves — which still makes `baton member revoke` take effect on
  * the very next request, with no session anywhere to invalidate.
  */
-let membersCache: { mtimeMs: number; reg: Awaited<ReturnType<typeof loadMembers>> } | null = null;
+let membersCache: { mtimeMs: number; ino: number; reg: Awaited<ReturnType<typeof loadMembers>> } | null = null;
 
 async function currentMembers(root: string) {
   const path = join(batonDir(root), 'members.json');
   let mtimeMs = -1;
+  let ino = -1;
   try {
-    mtimeMs = (await stat(path)).mtimeMs;
+    ({ mtimeMs, ino } = await stat(path));
   } catch {
     membersCache = null; // file absent → nobody is authorized
     return await loadMembers(root);
   }
-  if (membersCache && membersCache.mtimeMs === mtimeMs) return membersCache.reg;
+  // Keyed on inode as well as mtime: every save is a fresh tmp file renamed
+  // into place, so the inode moves even when two writes land in the same
+  // millisecond — the case where mtime alone would keep serving the first
+  // write, and the second write could be the revocation.
+  if (membersCache && membersCache.mtimeMs === mtimeMs && membersCache.ino === ino) return membersCache.reg;
   const reg = await loadMembers(root);
-  membersCache = { mtimeMs, reg };
+  membersCache = { mtimeMs, ino, reg };
   return reg;
 }
 
@@ -929,6 +934,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const body = await readJsonBody<{ name?: string; projects?: unknown }>(req);
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     if (!name) return send(res, 400, { error: 'a team needs a name' }, origin);
+    // Refused rather than coerced: cleanProjectIds turns any non-array into
+    // [], and an empty scope means the WHOLE hub — a typo ("web,api" as one
+    // string) must not silently widen what a team sees, with a 200 saying it
+    // worked.
+    if (body?.projects !== undefined && !Array.isArray(body.projects)) {
+      return send(res, 400, { error: 'projects must be an array of project ids, e.g. ["api","web"]' }, origin);
+    }
     try {
       const team = await addTeam(root, name, body?.projects ?? []);
       bus.publish({
@@ -966,6 +978,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
         }, origin);
       }
       const body = await readJsonBody<{ name?: string; projects?: unknown }>(req);
+      // Same refusal as create: a non-array would be coerced to [] = whole hub.
+      if (body?.projects !== undefined && !Array.isArray(body.projects)) {
+        return send(res, 400, { error: 'projects must be an array of project ids, e.g. ["api","web"]' }, origin);
+      }
       const team = await updateTeam(root, id, {
         ...(typeof body?.name === 'string' ? { name: body.name } : {}),
         ...(body?.projects !== undefined ? { projects: body.projects } : {}),

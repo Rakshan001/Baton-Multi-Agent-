@@ -29,6 +29,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { batonDir } from './store.js';
+import { withLock } from './util/lock.js';
 import { slugify } from './util/slug.js';
 
 export const TEAMS_VERSION = 1;
@@ -106,7 +107,10 @@ export function cleanTeams(raw: unknown): Team[] {
   const r = raw as Partial<TeamRegistry>;
   if (r.version !== TEAMS_VERSION || !Array.isArray(r.teams)) return [];
   const out: Team[] = [];
-  for (const t of r.teams.slice(0, MAX_TEAMS)) {
+  // The cap counts teams KEPT, not rows scanned: a duplicate or malformed row
+  // must not consume a slot a real team behind it needed.
+  for (const t of r.teams) {
+    if (out.length >= MAX_TEAMS) break;
     const id = typeof t?.id === 'string' ? teamId(t.id) : '';
     // A duplicate id would make "which team is this member in" ambiguous, and
     // the answer would depend on array order. Last write does not win; first
@@ -163,22 +167,26 @@ export async function saveTeams(root: string, teams: Team[]): Promise<void> {
   await rename(tmp, path);
 }
 
-export async function addTeam(root: string, name: string, projects: unknown = []): Promise<Team> {
-  const teams = await loadTeams(root);
-  const display = name.trim().slice(0, TEAM_NAME_MAX);
-  const id = teamId(display);
-  if (!id) throw new TeamError(`'${name}' has no usable letters or digits for an id`);
-  if (teams.some((t) => t.id === id)) throw new TeamError(`team '${id}' already exists`);
-  if (teams.length >= MAX_TEAMS) throw new TeamError(`team cap reached (${MAX_TEAMS})`);
+export function addTeam(root: string, name: string, projects: unknown = []): Promise<Team> {
+  // Like every mutator in src/members.ts: the whole load→mutate→save cycle
+  // runs inside one lock, so two concurrent creates cannot erase each other.
+  return withLock(teamsPath(root), async () => {
+    const teams = await loadTeams(root);
+    const display = name.trim().slice(0, TEAM_NAME_MAX);
+    const id = teamId(display);
+    if (!id) throw new TeamError(`'${name}' has no usable letters or digits for an id`);
+    if (teams.some((t) => t.id === id)) throw new TeamError(`team '${id}' already exists`);
+    if (teams.length >= MAX_TEAMS) throw new TeamError(`team cap reached (${MAX_TEAMS})`);
 
-  const team: Team = {
-    id,
-    name: display,
-    projects: cleanProjectIds(projects),
-    createdAt: new Date().toISOString(),
-  };
-  await saveTeams(root, [...teams, team]);
-  return team;
+    const team: Team = {
+      id,
+      name: display,
+      projects: cleanProjectIds(projects),
+      createdAt: new Date().toISOString(),
+    };
+    await saveTeams(root, [...teams, team]);
+    return team;
+  });
 }
 
 /**
@@ -186,22 +194,24 @@ export async function addTeam(root: string, name: string, projects: unknown = []
  * display name does: members point at the id, so renaming a team by minting a
  * new id would silently empty it.
  */
-export async function updateTeam(
+export function updateTeam(
   root: string,
   idOrName: string,
   patch: { name?: string; projects?: unknown },
 ): Promise<Team> {
-  const teams = await loadTeams(root);
-  const target = findTeam(teams, idOrName);
-  if (!target) throw new TeamError(`no team '${idOrName}'`);
-  if (typeof patch.name === 'string') {
-    const display = patch.name.trim().slice(0, TEAM_NAME_MAX);
-    if (!display) throw new TeamError('a team needs a name');
-    target.name = display;
-  }
-  if (patch.projects !== undefined) target.projects = cleanProjectIds(patch.projects);
-  await saveTeams(root, teams);
-  return target;
+  return withLock(teamsPath(root), async () => {
+    const teams = await loadTeams(root);
+    const target = findTeam(teams, idOrName);
+    if (!target) throw new TeamError(`no team '${idOrName}'`);
+    if (typeof patch.name === 'string') {
+      const display = patch.name.trim().slice(0, TEAM_NAME_MAX);
+      if (!display) throw new TeamError('a team needs a name');
+      target.name = display;
+    }
+    if (patch.projects !== undefined) target.projects = cleanProjectIds(patch.projects);
+    await saveTeams(root, teams);
+    return target;
+  });
 }
 
 /**
@@ -211,10 +221,12 @@ export async function updateTeam(
  * member left pointing at a deleted team reads as "no team", so the worst
  * outcome of the second write failing is a label that is already correct.
  */
-export async function removeTeam(root: string, idOrName: string): Promise<Team> {
-  const teams = await loadTeams(root);
-  const target = findTeam(teams, idOrName);
-  if (!target) throw new TeamError(`no team '${idOrName}'`);
-  await saveTeams(root, teams.filter((t) => t.id !== target.id));
-  return target;
+export function removeTeam(root: string, idOrName: string): Promise<Team> {
+  return withLock(teamsPath(root), async () => {
+    const teams = await loadTeams(root);
+    const target = findTeam(teams, idOrName);
+    if (!target) throw new TeamError(`no team '${idOrName}'`);
+    await saveTeams(root, teams.filter((t) => t.id !== target.id));
+    return target;
+  });
 }

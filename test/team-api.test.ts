@@ -122,6 +122,27 @@ describe.runIf(hasDist)('team endpoints', () => {
     expect((await post('/api/teams/platform-team', { projects: [] })).body.team.projects).toEqual([]);
   });
 
+  /*
+   * Because an empty scope means the WHOLE hub, coercing a malformed scope to
+   * [] would take a typo — "web,api" sent as one string — and answer it by
+   * silently widening what the team sees, with a 200 saying it worked. Refused
+   * at the boundary instead, on create and on update, and the stored scope
+   * must not move.
+   */
+  it('refuses a non-array scope rather than widening the team to the whole hub', async () => {
+    await post('/api/teams/platform-team', { projects: ['web'] });
+    const update = await post('/api/teams/platform-team', { projects: 'web,api' });
+    expect(update.status).toBe(400);
+    expect(update.body.error).toMatch(/array/);
+    const create = await post('/api/teams', { name: 'Typo Team', projects: 'web' });
+    expect(create.status).toBe(400);
+
+    const { body } = await api('/api/members');
+    expect(body.teams.find((t: any) => t.id === 'platform-team').projects).toEqual(['web']);
+    expect(body.teams.some((t: any) => t.id === 'typo-team')).toBe(false);
+    await post('/api/teams/platform-team', { projects: [] }); // restore for later tests
+  });
+
   it('takes a member out of every team with null', async () => {
     expect((await post('/api/members/sam/team', { team: null })).status).toBe(200);
     const { body } = await api('/api/members');
