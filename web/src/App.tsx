@@ -247,6 +247,48 @@ function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string
   );
 }
 
+/**
+ * "The daemon stopped answering, and everything below is the last thing we
+ * knew" — said once, across the full width, above everything.
+ *
+ * Deliberately not a toast: a toast is for something that just happened and
+ * then stops mattering. This matters for exactly as long as it is true, and it
+ * has to still be there when someone opens the laptop an hour later.
+ */
+function StaleBanner({ since, onRetry, retrying }: {
+  since: number | null; onRetry: () => void; retrying: boolean;
+}) {
+  const [, force] = useState(0);
+  // Re-render on a timer so "1m ago" does not sit frozen at "1s ago" — the age
+  // IS the message here, and a stale staleness notice would be its own joke.
+  useEffect(() => {
+    const id = setInterval(() => force((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+  const age = since === null ? null : Math.max(0, Math.round((Date.now() - since) / 1000));
+  const ago = age === null ? "before the first load"
+    : age < 60 ? `${age}s ago`
+      : age < 3600 ? `${Math.floor(age / 60)}m ago`
+        : `${Math.floor(age / 3600)}h ago`;
+  return (
+    <div role="status" style={{
+      display: "flex", alignItems: "center", gap: 10, flex: "none",
+      padding: "8px 16px", fontSize: "var(--fs-12)",
+      color: "var(--conflict-text)", background: "var(--conflict-soft)",
+      borderBottom: "1px solid var(--conflict-border)",
+    }}>
+      <Icon name="wifiOff" size={13} style={{ flex: "none" }} />
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <strong style={{ fontWeight: "var(--fw-semibold)" }}>Not connected to the daemon.</strong>{" "}
+        Everything below is the last data received, {ago} — sessions may have started or stopped since.
+      </span>
+      <button className="btn fr" style={{ height: 26, flex: "none" }} onClick={onRetry} disabled={retrying}>
+        {retrying ? "Retrying…" : "Retry"}
+      </button>
+    </div>
+  );
+}
+
 function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo, live, reconnecting, connections, onConnectionsChange }: {
   counts: Counts; apiState: "online" | "fetching" | "offline"; lastUpdated: number | null;
   onRefresh: () => void; onMenu: () => void; onSearch: () => void; onLaunch: (agent: AgentId | null) => void;
@@ -533,8 +575,24 @@ export default function App() {
 
   const selectedRow = (slug: string | null) => sessions.find((s) => s.slug === slug);
 
+  /*
+   * Connected once, unreachable now.
+   *
+   * `phase` only reports "offline" when there is NO data, so a link that dies
+   * after the first load leaves the whole board rendering its last snapshot —
+   * counters, session cards, "N Active" — with nothing but a 12 px dot in the
+   * header to say otherwise. Over a tunnel that is the failure this dashboard
+   * exists to prevent: you glance at it after the laptop woke up, read
+   * "2 Active sessions", and believe it.
+   *
+   * The data stays (blanking it would throw away the last thing we truthfully
+   * knew). What changes is that it stops claiming to be current.
+   */
+  const stale = !demo && !prefs.offline && apiState === "offline" && status.data !== null;
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {stale && <StaleBanner since={status.lastUpdated} onRetry={retry} retrying={retrying} />}
       <TopBar counts={counts} apiState={apiState} lastUpdated={status.lastUpdated}
         onRefresh={() => { status.refetch(); history.refetch(); }}
         onMenu={() => setNavOpen(true)} onSearch={() => setCmdOpen(true)} onLaunch={onLaunch} navigate={navigate}

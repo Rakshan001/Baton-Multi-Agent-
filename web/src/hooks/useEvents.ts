@@ -48,6 +48,9 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
   const [live, setLive] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const everLive = useRef(false);
+  /** Mirrors `live` for use inside the SSE callbacks, which close over the
+   *  first render's state and would otherwise always read `false`. */
+  const liveRef = useRef(false);
   const handlersRef = useRef(new Map<string, Set<Handler>>());
   // Re-open the stream when the credential changes: signing in must bring the
   // live feed up without a reload, and signing out must take it down.
@@ -63,11 +66,24 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
     const close = openSse({
       url: `${baseUrl || BatonAPI.baseUrl}/api/events`,
       token,
-      onOpen: () => { everLive.current = true; setLive(true); setReconnecting(false); },
+      onOpen: () => {
+        const wasDown = everLive.current && !liveRef.current;
+        everLive.current = true;
+        liveRef.current = true;
+        setLive(true);
+        setReconnecting(false);
+        // The stream coming back is the earliest proof the daemon is reachable
+        // again, and it is proof the pollers do not have — they are sitting in
+        // a backoff window precisely because they could not get an answer. Wake
+        // them, or the dashboard keeps saying "not connected" for up to 30 s
+        // after it demonstrably is.
+        if (wasDown) BatonAPI.notify();
+      },
       // Only call it "reconnecting" if the stream has ever been open — a daemon
       // that was never up is just offline. A terminal failure is never
       // "reconnecting" either; the shell shows the sign-in gate instead.
       onError: ({ willRetry }) => {
+        liveRef.current = false;
         setLive(false);
         setReconnecting(willRetry && everLive.current);
       },
@@ -92,6 +108,7 @@ export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean;
 
     return () => {
       close();
+      liveRef.current = false;
       setLive(false);
       setReconnecting(false);
       everLive.current = false;
