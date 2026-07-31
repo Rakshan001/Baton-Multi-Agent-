@@ -31,7 +31,45 @@ export type BatonEvent =
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
   | { type: 'terminal.output'; slug: string; data: string /* base64 */ }
-  | { type: 'memory.updated' };
+  | { type: 'memory.updated' }
+  /* --- presence + federated claims (src/federation.ts) ---
+     Live-plane only: these are never persisted and never reach git. A member
+     that vanishes leaves via TTL, not via a message, so `member.left` is emitted
+     by the host's sweep rather than by the departing member. */
+  | { type: 'member.joined'; memberId: string; memberName: string }
+  | { type: 'member.left'; memberId: string; memberName: string }
+  | { type: 'member.presence'; online: number }
+  | { type: 'claim.opened'; memberId: string; relPath: string; projectId: string | null }
+  | { type: 'claim.released'; memberId: string; relPath: string; projectId: string | null }
+  /** Two members on one path. `sameBranch` false = information, not a warning:
+   *  divergent branches meet at merge, not in a working tree. Advisory either
+   *  way — nothing is blocked, which is why this is an event and not an error. */
+  | { type: 'claim.conflict'; relPath: string; projectId: string | null; sameBranch: boolean; memberIds: string[] }
+  /* --- owner controls (Phase 6) ---
+     Every one of these is an owner acting ON someone, so every one carries who
+     did it. They exist as events precisely so the action lands in the same
+     stream everything else does — an owner cannot warn, disconnect or remove a
+     member without it being visible to the room. */
+  | { type: 'member.warned'; memberId: string; memberName: string; message: string; by: string }
+  | { type: 'member.disconnected'; memberId: string; memberName: string; by: string }
+  | { type: 'member.revoked'; memberId: string; memberName: string; by: string }
+  | { type: 'claim.cleared'; memberId: string; relPath: string; projectId: string | null; by: string }
+  /* --- teams (Phase 8, src/teams.ts) ---
+     ONE event type with an `action`, not four. Every consumer of these does the
+     same thing — refetch the roster and note who did it — so four types would
+     be four subscriptions that can each be forgotten separately. The federated
+     claim plane emits nothing here: teams group and filter, they never move a
+     claim, and an event suggesting otherwise would be the first step toward
+     believing they do. */
+  | {
+      type: 'team.changed';
+      action: 'created' | 'updated' | 'removed' | 'assigned';
+      teamId: string;
+      teamName: string;
+      /** Set for `assigned` only — who was moved. */
+      memberId?: string;
+      by: string;
+    };
 
 export type BatonEventType = BatonEvent['type'];
 

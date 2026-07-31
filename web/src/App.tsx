@@ -2,7 +2,7 @@
    BATON — App shell + root (ported from app.jsx)
    TopBar · Sidebar · BottomTabBar · routing · overlays
    ============================================================ */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { BatonMark } from "./components/BatonMark";
 import { CommandBar } from "./components/CommandBar";
@@ -30,12 +30,15 @@ import { AgentsScreen } from "./features/Agents";
 import { SkillsScreen } from "./features/Skills";
 import { SettingsScreen } from "./features/Settings";
 import { Connect } from "./features/Connect";
+import { SignIn } from "./features/SignIn";
 import { DetailSheet } from "./features/Detail";
 import { DiffViewer } from "./features/Diff";
 import { HandoffDialog } from "./features/Handoff";
 import { LaunchSession } from "./features/Launch";
 import { LiveSession } from "./features/Live";
 import { MemoryScreen } from "./features/Memory";
+import { ReviewsScreen } from "./features/Reviews";
+import { TeamScreen } from "./features/Team";
 import type { Meta, AgentId, Project, AgentRosterEntry } from "./types";
 
 interface NavItem { id: string; label: string; icon: IconName }
@@ -45,8 +48,10 @@ const NAV: NavItem[] = [
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
   { id: "graph", label: "Knowledge Graph", icon: "network" },
   { id: "memory", label: "Memory", icon: "sparkle" },
+  { id: "reviews", label: "Code review", icon: "fileWarning" },
   { id: "history", label: "History", icon: "history" },
   { id: "agents", label: "Agents", icon: "bot" },
+  { id: "team", label: "Team", icon: "share" },
   { id: "skills", label: "Skills", icon: "command" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
@@ -369,6 +374,10 @@ function MobileNavDrawer({ open, onClose, route, navigate }: { open: boolean; on
   );
 }
 
+/** Module-level so the identity is stable — a new function each render would
+ *  resubscribe on every render. */
+const subscribeApi = (fn: () => void) => BatonAPI.subscribe(fn);
+
 export default function App() {
   const prefs = usePrefs();
   const [route, setRoute] = useState<string>(() => ls.get("baton:route", "home"));
@@ -388,6 +397,10 @@ export default function App() {
   const [connections, setConnections] = useState<Connection[]>(loadConnections);
   const [connectionId, setConnectionId] = useState(() => BatonAPI.connectionId);
   const activeConn = connections.find((c) => c.id === connectionId) ?? DEFAULT_CONNECTION;
+  // The daemon has refused this browser's credential (or we never had one).
+  // Subscribed rather than polled so the gate appears the instant any request
+  // or the event stream is turned away.
+  const needsAuth = useSyncExternalStore(subscribeApi, () => BatonAPI.needsAuth);
 
   const events = useEvents({ enabled: !prefs.offline && !demo, baseUrl: activeConn.baseUrl });
   const status = useStatus(events.live);
@@ -475,6 +488,21 @@ export default function App() {
   useEffect(() => { if (retrying && !status.isFetching) setRetrying(false); }, [retrying, status.isFetching]);
   const retry = () => { setRetrying(true); status.refetch(); history.refetch(); meta.refetch(); };
 
+  // The credential gate stands in FRONT of the offline screen, and the order
+  // matters: a 401 means the daemon is up and does not know us. Showing
+  // "Baton isn't running" there would send a member off to debug the one
+  // machine that is working fine.
+  if (needsAuth && !demo) {
+    return (
+      <div style={{ height: "100%" }}>
+        <SignIn baseUrl={activeConn.baseUrl} refused={!!BatonAPI.token}
+          onSignedIn={() => { status.refetch(); history.refetch(); meta.refetch(); agents.refetch(); }} />
+        <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
+        <ToastViewport />
+      </div>
+    );
+  }
+
   if (phase !== "connected") {
     return (
       <div style={{ height: "100%" }}>
@@ -493,10 +521,12 @@ export default function App() {
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
+      case "reviews": return <ReviewsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "reviews" ? searchSeed : undefined} />;
       case "history": return <HistoryScreen history={history} onOpen={onOpen} searchSeed={searchSeed.route === "history" ? searchSeed : undefined} />;
       case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
+      case "team": return <TeamScreen writeEnabled={prefs.writeEnabled} subscribe={events.subscribe} knownProjects={(meta.data?.projects ?? []).map((p) => p.id)} />;
       case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "skills" ? searchSeed : undefined} />;
-      case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
+      case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} viewer={meta.data?.viewer} />;
       default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
     }
   })();

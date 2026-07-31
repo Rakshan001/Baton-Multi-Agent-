@@ -16,8 +16,10 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
+import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
+import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
 import { DEMO_SKILLS } from "./demoSkills";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
@@ -28,9 +30,11 @@ import {
 import { WORKSPACE, getDiff as demoDiff, type DemoProject } from "./preview";
 import { loadConnections, type Connection } from "./connections";
 import { ls } from "./storage";
+import { auth } from "./auth";
 
 export type ApiErrorCode =
   | "OFFLINE"
+  | "UNAUTHORIZED"
   | "NOT_FOUND"
   | "READ_ONLY"
   | "MERGE_FAILED"
@@ -54,6 +58,12 @@ export class ApiError extends Error {
 /** Branch convention from the CLI (src/commands/new.ts). */
 export function branchFor(slug: string): string {
   return `baton/${slug}`;
+}
+
+/** Demo-only id slug, mirroring `slugify` in src/util/slug.ts. Real ids are
+ *  always minted by the daemon; this exists so demo mode can invent one. */
+function slugId(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
 }
 
 type Listener = () => void;
@@ -164,6 +174,88 @@ class BatonClient {
     this.emit();
   }
 
+  /** The event stream was refused (revoked or rotated token). Raises the same
+   *  gate a refused API call raises — a live feed that silently stops is worse
+   *  than one that says why. */
+  notifyAuthRequired() {
+    this.challenge();
+  }
+
+  /* ---- credential (real mode over `--host`; see lib/auth.ts) ---- */
+
+  /** True once the daemon has refused our credential — the shell shows the
+   *  sign-in gate instead of a dashboard full of identical error toasts. */
+  needsAuth = false;
+
+  /** What the daemon last reported about THIS viewer (GET /api/meta). Cached
+   *  because capability answers depend on it — most importantly terminals,
+   *  which no credential makes reachable from another machine. */
+  viewer: Meta["viewer"] | null = null;
+
+  /** True when the daemon has told us this browser is NOT on its machine. Stays
+   *  false until meta has been read once: guessing "remote" from the mere
+   *  presence of a stored token would misjudge a local viewer who once signed
+   *  in to the same URL from elsewhere. */
+  get isRemoteViewer(): boolean {
+    return !!this.viewer && !this.viewer.local;
+  }
+
+  /** The member token for the active daemon, or "" when none is held. */
+  get token(): string {
+    return auth.get(this.baseUrl);
+  }
+
+  /** Store a credential and clear the gate. Callers validate it first. */
+  signIn(token: string, remember: boolean) {
+    auth.set(this.baseUrl, token, remember);
+    this.needsAuth = false;
+    this.emit();
+  }
+
+  /** Drop this daemon's credential and show the gate again. */
+  signOut() {
+    auth.clear(this.baseUrl);
+    this.needsAuth = true;
+    this.emit();
+  }
+
+  /**
+   * Try a candidate token against the daemon WITHOUT storing it, returning what
+   * that token can see. The sign-in gate uses this so a bad paste is answered
+   * with "that token was refused" on the spot, rather than being saved and
+   * turning every screen behind it into an error.
+   *
+   * `/api/meta` is the probe because it is cheap, read-only, and already
+   * reports the two things the gate wants to show next: who you are and whether
+   * this daemon accepts writes.
+   */
+  async probeToken(token: string): Promise<Meta> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/meta`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+    } catch {
+      throw new ApiError("OFFLINE", `Could not reach Baton at ${this.baseUrl || "this origin"}`);
+    }
+    if (res.status === 401) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError("UNAUTHORIZED", (body as { error?: string })?.error || "that token was refused", 401, body);
+    }
+    if (!res.ok) throw new ApiError("SERVER", res.statusText, res.status);
+    return (await res.json()) as Meta;
+  }
+
+  /** The daemon refused us. Kept separate from signOut: the stored token is
+   *  NOT discarded, because a 401 during a blip is not proof it is bad, and
+   *  silently erasing a good credential would be its own bug. */
+  private challenge() {
+    if (this.needsAuth) return;
+    this.needsAuth = true;
+    this.emit();
+  }
+
   /* ---- transport ---- */
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     if (this.forcedOffline) {
@@ -171,9 +263,17 @@ class BatonClient {
     }
     let res: Response;
     try {
+      const token = this.token;
       res = await fetch(`${this.baseUrl}${path}`, {
-        headers: { "Content-Type": "application/json" },
         ...init,
+        headers: {
+          "Content-Type": "application/json",
+          // Only when we hold one. A loopback daemon needs no credential, and
+          // sending an empty Authorization header would be a malformed request
+          // rather than an anonymous one.
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(init?.headers as Record<string, string> | undefined),
+        },
       });
     } catch (e) {
       throw new ApiError("OFFLINE", `Could not reach Baton at ${this.baseUrl || "this origin"}`);
@@ -186,6 +286,10 @@ class BatonClient {
         /* non-JSON error */
       }
       const msg = (body as { error?: string })?.error || res.statusText;
+      if (res.status === 401) {
+        this.challenge();
+        throw new ApiError("UNAUTHORIZED", msg, 401, body);
+      }
       if (res.status === 404) throw new ApiError("NOT_FOUND", msg, 404, body);
       if (res.status === 403) throw new ApiError("READ_ONLY", msg, 403, body);
       if (res.status === 400) throw new ApiError("BAD_REQUEST", msg, 400, body);
@@ -252,10 +356,15 @@ class BatonClient {
       return {
         repo: p.path, branch: p.branch, writeEnabled: this.writeEnabled, version: "demo",
         terminals: { available: true },
+        // The showcase views as a local owner — the sign-in gate is a real-mode
+        // path and must never appear in front of the demo.
+        viewer: (this.viewer = { local: true, memberId: null, name: null, role: "owner" }),
         agents: { headless: ["claude", "codex", "gemini"], interactive: ["claude", "cursor", "codex", "gemini", "aider", "opencode"] },
       };
     }
-    return this.request<Meta>("/api/meta");
+    const meta = await this.request<Meta>("/api/meta");
+    this.viewer = meta.viewer ?? null;
+    return meta;
   }
 
   /* ---- knowledge base (graphify) ---- */
@@ -548,7 +657,62 @@ class BatonClient {
   }
   /** Per-session SSE byte stream URL (EventSource). Null in demo mode. */
   terminalStreamUrl(slug: string): string | null {
-    return this.demo ? null : `${this.baseUrl}/api/tasks/${encodeURIComponent(slug)}/terminal/stream`;
+    // Null for a remote viewer, and deliberately BEFORE opening anything: the
+    // daemon refuses terminal endpoints over the network (src/access.ts rule 2),
+    // and EventSource answers a 403 by retrying forever. An honest "not here"
+    // beats a panel that reconnects into a wall for as long as it stays open.
+    if (this.demo || this.isRemoteViewer) return null;
+    return `${this.baseUrl}/api/tasks/${encodeURIComponent(slug)}/terminal/stream`;
+  }
+
+  /* ---- code review (three axes, src/reviews.ts) ---- */
+  private demoReviewStore: ReviewRecord[] | null = null;
+  /** Mutable demo copy so warn / disconnect / revoke actually change something. */
+  private demoTeam: TeamState | null = null;
+  private demoReviewRecords(): ReviewRecord[] {
+    return (this.demoReviewStore ??= JSON.parse(JSON.stringify(DEMO_REVIEWS)) as ReviewRecord[]);
+  }
+  /** Per-axis open counts. Never summed — see the note on ReviewRecord. */
+  private static openByAxis(r: ReviewRecord): Record<ReviewAxis, number> {
+    const out: Record<ReviewAxis, number> = { standards: 0, spec: 0, security: 0 };
+    for (const f of r.findings) if (f.status === "open") out[f.axis]++;
+    return out;
+  }
+  async getReviews(): Promise<{ reviews: ReviewRecord[]; head: string }> {
+    if (this.demo) {
+      await this.demoGate(60);
+      return { reviews: this.demoReviewRecords(), head: DEMO_REVIEW_HEAD };
+    }
+    const r = await this.request<{ reviews: ReviewRecord[]; head: string }>("/api/reviews");
+    return { reviews: r.reviews ?? [], head: r.head ?? "" };
+  }
+  /**
+   * Resolve one finding by its STABLE id, never by array position: a re-review
+   * reorders findings, so an index that was right when this screen rendered can
+   * address a different finding by the time the click lands.
+   */
+  async resolveReviewFinding(slug: string, id: string, dismiss = false): Promise<ReviewRecord> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      const next = this.demoReviewRecords().map((r) => {
+        if (r.slug !== slug) return r;
+        const findings = r.findings.map((f) => (f.id === id ? { ...f, status: (dismiss ? "dismissed" : "fixed") as FindingStatus } : f));
+        const updated = { ...r, findings, updatedAt: new Date().toISOString() };
+        return { ...updated, open: BatonClient.openByAxis(updated) };
+      });
+      this.demoReviewStore = next;
+      this.emit();
+      const rec = next.find((r) => r.slug === slug);
+      if (!rec) throw new Error(`no review '${slug}'`);
+      return rec;
+    }
+    const r = await this.request<ReviewRecord>(`/api/reviews/${encodeURIComponent(slug)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ id, dismiss }),
+    });
+    this.emit();
+    return r;
   }
 
   /* ---- project memory (evidence-anchored facts, src/memory.ts) ---- */
@@ -571,7 +735,7 @@ class BatonClient {
       await this.demoGate(150);
       const fact: MemoryFactStatus = {
         id: `mem-${this.slugify(input.fact)}`, type: (input.type as MemoryFactStatus["type"]) ?? "reference",
-        fact: input.fact, agent: "dashboard", task: input.task ?? null, createdAt: new Date().toISOString(),
+        fact: input.fact, agent: "dashboard", author: "you@example.com", task: input.task ?? null, createdAt: new Date().toISOString(),
         anchors: { commit: "demo", files: (input.files ?? []).map((p) => ({ path: p, hash: "demo" })) },
         supersedes: null, freshness: "fresh", staleReason: null, commitsBehind: 0, project: null,
       };
@@ -921,6 +1085,259 @@ class BatonClient {
     });
     this.emit(); // trigger an immediate refetch so the new session appears
     return created;
+  }
+
+  /* ---- Team: membership + federated claims ---- */
+
+  /**
+   * The whole Team screen in one call. `viewer.isOwner` decides what the UI
+   * bothers rendering; the SERVER decides what actually happens, independently,
+   * on every control below. A hidden button is not a permission check.
+   */
+  async getTeam(): Promise<TeamState> {
+    if (this.demo) {
+      await this.demoGate(60);
+      // The `empty` scenario doubles as the solo-hub state: nobody has joined,
+      // so the screen should point at the invite flow rather than show a table.
+      if (this.scenario === "empty") return DEMO_TEAM_SOLO;
+      this.demoTeam ??= structuredClone(DEMO_TEAM);
+      return this.demoTeam;
+    }
+    const r = await this.request<TeamState>("/api/members");
+    return {
+      members: r.members ?? [], teams: r.teams ?? [], claims: r.claims ?? [], overlaps: r.overlaps ?? [],
+      ttlMs: r.ttlMs ?? 90_000,
+      viewer: r.viewer ?? { local: false, memberId: null, isOwner: false },
+    };
+  }
+
+  /* ---- Teams (src/teams.ts) --------------------------------------------
+     A team groups members and filters this screen. None of these calls
+     changes anyone's access, and the server re-checks ownership on every one
+     of them regardless of what the UI chose to render. ------------------- */
+
+  async createTeam(name: string, projects: string[] = []): Promise<{ team: Team }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      const state = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const id = slugId(name);
+      if (!id) throw new ApiError("BAD_REQUEST", `'${name}' has no usable letters or digits for an id`);
+      if (state.teams.some((t) => t.id === id)) throw new ApiError("CONFLICT", `team '${id}' already exists`);
+      const team: Team = { id, name: name.trim(), projects, createdAt: new Date().toISOString() };
+      state.teams = [...state.teams, team];
+      this.emit();
+      return { team };
+    }
+    return this.request<{ team: Team }>("/api/teams", {
+      method: "POST", body: JSON.stringify({ name, projects }),
+    });
+  }
+
+  async updateTeam(id: string, patch: { name?: string; projects?: string[] }): Promise<{ team: Team }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(160);
+      const state = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const team = state.teams.find((t) => t.id === id);
+      if (!team) throw new ApiError("NOT_FOUND", `no team '${id}'`);
+      if (patch.name !== undefined) team.name = patch.name.trim();
+      if (patch.projects !== undefined) team.projects = patch.projects;
+      this.emit();
+      return { team };
+    }
+    return this.request<{ team: Team }>(`/api/teams/${encodeURIComponent(id)}`, {
+      method: "POST", body: JSON.stringify(patch),
+    });
+  }
+
+  async deleteTeam(id: string): Promise<{ ok: boolean; unassigned: number; note: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      const state = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      if (!state.teams.some((t) => t.id === id)) throw new ApiError("NOT_FOUND", `no team '${id}'`);
+      state.teams = state.teams.filter((t) => t.id !== id);
+      let unassigned = 0;
+      for (const m of state.members) if (m.team === id) { m.team = null; unassigned++; }
+      this.emit();
+      return {
+        ok: true, unassigned,
+        note: unassigned
+          ? `${unassigned} member${unassigned === 1 ? "" : "s"} moved to no team. Nobody lost access — a team was only ever a grouping.`
+          : "Nobody was in it.",
+      };
+    }
+    return this.request(`/api/teams/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  /** Move one member. `null` takes them out of every team. */
+  async assignMemberTeam(memberId: string, team: string | null): Promise<{ ok: boolean }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      const state = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      if (team && !state.teams.some((t) => t.id === team)) throw new ApiError("NOT_FOUND", `no team '${team}'`);
+      const m = state.members.find((x) => x.id === memberId);
+      if (m) m.team = team;
+      this.emit();
+      return { ok: true };
+    }
+    return this.request(`/api/members/${encodeURIComponent(memberId)}/team`, {
+      method: "POST", body: JSON.stringify({ team }),
+    });
+  }
+
+  /**
+   * Mint an invite. The token comes back exactly once — nothing stores it, so a
+   * closed tab means rotating rather than looking it up.
+   */
+  async inviteMember(name: string, role: MemberRole = "member"): Promise<InviteResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(240);
+      const team = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const id = slugId(name);
+      if (!id) throw new ApiError("BAD_REQUEST", `'${name}' has no usable letters or digits for an id`);
+      if (team.members.some((m) => m.id === id && !m.revokedAt)) {
+        throw new ApiError("CONFLICT", `member '${id}' already exists — revoke them first, or pick another name`);
+      }
+      const expiresAt = new Date(Date.now() + 72 * 3600_000).toISOString();
+      team.members = [...team.members, {
+        id, name, role, registered: true, team: null, createdAt: new Date().toISOString(),
+        online: false, device: null, sessions: 0, since: null, lastSeen: null,
+        claims: 0, warnings: [], expiresAt,
+      }];
+      this.emit();
+      return {
+        member: { id, name, role, expiresAt },
+        // Recognisably fake: a demo must never hand out something that looks
+        // like a live credential someone might actually paste somewhere.
+        token: "baton_demo000000000000000000000000000000000000000000000000000000000",
+        command: "npx baton join http://mac-mini.local:7077 --token baton_demo…",
+        expiresAt,
+        note: "This command carries a live credential. Send it over a private channel, and it is shown only once.",
+      };
+    }
+    return this.request<InviteResult>("/api/members", {
+      method: "POST", body: JSON.stringify({ name, role }),
+    });
+  }
+
+  /** Reissue a token, invalidating the previous one. */
+  async rotateMember(id: string): Promise<InviteResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(220);
+      const team = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const m = team.members.find((x) => x.id === id);
+      const expiresAt = new Date(Date.now() + 72 * 3600_000).toISOString();
+      if (m) { m.expiresAt = expiresAt; delete m.firstUsedAt; }
+      this.emit();
+      return {
+        member: { id, name: m?.name ?? id, role: m?.role ?? "member", expiresAt },
+        token: "baton_demo000000000000000000000000000000000000000000000000000000000",
+        command: "npx baton join http://mac-mini.local:7077 --token baton_demo…",
+        expiresAt,
+        note: "Their previous token stopped working the moment this one was created.",
+      };
+    }
+    return this.request<InviteResult>(`/api/members/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+  }
+
+  /**
+   * Send a member a notice. Fails when they are not connected — a warning is a
+   * live-plane action, and reporting "sent" to an empty room would leave the
+   * owner believing the person had been told.
+   */
+  async warnMember(id: string, message: string): Promise<{ ok: boolean }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      const team = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const m = team.members.find((x) => x.id === id);
+      if (!m?.online) throw new ApiError("CONFLICT", `'${m?.name ?? id}' is not connected — a warning has nowhere to be delivered`);
+      m.warnings = [...m.warnings, { id: `w${Date.now()}`, message, from: "you", at: new Date().toISOString() }];
+      this.emit();
+      return { ok: true };
+    }
+    return this.request(`/api/members/${encodeURIComponent(id)}/warn`, {
+      method: "POST", body: JSON.stringify({ message }),
+    });
+  }
+
+  /** Drop a member from the live view. Soft: their token still works and they
+   *  reconnect on their next heartbeat. */
+  async disconnectMember(id: string): Promise<{ ok: boolean; dropped: boolean; note: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(160);
+      const team = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const m = team.members.find((x) => x.id === id);
+      const dropped = !!m?.online;
+      if (m) { m.online = false; m.sessions = 0; m.claims = 0; m.since = null; }
+      team.claims = team.claims.filter((c) => c.memberId !== id);
+      team.overlaps = team.overlaps.filter((o) => o.holders.every((h) => h.memberId !== id));
+      this.emit();
+      return {
+        ok: true, dropped,
+        note: dropped
+          ? "Dropped from the live view. Their token still works — they reconnect on their next heartbeat."
+          : "They were not connected.",
+      };
+    }
+    return this.request(`/api/members/${encodeURIComponent(id)}/disconnect`, { method: "POST" });
+  }
+
+  /** Revoke a member's token. Refused server-side for the last active owner. */
+  async revokeMember(id: string): Promise<{ ok: boolean; note: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(220);
+      const team = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      const m = team.members.find((x) => x.id === id);
+      const owners = team.members.filter((x) => x.role === "owner" && !x.revokedAt);
+      if (m?.role === "owner" && owners.length === 1) {
+        throw new ApiError("CONFLICT", `'${m.id}' is the only owner — promote someone else before revoking them`);
+      }
+      if (m) { m.revokedAt = new Date().toISOString(); m.online = false; m.claims = 0; m.sessions = 0; }
+      team.claims = team.claims.filter((c) => c.memberId !== id);
+      team.overlaps = team.overlaps.filter((o) => o.holders.every((h) => h.memberId !== id));
+      this.emit();
+      return { ok: true, note: "Their token no longer works. Anything they already cloned or synced stays on their machine." };
+    }
+    return this.request(`/api/members/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+  }
+
+  /** Clear one stale claim. Corrects the shared VIEW — if their agent is still
+   *  on the file, their next heartbeat re-states it. */
+  async releaseClaim(memberId: string, relPath: string, projectId: string | null = null): Promise<{ ok: boolean; note: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      const team = (this.demoTeam ??= structuredClone(DEMO_TEAM));
+      team.claims = team.claims.filter((c) => !(c.memberId === memberId && c.relPath === relPath && c.projectId === projectId));
+      team.overlaps = team.overlaps.filter((o) => !(o.relPath === relPath && o.projectId === projectId));
+      const m = team.members.find((x) => x.id === memberId);
+      if (m) m.claims = team.claims.filter((c) => c.memberId === memberId).length;
+      this.emit();
+      return { ok: true, note: "Cleared from the shared view. If their agent is still editing it, their next heartbeat re-states it." };
+    }
+    return this.request("/api/claims/release", {
+      method: "POST", body: JSON.stringify({ memberId, relPath, projectId }),
+    });
+  }
+
+  /**
+   * Can anyone else reach this hub? Owner-only server-side — it enumerates LAN
+   * addresses and installed tooling, which a member has no use for.
+   */
+  async getReachability(): Promise<Reachability> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return DEMO_REACHABILITY;
+    }
+    return this.request<Reachability>("/api/reachability");
   }
 
   /* ---- WRITE: merge / remove / handoff (gated; optimistic overlay) ---- */

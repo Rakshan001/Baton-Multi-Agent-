@@ -13,6 +13,11 @@ import './util/quiet.js'; // FIRST: suppress node:sqlite experimental warning be
 import { Command } from 'commander';
 import { ensureBinPath } from './util/path-env.js';
 import { setupCmd } from './commands/setup.js';
+import { joinCmd, workspaceShowCmd } from './commands/workspace.js';
+import { handoffExportCmd, handoffImportCmd } from './commands/bundle.js';
+import { memberAddCmd, memberListCmd, memberRevokeCmd } from './commands/member.js';
+import { teamAddCmd, teamAssignCmd, teamListCmd, teamRemoveCmd, teamScopeCmd } from './commands/team.js';
+import { hostClearCmd, hostSetCmd, hostStatusCmd } from './commands/host.js';
 import { newCmd } from './commands/new.js';
 import { lsCmd } from './commands/ls.js';
 import { statusCmd } from './commands/status.js';
@@ -72,6 +77,26 @@ program
     run(() => setupCmd(path, opts)));
 
 program
+  .command('workspace')
+  .argument('[path]', 'hub folder to describe (default: current directory)')
+  .option('--write', 'also save it to .baton/workspace.json')
+  .description('print this hub\'s layout as a shareable manifest (redirect it: > workspace.json)')
+  .action((path: string | undefined, opts: { write?: boolean }) => run(() => workspaceShowCmd(path, opts)));
+
+program
+  .command('join')
+  .argument('<manifest-or-url>', 'workspace.json from `baton workspace`, or a host URL from your invite')
+  .argument('[dir]', 'folder to build the workspace in (default: current directory)')
+  .option('--token <token>', 'member token, when joining from a host URL')
+  .option('--device <name>', 'label for this machine in the host\'s roster')
+  .option('--no-setup', 'clone only — skip the `baton setup --hub` hand-off')
+  .option('--headless', 'after cloning, set up for MCP-only use (no dashboard)')
+  .option('--serve', 'after cloning, set up for the dashboard (default)')
+  .description('recreate a teammate\'s hub: clone every repo into the same folder layout')
+  .action((source: string, dir: string | undefined, opts: { setup?: boolean; headless?: boolean; serve?: boolean; token?: string; device?: string }) =>
+    run(() => joinCmd(source, dir, opts)));
+
+program
   .command('connect')
   .option('--agents <list>', 'comma-separated: claude,cursor,codex,gemini (default: all four)')
   .option('--yes', 'also write global ($HOME) configs for codex/gemini')
@@ -117,8 +142,76 @@ program
   .command('serve')
   .option('-p, --port <port>', 'port (default 7077)')
   .option('--write', 'enable write actions (merge / remove) from the dashboard')
+  .option('--host <addr>', 'EXPOSE on a network address (default 127.0.0.1). Requires a member token on every /api request; refuses to start with no members')
+  .option('--allowed-host <name>', 'Host header to accept besides loopback (repeatable) — needed when reached by DNS name', (v: string, acc: string[]) => [...acc, v], [] as string[])
   .description('start the local daemon: JSON API + the built web dashboard')
-  .action((opts: { port?: string; write?: boolean }) => run(() => serveCmd(opts)));
+  .action((opts: { port?: string; write?: boolean; host?: string; allowedHost?: string[] }) => run(() => serveCmd(opts)));
+
+const host = program.command('host').description('link this machine to a hub host, so its file claims join the shared picture');
+host
+  .command('set')
+  .argument('<url>', 'host daemon base URL, e.g. http://mac-mini.local:7077')
+  .requiredOption('--token <token>', 'member token the hub owner minted with `baton member add`')
+  .option('--device <name>', 'label for this machine in the roster')
+  .description('point this daemon at a host and verify it answers')
+  .action((url: string, opts: { token?: string; device?: string }) => run(() => hostSetCmd(url, opts)));
+host
+  .command('status', { isDefault: true })
+  .description('show the linked host and whether it is reachable right now')
+  .action(() => run(hostStatusCmd));
+host
+  .command('clear')
+  .description('unlink — go back to local-only coordination')
+  .action(() => run(hostClearCmd));
+
+const member = program.command('member').description('who may reach this daemon over a network (--host only)');
+member
+  .command('add')
+  .argument('<name>', 'display name')
+  .option('--role <role>', 'owner | member (the first member is always owner)')
+  .option('--team <id>', 'team to file them under (see `baton team list`) — a grouping, not a permission')
+  .description('register a member and mint their token — printed once, stored only as a hash')
+  .action((name: string, opts: { role?: string; team?: string }) => run(() => memberAddCmd(name, opts)));
+member
+  .command('list', { isDefault: true })
+  .description('list members and whether their token still works')
+  .action(() => run(memberListCmd));
+member
+  .command('revoke')
+  .argument('<id>', 'member id (see `baton member list`)')
+  .description("revoke a member's token — takes effect on their next request")
+  .action((id: string) => run(() => memberRevokeCmd(id)));
+
+const team = program
+  .command('team')
+  .description('group members — changes how the roster reads, never who may reach what');
+team
+  .command('add')
+  .argument('<name>', 'display name')
+  .option('--projects <ids>', 'comma-separated hub project ids this team works on (default: all)')
+  .description('create a team')
+  .action((name: string, opts: { projects?: string }) => run(() => teamAddCmd(name, opts)));
+team
+  .command('list', { isDefault: true })
+  .description('list teams, how many members are in each, and their project scope')
+  .action(() => run(teamListCmd));
+team
+  .command('rm')
+  .argument('<id>', 'team id (see `baton team list`)')
+  .description('delete a team — its members move to no team and keep their access')
+  .action((id: string) => run(() => teamRemoveCmd(id)));
+team
+  .command('assign')
+  .argument('<member>', 'member id (see `baton member list`)')
+  .argument('<team>', 'team id, or `none` to take them out of one')
+  .description('put a member in a team — a member is in at most one')
+  .action((m: string, t: string) => run(() => teamAssignCmd(m, t)));
+team
+  .command('scope')
+  .argument('<id>', 'team id')
+  .argument('[projects]', 'comma-separated project ids; omit to reset to the whole hub')
+  .description("set which hub projects a team sees — a dashboard filter, not a permission")
+  .action((id: string, projects: string | undefined) => run(() => teamScopeCmd(id, projects)));
 
 program
   .command('rm')
@@ -335,6 +428,25 @@ program
   .option('--json', 'machine-readable list')
   .description('list open handoff briefs, or print the pickup prompt for one')
   .action((slug: string | undefined, opts: { json?: boolean }) => run(() => resumeCmd(slug, opts)));
+
+const handoff = program.command('handoff').description('move a half-finished task between machines');
+handoff
+  .command('export')
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .option('-o, --out <file>', 'where to write the bundle (default: <slug>.bundle.json)')
+  .option('--allow-secrets', 'export even when the diff looks like it contains a credential')
+  .description('pack brief + ledger + open findings + memory + the UNCOMMITTED diff into one file')
+  .action((slug: string | undefined, opts: { out?: string; allowSecrets?: boolean }) =>
+    run(() => handoffExportCmd(slug, opts)));
+handoff
+  .command('import')
+  .argument('<file>', 'bundle written by `baton handoff export`')
+  .option('--into <dir>', 'checkout to apply it to (default: current directory)')
+  .option('--force', 'apply even though HEAD is not the commit the patch was cut from')
+  .option('--no-context', 'apply the diff only — skip HANDOFF.md and the progress ledger')
+  .description('restore a bundle: applies the diff only when HEAD matches its base commit')
+  .action((file: string, opts: { into?: string; force?: boolean; context?: boolean }) =>
+    run(() => handoffImportCmd(file, opts)));
 
 const hooks = program.command('hooks').description('agent-side hook installation');
 hooks
