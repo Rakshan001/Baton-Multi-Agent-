@@ -4,7 +4,7 @@
    ============================================================ */
 import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../components/Icon";
-import { AgentBadge, SegmentedControl, Switch, ComingSoon } from "../components/primitives";
+import { AgentBadge, SegmentedControl, Switch, ComingSoon, ConfirmDialog } from "../components/primitives";
 import { BatonMark } from "../components/BatonMark";
 import { ScreenHeader } from "./shared";
 import { AGENT_REGISTRY, ACCENTS } from "../lib/registry";
@@ -12,7 +12,8 @@ import { showToast } from "../lib/toast";
 import { BatonAPI } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
-import type { AgentId, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import type { AgentId, Meta, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import { auth } from "../lib/auth";
 
 const MODE_HINTS: Record<RoutingMode, string> = {
   auto: "Rules first, then severity picks a tier automatically.",
@@ -264,7 +265,79 @@ function ConnectionSettings({ prefs }: { prefs: Prefs }) {
   );
 }
 
-export function SettingsScreen({ prefs, repo }: { prefs: Prefs; repo: string | null }) {
+
+/**
+ * Who this browser is to the daemon, and the only way out.
+ *
+ * A member who signed in over `--host` otherwise has no way to sign out short
+ * of clearing site data — and on a shared or borrowed machine that is the
+ * difference between a credential that ends with the session and one that does
+ * not. Local viewers see the same block saying why they were never asked.
+ */
+function SessionSettings({ viewer }: { viewer?: Meta["viewer"] }) {
+  const [confirm, setConfirm] = useState(false);
+  const hasToken = !!BatonAPI.token;
+  const remembered = auth.remembered(BatonAPI.baseUrl);
+  const local = viewer ? viewer.local : !hasToken;
+
+  return (
+    <>
+      <SettingsBlock title="Your session" desc="How this browser identifies itself to the daemon.">
+        {local ? (
+          <SettingRow
+            label="Local connection"
+            hint="This browser is on the same machine as the daemon, so Baton asks for no credential — the same rule that lets the CLI work without one."
+          >
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+              <Icon name="monitor" size={13} /> No sign-in needed
+            </span>
+          </SettingRow>
+        ) : (
+          <SettingRow
+            label={`Signed in as ${viewer?.name || "a member"}`}
+            hint={
+              remembered
+                ? "Stored in this browser until you sign out."
+                : "Kept for this tab only — closing it signs you out."
+            }
+          >
+            <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+              {viewer?.memberId}
+              {viewer?.role === "owner" && (
+                <span style={{ padding: "1px 6px", borderRadius: 99, background: "var(--accent-soft)", border: "1px solid var(--accent-border)", color: "var(--accent-text)", fontSize: "var(--fs-11)", fontWeight: "var(--fw-semibold)" }}>owner</span>
+              )}
+            </span>
+          </SettingRow>
+        )}
+        {hasToken && (
+          <SettingRow
+            label="Sign out"
+            hint="Removes the token from this browser. It stays valid on the hub — ask the owner to revoke it if it has leaked."
+          >
+            <button className="btn btn-sm btn-danger fr" onClick={() => setConfirm(true)}>
+              <Icon name="lock" size={13} /> Sign out
+            </button>
+          </SettingRow>
+        )}
+      </SettingsBlock>
+
+      <ConfirmDialog
+        open={confirm}
+        title="Sign out of this hub?"
+        /* The honest warning: for most members the pasted token was the only
+           copy, and Baton cannot show it again — only the owner can reissue. */
+        body="You'll need your member token to sign back in. If you don't still have it, the hub owner has to reissue one from the Team screen."
+        confirmLabel="Sign out"
+        tone="danger"
+        icon="lock"
+        onClose={() => setConfirm(false)}
+        onConfirm={() => { setConfirm(false); BatonAPI.signOut(); }}
+      />
+    </>
+  );
+}
+
+export function SettingsScreen({ prefs, repo, viewer }: { prefs: Prefs; repo: string | null; viewer?: Meta["viewer"] }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="Settings" subtitle="Appearance, connection, and the agent registry" />
@@ -292,6 +365,8 @@ export function SettingsScreen({ prefs, repo }: { prefs: Prefs; repo: string | n
           </SettingsBlock>
 
           <ConnectionSettings prefs={prefs} />
+
+          <SessionSettings viewer={viewer} />
 
           <RoutingSettings />
 

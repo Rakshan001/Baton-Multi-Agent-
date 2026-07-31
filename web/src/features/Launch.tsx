@@ -11,7 +11,7 @@ import { AGENT_REGISTRY, AgentGlyph, getAgent } from "../lib/registry";
 import { BatonAPI } from "../lib/api";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { showToast } from "../lib/toast";
-import type { AgentId, RouteSuggestion } from "../types";
+import type { AgentId, Meta, RouteSuggestion } from "../types";
 
 type Phase = "form" | "provisioning" | "done";
 
@@ -29,7 +29,7 @@ export function LaunchSession({
   const [step, setStep] = useState(-1);
   const [suggestion, setSuggestion] = useState<RouteSuggestion | null>(null);
   const [startMode, setStartMode] = useState<"none" | "headless" | "terminal">("none");
-  const [terminals, setTerminals] = useState<{ available: boolean; hint?: string } | null>(null);
+  const [terminals, setTerminals] = useState<Meta["terminals"] | null>(null);
   // Multi-repo hub: a task must target one sub-project (its own git repo). null = single repo.
   const [hubProjects, setHubProjects] = useState<{ id: string; name: string }[] | null>(null);
   const [project, setProject] = useState<string | null>(null);
@@ -213,9 +213,17 @@ export function LaunchSession({
                     ))}
                   </div>
                   {terminals && !terminals.available && (
-                    <div style={{ marginTop: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
-                      <Icon name="terminal" size={12} />
-                      Interactive terminals need tmux{terminals.hint ? <> — <span className="mono" style={{ color: "var(--accent-text)" }}>{terminals.hint}</span></> : null}
+                    <div style={{ marginTop: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", display: "flex", alignItems: "flex-start", gap: 6 }}>
+                      <Icon name="terminal" size={12} style={{ flex: "none", marginTop: 2 }} />
+                      {/* Two different reasons, and only one of them is fixable
+                          from here. A remote viewer installing tmux would learn
+                          nothing — the daemon refuses terminals over the network
+                          at any tmux version. */}
+                      {terminals.reason === "remote" ? (
+                        <span>Terminals stay on the host machine — they're never served over the network. Use SSH port-forwarding to reach one.</span>
+                      ) : (
+                        <span>Interactive terminals need tmux{terminals.hint ? <> — <span className="mono" style={{ color: "var(--accent-text)" }}>{terminals.hint}</span></> : null}</span>
+                      )}
                     </div>
                   )}
                 </div>

@@ -42,12 +42,16 @@ export function TerminalPanel({ slug, task, writeEnabled, demo }: {
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [exited, setExited] = useState(false);
+  /** True briefly after the stream dropped and resynced — the screen below is
+   *  current, but output produced while disconnected was never delivered. */
+  const [resynced, setResynced] = useState(false);
   const canType = writeEnabled && !demo;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     setExited(false);
+    setResynced(false);
 
     const term = new Terminal({
       fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
@@ -82,13 +86,41 @@ export function TerminalPanel({ slug, task, writeEnabled, demo }: {
       }
     } else {
       const url = BatonAPI.terminalStreamUrl(slug);
+      if (!url) {
+        // Remote viewer: terminals never leave the host machine, so say so on
+        // the screen where someone is waiting for output rather than leaving a
+        // black rectangle that looks like a hang.
+        term.write("\x1b[2m── terminals aren't served over the network ──\x1b[0m\r\n\r\n");
+        term.write("This agent's terminal is running on the hub machine. Baton refuses\r\n");
+        term.write("terminal streams to any remote viewer, with or without a token —\r\n");
+        term.write("an interactive shell is not something a member token should carry.\r\n\r\n");
+        term.write("\x1b[2mTo watch it: SSH to the host and port-forward the dashboard.\x1b[0m\r\n");
+      }
       if (url) {
         es = new EventSource(url);
+        // A mid-stream error means the connection broke — most often the
+        // daemon's 4 MB slow-consumer drop, which cannot announce itself (by
+        // then the socket holds the backlog, so a final frame is either
+        // discarded or forces the very flush the cap exists to avoid). So the
+        // gap is detected here: an error followed by a fresh snapshot means we
+        // were disconnected and have just resynced. EventSource retries on its
+        // own; nothing is permanently lost — the snapshot IS the current screen
+        // — but bytes produced while we were away never arrive, and silently
+        // showing a jumped-forward terminal is how people mistrust the panel.
+        let lostConnection = false;
+        es.onerror = () => { if (!disposed) lostConnection = true; };
         es.addEventListener("terminal.snapshot", (e) => {
           try {
             const msg = JSON.parse((e as MessageEvent).data as string) as { data: string };
             term.reset();
             if (msg.data) term.write(b64decode(msg.data));
+            if (lostConnection) {
+              lostConnection = false;
+              setResynced(true);
+              // Self-clearing: a warning about a gap that has stopped mattering
+              // is noise, and this panel stays open for hours.
+              timers.push(setTimeout(() => { if (!disposed) setResynced(false); }, 15_000));
+            }
           } catch { /* malformed frame */ }
         });
         es.addEventListener("terminal.output", (e) => {
@@ -156,6 +188,12 @@ export function TerminalPanel({ slug, task, writeEnabled, demo }: {
   return (
     <div style={{ position: "relative", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", background: "var(--code-bg)" }}>
       <div ref={hostRef} style={{ flex: 1, minHeight: 0, padding: "8px 4px 8px 10px" }} />
+      {resynced && !exited && (
+        <div role="status" style={{ flex: "none", display: "flex", alignItems: "center", gap: 7, padding: "5px 12px", borderTop: "1px solid var(--border-subtle)", fontSize: 11, color: "var(--dirty)", background: "var(--dirty-soft)" }}>
+          <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--dirty)", flex: "none" }} />
+          Stream reconnected — the screen above is current, but output produced while disconnected was skipped.
+        </div>
+      )}
       {(!canType || exited) && (
         <div style={{ flex: "none", padding: "5px 12px", borderTop: "1px solid var(--border-subtle)", fontSize: 11, color: "var(--text-tertiary)", background: "var(--bg-surface)" }}>
           {exited ? "Session ended — relaunch from the task to start a new one."
