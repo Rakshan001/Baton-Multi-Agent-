@@ -6,9 +6,15 @@
 
 **Baton is a local coordination hub + knowledge base for running multiple AI coding agents on one repo** — Claude Code, Cursor, Codex, Gemini, Aider, OpenCode. Isolated git worktrees, a realtime dashboard, shared evidence-anchored memory, installable skills, and one-file session handoff.
 
-[Quickstart](docs/quickstart.md) · [Documentation](docs/README.md) · [CLI reference](docs/cli-reference.md) · [Architecture](docs/architecture.md)
+<a href="https://baton-landing.vercel.app"><img src="https://img.shields.io/badge/Read%20the%20docs-baton--landing.vercel.app-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Baton documentation website"></a>
 
-[![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) [![Website](https://img.shields.io/badge/website-baton--landing.vercel.app-000?logo=vercel&logoColor=white)](https://baton-landing.vercel.app) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
+### 🌐 [**baton-landing.vercel.app**](https://baton-landing.vercel.app)
+
+[Docs](https://baton-landing.vercel.app/docs) · [Features](https://baton-landing.vercel.app/features) · [How it works](https://baton-landing.vercel.app/how-it-works) · [Use cases](https://baton-landing.vercel.app/use-cases) · [FAQ](https://baton-landing.vercel.app/faq) · [About](https://baton-landing.vercel.app/about)
+
+<sub>In this repo: <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/README.md">Documentation</a> · <a href="docs/cli-reference.md">CLI reference</a> · <a href="docs/architecture.md">Architecture</a></sub>
+
+[![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
 
 </div>
 
@@ -108,7 +114,14 @@ History, memory, and reports are plain files + git — so when you *do* open the
 
 ## Documentation
 
-Full docs live in [**`docs/`**](docs/README.md):
+> [!TIP]
+> ### 🌐 Read the docs on the web → **[baton-landing.vercel.app/docs](https://baton-landing.vercel.app/docs)**
+>
+> Cross-linked and nicer to read than raw markdown — start with **[How it works](https://baton-landing.vercel.app/how-it-works)** for the handoff flow, **[Use cases](https://baton-landing.vercel.app/use-cases)** for real setups, or the **[FAQ](https://baton-landing.vercel.app/faq)**.
+>
+> **[Home](https://baton-landing.vercel.app)** · **[Docs](https://baton-landing.vercel.app/docs)** · **[Features](https://baton-landing.vercel.app/features)** · **[How it works](https://baton-landing.vercel.app/how-it-works)** · **[Use cases](https://baton-landing.vercel.app/use-cases)** · **[FAQ](https://baton-landing.vercel.app/faq)** · **[About](https://baton-landing.vercel.app/about)**
+
+The same docs also live in this repo under [**`docs/`**](docs/README.md):
 
 - **[Installation](docs/installation.md)** · **[Quickstart](docs/quickstart.md)** · **[CLI reference](docs/cli-reference.md)**
 - **[Dashboard](docs/dashboard.md)** · **[Knowledge base](docs/knowledge-graph.md)** · **[Session handoff](docs/session-handoff.md)**
