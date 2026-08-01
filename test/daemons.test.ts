@@ -10,12 +10,13 @@
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type DaemonRecord, cleanDaemonRecord, listDaemonRecords, listVerifiedDaemons, pidAlive,
-  probeMeta, recordPath, removeDaemonRecord, stopDaemon, verifyDaemon, writeDaemonRecord,
+  probeMeta, recordPath, removeDaemonRecord, stopDaemon, sweepDeadDaemonRecords, verifyDaemon,
+  writeDaemonRecord,
 } from '../src/daemons.js';
 
 let dir: string;
@@ -72,6 +73,43 @@ describe('record lifecycle', () => {
 
   it('names the file by pid AND port, so a reused pid cannot collide', () => {
     expect(recordPath(12, 7077, dir)).toBe(join(dir, '12-7077.json'));
+  });
+
+  it('sweepDeadDaemonRecords buries dead-pid records and ONLY those', async () => {
+    // The keeper's port is silent — it would verify stale — but its pid (ours)
+    // lives, and the sweep must not consult ports at all: pid-death alone
+    // decides, so a probe flap can never widen an unattended sweep.
+    await writeDaemonRecord(rec({ port: 7010 }), dir);
+    await writeDaemonRecord(rec({ pid: 2 ** 24, port: 7011 }), dir);
+    await writeDaemonRecord(rec({ pid: 2 ** 24 + 1, port: 7012, root: '/tmp/other' }), dir);
+    const buried = await sweepDeadDaemonRecords(dir);
+    expect(buried.map((r) => r.port).sort()).toEqual([7011, 7012]);
+    expect((await listDaemonRecords(dir)).map((r) => r.port)).toEqual([7010]);
+  });
+
+  it('two sweeps racing report each corpse ONCE between them, not twice each', async () => {
+    // Sweeps race routinely — every `baton serve` startup runs one, and so do
+    // `baton daemon clean` and the dashboard's Clean up all. Deletion is
+    // idempotent, but the return value is what gets REPORTED ("3 records
+    // removed"), so a record another sweep already unlinked must not be
+    // counted again.
+    for (const port of [7020, 7021, 7022]) await writeDaemonRecord(rec({ pid: 2 ** 24, port }), dir);
+    const [a, b] = await Promise.all([sweepDeadDaemonRecords(dir), sweepDeadDaemonRecords(dir)]);
+    expect(a.length + b.length).toBe(3);
+    expect((await listDaemonRecords(dir)).length).toBe(0);
+    // And the claim files the winner used are gone with them.
+    expect((await readdir(dir)).filter((n) => n.includes('.sweep-'))).toEqual([]);
+  });
+
+  it('reclaims a claim file abandoned by a dead sweeper, and leaves a live one alone', async () => {
+    // The crash window between claim and delete. The abandoned file is inert
+    // either way (listings only read `.json`), but the sweep is the hygiene
+    // routine — it must not be the thing leaving litter behind.
+    await writeFile(join(dir, '99-7030.json.sweep-16777216'), '{}');
+    await writeFile(join(dir, `99-7031.json.sweep-${process.pid}`), '{}');
+    await sweepDeadDaemonRecords(dir);
+    const left = (await readdir(dir)).filter((n) => n.includes('.sweep-'));
+    expect(left).toEqual([`99-7031.json.sweep-${process.pid}`]);
   });
 });
 

@@ -1215,6 +1215,24 @@ class BatonClient {
     return this.request(`/api/daemons/${port}/stop`, { method: "POST", body: JSON.stringify({ pid, ...(expect ? { expect } : {}) }) });
   }
 
+  /** The bulk twin of clicking Clean up on each stale row: the server buries
+   *  every record whose process is provably gone. Deletion only — no probe is
+   *  consulted and nothing running is signalled, so `removed` can be smaller
+   *  than the stale rows on screen (a stale record whose pid still lives is
+   *  kept for the per-row, re-verified stop). */
+  async cleanFleet(): Promise<{ ok: boolean; removed: number }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(200);
+      const fleet = (this.demoFleet ??= structuredClone(DEMO_FLEET));
+      const removed = fleet.filter((d) => d.status === "stale").length;
+      this.demoFleet = fleet.filter((d) => d.status !== "stale");
+      this.emit();
+      return { ok: true, removed };
+    }
+    return this.request("/api/daemons/clean", { method: "POST" });
+  }
+
   /** Stop the daemon serving THIS dashboard. The daemon answers, then exits;
    *  the staleness banner takes the screen over from there. */
   async shutdownSelf(): Promise<{ ok: boolean }> {

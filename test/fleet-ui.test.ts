@@ -64,9 +64,12 @@ describe('uptimeLabel', () => {
 });
 
 describe('demo fixtures', () => {
-  it('showcase exactly one self and one stale row — Clean up is half the feature', () => {
+  it('showcase exactly one self and MORE THAN ONE stale row — both clean-up paths are half the feature', () => {
     expect(DEMO_FLEET.filter((r) => r.self).length).toBe(1);
-    expect(DEMO_FLEET.filter((r) => r.status === 'stale').length).toBe(1);
+    // Two, not one: the bulk "Clean up all" control only appears once corpses
+    // outnumber a single row, and a control the showcase cannot reach is a
+    // control nobody reviews.
+    expect(DEMO_FLEET.filter((r) => r.status === 'stale').length).toBeGreaterThan(1);
     // The self row must be live: a dashboard served by a stale daemon is a
     // contradiction the card should never have to draw.
     expect(DEMO_FLEET.find((r) => r.self)?.status).toBe('live');

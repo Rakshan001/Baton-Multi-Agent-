@@ -34,6 +34,10 @@ export interface AgentDef {
   detect: RegExp;
   headless?: HeadlessLauncher;
   interactive?: InteractiveLauncher;
+  /** Set only on entries from a project's `.baton/agents.json`. Those arrive
+   *  with the code rather than from the person running Baton, so every surface
+   *  that offers to LAUNCH one says where it came from. */
+  fromProject?: true;
 }
 
 const modelFlag = (flag: string, model?: string): string[] => (model ? [flag, model] : []);
@@ -124,6 +128,22 @@ export function customAgentsPath(): string {
 
 const CUSTOM_ID_RE = /^[a-z][a-z0-9-]{0,19}$/;
 const CUSTOM_BIN_RE = /^[A-Za-z0-9._/-]{1,120}$/;
+/**
+ * The same, minus every way to name a file INSIDE the repo: no `/`, no leading
+ * dot or dash — a bare PATH command only.
+ *
+ * `~/.baton/agents.json` is written by the person running Baton, so a path
+ * there is theirs and allowed. A project's `.baton/agents.json` arrives with
+ * the CODE: it is committed, shared, and lands on your disk from a clone, a
+ * PR branch, or a `git pull` you did not read. The roster probes every known
+ * binary with `<bin> --version` on a poll, so a repo-relative `./scripts/x`
+ * would be a zero-click execution of a file the repo itself ships. A bare
+ * name can only ever select something already installed on the machine.
+ */
+const PROJECT_BIN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/;
+
+/** Where a custom entry came from — the trust boundary, not decoration. */
+export type AgentScope = 'global' | 'project';
 const MAX_CUSTOM_AGENTS = 20;
 const DETECT_MAX = 80;
 const ARG_MAX = 200;
@@ -177,7 +197,7 @@ function cleanArgsTemplate(raw: unknown, where: string, issues: string[]): strin
   return tpl;
 }
 
-function cleanCustomAgent(raw: unknown, issues: string[]): AgentDef | null {
+function cleanCustomAgent(raw: unknown, issues: string[], scope: AgentScope = 'global'): AgentDef | null {
   const r = raw as Partial<Record<'id' | 'label' | 'binary' | 'detect', unknown>> & {
     headless?: { cmd?: unknown; args?: unknown }; interactive?: { cmd?: unknown; args?: unknown };
   };
@@ -186,9 +206,13 @@ function cleanCustomAgent(raw: unknown, issues: string[]): AgentDef | null {
     issues.push(`agents.json: '${String(r?.id ?? '(missing id)')}' is not a usable id (lowercase letters, digits, dashes, max 20) — entry skipped`);
     return null;
   }
+  const binRe = scope === 'project' ? PROJECT_BIN_RE : CUSTOM_BIN_RE;
+  const binHelp = scope === 'project'
+    ? 'must be an installed command name — a project file may not point at a path, because it arrives with the code'
+    : 'must be a plain command name or path';
   const binary = typeof r.binary === 'string' ? r.binary : '';
-  if (!CUSTOM_BIN_RE.test(binary)) {
-    issues.push(`agents.json (${id}): binary is required and must be a plain command name or path — entry skipped`);
+  if (!binRe.test(binary)) {
+    issues.push(`agents.json (${id}): binary is required and ${binHelp} — entry skipped`);
     return null;
   }
   const detectSrc = typeof r.detect === 'string' && r.detect.length > 0 ? r.detect : null;
@@ -212,7 +236,18 @@ function cleanCustomAgent(raw: unknown, issues: string[]): AgentDef | null {
     if (!l) return undefined;
     const args = cleanArgsTemplate(l.args, `agents.json (${id}) ${which}`, issues);
     if (!args) return undefined;
-    const cmd = typeof l.cmd === 'string' && CUSTOM_BIN_RE.test(l.cmd) ? l.cmd : binary;
+    // A launcher cmd is spawned directly, so it faces the same rule as
+    // `binary` — and in a project file a bad one is REPORTED rather than
+    // quietly swapped for the binary: silently launching something other than
+    // what the file named is how a repo-supplied path gets a second chance.
+    if (typeof l.cmd === 'string' && !binRe.test(l.cmd)) {
+      if (scope === 'project') {
+        issues.push(`agents.json (${id}) ${which}: cmd '${l.cmd}' ${binHelp} — ${which} mode dropped`);
+        return undefined;
+      }
+      return { cmd: binary, args: templateArgs(args) };
+    }
+    const cmd = typeof l.cmd === 'string' ? l.cmd : binary;
     return { cmd, args: templateArgs(args) };
   };
   const headless = launcher('headless');
@@ -230,6 +265,7 @@ function cleanCustomAgent(raw: unknown, issues: string[]): AgentDef | null {
     label: (typeof r.label === 'string' && r.label.trim() ? r.label.trim() : id).slice(0, 40),
     binary,
     detect,
+    ...(scope === 'project' ? { fromProject: true as const } : {}),
     ...(headless && headlessUsesPrompt ? { headless } : {}),
     ...(interactive ? { interactive } : {}),
   };
@@ -245,6 +281,7 @@ export function loadCustomAgents(
   file: string,
   into: Record<string, AgentDef>,
   issues: string[],
+  scope: AgentScope = 'global',
 ): string[] {
   let raw: string;
   try {
@@ -270,7 +307,7 @@ export function loadCustomAgents(
       issues.push(`${file}: more than ${MAX_CUSTOM_AGENTS} custom agents — the rest are ignored`);
       break;
     }
-    const def = cleanCustomAgent(entry, issues);
+    const def = cleanCustomAgent(entry, issues, scope);
     if (!def) continue;
     if (into[def.id]) {
       // "Existing", not "built-in": a project file can also collide with a
@@ -294,9 +331,13 @@ export const KNOWN_AGENT_IDS = Object.keys(AGENTS);
 /* ------------------------------------------------------------------ */
 /* Per-project agents — <root>/.baton/agents.json                      */
 /*                                                                     */
-/* The same format and the same validator as the machine-global file,  */
-/* scoped to one project: an agent only that repo's team uses does     */
-/* not belong in ~/.baton on every machine. Layering is additive and   */
+/* The same format as the machine-global file, scoped to one project:  */
+/* an agent only that repo's team uses does not belong in ~/.baton on  */
+/* every machine. The VALIDATOR is stricter, though, and deliberately: */
+/* this file is committed, so it arrives from clones and PR branches   */
+/* rather than from the person running Baton. Project entries may name */
+/* an installed command, never a path — see PROJECT_BIN_RE. Layering   */
+/* is additive and                                                     */
 /* earlier-wins — built-ins, then ~/.baton, then the project file —    */
 /* because config exists to ADD agents, never to redefine one.         */
 /*                                                                     */
@@ -336,7 +377,7 @@ export function loadProjectAgents(root: string): ProjectAgents {
   // collision check refuse built-ins and ~/.baton customs alike.
   const into: Record<string, AgentDef> = { ...AGENTS };
   const issues: string[] = [];
-  const ids = loadCustomAgents(projectAgentsPath(root), into, issues);
+  const ids = loadCustomAgents(projectAgentsPath(root), into, issues, 'project');
   const defs: Record<string, AgentDef> = {};
   for (const id of ids) defs[id] = into[id]!;
   const view: ProjectAgents = { ids, defs, issues };

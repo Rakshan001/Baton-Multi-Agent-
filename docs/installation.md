@@ -92,6 +92,16 @@ didn't:
   refused (a config file must not redefine how `claude` runs).
 - `binary` — probed on `PATH`, and matched in the process table for detection
   (add a `detect` regex string only if the default binary-name match is wrong).
+  **In a project file this must be an installed command name — never a path.**
+  `~/.baton/agents.json` is written by you, so `/opt/tools/mycli` is fine
+  there; a project file arrives with the code (a clone, a PR branch, a pull
+  you didn't read), and Baton probes every known binary with `<bin> --version`
+  on a poll. A repo-relative `./scripts/x` would therefore run a file the repo
+  itself ships, with no click anywhere — so project entries naming a path are
+  refused and reported in `baton doctor`. The same rule covers launcher `cmd`.
+  A project file can still only select software already on the machine, but
+  reviewing `.baton/agents.json` is worth the same attention as reviewing a
+  CI config in a PR.
 - Launcher `args` are an **argv template**, never a shell string: `{prompt}`
   substitutes the prompt, and any token containing `{model}` is dropped when no
   model override was asked for — write `--model={model}` as one token so

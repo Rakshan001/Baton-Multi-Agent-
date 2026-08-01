@@ -10,6 +10,7 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   type VerifiedDaemon, listVerifiedDaemons, removeDaemonRecord, stopDaemon,
+  sweepDeadDaemonRecords,
 } from '../daemons.js';
 
 function uptime(startedAt: string): string {
@@ -31,9 +32,12 @@ export async function psCmd(): Promise<void> {
     console.log('No Baton daemons on this machine. Start one:  baton serve --write');
     return;
   }
-  console.log('PORT   PID     UPTIME   STATUS  PATH');
+  console.log('PORT   PID     UPTIME   MODE     STATUS  PATH');
   for (const d of daemons) {
-    console.log(`${String(d.port).padEnd(6)} ${String(d.pid).padEnd(7)} ${uptime(d.startedAt).padEnd(8)} ${d.status.padEnd(7)} ${d.root}`);
+    // The record knows how the daemon was started; hiding that made "did I
+    // start this one with --write?" a question `ps` could not answer.
+    const mode = (d.writeEnabled ? 'rw' : 'ro') + (d.host ? '+host' : '');
+    console.log(`${String(d.port).padEnd(6)} ${String(d.pid).padEnd(7)} ${uptime(d.startedAt).padEnd(8)} ${mode.padEnd(8)} ${d.status.padEnd(7)} ${d.root}`);
   }
   const stale = daemons.filter((d) => d.status === 'stale');
   if (stale.length) {
@@ -42,6 +46,24 @@ export async function psCmd(): Promise<void> {
     // port with the live daemon that replaced it, and `stop <port>` alone
     // would act on both.
     for (const d of stale) console.log(`  Clean up:  baton daemon stop ${d.port} ${d.pid}   — a stale record is only ever deleted, never signalled.`);
+    if (stale.length > 1) console.log('  All at once:  baton daemon clean   — removes every record whose process is provably gone.');
+  }
+}
+
+/**
+ * `baton daemon clean` — the bulk twin of the per-row clean-up. Buries every
+ * record whose pid is dead; a record that failed probing while its pid lives
+ * (busy daemon, port hijacked by another app) is deliberately kept, because
+ * only the targeted `stop <port> <pid>` should decide its fate.
+ */
+export async function cleanCmd(): Promise<void> {
+  const buried = await sweepDeadDaemonRecords();
+  for (const r of buried) console.log(`✓ removed record for port ${r.port} pid ${r.pid} (${r.root}) — the daemon behind it is gone`);
+  if (!buried.length) console.log('Nothing to clean — no record names a dead process.');
+  const kept = (await listVerifiedDaemons()).filter((d) => d.status === 'stale');
+  if (kept.length) {
+    console.log(`\n  ${kept.length} stale record${kept.length === 1 ? '' : 's'} kept: the process is alive but did not answer as that daemon.`);
+    console.log('  A busy daemon can miss one probe — check `baton ps` again, or target one with `baton daemon stop <port> <pid>`.');
   }
 }
 

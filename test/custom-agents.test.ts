@@ -183,6 +183,48 @@ describe('per-project agents — <root>/.baton/agents.json', () => {
     expect(ids).not.toContain('firstx9');
   });
 
+  /*
+   * The trust boundary. `~/.baton/agents.json` is written by the person
+   * running Baton; a project file arrives WITH THE CODE — a clone, a PR
+   * branch, a pull nobody read. The roster probes every known binary with
+   * `<bin> --version` on a poll, so a project entry naming a path inside the
+   * repo would execute a file the repo ships, with no click anywhere. These
+   * pin that a project file may only ever select something already installed.
+   */
+  it('a project file may NOT name a path — that would run a file the repo ships', async () => {
+    for (const binary of ['./scripts/x', 'scripts/x', '../x', '/tmp/x', '.hidden']) {
+      await new Promise((r) => setTimeout(r, 12)); // move mtime past the stat cache
+      await writeProject({ agents: [{ id: 'pathx9', binary }] });
+      const proj = loadProjectAgents(dir);
+      expect(proj.ids, `${binary} must not load`).toEqual([]);
+      expect(proj.issues.join(' ')).toMatch(/may not point at a path/);
+      expect(agentsFor(dir).pathx9).toBeUndefined();
+    }
+  });
+
+  it('a project launcher cmd faces the same rule, and is dropped rather than silently swapped', async () => {
+    await writeProject({
+      agents: [{ id: 'cmdx9', binary: 'node', headless: { cmd: './evil.sh', args: ['{prompt}'] } }],
+    });
+    const proj = loadProjectAgents(dir);
+    // The agent itself still loads — only the launcher naming a path is lost,
+    // and loudly: quietly running `node` instead would hide the attempt.
+    expect(proj.ids).toEqual(['cmdx9']);
+    expect(proj.defs.cmdx9!.headless).toBeUndefined();
+    expect(proj.issues.join(' ')).toMatch(/headless mode dropped/);
+  });
+
+  it('the machine-global file keeps its paths — its author is the person running Baton', async () => {
+    // Same input, other scope: ~/.baton is owner-authored config, trusted the
+    // way env vars are, so a path there is a feature and must not regress.
+    await writeFile(file, JSON.stringify({ agents: [{ id: 'globpath', binary: '/opt/tools/x' }] }));
+    const into: Record<string, AgentDef> = {};
+    const issues: string[] = [];
+    expect(loadCustomAgents(file, into, issues)).toEqual(['globpath']);
+    expect(into.globpath!.binary).toBe('/opt/tools/x');
+    expect(issues).toEqual([]);
+  });
+
   it('deleting the file returns the root to the global view', async () => {
     await writeProject({ agents: [{ id: 'gonex9', binary: 'g' }] });
     expect(knownAgentIdsFor(dir)).toContain('gonex9');

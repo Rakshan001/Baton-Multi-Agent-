@@ -32,6 +32,10 @@ export interface AgentRosterEntry {
   live: LiveSession[];
   /** installed, nothing running */
   idle: boolean;
+  /** Defined by this repo's `.baton/agents.json` rather than by the person
+   *  running Baton — surfaced so a repo-supplied entry can never pass for a
+   *  built-in in a list you launch from. */
+  fromProject?: true;
 }
 
 // probeBinary spawns a process per agent; cache so /api/agents stays poll-cheap.
@@ -90,6 +94,7 @@ export async function collectAgents(root: string, now = Date.now()): Promise<Age
         mcp,
         live,
         idle: installed && live.length === 0,
+        ...(def.fromProject ? { fromProject: true as const } : {}),
       };
     }),
   );

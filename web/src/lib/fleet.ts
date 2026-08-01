@@ -46,8 +46,9 @@ export function fleetOrder(rows: FleetDaemon[]): FleetDaemon[] {
   });
 }
 
-/* ---- demo fixtures (three daemons, one stale — the showcase must show the
-   stale path too, because "Clean up" is half the feature) ---- */
+/* ---- demo fixtures (four daemons, TWO stale — the showcase must show the
+   stale path too, because "Clean up" is half the feature, and the bulk
+   "Clean up all" control only appears once corpses outnumber one) ---- */
 
 const mins = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -62,6 +63,10 @@ export const DEMO_FLEET: FleetDaemon[] = [
   },
   {
     pid: 38122, port: 7091, root: "/Users/you/dev/scratch/spike-old", startedAt: mins(2890),
+    version: "0.0.1", writeEnabled: true, host: false, status: "stale", self: false,
+  },
+  {
+    pid: 37544, port: 7092, root: "/Users/you/dev/scratch/spike-older", startedAt: mins(4120),
     version: "0.0.1", writeEnabled: true, host: false, status: "stale", self: false,
   },
 ];

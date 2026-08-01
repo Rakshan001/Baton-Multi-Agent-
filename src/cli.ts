@@ -23,7 +23,7 @@ import { lsCmd } from './commands/ls.js';
 import { statusCmd } from './commands/status.js';
 import { historyCmd } from './commands/history.js';
 import { serveCmd } from './commands/serve.js';
-import { psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
+import { cleanCmd as daemonCleanCmd, psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
 import { mergeCmd } from './commands/merge.js';
 import { rmCmd } from './commands/rm.js';
 import { worktreeGcCmd } from './commands/clean.js';
@@ -166,6 +166,10 @@ daemon
   .argument('[pid]', 'narrow to one record when several share the target — cleaning a corpse must not stop the live daemon on its port')
   .description('stop a daemon anywhere on this machine (graceful, SIGTERM fallback); cleans up stale records')
   .action((target: string, pid?: string) => run(() => daemonStopCmd(target, pid)));
+daemon
+  .command('clean')
+  .description('remove every fleet record whose process is provably gone — deletion only, nothing running is signalled')
+  .action(() => run(daemonCleanCmd));
 
 const host = program.command('host').description('link this machine to a hub host, so its file claims join the shared picture');
 host

@@ -522,6 +522,10 @@ export interface AgentRosterEntry {
   mcp: McpStatus;
   live: LiveSession[];
   idle: boolean;
+  /** Defined by this repo's `.baton/agents.json`, not by you — the Agents
+   *  screen labels it, because config that arrives with a `git pull` should
+   *  never look like a built-in. */
+  fromProject?: true;
 }
 
 /** POST /api/agents/:id/connect result. */

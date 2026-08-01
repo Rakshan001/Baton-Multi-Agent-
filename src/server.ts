@@ -87,8 +87,8 @@ import {
   TeamError, addTeam, findTeam, loadTeams, removeTeam, teamId as slugTeamId, updateTeam,
 } from './teams.js';
 import {
-  listDaemonRecords, listVerifiedDaemons, removeDaemonRecord, removeDaemonRecordSync,
-  stopDaemon, verifyDaemon, writeDaemonRecord,
+  type DaemonRecord, listDaemonRecords, listVerifiedDaemons, removeDaemonRecord,
+  removeDaemonRecordSync, stopDaemon, sweepDeadDaemonRecords, verifyDaemon, writeDaemonRecord,
 } from './daemons.js';
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
@@ -1062,6 +1062,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       process.exit(0);
     }, 150);
     return;
+  }
+
+  if (method === 'POST' && path === '/api/daemons/clean') {
+    if (!access.local) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    // Bulk clean-up: deletion only, and only of records whose pid is provably
+    // dead — no probe is consulted, so a flap can never widen this into
+    // touching the living. Stale-but-pid-alive records stay for the per-row
+    // stop route, which re-verifies each one.
+    const buried = await sweepDeadDaemonRecords();
+    return send(res, 200, { ok: true, removed: buried.length }, origin);
   }
 
   const daemonStopM = path.match(/^\/api\/daemons\/(\d{1,5})\/stop$/);
@@ -2090,6 +2101,12 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // Conservative startup sweep: delete only provably-dead temp files + stale
   // uploads (never worktrees/branches/tmux). Best-effort, like the watcher below.
   void sweepTmpFiles(root).catch(() => undefined);
+  // Fleet self-healing: bury records left machine-wide by crashed daemons, so
+  // corpses do not pile up waiting for someone to run `baton daemon clean`.
+  // pid-death only — no probes, nothing signalled — safe unattended.
+  void sweepDeadDaemonRecords()
+    .then((buried) => { if (buried.length) console.log(`baton serve: swept ${buried.length} fleet record${buried.length === 1 ? '' : 's'} left by crashed daemons`); })
+    .catch(() => undefined);
   // Apply any saved memory-retention policy once at startup (best-effort).
   void loadRetention(root)
     .then((p) => (retentionActive(p) ? pruneMemories(root, p) : []))
@@ -2228,11 +2245,17 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
       // that" is the whole question this error used to leave open. Verified
       // first: a stale record plus some OTHER app on the port would otherwise
       // produce a confident lie, and a `baton daemon stop` that frees nothing.
-      const holder = (await listDaemonRecords().catch(() => []))
-        .find((r) => r.port === opts.port);
-      const vouched = holder && (await verifyDaemon(holder).catch(() => 'stale')) === 'live';
-      console.error(vouched
-        ? `baton serve: port ${opts.port} is already serving ${holder.root} — stop it with: baton daemon stop ${opts.port}`
+      // EVERY record on the port, not the first: a crash leftover and the
+      // live daemon can both claim it, and the leftover often sorts first —
+      // checking only that one would print "unknown holder" while the
+      // registry knew exactly who to name.
+      const claims = (await listDaemonRecords().catch(() => [])).filter((r) => r.port === opts.port);
+      let holder: DaemonRecord | undefined;
+      for (const c of claims) {
+        if ((await verifyDaemon(c).catch(() => 'stale')) === 'live') { holder = c; break; }
+      }
+      console.error(holder
+        ? `baton serve: port ${opts.port} is already serving ${holder.root} — stop it with: baton daemon stop ${opts.port} ${holder.pid}`
         : `baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
       process.exit(1);
     }

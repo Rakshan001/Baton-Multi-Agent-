@@ -137,8 +137,25 @@ describe.runIf(hasDist)('fleet endpoints', () => {
   it('a read-only daemon refuses shutdown and the stop proxy', async () => {
     expect((await api(PORT_RO, '/api/shutdown', { method: 'POST' })).status).toBe(403);
     expect((await api(PORT_RO, `/api/daemons/${PORT_B}/stop`, { method: 'POST' })).status).toBe(403);
+    expect((await api(PORT_RO, '/api/daemons/clean', { method: 'POST' })).status).toBe(403);
     // ...but may still LOOK: listing is a read.
     expect((await api(PORT_RO, '/api/daemons')).status).toBe(200);
+  });
+
+  it('POST /api/daemons/clean buries every dead-pid record at once and touches nothing alive', async () => {
+    // Two crash leftovers from different ports; the three real daemons stand
+    // among them. The bulk clean is deletion-by-pid-death only, so it must
+    // report exactly the corpses and leave every living record where it was.
+    await writeDaemonRecord(corpse(7961, repoB), registry);
+    await writeDaemonRecord({ ...corpse(7962, repoB), pid: 2 ** 24 + 1 }, registry);
+    const { status, body } = await api(PORT_A, '/api/daemons/clean', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.removed).toBe(2);
+    const fleet = (await api(PORT_A, '/api/daemons')).body.daemons;
+    expect(fleet.map((d: any) => d.port).sort()).toEqual([PORT_A, PORT_B, PORT_RO]);
+    expect(fleet.every((d: any) => d.status === 'live')).toBe(true);
+    // A second clean finds nothing — the sweep is idempotent, not greedy.
+    expect((await api(PORT_A, '/api/daemons/clean', { method: 'POST' })).body.removed).toBe(0);
   });
 
   it('a pid-targeted stop cleans ONLY the corpse sharing a live daemon\'s port', async () => {

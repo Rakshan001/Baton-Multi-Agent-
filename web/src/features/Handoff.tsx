@@ -130,35 +130,40 @@ export function HandoffDialog({
 
   const pick = (id: AgentId) => { userPicked.current = true; setTarget(id); };
 
-  // Routing suggestion: preselect only while the user hasn't picked anything.
+  // Both suggestions are FETCHED here and VALIDATED below, deliberately split:
+  // validating inside these callbacks read an `options` captured at mount,
+  // when customIds was still empty — so a suggestion naming a custom agent
+  // was rejected by the very list added to accept it.
   useEffect(() => {
     if (!task?.task) return;
     let on = true;
     BatonAPI.getRouting(task.task).then((r) => {
-      if (!on || !r.suggestion) return;
-      setSuggestion(r.suggestion);
-      // Manual mode = advisory only — show the chip, never preselect.
-      if (r.suggestion.mode === "manual") return;
-      const valid = options.some((a) => a.id === r.suggestion!.agent);
-      if (valid && !userPicked.current) setTarget((cur) => cur ?? (r.suggestion!.agent as AgentId));
+      if (on && r.suggestion) setSuggestion(r.suggestion);
     }).catch(() => undefined);
     return () => { on = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task?.task]);
 
-  // Load-aware recommendation: prefer a free agent. Overrides the routing-only
-  // preselect (it already folds routing in as a tie-break) unless the user chose.
   useEffect(() => {
     let on = true;
-    BatonAPI.suggestHandoff(slug).then((s) => {
-      if (!on) return;
-      setLoad(s);
-      const valid = s.recommended && options.some((a) => a.id === s.recommended);
-      if (valid && !userPicked.current) setTarget(s.recommended as AgentId);
-    }).catch(() => undefined);
+    BatonAPI.suggestHandoff(slug).then((s) => { if (on) setLoad(s); }).catch(() => undefined);
     return () => { on = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
+
+  // Preselect, re-run whenever the option list or either suggestion changes —
+  // including when meta.agents finally lands. Load-aware wins over routing
+  // (it already folds routing in as a tie-break); a manual-mode routing
+  // suggestion is advisory only, shown as a chip and never preselected.
+  useEffect(() => {
+    if (userPicked.current) return;
+    const valid = (id?: string | null): boolean => !!id && options.some((a) => a.id === id);
+    if (valid(load?.recommended)) { setTarget(load!.recommended as AgentId); return; }
+    if (suggestion && suggestion.mode !== "manual" && valid(suggestion.agent)) {
+      setTarget((cur) => cur ?? (suggestion.agent as AgentId));
+    }
+    // `options` is rebuilt every render; customIds + the excluded agent are
+    // what actually change it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestion, load, customIds, task?.agent]);
 
   useFocusTrap(ref, onClose, { autoFocus: false });
   useEffect(() => { const t = setTimeout(() => ref.current?.focus(), 40); return () => clearTimeout(t); }, []);

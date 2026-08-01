@@ -350,9 +350,11 @@ function SessionSettings({ viewer }: { viewer?: Meta["viewer"] }) {
 function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
   const fleet = usePoll<FleetDaemon[] | null>(() => BatonAPI.getDaemons(), { interval: 5000 });
   const [confirm, setConfirm] = useState<FleetDaemon | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState<string[]>([]);
   const rows = fleetOrder(fleet.data ?? []);
+  const staleCount = rows.filter((d) => d.status === "stale").length;
   // A "stopping…" row un-greys the moment the poll stops listing it — and if
   // its record SURVIVES a stop attempt (refused/failed), the key must not pin
   // the row at half-opacity with a dead button forever.
@@ -389,6 +391,28 @@ function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
       setConfirm(null);
     } catch (e) {
       showToast({ kind: "error", title: "Could not stop it", desc: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cleanAll = async () => {
+    setBusy(true);
+    try {
+      // The server buries only records whose pid is provably dead, so the
+      // count it reports can be smaller than the stale rows on screen — the
+      // toast repeats what actually happened, not what the screen promised.
+      const r = await BatonAPI.cleanFleet();
+      // Grey the rows we asked to remove, same as a per-row clean-up: the
+      // poll is up to 5s away, and leaving them at full opacity reads as
+      // "nothing happened". The effect above un-greys any that survive.
+      if (r.removed > 0) setStopping((s) => [...s, ...rows.filter((d) => d.status === "stale").map((d) => `${d.pid}-${d.port}`)]);
+      showToast(r.removed > 0
+        ? { kind: "ok", title: "Cleaned up", desc: `${r.removed} stale record${r.removed === 1 ? "" : "s"} removed — the daemons behind them were already gone.` }
+        : { kind: "ok", title: "Nothing to clean", desc: "Every remaining record names a process that is still alive." });
+      setConfirmAll(false);
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not clean up", desc: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -434,6 +458,27 @@ function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
           </div>
         );
       })}
+      {/* One click for a pile of corpses — but only when there IS a pile;
+          a single stale row's own button is already one click. */}
+      {staleCount > 1 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "9px 16px" }}>
+          <span data-tip={writeEnabled ? undefined : "Read-only — enable Write actions (the daemon needs baton serve --write)"}>
+            <button className="btn btn-sm btn-ghost fr" disabled={busy || !writeEnabled} onClick={() => setConfirmAll(true)}>
+              Clean up all {staleCount} stale records
+            </button>
+          </span>
+        </div>
+      )}
+      <ConfirmDialog
+        open={confirmAll}
+        onClose={() => setConfirmAll(false)}
+        onConfirm={() => void cleanAll()}
+        busy={busy}
+        icon="trash"
+        title="Clean up all stale records?"
+        confirmLabel="Clean up all"
+        body={<span>Removes every record whose daemon is provably gone. Only leftover files are deleted — nothing running is touched, and a record whose process turns out to be alive is kept.</span>}
+      />
       <ConfirmDialog
         open={confirm !== null}
         onClose={() => setConfirm(null)}

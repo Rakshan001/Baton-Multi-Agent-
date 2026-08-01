@@ -109,6 +109,47 @@ export function removeDaemonRecordSync(pid: number, port: number, dir = daemonsD
   try { unlinkSync(recordPath(pid, port, dir)); } catch { /* already gone */ }
 }
 
+/**
+ * Bury every record whose pid is provably gone. Deletion only, and decided on
+ * pid-death alone — no port is probed, so a busy daemon missing one probe can
+ * never get its record swept here. That strictness is what makes this safe to
+ * run unattended (daemon startup, `baton daemon clean`, the dashboard's bulk
+ * clean-up): a record kept may still be stale for other reasons, but a record
+ * removed could not have named a living process.
+ */
+export async function sweepDeadDaemonRecords(dir = daemonsDir()): Promise<DaemonRecord[]> {
+  const buried: DaemonRecord[] = [];
+  // A crash between the claim and the delete below leaves a `.sweep-<pid>`
+  // file. It is inert (no listing looks at it — they filter on `.json`), but
+  // this IS the hygiene routine, so it does not get to litter: reclaim any
+  // whose claimer is gone. A live claimer's file is mid-sweep, so leave it.
+  await readdir(dir).then((names) => Promise.all(names.map(async (n) => {
+    const m = /\.sweep-(\d+)$/.exec(n);
+    if (m && !pidAlive(Number(m[1]))) await unlink(join(dir, n)).catch(() => undefined);
+  }))).catch(() => undefined);
+  for (const rec of await listDaemonRecords(dir)) {
+    if (pidAlive(rec.pid)) continue;
+    // CLAIM, then delete. Every caller REPORTS this list ("3 records
+    // removed", one ✓ per row) and sweeps race routinely — every `baton
+    // serve` startup runs one, alongside `baton daemon clean` and the
+    // dashboard's Clean up all — across processes, so no in-process lock can
+    // serialize them. `unlink` cannot decide the winner: two concurrent
+    // unlinks of one path BOTH resolve successfully here, so counting on its
+    // success reports the same corpse twice. Renaming to a pid-unique name
+    // is the atomic claim POSIX does guarantee — exactly one rename can move
+    // a given file, so exactly one sweep counts it.
+    const claim = `${recordPath(rec.pid, rec.port, dir)}.sweep-${process.pid}`;
+    try {
+      await rename(recordPath(rec.pid, rec.port, dir), claim);
+    } catch {
+      continue; // another sweep got there first — theirs to report, not ours
+    }
+    await unlink(claim).catch(() => undefined);
+    buried.push(rec);
+  }
+  return buried;
+}
+
 /** Every record on this machine. One corrupt file must not hide the rest, so
  *  parse failures are skipped per-file, never thrown. */
 export async function listDaemonRecords(dir = daemonsDir()): Promise<DaemonRecord[]> {

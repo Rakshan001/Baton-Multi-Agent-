@@ -108,6 +108,26 @@ baton serve [-p|--port <port>] [--write]
 
 See [Dashboard](./dashboard.md) and [Security](./security.md).
 
+### `ps` / `daemon` — the fleet
+Every `baton serve` on this machine, across all projects. Each daemon writes one
+record file to `~/.baton/daemons/`; a record is a **claim**, verified before it
+is shown live (pid alive + the port answers `/api/meta` as the same repo + the
+answering process *is* that pid) — and a stale record is only ever deleted,
+never signalled.
+
+```bash
+baton ps                          # PORT · PID · UPTIME · MODE (rw/ro, +host) · STATUS · PATH
+baton daemon stop <port|path> [pid]   # stop a live daemon (graceful, SIGTERM fallback)
+                                      # pid narrows to one record when a corpse shares the port
+baton daemon clean                # bury every record whose process is provably gone
+```
+
+`daemon clean` decides on pid-death alone — no port is probed, so a busy daemon
+missing one probe can never lose its record to it. The same sweep runs
+automatically when any daemon starts, so crash leftovers heal on their own. The
+dashboard's Settings → *Daemons on this machine* card is the same surface with
+buttons (loopback-only; a `--host` member can neither see nor stop anything).
+
 ### `doctor` / `clean`
 Audit and reclaim junk — orphaned worktrees, `baton/*` branches, ghost tmux sessions, leaked temp files.
 
