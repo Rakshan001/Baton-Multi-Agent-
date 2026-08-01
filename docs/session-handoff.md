@@ -117,7 +117,7 @@ compact:
 
 ```bash
 baton hooks install claude            # user-wide (~/.claude/settings.json)
-baton hooks install claude --project  # this repo (.claude/settings.json)
+baton hooks install claude --project  # this workspace (.claude/settings.json at the baton root)
 ```
 
 This wires Claude Code's **Stop** and **PreCompact** hooks to run

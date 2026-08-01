@@ -13,12 +13,32 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { gitRoot } from '../git.js';
+import { activeBatonRoot } from '../store.js';
 
 const PASS_CMD = 'baton pass --auto';
 const GUARD_CMD = 'baton guard';
 const GUARD_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
 const ORIENT_CMD = 'baton orient --auto';
+
+/**
+ * Where an install writes. `--project` means "this workspace", which is the
+ * BATON root — the directory that owns `.baton/`, and the same root
+ * `baton skills install` writes `.claude/skills/` into. It is deliberately not
+ * `gitRoot()`: run from inside a task worktree that answers the worktree, so
+ * the config landed in `.baton/wt/<slug>/.claude/settings.json` — a throwaway
+ * checkout that `baton merge` deletes, taking the hooks with it while the
+ * command reported success; and at the root of a multi-repo hub, which need
+ * not be a git repo, it threw and the install died outright.
+ */
+export async function hooksFile(
+  agent: 'claude' | 'cursor',
+  opts: { project?: boolean },
+  cwd?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const rel = agent === 'cursor' ? ['.cursor', 'hooks.json'] : ['.claude', 'settings.json'];
+  return join(opts.project ? await activeBatonRoot(cwd, env) : homedir(), ...rel);
+}
 
 interface HookEntry { type: string; command: string }
 interface HookMatcher { matcher?: string; hooks: HookEntry[] }
@@ -71,9 +91,7 @@ export async function hooksInstallCmd(agent: string, opts: { project?: boolean }
     process.exitCode = 1;
     return;
   }
-  const file = opts.project
-    ? join(await gitRoot(), '.claude', 'settings.json')
-    : join(homedir(), '.claude', 'settings.json');
+  const file = await hooksFile('claude', opts);
 
   let settings: ClaudeSettings = {};
   if (existsSync(file)) {
@@ -102,9 +120,7 @@ export async function hooksInstallCmd(agent: string, opts: { project?: boolean }
 
 /** `baton hooks install cursor [--project]` — wire Cursor's afterFileEdit to the guard (M2). */
 async function hooksInstallCursor(opts: { project?: boolean }): Promise<void> {
-  const file = opts.project
-    ? join(await gitRoot(), '.cursor', 'hooks.json')
-    : join(homedir(), '.cursor', 'hooks.json');
+  const file = await hooksFile('cursor', opts);
 
   let config: Parameters<typeof withCursorHooks>[0] = {};
   if (existsSync(file)) {

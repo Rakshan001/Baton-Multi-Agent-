@@ -476,7 +476,7 @@ const hooks = program.command('hooks').description('agent-side hook installation
 hooks
   .command('install')
   .argument('<agent>', 'claude | cursor')
-  .option('--project', 'install into this repo (.claude/settings.json / .cursor/hooks.json) instead of the home dir')
+  .option('--project', 'install into this workspace (.claude/settings.json / .cursor/hooks.json at the baton root) instead of the home dir')
   .description('claude: handoff brief + edit guard + orient; cursor: afterFileEdit edit-signal guard')
   .action((agent: string, opts: { project?: boolean }) => run(() => hooksInstallCmd(agent, opts)));
 

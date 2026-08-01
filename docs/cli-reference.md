@@ -247,8 +247,13 @@ baton skills import <path|url>          # add your own, then install it
 Auto-generate a handoff brief when a Claude Code session ends (Stop / PreCompact hooks).
 
 ```bash
-baton hooks install claude [--project]   # --project: write into this repo's .claude/settings.json
+baton hooks install claude [--project]   # --project: write into this workspace's .claude/settings.json
 ```
+
+`--project` writes to the **baton root** — the directory that owns `.baton/`,
+the same root `baton skills install` uses. Run from inside a task worktree it
+still installs at that root, never into the worktree (which merge deletes); in a
+multi-repo hub it installs at the hub, which need not be a git repo at all.
 
 ### `mcp`
 Run the Baton coordination MCP server over stdio (`check_files`, `get_report`, `who_touched`, `save_memory`, `recall_memory`, …). Usually invoked by an agent via the config from `baton kb mcp`, not by hand. See [MCP tools](./mcp-tools.md).
