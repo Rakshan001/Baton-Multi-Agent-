@@ -5,11 +5,11 @@
  * Without: lists tasks and their commit counts. Designed for low token cost —
  * an agent reads a few rows instead of scanning the whole git log.
  */
-import { gitRoot } from '../git.js';
 import { listHistory, queryFile } from '../history.js';
+import { activeBatonRoot } from '../store.js';
 
 export async function historyCmd(file?: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
 
   if (file) {
     const hits = queryFile(root, file);

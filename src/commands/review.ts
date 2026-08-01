@@ -17,8 +17,9 @@
  * point of the two/three-axis split is that one axis passing can't mask another
  * failing, and a combined "worst issue" would undo that.
  */
-import { gitRoot, headCommit } from '../git.js';
+import { headCommit } from '../git.js';
 import { bus } from '../events.js';
+import { activeBatonRoot } from '../store.js';
 import {
   countByAxis, isReviewStale, listReviews, loadReview, openFindings, resolveFinding,
   REVIEW_AXES, reviewHeads, saveReview, type ReviewAxis, type ReviewFinding, type ReviewRecord,
@@ -81,7 +82,7 @@ function printRecord(rec: ReviewRecord, currentHead: string): void {
 
 /** `baton review save <slug>` — read a findings JSON payload on stdin. */
 export async function reviewSaveCmd(slug: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
 
   // An interactive terminal never sends EOF on its own, so waiting for 'end'
   // here hangs forever with no output. Fail fast with the usage instead.
@@ -132,7 +133,7 @@ export async function reviewSaveCmd(slug: string): Promise<void> {
 
 /** `baton review list` — every recorded review, newest first. */
 export async function reviewListCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const all = await listReviews(root);
   if (!all.length) {
     console.log('No reviews recorded.');
@@ -152,7 +153,7 @@ export async function reviewListCmd(): Promise<void> {
 
 /** `baton review show <slug>` — findings grouped by axis. */
 export async function reviewShowCmd(slug: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const rec = await loadReview(root, slug);
   if (!rec) {
     console.error(`No review recorded for '${slug}'. See: baton review list`);
@@ -164,7 +165,7 @@ export async function reviewShowCmd(slug: string): Promise<void> {
 
 /** `baton review resolve <slug> <index>` — mark a finding fixed (or dismissed). */
 export async function reviewResolveCmd(slug: string, refArg: string, opts: { dismiss?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   // A bare number is a positional index; anything else is a stable finding id.
   // Prefer the id when scripting — an index is only valid until the next review.
   const ref: string | number = /^\d+$/.test(refArg.trim()) ? Number.parseInt(refArg, 10) : refArg.trim();

@@ -2,14 +2,13 @@
  * `baton usage` — real token usage per Claude Code session, mapped to tasks.
  * Costs are estimates from a static price table (always labelled est).
  */
-import { gitRoot } from '../git.js';
-import { loadTasks } from '../store.js';
+import { loadTasks , activeBatonRoot } from '../store.js';
 import { usageForRepo } from '../usage.js';
 
 const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 export async function usageCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const { sessions, totals, byModel } = await usageForRepo(root, await loadTasks(root));
   if (!sessions.length) {
     console.log('no Claude Code sessions found for this repo or its worktrees');

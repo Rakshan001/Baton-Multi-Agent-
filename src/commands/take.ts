@@ -3,12 +3,12 @@
  * in-progress, and print the execution prompt for the receiving agent.
  * `baton done [slug]` — mark the brief done.
  */
-import { gitRoot } from '../git.js';
+import { activeBatonRoot } from '../store.js';
 import { briefStalenessWarning, readBrief, setBriefStatus } from '../handoff/brief.js';
 import { resolveTask } from './pass.js';
 
 export async function takeCmd(slug: string | undefined): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const task = await resolveTask(root, slug);
   if (!task) {
     console.error(slug ? `No task '${slug}'. See: baton ls` : 'Not inside a baton worktree — pass a slug: baton take <slug>');
@@ -44,7 +44,7 @@ export async function takeCmd(slug: string | undefined): Promise<void> {
 }
 
 export async function doneCmd(slug: string | undefined): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const task = await resolveTask(root, slug);
   if (!task) {
     console.error(slug ? `No task '${slug}'` : 'Not inside a baton worktree — pass a slug: baton done <slug>');

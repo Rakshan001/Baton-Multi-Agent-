@@ -10,8 +10,8 @@
  * src/teams.ts. `baton member revoke` is still the only thing that takes access
  * away, and the output here says so wherever someone might hope otherwise.
  */
-import { gitRoot } from '../git.js';
 import { activeMembers, clearTeamAssignments, loadMembers, setMemberTeam } from '../members.js';
+import { activeBatonRoot } from '../store.js';
 import { addTeam, findTeam, loadTeams, removeTeam, teamId, teamsPath, updateTeam, type Team } from '../teams.js';
 
 /** `--projects a,b` or `--projects "a, b"`. Empty ⇒ the whole hub. */
@@ -22,7 +22,7 @@ function parseProjects(raw: string | undefined): string[] {
 const scopeOf = (t: Team): string => (t.projects.length ? t.projects.join(', ') : 'whole hub');
 
 export async function teamAddCmd(name: string, opts: { projects?: string } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const team = await addTeam(root, name, parseProjects(opts.projects));
   console.log(`✓ team ${team.name} (${team.id}) created — scope: ${scopeOf(team)}`);
   console.log(`  Put someone in it:  baton team assign <member-id> ${team.id}`);
@@ -35,7 +35,7 @@ export async function teamAddCmd(name: string, opts: { projects?: string } = {})
 }
 
 export async function teamListCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const [teams, reg] = await Promise.all([loadTeams(root), loadMembers(root)]);
   if (!teams.length) {
     console.log('No teams. Members are one flat roster until you add one:');
@@ -55,7 +55,7 @@ export async function teamListCmd(): Promise<void> {
 }
 
 export async function teamRemoveCmd(idOrName: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const team = await removeTeam(root, idOrName);
   const unassigned = await clearTeamAssignments(root, team.id);
   console.log(`✓ team ${team.id} deleted`);
@@ -65,7 +65,7 @@ export async function teamRemoveCmd(idOrName: string): Promise<void> {
 }
 
 export async function teamAssignCmd(memberIdOrName: string, teamIdOrNone: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const wanted = /^(none|-)$/i.test(teamIdOrNone.trim()) ? '' : teamId(teamIdOrNone);
   if (wanted) {
     const teams = await loadTeams(root);
@@ -83,7 +83,7 @@ export async function teamAssignCmd(memberIdOrName: string, teamIdOrNone: string
 }
 
 export async function teamScopeCmd(idOrName: string, projects: string | undefined): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const team = await updateTeam(root, idOrName, { projects: parseProjects(projects) });
   console.log(`✓ ${team.id} scope: ${scopeOf(team)}`);
   console.log('  A view filter, not a permission — it changes what this team sees, not what it can reach.');

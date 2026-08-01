@@ -19,7 +19,7 @@
 import { parseFrontmatter } from '../util/frontmatter.js';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { batonDir, resolveMcpRoot } from '../store.js';
+import { batonDir, activeBatonRoot } from '../store.js';
 import { gitTry } from '../util/exec.js';
 import { buildBrief, handoffPath, readBrief, setBriefStatus, writeBrief, type HandoffBrief } from '../handoff/brief.js';
 import { renderContinuationHead, renderCursorRule, CURSOR_RULE_REL } from '../handoff/continuation.js';
@@ -107,10 +107,10 @@ export interface SnapshotOptions {
  * an active handoff.
  */
 export async function snapshotTask(slug: string | undefined, opts: SnapshotOptions = {}): Promise<HandoffBrief | null> {
-  // A worktree's own gitRoot is a shadow store; resolveMcpRoot honors BATON_ROOT
+  // A worktree's own gitRoot is a shadow store; activeBatonRoot honors BATON_ROOT
   // and escapes the worktree to the owning .baton (hub-safe), so getTask finds
   // the task whether we run at the repo root, in a linked worktree, or in a hub.
-  const root = opts.root ?? (await resolveMcpRoot());
+  const root = opts.root ?? (await activeBatonRoot());
   const task = await resolveTask(root, slug);
   if (!task) return null;
 

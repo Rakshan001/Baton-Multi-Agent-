@@ -4,10 +4,9 @@
  */
 import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { gitRoot } from '../git.js';
 import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanup.js';
 import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from '../kb/sprawl.js';
-import { batonDir, loadTasks, resolveBatonRoot } from '../store.js';
+import { batonDir, loadTasks, resolveBatonRoot , activeBatonRoot } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { auditKb, type KbFinding } from '../kb/health.js';
 import {
@@ -58,7 +57,7 @@ function printKb(findings: KbFinding[]): void {
 
 export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): Promise<void> {
   if (opts.docs) return doctorDocsCmd();
-  const report = await auditJunk(await gitRoot());
+  const report = await auditJunk(await activeBatonRoot());
   printReport(report);
   if (report.items.length) {
     const dirty = report.items.some((i) => i.blocked === 'dirty');
@@ -209,7 +208,7 @@ const SPRAWL_LABEL: Record<SprawlFinding['kind'], string> = {
  * (see sprawl.ts for why bulk import can't be auto-applied).
  */
 export async function doctorDocsCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const findings = scanDocSprawl(await listRepoFiles(root));
   if (!findings.length) {
     console.log('✓ no doc sprawl found — the knowledge base is the single source');
@@ -229,7 +228,7 @@ export async function doctorDocsCmd(): Promise<void> {
 }
 
 export async function cleanCmd(opts: { fix?: boolean; force?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const report = await auditJunk(root);
   if (!report.items.length) {
     console.log('✓ no junk found — nothing to clean');

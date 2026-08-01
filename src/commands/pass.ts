@@ -9,9 +9,8 @@ import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { gitRoot } from '../git.js';
 import { gitTry } from '../util/exec.js';
-import { batonDir, getTask, loadTasks, type Task } from '../store.js';
+import { batonDir, getTask, loadTasks, type Task , activeBatonRoot } from '../store.js';
 import { buildBrief, readBrief, writeBrief, type HandoffBrief } from '../handoff/brief.js';
 import { loadRouting, resolveChain, suggestRoute, type RouteSuggestion } from '../routing.js';
 import { agentInstalled } from '../agents/roster.js';
@@ -83,7 +82,7 @@ export interface PassResult {
 
 /** Core pass pipeline, shared by CLI and POST /api/tasks/:slug/handoff. */
 export async function passTask(slug: string | undefined, opts: PassOptions, root?: string): Promise<PassResult | null> {
-  const repoRoot = root ?? (await gitRoot());
+  const repoRoot = root ?? (await activeBatonRoot());
   const task = await resolveTask(repoRoot, slug);
   if (!task) {
     if (opts.auto) return null; // hook fired outside a baton worktree — fine

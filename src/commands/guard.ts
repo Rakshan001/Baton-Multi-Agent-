@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { relative, isAbsolute, dirname, basename, join } from 'node:path';
 import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
-import { resolveMcpRoot, batonDir } from '../store.js';
+import { activeBatonRoot, batonDir } from '../store.js';
 import { checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
 import { snapshotDue } from './snapshot.js';
 import { guardrailReminderDue, formatGuardrailReminder } from '../handoff/guardrails.js';
@@ -168,7 +168,7 @@ async function runGuard(agent: string): Promise<string | null> {
   const worktreeRoot = await gitRoot(cwd);
   const rel = guardTarget(await canonicalTarget(payload), worktreeRoot);
   if (!rel) return null;
-  const root = await resolveMcpRoot(cwd);
+  const root = await activeBatonRoot(cwd);
   const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG, agent);
   // G2: the guard WRITES the signal too — the daemon-less path that makes
   // sessions at the repo root (and worktree sessions with no daemon) visible

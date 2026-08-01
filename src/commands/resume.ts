@@ -5,8 +5,8 @@
  * brief to in-progress. `baton take` remains the task-worktree-specific path;
  * resume covers everything, including root sessions with no worktree.
  */
-import { gitRoot } from '../git.js';
 import { briefStalenessWarning } from '../handoff/brief.js';
+import { activeBatonRoot } from '../store.js';
 import { listBriefs, setBriefStatusAt } from '../handoff/resume.js';
 
 function age(iso: string): string {
@@ -19,7 +19,7 @@ function age(iso: string): string {
 }
 
 export async function resumeCmd(slug: string | undefined, opts: { json?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const briefs = await listBriefs(root);
 
   if (!slug) {

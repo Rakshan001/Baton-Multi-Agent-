@@ -3,7 +3,7 @@
  * shell-driven / interactive agents that aren't calling the MCP tool. Surfaced
  * to siblings via check_files/list_signals; expires in 30 min, clears on commit.
  */
-import { resolveMcpRoot } from '../store.js';
+import { activeBatonRoot } from '../store.js';
 import { gitRoot } from '../git.js';
 import { setProgress } from '../signals.js';
 import { slugFromWorktreePath } from './guard.js';
@@ -21,6 +21,6 @@ export async function progressCmd(note: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  setProgress(await resolveMcpRoot(), slug, text.slice(0, 200));
+  setProgress(await activeBatonRoot(), slug, text.slice(0, 200));
   console.log(`✓ reported for ${slug}: ${text}`);
 }

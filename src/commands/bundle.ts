@@ -8,7 +8,7 @@
  */
 import { resolve } from 'node:path';
 import { gitRoot } from '../git.js';
-import { getTask, loadTasks, type Task } from '../store.js';
+import { getTask, loadTasks, type Task , activeBatonRoot } from '../store.js';
 import {
   buildBundle, importBundle, readBundle, restoreContext, writeBundle, BundleError,
 } from '../handoff/bundle.js';
@@ -27,7 +27,7 @@ export interface HandoffExportOpts {
 }
 
 export async function handoffExportCmd(slug: string | undefined, opts: HandoffExportOpts = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const task = await resolveTask(root, slug);
   if (!task) {
     console.error(slug ? `No task '${slug}'.` : 'Not inside a task worktree — pass a slug: baton handoff export <slug>');

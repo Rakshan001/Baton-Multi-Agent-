@@ -8,7 +8,7 @@ const same = async (a: string, b: string) =>
   expect(await realpath(a)).toBe(await realpath(b));
 import { git } from '../src/util/exec.js';
 import { createTask } from '../src/commands/new.js';
-import { resolveMcpRoot } from '../src/store.js';
+import { activeBatonRoot } from '../src/store.js';
 
 async function initRepo(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
@@ -23,7 +23,7 @@ async function initRepo(prefix: string): Promise<string> {
   return root;
 }
 
-describe('resolveMcpRoot — coordination tools must read the hub store, not a worktree shadow', () => {
+describe('activeBatonRoot — coordination tools must read the hub store, not a worktree shadow', () => {
   let root: string;
   beforeEach(async () => { root = await initRepo('baton-mcproot-'); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -34,18 +34,18 @@ describe('resolveMcpRoot — coordination tools must read the hub store, not a w
     // per-worktree .baton the first time any coordination tool ran in the worktree.
     await mkdir(join(task.worktreePath, '.baton'), { recursive: true });
 
-    await same(await resolveMcpRoot(task.worktreePath, {}), root);
+    await same(await activeBatonRoot(task.worktreePath, {}), root);
   });
 
   it('prefers an explicit BATON_ROOT env (how baton-spawned agents are told their hub root)', async () => {
     const task = await createTask('Add dark mode', root);
     await mkdir(join(task.worktreePath, '.baton'), { recursive: true });
 
-    await same(await resolveMcpRoot(task.worktreePath, { BATON_ROOT: root }), root);
+    await same(await activeBatonRoot(task.worktreePath, { BATON_ROOT: root }), root);
   });
 
   it('resolves a plain (non-worktree) repo checkout to the repo root', async () => {
-    await same(await resolveMcpRoot(root, {}), root);
+    await same(await activeBatonRoot(root, {}), root);
   });
 });
 
@@ -79,7 +79,7 @@ async function initHub(): Promise<{ hub: string; api: string }> {
   return { hub, api };
 }
 
-describe('resolveMcpRoot — a hub sub-project resolves to the hub store, not a shadow', () => {
+describe('activeBatonRoot — a hub sub-project resolves to the hub store, not a shadow', () => {
   let hub: string;
   afterEach(async () => { await rm(hub, { recursive: true, force: true }); });
 
@@ -89,7 +89,7 @@ describe('resolveMcpRoot — a hub sub-project resolves to the hub store, not a 
     // kb.json lists this checkout as a project, so the shadow is illegitimate.
     await mkdir(join(h.api, '.baton'), { recursive: true });
 
-    await same(await resolveMcpRoot(h.api, {}), h.hub);
+    await same(await activeBatonRoot(h.api, {}), h.hub);
   });
 
   it('does NOT hijack an independent nested repo the hub does not claim', async () => {
@@ -101,6 +101,6 @@ describe('resolveMcpRoot — a hub sub-project resolves to the hub store, not a 
     await git(['init', '-q'], vendor);
     await mkdir(join(vendor, '.baton'), { recursive: true });
 
-    await same(await resolveMcpRoot(vendor, {}), vendor);
+    await same(await activeBatonRoot(vendor, {}), vendor);
   });
 });

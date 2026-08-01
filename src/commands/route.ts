@@ -3,15 +3,15 @@
  * matched rule or severity score, the tier's fallback chain, and which chain
  * entry actually resolves on this machine.
  */
-import { gitRoot } from '../git.js';
 import { agentInstalled } from '../agents/roster.js';
+import { activeBatonRoot } from '../store.js';
 import { CONFIG_FILE, loadRouting, resolveChain, suggestRoute } from '../routing.js';
 
 const available = (agent: string, root: string): Promise<boolean> =>
   agent === 'any' ? Promise.resolve(true) : agentInstalled(agent, root);
 
 export async function routeCmd(text: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const { config, path, errors } = await loadRouting(root);
   for (const e of errors) console.error(`! ${CONFIG_FILE}: ${e}`);
 

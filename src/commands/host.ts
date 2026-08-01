@@ -5,14 +5,14 @@
  * Purely opt-in. With no host link the daemon behaves exactly as it always has:
  * local signals, local checks, no network calls at all.
  */
-import { gitRoot } from '../git.js';
+import { activeBatonRoot } from '../store.js';
 import {
   clearHostLink, hostLinkPath, isValidHostUrl, loadHostLink, normalizeHostUrl, saveHostLink,
   sendHeartbeat, HostLinkError,
 } from '../host-link.js';
 
 export async function hostSetCmd(url: string, opts: { token?: string; device?: string } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const clean = normalizeHostUrl(url);
   if (!isValidHostUrl(clean)) {
     console.error(`Not a usable host URL: ${url}`);
@@ -53,7 +53,7 @@ export async function hostSetCmd(url: string, opts: { token?: string; device?: s
 }
 
 export async function hostStatusCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const link = await loadHostLink(root);
   if (!link) {
     console.log('Not linked to a host — this daemon coordinates locally only.');
@@ -75,7 +75,7 @@ export async function hostStatusCmd(): Promise<void> {
 }
 
 export async function hostClearCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const had = await clearHostLink(root);
   console.log(had ? '✓ host link removed — this daemon is local-only again.' : 'No host link to remove.');
 }

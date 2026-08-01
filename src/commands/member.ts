@@ -4,8 +4,8 @@
  * Only relevant once `baton serve --host` is used; a loopback-only daemon needs
  * no members and this registry stays empty.
  */
-import { gitRoot } from '../git.js';
 import { activeMembers, addMember, loadMembers, membersPath, revokeMember, type MemberRole } from '../members.js';
+import { activeBatonRoot } from '../store.js';
 import { findTeam, loadTeams, teamId } from '../teams.js';
 
 const age = (iso: string): string => {
@@ -15,7 +15,7 @@ const age = (iso: string): string => {
 };
 
 export async function memberAddCmd(name: string, opts: { role?: string; team?: string } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const role: MemberRole | undefined = opts.role === 'owner' ? 'owner' : opts.role === 'member' ? 'member' : undefined;
   // Checked before the token is minted: a typo'd team would otherwise cost a
   // rotation to correct, since the token is shown exactly once.
@@ -38,7 +38,7 @@ export async function memberAddCmd(name: string, opts: { role?: string; team?: s
 }
 
 export async function memberListCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const reg = await loadMembers(root);
   if (!reg.members.length) {
     console.log('No members. The daemon is loopback-only until you add one:');
@@ -59,7 +59,7 @@ export async function memberListCmd(): Promise<void> {
 }
 
 export async function memberRevokeCmd(idOrName: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const m = await revokeMember(root, idOrName);
   console.log(`✓ ${m.id} revoked — their token stops working on the next request.`);
   console.log('  Note: this blocks FUTURE access only. Anything already cloned or read stays on their machine.');

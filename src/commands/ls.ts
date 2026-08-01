@@ -1,8 +1,8 @@
 /**
  * `baton ls` — list tasks with their branch, git status, ahead/behind, and age.
  */
-import { aheadBehind, gitRoot, worktreeStatus } from '../git.js';
-import { loadTasks } from '../store.js';
+import { aheadBehind, worktreeStatus } from '../git.js';
+import { loadTasks , activeBatonRoot } from '../store.js';
 
 function age(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -19,7 +19,7 @@ function pad(s: string, n: number): string {
 }
 
 export async function lsCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const tasks = await loadTasks(root);
 
   if (tasks.length === 0) {

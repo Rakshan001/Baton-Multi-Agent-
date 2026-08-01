@@ -23,7 +23,7 @@ import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
 import { ensureBatonGitignore } from '../kb/batonignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
-import { resolveBatonRoot } from '../store.js';
+import { resolveBatonRoot , activeBatonRoot } from '../store.js';
 
 /** Exported for the T2 budget/trigger invariant test — every session reads this. */
 export const AGENT_GUIDE = `
@@ -208,7 +208,7 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
 }
 
 export async function kbStatusCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const { state, projects, merged } = await kbStatus(root);
   if (!state) {
     console.log('knowledge base not initialized — run: baton kb init');
@@ -234,7 +234,7 @@ export async function kbRebuildCmd(
   projectId: string | undefined,
   opts: { full?: boolean } = {},
 ): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const state = await loadKb(root);
   if (!state) {
     console.error('knowledge base not initialized — run: baton kb init');
@@ -269,7 +269,7 @@ export async function kbRebuildCmd(
 }
 
 export async function kbExportCmd(opts: { out?: string } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const state = await loadKb(root);
   if (!state) {
     console.error('knowledge base not initialized — run: baton kb init');
@@ -284,7 +284,7 @@ export async function kbExportCmd(opts: { out?: string } = {}): Promise<void> {
 }
 
 export async function kbImportCmd(source: string, opts: { rebuild?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const result = await importKb(root, source);
   for (const p of result.projects) {
     const mark = p.status === 'ok' ? '✓' : '✗';
@@ -307,7 +307,7 @@ export async function kbImportCmd(source: string, opts: { rebuild?: boolean } = 
 }
 
 export async function kbShareCmd(mode?: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const state = await loadKb(root);
   if (!state) {
     console.error('knowledge base not initialized — run: baton kb init');
@@ -331,7 +331,7 @@ export async function kbShareCmd(mode?: string): Promise<void> {
 }
 
 export async function kbMcpCmd(opts: { agent?: string; port?: string } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const state = await loadKb(root);
   if (!state) {
     console.error('knowledge base not initialized — run: baton kb init');

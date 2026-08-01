@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { collectStatus } from './board.js';
 import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
-import { resolveMcpRoot } from './store.js';
+import { activeBatonRoot } from './store.js';
 import { queryFile, searchHistory } from './history.js';
 import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
@@ -43,9 +43,9 @@ const PRESENCE_TOUCH_MS = 30_000;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
-  // gitRoot() would point at an empty per-worktree shadow store. resolveMcpRoot
+  // gitRoot() would point at an empty per-worktree shadow store. activeBatonRoot
   // finds the real hub/repo .baton (and honors BATON_ROOT for spawned agents).
-  const root = await resolveMcpRoot();
+  const root = await activeBatonRoot();
   // Memory tools resolve the shared main repo themselves (worktree-safe) from a
   // git path, so give them the git root — unchanged in hub mode.
   const memRoot = await gitRoot();

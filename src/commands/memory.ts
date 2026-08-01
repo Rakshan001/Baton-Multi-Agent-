@@ -3,7 +3,7 @@
  * Facts are written by agents via the `save_memory` MCP tool (or the
  * dashboard); this command is the human curation surface.
  */
-import { gitRoot } from '../git.js';
+import { activeBatonRoot } from '../store.js';
 import {
   gcMemories, listMemories, readJournal, removeMemory, repairMemories, saveMemory,
   MemoryValidationError, type MemoryStatus,
@@ -26,7 +26,7 @@ function printFact(f: MemoryStatus): void {
 }
 
 export async function memoryListCmd(): Promise<void> {
-  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const root = await activeBatonRoot();
   const facts = await listMemories(root);
   if (!facts.length) {
     console.log('no memories yet — agents save them with the `save_memory` MCP tool');
@@ -38,7 +38,7 @@ export async function memoryListCmd(): Promise<void> {
 }
 
 export async function memoryAddCmd(fact: string, opts: { type?: string; files?: string; task?: string }): Promise<void> {
-  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const root = await activeBatonRoot();
   try {
     const saved = await saveMemory(root, {
       fact,
@@ -59,14 +59,14 @@ export async function memoryAddCmd(fact: string, opts: { type?: string; files?: 
 }
 
 export async function memoryRmCmd(id: string): Promise<void> {
-  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const root = await activeBatonRoot();
   const ok = await removeMemory(root, id);
   console.log(ok ? `✓ removed ${id}` : `no memory '${id}'`);
   if (!ok) process.exitCode = 1;
 }
 
 export async function memoryRepairCmd(): Promise<void> {
-  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const root = await activeBatonRoot();
   const r = await repairMemories(root);
   if (r.reanchored.length) console.log(`⚓ re-anchored ${r.reanchored.length} fact${r.reanchored.length === 1 ? '' : 's'} (still true, evidence refreshed): ${r.reanchored.join(', ')}`);
   if (r.needsReview.length) {
@@ -77,7 +77,7 @@ export async function memoryRepairCmd(): Promise<void> {
 }
 
 export async function memoryGcCmd(): Promise<void> {
-  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const root = await activeBatonRoot();
   // Rescue what is mechanically verifiable BEFORE dropping anything (M3) —
   // gc used to be the knowledge-loss path for facts that were still true.
   const repaired = await repairMemories(root);
@@ -89,7 +89,7 @@ export async function memoryGcCmd(): Promise<void> {
 const OP_LABEL: Record<'supersede' | 'remove' | 'reanchor', string> = { supersede: '↻', remove: '✗', reanchor: '⚓' };
 
 export async function memoryLogCmd(): Promise<void> {
-  const root = await gitRoot(); // memory.ts resolves the main repo root internally
+  const root = await activeBatonRoot();
   const journal = await readJournal(root);
   if (!journal.length) {
     console.log('no memory history yet — supersessions and removals are logged here');
