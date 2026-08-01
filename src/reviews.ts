@@ -22,7 +22,8 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { batonDir } from './store.js';
+import { batonDir, loadTasks } from './store.js';
+import { headCommit } from './git.js';
 import { readAuthor, resolveAuthor } from './identity.js';
 import { detectSecret } from './memory.js';
 
@@ -364,6 +365,43 @@ export async function resolveFinding(
  * may already be fixed — surfaced as a warning rather than silently trusted,
  * the same discipline memory staleness uses.
  */
+/**
+ * The sha each of `slugs` must be compared against: the HEAD of the WORKTREE
+ * whose code the review was about.
+ *
+ * A review's head is recorded by an agent working in a task worktree, on the
+ * task's branch. The served root is a DIFFERENT checkout sitting on a
+ * different branch — and in a hub it is often not the same repo, sometimes not
+ * a repo at all. Asking it produced a staleness answer about the wrong code in
+ * every direction: a divergent task branch read stale forever, while a root
+ * with no commits (a plain hub) reported '' and so read never-stale, silently
+ * disabling the warning.
+ *
+ * A review whose task is gone falls back to the root — that checkout is the
+ * only code left to ask about. A worktree that cannot answer yields '', which
+ * `isReviewStale` treats as "no claim", because a wrong sha is worse than none.
+ */
+export async function reviewHeads(root: string, slugs: string[]): Promise<Map<string, string>> {
+  const rootHead = (await headCommit(root).catch(() => null)) ?? '';
+  const tasks = await loadTasks(root).catch(() => []);
+  const worktreeOf = new Map(tasks.map((t) => [t.slug, t.worktreePath]));
+  const out = new Map<string, string>();
+  await Promise.all([...new Set(slugs)].map(async (slug) => {
+    const wt = worktreeOf.get(slug);
+    if (!wt) return void out.set(slug, rootHead);
+    out.set(slug, (await headCommit(wt).catch(() => null)) ?? '');
+  }));
+  return out;
+}
+
 export function isReviewStale(record: ReviewRecord, currentHead: string): boolean {
-  return !!record.head && !!currentHead && record.head !== currentHead;
+  if (!record.head || !currentHead) return false;
+  // Compared on the SHORTER length, because the two shas legitimately arrive
+  // in different spellings of the same commit: `headCommit()` is
+  // `rev-parse --short`, while the code-review skill records `rev-parse HEAD`
+  // in full. A strict !== made every review stale the moment it was saved —
+  // a warning that is always on is a warning nobody reads. Git abbreviations
+  // are prefixes, so a prefix match IS commit identity here.
+  const n = Math.min(record.head.length, currentHead.length);
+  return record.head.slice(0, n) !== currentHead.slice(0, n);
 }

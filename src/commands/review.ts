@@ -21,7 +21,7 @@ import { gitRoot, headCommit } from '../git.js';
 import { bus } from '../events.js';
 import {
   countByAxis, isReviewStale, listReviews, loadReview, openFindings, resolveFinding,
-  REVIEW_AXES, saveReview, type ReviewAxis, type ReviewFinding, type ReviewRecord,
+  REVIEW_AXES, reviewHeads, saveReview, type ReviewAxis, type ReviewFinding, type ReviewRecord,
 } from '../reviews.js';
 
 const AXIS_LABEL: Record<ReviewAxis, string> = {
@@ -139,11 +139,11 @@ export async function reviewListCmd(): Promise<void> {
     console.log('Agents running the code-review skill persist findings with `baton review save <slug>`.');
     return;
   }
-  const head = (await headCommit(root).catch(() => null)) ?? '';
+  const heads = await reviewHeads(root, all.map((r) => r.slug));
   console.log(`${all.length} recorded review${all.length === 1 ? '' : 's'}:\n`);
   for (const rec of all) {
     const counts = countByAxis(openFindings(rec));
-    const stale = isReviewStale(rec, head) ? '  ⚠ stale' : '';
+    const stale = isReviewStale(rec, heads.get(rec.slug) ?? '') ? '  ⚠ stale' : '';
     console.log(`  ${rec.slug}  ${rec.updatedAt.split('T')[0]}  ${rec.fixedPoint}...${rec.head.slice(0, 9)}${stale}`);
     console.log(`      open: ${REVIEW_AXES.map((a) => `${AXIS_LABEL[a]} ${counts[a]}`).join(' · ')}`);
   }
@@ -159,7 +159,7 @@ export async function reviewShowCmd(slug: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  printRecord(rec, (await headCommit(root).catch(() => null)) ?? '');
+  printRecord(rec, (await reviewHeads(root, [slug])).get(slug) ?? '');
 }
 
 /** `baton review resolve <slug> <index>` — mark a finding fixed (or dismissed). */

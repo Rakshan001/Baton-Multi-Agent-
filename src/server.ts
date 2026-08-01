@@ -19,7 +19,7 @@ import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus, collectPresence, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
 import { currentBranch, headCommit, isGitRepo } from './git.js';
-import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding } from './reviews.js';
+import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding, reviewHeads } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
 import { batonDir, loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
@@ -1781,12 +1781,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // open counts only: the axes are separate by design, so no combined total.
   if (method === 'GET' && path === '/api/reviews') {
     const reviews = await listReviews(root);
+    // Per review, not one sha for the lot: each was taken in its own task's
+    // worktree, on its own branch (see reviewHeads).
+    const heads = await reviewHeads(root, reviews.map((r) => r.slug));
     const head = (await headCommit(root).catch(() => null)) ?? '';
     return send(res, 200, {
       reviews: reviews.map((r) => ({
         ...r,
         open: countByAxis(openFindings(r)),
-        stale: isReviewStale(r, head),
+        stale: isReviewStale(r, heads.get(r.slug) ?? ''),
       })),
       head,
     }, origin);
