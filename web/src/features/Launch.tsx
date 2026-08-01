@@ -35,6 +35,11 @@ export function LaunchSession({
   const [project, setProject] = useState<string | null>(null);
   const [headlessAgents, setHeadlessAgents] = useState<string[]>(["claude", "codex", "gemini"]); // fallback until meta loads
   const [interactiveAgents, setInteractiveAgents] = useState<string[] | null>(null); // null = any agent
+  // Ids the REPO defined, not this machine's owner. This dialog is what
+  // actually starts an agent, so it has to say which ones arrived with the
+  // code — the Agents card tags them, and a launcher that didn't would be the
+  // one place the provenance goes missing.
+  const [projectAgents, setProjectAgents] = useState<string[]>([]);
   const userPickedAgent = useRef(initialAgent !== null);
   const acceptedModel = useRef<string | undefined>(undefined); // set when the user takes the routing suggestion
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -49,6 +54,7 @@ export function LaunchSession({
       setTerminals(m.terminals ?? { available: false });
       if (m.agents?.headless) setHeadlessAgents(m.agents.headless);
       if (m.agents?.interactive) setInteractiveAgents(m.agents.interactive);
+      if (m.agents?.fromProject) setProjectAgents(m.agents.fromProject);
       if (m.hub && m.projects?.length) {
         setHubProjects(m.projects);
         setProject((p) => p ?? m.projects![0].id); // default to the first sub-project
@@ -80,6 +86,7 @@ export function LaunchSession({
   // agents arrive only through meta.agents, and the daemon can genuinely
   // launch them — hiding them here would make the feature invisible.
   const inRegistry = new Set<string>(AGENT_REGISTRY.map((x) => x.id!));
+  const fromRepo = (id?: string | null): boolean => !!id && projectAgents.includes(id);
   const agentGrid = [
     ...AGENT_REGISTRY,
     ...[...new Set([...headlessAgents, ...(interactiveAgents ?? [])])].filter((id) => !inRegistry.has(id)).sort().map((id) => getAgent(id)),
@@ -187,11 +194,26 @@ export function LaunchSession({
                     <button key={ag.id} className="fr" onClick={() => { userPickedAgent.current = true; acceptedModel.current = undefined; setAgent(ag.id as AgentId); }} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? `color-mix(in srgb, ${ag.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${ag.color} 45%, transparent)` : "var(--border-subtle)"}`, boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${ag.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1), background var(--dur-1)" }}>
                       <AgentBadge id={ag.id} size="sm" showLabel={false} />
                       <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ag.short}</span>
+                      {/* A dot, not a word: the tile is 132px and the sentence
+                          that matters is spelled out below for the agent you
+                          actually picked. */}
+                      {fromRepo(ag.id) && !on && (
+                        <span aria-label="defined by this repo" data-tip="Defined by this repo's .baton/agents.json"
+                          style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--warn, #b58900)" }} />
+                      )}
                       {on && <Icon name="check" size={14} style={{ color: ag.color, flex: "none" }} />}
                     </button>
                   );
                 })}
               </div>
+              {/* Said in full exactly where it costs something: you are about
+                  to START this one, and the repo — not you — chose the binary
+                  behind it. The Agents card carries the same tag. */}
+              {fromRepo(agent) && (
+                <p style={{ margin: "7px 0 0", fontSize: "var(--fs-11)", color: "var(--warn, #b58900)" }}>
+                  {a.short} is defined by this repo's <span className="mono">.baton/agents.json</span> — it arrived with the code, like any other committed config you review.
+                </p>
+              )}
             </div>
 
             <div>

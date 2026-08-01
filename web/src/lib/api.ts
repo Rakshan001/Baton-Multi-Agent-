@@ -360,7 +360,18 @@ class BatonClient {
         // The showcase views as a local owner — the sign-in gate is a real-mode
         // path and must never appear in front of the demo.
         viewer: (this.viewer = { local: true, memberId: null, name: null, role: "owner" }),
-        agents: { headless: ["claude", "codex", "gemini"], interactive: ["claude", "cursor", "codex", "gemini", "aider", "opencode"] },
+        agents: {
+          headless: ["claude", "codex", "gemini"],
+          interactive: ["claude", "cursor", "codex", "gemini", "aider", "opencode"],
+          // Wider than the two lists above, exactly as in real mode: antigravity
+          // and openclaw are detection-only, so they can be handed off to but
+          // never launched.
+          known: ["claude", "cursor", "codex", "gemini", "antigravity", "aider", "opencode", "openclaw"],
+          // Empty on purpose, and not fabricated: the showcase ships no
+          // `.baton/agents.json`, so nothing here arrived with a repo. Present
+          // rather than omitted so demo and real mode have the same shape.
+          fromProject: [],
+        },
       };
     }
     const meta = await this.request<Meta>("/api/meta");

@@ -2,7 +2,7 @@
  * Shared status collection — the structured data behind `baton status` and the
  * `baton serve` /api/status endpoint. One source of truth for both.
  */
-import { detectAgents, detectRootAgents, type RootAgentSession } from './agents.js';
+import { detectAgents, detectionRoots, detectRootAgents, type RootAgentSession } from './agents.js';
 import { computeConflicts } from './conflicts.js';
 import { aheadBehind, worktreeStatus, type RepoState } from './git.js';
 import { loadTasks } from './store.js';
@@ -26,7 +26,7 @@ export interface StatusRow {
 export async function collectStatus(root: string): Promise<StatusRow[]> {
   const tasks = await loadTasks(root);
   const [agents, conflicts] = await Promise.all([
-    detectAgents(tasks.map((t) => t.worktreePath), { root }),
+    detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) }),
     computeConflicts(tasks, root),
   ]);
 

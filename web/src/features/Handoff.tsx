@@ -115,13 +115,20 @@ export function HandoffDialog({
   // Custom agents from meta.agents join the registry list: the server's
   // routing can legitimately suggest a `.baton/agents.json` id, and a
   // registry-only list would silently reject its own daemon's suggestion.
+  //
+  // `known` rather than the launcher lists, because a handoff is a BRIEF, not
+  // a launch: a detection-only custom agent is a perfectly good target (you
+  // start it yourself and it reads HANDOFF.md), and the launcher lists cannot
+  // name it. The union fallback keeps older daemons working, minus exactly
+  // those agents — which is what this whole picker used to do.
   const [customIds, setCustomIds] = useState<string[]>([]);
   useEffect(() => {
     let on = true;
     const inRegistry = new Set<string>(AGENT_REGISTRY.map((a) => a.id!));
     BatonAPI.getMeta().then((m) => {
       if (!on) return;
-      const ids = [...new Set([...(m.agents?.headless ?? []), ...(m.agents?.interactive ?? [])])];
+      const ids = m.agents?.known
+        ?? [...new Set([...(m.agents?.headless ?? []), ...(m.agents?.interactive ?? [])])];
       setCustomIds(ids.filter((id) => !inRegistry.has(id)).sort());
     }).catch(() => undefined);
     return () => { on = false; };

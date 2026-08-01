@@ -22,7 +22,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
@@ -99,6 +99,13 @@ describe.runIf(hasDist)('fleet endpoints', () => {
       makeRepo(base, 'repo-a'), makeRepo(base, 'repo-b'), makeRepo(base, 'repo-ro'),
     ]);
     repoB = b;
+    // A DETECTION-ONLY project agent, written before A's daemon starts: it
+    // declares no launcher, so it can never appear in the two launch lists —
+    // which is exactly why /api/meta has to report it somewhere else.
+    await mkdir(join(a, '.baton'), { recursive: true });
+    await writeFile(join(a, '.baton', 'agents.json'), JSON.stringify({
+      agents: [{ id: 'ghostly', label: 'Ghostly', binary: 'ghostly' }],
+    }));
     await spawnDaemon(a, PORT_A, true);
     await spawnDaemon(b, PORT_B, true);
     await spawnDaemon(ro, PORT_RO, false);
@@ -122,6 +129,25 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     // /api/meta names the answering process — the identity verifyDaemon needs
     // to tell "that daemon" from "a new daemon in the same repo on its port".
     expect((await api(PORT_A, '/api/meta')).body.pid).toBe(body.daemons.find((d: any) => d.self).pid);
+  });
+
+  it('/api/meta reports a detection-only project agent that no launch list can hold', async () => {
+    // The bug: the dashboard's handoff picker was built from headless ∪
+    // interactive, so an agent Baton can RECOGNISE but not START was invisible
+    // to it — while the built-in detection-only ones (antigravity, openclaw)
+    // stayed visible only because the web registry hardcodes them. A handoff
+    // is a brief, not a spawn, so the target list is `known`.
+    const { body } = await api(PORT_A, '/api/meta');
+    expect(body.agents.known).toContain('ghostly');
+    expect(body.agents.headless).not.toContain('ghostly');
+    expect(body.agents.interactive).not.toContain('ghostly');
+    // Built-ins are not lost by the widening, and the launch lists stay
+    // strictly narrower — a picker that launches must not read `known`.
+    expect(body.agents.known).toEqual(expect.arrayContaining(['claude', 'openclaw']));
+    expect(body.agents.headless).not.toContain('openclaw');
+    // Provenance travels WITH the list, so the dialog that starts an agent can
+    // say the repo chose it. A built-in must never be named here.
+    expect(body.agents.fromProject).toEqual(['ghostly']);
   });
 
   it('refuses to stop the daemon you are talking to via the proxy route', async () => {

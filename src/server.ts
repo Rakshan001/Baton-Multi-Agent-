@@ -1558,6 +1558,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const hubProjects = (kb?.projects.length ?? 0) > 1
       ? kb!.projects.map((p) => ({ id: p.id, name: p.name }))
       : [];
+    const known = agentsFor(root);
     return send(res, 200, {
       repo: root, branch: rootIsRepo ? await currentBranch(root) : null,
       writeEnabled: !!opts.writeEnabled, version: VERSION,
@@ -1570,8 +1571,22 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       // Per root, not the module-level lists: the project's own
       // `.baton/agents.json` must reach the dashboard's agent pickers.
       agents: {
-        headless: Object.values(agentsFor(root)).filter((a) => a.headless).map((a) => a.id),
-        interactive: Object.values(agentsFor(root)).filter((a) => a.interactive).map((a) => a.id),
+        headless: Object.values(known).filter((a) => a.headless).map((a) => a.id),
+        interactive: Object.values(known).filter((a) => a.interactive).map((a) => a.id),
+        // Every id this root knows, launchable or not. A detection-only agent
+        // (antigravity and openclaw today, or a custom entry that declares no
+        // launcher) is still a valid HANDOFF target — a brief is a document
+        // you leave for whoever picks the task up, not a process Baton
+        // spawns. A picker built from the two launcher lists silently dropped
+        // exactly those agents, while the built-in detection-only ones stayed
+        // visible because the web registry hardcodes them.
+        known: Object.keys(known),
+        // Which of those the REPO defined rather than this machine's owner.
+        // The Agents card already tags these, but the Launch dialog is the
+        // surface that actually starts one, and it was offering repo-supplied
+        // agents indistinguishable from built-ins. Provenance has to travel
+        // with the list, or only one of the two surfaces can show it.
+        fromProject: Object.values(known).filter((a) => a.fromProject).map((a) => a.id),
       },
       /*
        * Terminals are answered FOR THIS VIEWER, not for the machine. A remote

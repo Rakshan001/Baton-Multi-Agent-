@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchAgentToWorktree, detectAgents, resetDetectAgentsCache, detectRootAgents, resetDetectRootAgentsCache } from '../src/agents.js';
+import { matchAgentToWorktree, detectAgents, detectionRoots, resetDetectAgentsCache, detectRootAgents, resetDetectRootAgentsCache } from '../src/agents.js';
 
 describe('matchAgentToWorktree', () => {
   const wt = '/repo/.baton/wt/navbar';
@@ -57,6 +57,36 @@ describe('detectAgents TTL cache', () => {
     const scan = async () => { calls++; return new Map<string, string>(); };
     expect((await detectAgents([], { scan })).size).toBe(0);
     expect(calls).toBe(0);
+  });
+});
+
+describe('detectionRoots — whose .baton/agents.json can name the agent in a worktree', () => {
+  it('adds each task\'s own repo, deduped, served root first', () => {
+    const roots = detectionRoots('/hub', [
+      { repoRoot: '/hub/api' }, { repoRoot: '/hub/web' }, { repoRoot: '/hub/api' }, {},
+    ]);
+    // First wins on an id collision in patternsFor, so the SERVED root must
+    // lead: a hub-level definition still overrides a sub-project's.
+    expect(roots).toEqual(['/hub', '/hub/api', '/hub/web']);
+  });
+
+  it('a single repo yields just its root — including tasks that name it again', () => {
+    // Older task records omit repoRoot entirely; newer ones in a plain repo
+    // set it to the root itself. Neither may widen the set.
+    expect(detectionRoots('/repo', [{}, { repoRoot: '/repo' }])).toEqual(['/repo']);
+  });
+
+  it('the single-root array shares a cache entry with the old scalar form', async () => {
+    // The claim made in detectionRoots' comment: no cache split, so a plain
+    // repo pays nothing for the widening. rootKey joins with NUL, and a
+    // one-element join is the element.
+    resetDetectAgentsCache();
+    let calls = 0;
+    const scan = async () => { calls++; return new Map([['/wt/a', 'claude']]); };
+    const now = () => 1_000_000;
+    await detectAgents(['/wt/a'], { scan, now, root: '/repo' });
+    await detectAgents(['/wt/a'], { scan, now, root: detectionRoots('/repo', []) });
+    expect(calls).toBe(1);
   });
 });
 

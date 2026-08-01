@@ -106,8 +106,14 @@ export interface Meta {
    *  are loopback-only and no credential changes that. */
   terminals?: { available: boolean; reason?: "tmux" | "remote"; hint?: string };
   /** Which agents each launch mode supports — single source of truth is the
-   *  daemon (src/spawn.ts LAUNCHERS / src/terminals.ts INTERACTIVE_LAUNCHERS). */
-  agents?: { headless: string[]; interactive: string[] };
+   *  daemon (src/spawn.ts LAUNCHERS / src/terminals.ts INTERACTIVE_LAUNCHERS).
+   *  `known` is every agent the daemon's root knows INCLUDING detection-only
+   *  ones, which can be handed off to but not launched. Absent on daemons
+   *  older than this — fall back to the union of the two launcher lists.
+   *  `fromProject` names the ids the REPO defined (its `.baton/agents.json`)
+   *  rather than the machine's owner, so any surface that offers to launch one
+   *  can say where it came from. */
+  agents?: { headless: string[]; interactive: string[]; known?: string[]; fromProject?: string[] };
   /** Who the daemon thinks this browser is. `local` means a loopback
    *  connection, which needs no credential at all; a remote viewer is whichever
    *  member the bearer token names. Absent on daemons older than this. */

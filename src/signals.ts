@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { batonDir, loadTasks, type Task } from './store.js';
-import { detectAgents } from './agents.js';
+import { detectAgents, detectionRoots } from './agents.js';
 import { changedFiles } from './conflicts.js';
 import { gitTry } from './util/exec.js';
 import { bus } from './events.js';
@@ -714,7 +714,7 @@ export async function getSignals(
   // thing that can flip a re-dirtied path back to active. Filter at the output.
   const reconciled = await reconcileSignals(root, liveRows(root, windowMin), tasks, sessions, watched);
   const rows = opts.includeSettled ? reconciled : reconciled.filter((r) => !r.settledAt);
-  const agents = await detectAgents(tasks.map((t) => t.worktreePath), { root });
+  const agents = await detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) });
   // Reverse index: a checkout path → an agent name self-reported by a session
   // registered there, so fs-watch checkout signals (which see *what* changed,
   // not *who*) can borrow the agent name when one is known (ADD-07/A). Finding
@@ -823,7 +823,7 @@ export async function checkFiles(
 ): Promise<Record<string, FileCheck>> {
   const signals = await getSignals(root);
   const tasks = await loadTasks(root);
-  const agents = await detectAgents(tasks.map((t) => t.worktreePath), { root });
+  const agents = await detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) });
   const changed = new Map<string, Set<string>>(); // slug → files
   await Promise.all(tasks.map(async (t) => changed.set(t.slug, await changedFiles(t, root))));
   const byPath = new Map(signals.map((s) => [s.path, s.holders]));

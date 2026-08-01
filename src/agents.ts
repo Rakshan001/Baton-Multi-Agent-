@@ -37,6 +37,27 @@ function rootKey(root?: string | string[]): string {
   return root === undefined ? '' : Array.isArray(root) ? root.join('\x00') : root;
 }
 
+/**
+ * Which roots' `.baton/agents.json` must be read to recognise the agents
+ * working in `tasks`.
+ *
+ * In a hub, a task's worktree belongs to its OWN repo (`task.repoRoot`), and
+ * that repo's file is what teaches Baton the CLI its team uses. Detecting with
+ * the served root alone left a sub-project's custom agent unclassified in its
+ * own worktree — the board drew the row idle while an agent was plainly
+ * working in it, which is the one thing the board exists to get right.
+ *
+ * The served root stays FIRST: `patternsFor` dedupes by id, first root wins,
+ * so a hub-level definition still overrides a sub-project's. A single repo
+ * yields `[root]`, whose cache key is byte-identical to the old scalar form —
+ * no cache split, no extra scans.
+ */
+export function detectionRoots(root: string, tasks: Array<{ repoRoot?: string }>): string[] {
+  const roots = [root];
+  for (const t of tasks) if (t.repoRoot && !roots.includes(t.repoRoot)) roots.push(t.repoRoot);
+  return roots;
+}
+
 /** True if `cwd` is the worktree path or nested inside it. Pure → unit-tested. */
 export function matchAgentToWorktree(cwd: string, worktreePath: string): boolean {
   if (cwd === worktreePath) return true;
