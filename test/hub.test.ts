@@ -16,6 +16,7 @@ import { loadTasks, resolveBatonRoot } from '../src/store.js';
 import { createTask, ProjectRequiredError, UnknownProjectError } from '../src/commands/new.js';
 import { mergeTaskBranch } from '../src/commands/merge.js';
 import { removeTaskWorktree } from '../src/commands/rm.js';
+import { collectStatus } from '../src/board.js';
 
 /** A git sub-repo with one commit on `main`. */
 async function initSubRepo(root: string): Promise<void> {
@@ -116,6 +117,43 @@ describe('createTask on a multi-repo hub', () => {
 
   it('rejects an unknown project id', async () => {
     await expect(createTask('Do something', hub, 'nope')).rejects.toBeInstanceOf(UnknownProjectError);
+  });
+
+  /**
+   * Per-task git questions must be asked of the task's OWN repo. Both of these
+   * used to be asked of the served root, and both failure modes are SILENT:
+   * `aheadBehind` returns {0,0} on any error, and `changedFiles` skips a failed
+   * diff. On a hub the served root is not the branch's repo, so the board drew
+   * every task as having nothing to merge and overlap detection went blind to
+   * everything already committed.
+   */
+  it('reports a sub-project task as ahead of its base — asked of the task\'s repo, not the hub', async () => {
+    const task = await createTask('Add a banner', hub, 'proj-a');
+    await fsWriteFile(join(task.worktreePath, 'banner.txt'), 'hi\n', 'utf-8');
+    await git(['add', '.'], task.worktreePath);
+    await git(['commit', '-q', '-m', 'add banner'], task.worktreePath);
+
+    const rows = await collectStatus(hub);
+    const row = rows.find((r) => r.slug === task.slug)!;
+    expect(row.ahead).toBe(1);
+    expect(row.behind).toBe(0);
+  });
+
+  it('sees a COMMITTED change when detecting overlap between two hub tasks', async () => {
+    // Both tasks touch shared.txt in the same repo, and each COMMITS it — the
+    // uncommitted half of changedFiles finds nothing, so if the committed half
+    // is asked of the wrong repo the overlap vanishes entirely.
+    const a = await createTask('Task one', hub, 'proj-a');
+    const b = await createTask('Task two', hub, 'proj-a');
+    for (const t of [a, b]) {
+      await fsWriteFile(join(t.worktreePath, 'shared.txt'), `${t.slug}\n`, 'utf-8');
+      await git(['add', '.'], t.worktreePath);
+      await git(['commit', '-q', '-m', `touch shared from ${t.slug}`], t.worktreePath);
+    }
+
+    const rows = await collectStatus(hub);
+    expect(rows.find((r) => r.slug === a.slug)!.conflictFiles).toContain('shared.txt');
+    expect(rows.find((r) => r.slug === b.slug)!.conflictFiles).toContain('shared.txt');
   });
 
   it('merges a sub-project task back into its own repo, then removes the worktree', async () => {

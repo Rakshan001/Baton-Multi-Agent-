@@ -10,10 +10,14 @@ import type { Task } from './store.js';
 export async function changedFiles(task: Task, root: string): Promise<Set<string>> {
   const files = new Set<string>();
 
-  // Committed divergence: what's on the branch but not on its base.
+  // Committed divergence: what's on the branch but not on its base. Asked of
+  // the task's OWN repo — in a hub the branch does not exist in the served
+  // root, and a failed diff is SKIPPED rather than raised, so overlap
+  // detection silently saw only uncommitted work: two agents editing one file
+  // stopped conflicting the moment either of them committed.
   const committed = await gitTry(
     ['diff', '--name-only', `${task.baseBranch}...${task.branch}`],
-    root,
+    task.repoRoot ?? root,
   );
   if (committed.ok) {
     for (const f of committed.stdout.split('\n').filter(Boolean)) files.add(f);

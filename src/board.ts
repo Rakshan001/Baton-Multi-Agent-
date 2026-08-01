@@ -33,7 +33,11 @@ export async function collectStatus(root: string): Promise<StatusRow[]> {
   return Promise.all(
     tasks.map(async (t) => {
       const st = await worktreeStatus(t.worktreePath);
-      const { ahead, behind } = await aheadBehind(t.branch, t.baseBranch, root);
+      // The task's OWN repo: in a hub the branch lives in the sub-project, and
+      // the served root may not be a git repo at all. aheadBehind swallows
+      // every error as {0,0}, so asking the wrong repo drew each hub task with
+      // nothing to merge — the column that says "this is ready" reading zero.
+      const { ahead, behind } = await aheadBehind(t.branch, t.baseBranch, t.repoRoot ?? root);
       return {
         slug: t.slug,
         task: t.task,
