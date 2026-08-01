@@ -53,6 +53,12 @@ export const AGENT_REGISTRY: AgentDef[] = [
     path: "M12 3.2 19 7.1v9.8L12 20.8 5 16.9V7.1L12 3.2Z M12 8.4 15.4 10.3v3.4L12 15.6 8.6 13.7v-3.4L12 8.4Z",
     fill: false, stroke: 1.8,
   },
+  {
+    id: "openclaw", label: "OpenClaw", short: "OpenClaw", color: "#f59e0b",
+    // three claw strokes
+    path: "M7.5 4.5c-1.6 3.8-.6 7.8 1.2 11 M12 3.8c-1.2 4.4-.4 8.9.8 12.4 M16.5 4.5c.9 3.8-.2 7.8-2.2 11",
+    fill: false, stroke: 2,
+  },
 ];
 
 export const AGENT_MAP: Record<string, AgentDef> = AGENT_REGISTRY.reduce(

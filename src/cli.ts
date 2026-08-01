@@ -163,8 +163,9 @@ daemon
 daemon
   .command('stop')
   .argument('<target>', 'port number, or the path of the repo the daemon serves')
+  .argument('[pid]', 'narrow to one record when several share the target — cleaning a corpse must not stop the live daemon on its port')
   .description('stop a daemon anywhere on this machine (graceful, SIGTERM fallback); cleans up stale records')
-  .action((target: string) => run(() => daemonStopCmd(target)));
+  .action((target: string, pid?: string) => run(() => daemonStopCmd(target, pid)));
 
 const host = program.command('host').description('link this machine to a hub host, so its file claims join the shared picture');
 host

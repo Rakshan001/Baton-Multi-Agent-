@@ -26,7 +26,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
-import { type DaemonRecord, pidAlive, writeDaemonRecord } from '../src/daemons.js';
+import { type DaemonRecord, pidAlive, recordPath, writeDaemonRecord } from '../src/daemons.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -119,6 +119,9 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect(body.daemons.find((d: any) => d.port === PORT_A).self).toBe(true);
     expect(body.daemons.find((d: any) => d.port === PORT_B).self).toBe(false);
     expect(body.daemons.every((d: any) => d.status === 'live')).toBe(true);
+    // /api/meta names the answering process — the identity verifyDaemon needs
+    // to tell "that daemon" from "a new daemon in the same repo on its port".
+    expect((await api(PORT_A, '/api/meta')).body.pid).toBe(body.daemons.find((d: any) => d.self).pid);
   });
 
   it('refuses to stop the daemon you are talking to via the proxy route', async () => {
@@ -172,9 +175,65 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect(self[0].self).toBe(true);
   });
 
+  it('a forged record naming this daemon\'s own pid is unmasked by the pid check and swept — no daemon touched', async () => {
+    // Daemons only ever write their own pid, so this record exists by hand:
+    // A's pid on B's port, with B's root exactly as B reports it (realpath'd
+    // on macOS, where tmpdir is a symlink). Before /api/meta carried `pid`,
+    // this forgery verified LIVE (pid alive + root match) and only a 409 in
+    // the route kept it from being acted on. Now B answers with B's own pid,
+    // the record's claim fails identity verification, and the false record is
+    // deleted as the corpse it is — a file removal, never a signal. (The 409
+    // stays in the route as the guard for legacy daemons whose meta has no
+    // pid, where such a record still verifies live.)
+    const aPid = (await api(PORT_A, '/api/daemons')).body.daemons.find((d: any) => d.self).pid;
+    const bRoot = (await api(PORT_B, '/api/meta')).body.repo;
+    await writeDaemonRecord({ ...corpse(PORT_B, bRoot), pid: aPid }, registry);
+    try {
+      const { status, body } = await api(PORT_A, `/api/daemons/${PORT_B}/stop`, {
+        method: 'POST', body: JSON.stringify({ pid: aPid }),
+      });
+      expect(status).toBe(200);
+      expect(body.outcome).toBe('cleaned');
+      // Neither daemon noticed: B still answers, and A (whose pid the forgery
+      // named) is obviously still here to be asked.
+      expect((await api(PORT_B, '/api/meta')).status).toBe(200);
+      expect((await api(PORT_A, '/api/daemons')).body.daemons.filter((d: any) => d.port === PORT_B).length).toBe(1);
+    } finally {
+      // force: a failed assertion above must surface, not an ENOENT from here.
+      await rm(recordPath(aPid, PORT_B, registry), { force: true });
+    }
+  });
+
   it('a garbage body is refused, not guessed at', async () => {
     expect((await api(PORT_A, `/api/daemons/${PORT_B}/stop`, { method: 'POST', body: '{ not json' })).status).toBe(400);
     expect((await api(PORT_A, `/api/daemons/${PORT_B}/stop`, { method: 'POST', body: JSON.stringify({ pid: -4 }) })).status).toBe(400);
+  });
+
+  it('expect:"stale" acts only on what the caller\'s screen showed — never a surprise stop', async () => {
+    // A Clean-up click whose row flipped live since the last poll (probe
+    // timeout flap, or the daemon came back): the dialog promised a file
+    // deletion, so stopping a healthy daemon here is a broken promise.
+    const bPid = (await api(PORT_A, '/api/daemons')).body.daemons
+      .find((d: any) => d.port === PORT_B && d.status === 'live').pid;
+    const refused = await api(PORT_A, `/api/daemons/${PORT_B}/stop`, {
+      method: 'POST', body: JSON.stringify({ pid: bPid, expect: 'stale' }),
+    });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/not a leftover/);
+    expect((await api(PORT_B, '/api/meta')).status).toBe(200); // B untouched
+
+    // A genuine corpse under expect:"stale" is exactly the promised cleanup.
+    await writeDaemonRecord(corpse(PORT_B, repoB), registry);
+    const cleaned = await api(PORT_A, `/api/daemons/${PORT_B}/stop`, {
+      method: 'POST', body: JSON.stringify({ pid: 2 ** 24, expect: 'stale' }),
+    });
+    expect(cleaned.status).toBe(200);
+    expect(cleaned.body.outcome).toBe('cleaned');
+
+    // A nonsense expectation is refused, not guessed at.
+    expect((await api(PORT_A, `/api/daemons/${PORT_B}/stop`, {
+      method: 'POST', body: JSON.stringify({ expect: 'maybe' }),
+    })).status).toBe(400);
   });
 
   it('daemon A stops daemon B gracefully, and says so — corpse on the same port notwithstanding', async () => {

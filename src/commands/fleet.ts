@@ -6,6 +6,7 @@
  * `ps` never lies about freshness — every row is verified (pid alive AND the
  * port answers with the same root) before it is printed as live.
  */
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   type VerifiedDaemon, listVerifiedDaemons, removeDaemonRecord, stopDaemon,
@@ -37,23 +38,38 @@ export async function psCmd(): Promise<void> {
   const stale = daemons.filter((d) => d.status === 'stale');
   if (stale.length) {
     console.log(`\n  ${stale.length} stale record${stale.length === 1 ? '' : 's'} (daemon gone, file left by a crash).`);
-    console.log('  Clean up:  baton daemon stop <port>   — a stale record is only ever deleted, never signalled.');
+    // The pid is part of the command, not decoration: a corpse can share its
+    // port with the live daemon that replaced it, and `stop <port>` alone
+    // would act on both.
+    for (const d of stale) console.log(`  Clean up:  baton daemon stop ${d.port} ${d.pid}   — a stale record is only ever deleted, never signalled.`);
   }
 }
 
-/** Match `<port>` or a path (relative or absolute) against verified records. */
-function match(daemons: VerifiedDaemon[], target: string): VerifiedDaemon[] {
-  if (/^\d+$/.test(target)) return daemons.filter((d) => d.port === Number(target));
-  const want = resolve(target);
-  return daemons.filter((d) => resolve(d.root) === want);
+/** Realpath when the path exists (macOS `/tmp` → `/private/tmp`; records store
+ *  the daemon's own realpath'd cwd), plain resolve when it no longer does. */
+function real(p: string): string {
+  try { return realpathSync(p); } catch { return resolve(p); }
 }
 
-export async function stopCmd(target: string): Promise<void> {
+/** Match `<port>` or a path (relative or absolute) against verified records,
+ *  optionally narrowed to one pid — a port is not a daemon (D1). */
+function match(daemons: VerifiedDaemon[], target: string, pid?: number): VerifiedDaemon[] {
+  const byTarget = /^\d+$/.test(target)
+    ? daemons.filter((d) => d.port === Number(target))
+    : daemons.filter((d) => real(d.root) === real(target));
+  return pid === undefined ? byTarget : byTarget.filter((d) => d.pid === pid);
+}
+
+export async function stopCmd(target: string, pidArg?: string): Promise<void> {
+  const pid = pidArg === undefined ? undefined : Number(pidArg);
+  if (pid !== undefined && (!Number.isInteger(pid) || pid <= 0)) {
+    throw new Error(`'${pidArg}' is not a pid — usage: baton daemon stop <port|path> [pid]`);
+  }
   const daemons = await listVerifiedDaemons();
-  const hits = match(daemons, target);
+  const hits = match(daemons, target, pid);
   if (!hits.length) {
     const known = daemons.map((d) => `${d.port} (${d.root})`).join(', ') || '(none)';
-    throw new Error(`no daemon matches '${target}' — running: ${known}`);
+    throw new Error(`no daemon matches '${target}${pid !== undefined ? ` ${pid}` : ''}' — running: ${known}`);
   }
   // A path can legitimately match twice (D4: two daemons, one repo — the exact
   // mistake this command exists for), so act on every hit and say so per row.

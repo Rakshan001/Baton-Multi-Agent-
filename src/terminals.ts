@@ -21,7 +21,7 @@ import { probeBinary } from './util/exec.js';
 import { detectTmux, repoPrefix, sessionNameFor, slugFromSession, tmux, tmuxTry } from './util/tmux.js';
 import { bus } from './events.js';
 import { hasHeadlessRun } from './spawn.js';
-import { AGENTS, type InteractiveLauncher } from './agents/registry.js';
+import { AGENTS, agentsFor, type InteractiveLauncher } from './agents/registry.js';
 
 // Session naming + tmux exec live in util/tmux.js so spawn.ts and rm.ts can
 // coordinate cross-process through the same deterministic names.
@@ -34,6 +34,14 @@ export const INTERACTIVE_LAUNCHERS: Record<string, InteractiveLauncher> = Object
 );
 
 export const INTERACTIVE_AGENTS = Object.keys(INTERACTIVE_LAUNCHERS);
+
+/** The per-root view: interactive launchers plus any the project's own
+ *  `.baton/agents.json` teaches. Used wherever a root is in hand. */
+export function interactiveLaunchersFor(root: string): Record<string, InteractiveLauncher> {
+  return Object.fromEntries(
+    Object.values(agentsFor(root)).flatMap((a) => (a.interactive ? [[a.id, a.interactive] as const] : [])),
+  );
+}
 
 export class TerminalRunningError extends Error {
   constructor(slug: string, agent: string) {
@@ -312,8 +320,9 @@ export async function createTerminal(
   const task = await getTask(repoRoot, slug);
   if (!task) throw new Error(`No task '${slug}'`);
   const agent = opts.agent ?? 'claude';
-  const launcher = INTERACTIVE_LAUNCHERS[agent];
-  if (!launcher) throw new Error(`'${agent}' has no interactive launcher — supported: ${INTERACTIVE_AGENTS.join(', ')}`);
+  const launchers = interactiveLaunchersFor(repoRoot);
+  const launcher = launchers[agent];
+  if (!launcher) throw new Error(`'${agent}' has no interactive launcher — supported: ${Object.keys(launchers).join(', ')}`);
   if (hasHeadlessRun(slug)) throw new HeadlessConflictError(slug);
 
   const sessionName = sessionNameFor(repoRoot, slug);

@@ -27,12 +27,13 @@ const rec = (over: Partial<DaemonRecord> = {}): DaemonRecord => ({
   version: '0.0.1', writeEnabled: true, host: false, ...over,
 });
 
-/** A stand-in daemon: answers /api/meta with a chosen root on an OS-picked port. */
-async function fakeDaemon(repo: string): Promise<{ port: number; close: () => Promise<void> }> {
+/** A stand-in daemon: answers /api/meta with a chosen root on an OS-picked
+ *  port. `pid` optional — a daemon that omits it predates the identity field. */
+async function fakeDaemon(repo: string, pid?: number): Promise<{ port: number; close: () => Promise<void> }> {
   const srv: Server = createServer((req, res) => {
     if (req.url === '/api/meta') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ repo, version: 'test' }));
+      res.end(JSON.stringify({ repo, version: 'test', ...(pid !== undefined ? { pid } : {}) }));
     } else { res.writeHead(404); res.end(); }
   });
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
@@ -103,6 +104,26 @@ describe('verification — a record is a claim', () => {
     } finally { await d.close(); }
   });
 
+  it('the SAME repo answering for a DIFFERENT pid is stale — the same-port-restart guard', async () => {
+    // The hole root alone can't close: crash leaves a record, the same repo
+    // restarts on the same port, the OS later recycles the dead pid to a
+    // stranger. Root matches, the record's pid is alive — but the process
+    // answering the port is not it, and signalling would hit that stranger.
+    const d = await fakeDaemon('/tmp/repo', process.pid + 1);
+    try {
+      expect(await verifyDaemon(rec({ port: d.port }))).toBe('stale');
+    } finally { await d.close(); }
+  });
+
+  it('a daemon that reports its own pid back is live — and one that predates the field still is', async () => {
+    const withPid = await fakeDaemon('/tmp/repo', process.pid);
+    const legacy = await fakeDaemon('/tmp/repo');
+    try {
+      expect(await verifyDaemon(rec({ port: withPid.port }))).toBe('live');
+      expect(await verifyDaemon(rec({ port: legacy.port }))).toBe('live');
+    } finally { await withPid.close(); await legacy.close(); }
+  });
+
   it('pidAlive: own pid yes, absurd pid no', () => {
     expect(pidAlive(process.pid)).toBe(true);
     expect(pidAlive(2 ** 24)).toBe(false);
@@ -128,6 +149,23 @@ describe('verification — a record is a claim', () => {
 describe('stopDaemon', () => {
   it('refuses a stale record outright — no signal is ever sent on a claim', async () => {
     expect(await stopDaemon(rec({ pid: 2 ** 24, port: 1 }), dir)).toBe('refused-stale');
+  });
+
+  it('refusing a record whose pid is provably GONE also buries it', async () => {
+    // Symmetric with the mid-flight re-check: a corpse found at the door
+    // leaves with us, so the next poll doesn't re-render the row we just
+    // told the user was already gone.
+    const r = rec({ pid: 2 ** 24, port: 1 });
+    await writeDaemonRecord(r, dir);
+    expect(await stopDaemon(r, dir)).toBe('refused-stale');
+    expect((await listDaemonRecords(dir)).length).toBe(0);
+  });
+
+  it('refusing a record whose pid still LIVES keeps it — a probe flap must not eat a real daemon\'s record', async () => {
+    const r = rec({ port: 1 }); // our own pid, silent port: fails verification, pid alive
+    await writeDaemonRecord(r, dir);
+    expect(await stopDaemon(r, dir)).toBe('refused-stale');
+    expect((await listDaemonRecords(dir)).length).toBe(1);
   });
 
   it('a daemon that outlives the wait is FAILED, and keeps its record', async () => {

@@ -34,7 +34,7 @@ import { graphFreshness, renderGraphFreshnessNote, injectFreshnessNote } from '.
 import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
-import { KNOWN_AGENT_IDS } from './agents/registry.js';
+import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
 import {
   importSkill, installSkill, installSkillEverywhere, listSkillStatus, uninstallSkill,
   SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
@@ -56,11 +56,11 @@ import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from '
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
-import { AgentRunningError, HEADLESS_AGENTS, runningHeadless, startAgent, stopAgent, TerminalConflictError } from './spawn.js';
+import { AgentRunningError, runningHeadless, startAgent, stopAgent, TerminalConflictError } from './spawn.js';
 import {
   captureScreen, createTerminal, detectTmux, getScrollback, hasTerminal, killTerminal, listTerminals,
   reattachOrphans, resizeTerminal, writeInput,
-  HeadlessConflictError, TerminalRunningError, TerminalUnavailableError, INTERACTIVE_AGENTS,
+  HeadlessConflictError, TerminalRunningError, TerminalUnavailableError,
 } from './terminals.js';
 import {
   bulkRemoveMemory, gcMemories, listMemories, loadRetention, mainRepoRoot, memoryDir,
@@ -1074,15 +1074,27 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     // row the caller clicked is a (pid, port) pair — without the pid, cleaning
     // the corpse and stopping the living are the same request.
     let pidWanted: number | undefined;
+    // Optional `{ "expect": "stale" }`: the caller's screen said "crash
+    // leftover" and its confirm dialog promised a file deletion. Verification
+    // is re-run here, and a record can flip live in between (or the earlier
+    // probe merely timed out on a loaded box) — honoring the click anyway
+    // would stop a healthy daemon behind a dialog that promised otherwise.
+    let expectStale = false;
     const rawBody = await readBody(req);
     if (rawBody.trim()) {
       try {
-        const parsed = JSON.parse(rawBody) as { pid?: unknown };
+        const parsed = JSON.parse(rawBody) as { pid?: unknown; expect?: unknown };
         if (parsed.pid !== undefined) {
           if (!Number.isInteger(parsed.pid) || (parsed.pid as number) <= 0) {
             return send(res, 400, { error: 'pid must be a positive integer' }, origin);
           }
           pidWanted = parsed.pid as number;
+        }
+        if (parsed.expect !== undefined) {
+          if (parsed.expect !== 'stale' && parsed.expect !== 'live') {
+            return send(res, 400, { error: `expect must be "stale" or "live"` }, origin);
+          }
+          expectStale = parsed.expect === 'stale';
         }
       } catch {
         return send(res, 400, { error: 'body must be JSON like { "pid": 12345 }, or empty' }, origin);
@@ -1103,12 +1115,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     // Never let a corpse shadow the living: when the port carries both a live
     // daemon and stale leftovers, an un-narrowed stop means the live one.
     const live = matches.find((d) => d.status === 'live' && d.pid !== process.pid);
+    if (expectStale && live) {
+      return send(res, 409, {
+        error: `the record for port ${port} is not a leftover — pid ${live.pid} is alive and answering as ${live.root}`,
+        hint: 'refresh the list; stopping a live daemon is a different action than cleaning a record',
+      }, origin);
+    }
     if (!live) {
-      // Only stale records match — delete them all; a stale record is only
-      // ever deleted, never signalled, because verification cannot vouch for
-      // the pid it names.
-      for (const m of matches) await removeDaemonRecord(m.pid, m.port);
-      return send(res, 200, { ok: true, outcome: 'cleaned', root: matches[0]!.root }, origin);
+      // Only corpses may be deleted. A record that verifies live but names
+      // THIS pid (only a hand-forged file gets here — daemons write their own
+      // pid) is neither stoppable nor deletable-as-stale; refuse it by name
+      // rather than sweep a live record away in a loop labelled "cleanup".
+      const corpses = matches.filter((d) => d.status === 'stale');
+      if (!corpses.length) {
+        return send(res, 409, { error: `the record for port ${port} names this very process (pid ${process.pid}) — nothing here can act on it` }, origin);
+      }
+      for (const m of corpses) await removeDaemonRecord(m.pid, m.port);
+      return send(res, 200, { ok: true, outcome: 'cleaned', root: corpses[0]!.root }, origin);
     }
     const outcome = await stopDaemon(live);
     if (outcome === 'failed') return send(res, 500, { error: `could not stop pid ${live.pid} on port ${port} — it did not exit (or this process may not signal it); its record stays until it is truly gone` }, origin);
@@ -1527,9 +1550,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, {
       repo: root, branch: rootIsRepo ? await currentBranch(root) : null,
       writeEnabled: !!opts.writeEnabled, version: VERSION,
+      // The fleet's identity check: a daemon record names a (pid, port) pair,
+      // and root alone can't distinguish "that daemon" from "a new daemon in
+      // the same repo on the same port" (verifyDaemon, src/daemons.ts).
+      pid: process.pid,
       // In a hub, the dashboard must ask which project a new task targets.
       hub: hubProjects.length > 0, projects: hubProjects,
-      agents: { headless: HEADLESS_AGENTS, interactive: INTERACTIVE_AGENTS },
+      // Per root, not the module-level lists: the project's own
+      // `.baton/agents.json` must reach the dashboard's agent pickers.
+      agents: {
+        headless: Object.values(agentsFor(root)).filter((a) => a.headless).map((a) => a.id),
+        interactive: Object.values(agentsFor(root)).filter((a) => a.interactive).map((a) => a.id),
+      },
       /*
        * Terminals are answered FOR THIS VIEWER, not for the machine. A remote
        * browser cannot reach one at any tmux version (access.ts rule 2), so
@@ -1642,7 +1674,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (acm && method === 'POST') {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const agent = decodeURIComponent(acm[1]);
-    if (!KNOWN_AGENT_IDS.includes(agent)) return send(res, 404, { error: `unknown agent '${agent}'` }, origin);
+    if (!knownAgentIdsFor(root).includes(agent)) return send(res, 404, { error: `unknown agent '${agent}'` }, origin);
     const body = (await readJsonBody<{ confirmGlobal?: boolean }>(req)) ?? {};
     try {
       const state = await loadKb(root);

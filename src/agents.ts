@@ -9,7 +9,7 @@
  */
 import { sep } from 'node:path';
 import { execa } from 'execa';
-import { AGENTS } from './agents/registry.js';
+import { AGENTS, agentsFor } from './agents/registry.js';
 
 /** Agent CLIs we recognise (from the registry), matched against process command lines. */
 const AGENT_PATTERNS: Array<{ id: string; re: RegExp }> = Object.values(AGENTS).map((a) => ({
@@ -17,14 +17,34 @@ const AGENT_PATTERNS: Array<{ id: string; re: RegExp }> = Object.values(AGENTS).
   re: a.detect,
 }));
 
+/** The per-root pattern list — global patterns plus any agents the project's
+ *  own `.baton/agents.json` teaches. Accepts several roots because a hub scans
+ *  its sub-projects' checkouts too, and each sub-project may teach its own
+ *  agents; the union is deduped by id, first root wins. Cheap: the underlying
+ *  load is stat-cached. */
+function patternsFor(root?: string | string[]): Array<{ id: string; re: RegExp }> {
+  const roots = root === undefined ? [] : Array.isArray(root) ? root : [root];
+  if (!roots.length) return AGENT_PATTERNS;
+  const seen = new Map<string, RegExp>();
+  for (const r of roots) {
+    for (const a of Object.values(agentsFor(r))) if (!seen.has(a.id)) seen.set(a.id, a.detect);
+  }
+  return [...seen.entries()].map(([id, re]) => ({ id, re }));
+}
+
+/** Cache-key fragment for a root or root set — NUL-joined, no path collisions. */
+function rootKey(root?: string | string[]): string {
+  return root === undefined ? '' : Array.isArray(root) ? root.join('\x00') : root;
+}
+
 /** True if `cwd` is the worktree path or nested inside it. Pure → unit-tested. */
 export function matchAgentToWorktree(cwd: string, worktreePath: string): boolean {
   if (cwd === worktreePath) return true;
   return cwd.startsWith(worktreePath + sep);
 }
 
-function classify(command: string): string | null {
-  for (const { id, re } of AGENT_PATTERNS) {
+function classify(command: string, patterns: Array<{ id: string; re: RegExp }> = AGENT_PATTERNS): string | null {
+  for (const { id, re } of patterns) {
     if (re.test(command)) return id;
   }
   return null;
@@ -37,13 +57,14 @@ function classify(command: string): string | null {
  * /Applications/Cursor.app/… that the strict CLI patterns don't cover. Safe to
  * be lenient here: the chain is OUR OWN ancestry, not the whole process table.
  */
-export function firstAgentIn(commands: string[]): string | null {
+export function firstAgentIn(commands: string[], root?: string): string | null {
+  const patterns = patternsFor(root);
   for (const cmd of commands) {
-    const strict = classify(cmd);
+    const strict = classify(cmd, patterns);
     if (strict) return strict;
   }
   for (const cmd of commands) {
-    for (const { id } of AGENT_PATTERNS) {
+    for (const { id } of patterns) {
       if (id && new RegExp(`(^|[/\\\\\\s])${id}`, 'i').test(cmd)) return id;
     }
   }
@@ -54,8 +75,10 @@ export function firstAgentIn(commands: string[]): string | null {
  * The agent that spawned this process — `baton mcp` runs as a child of the
  * agent session it serves, so walking parent pids identifies the agent with
  * zero configuration. Null when the chain holds no known agent (fail open).
+ * `root` lets the project's own `.baton/agents.json` agents claim the session
+ * too — without it a project-defined CLI registers with a null identity.
  */
-export async function detectParentAgent(maxDepth = 6): Promise<string | null> {
+export async function detectParentAgent(maxDepth = 6, root?: string): Promise<string | null> {
   const chain: string[] = [];
   let pid = process.ppid;
   for (let i = 0; i < maxDepth && pid > 1; i++) {
@@ -69,7 +92,7 @@ export async function detectParentAgent(maxDepth = 6): Promise<string | null> {
       break;
     }
   }
-  return firstAgentIn(chain);
+  return firstAgentIn(chain, root);
 }
 
 async function listProcesses(): Promise<Array<{ pid: number; command: string }>> {
@@ -107,13 +130,13 @@ async function pidCwd(pid: number): Promise<string | null> {
  * inside one of the given worktrees. Only resolves cwd for processes that
  * actually look like an agent (cheap), and skips our own process.
  */
-async function scanAgents(worktreePaths: string[]): Promise<Map<string, string>> {
+async function scanAgents(worktreePaths: string[], patterns = AGENT_PATTERNS): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   if (worktreePaths.length === 0) return result;
 
   const procs = (await listProcesses()).filter((p) => p.pid !== process.pid);
   const candidates = procs
-    .map((p) => ({ ...p, agent: classify(p.command) }))
+    .map((p) => ({ ...p, agent: classify(p.command, patterns) }))
     .filter((p): p is { pid: number; command: string; agent: string } => p.agent !== null);
 
   await Promise.all(
@@ -144,12 +167,15 @@ export function resetDetectAgentsCache(): void {
 
 export async function detectAgents(
   worktreePaths: string[],
-  opts: { now?: () => number; scan?: (paths: string[]) => Promise<Map<string, string>> } = {},
+  opts: { now?: () => number; scan?: (paths: string[]) => Promise<Map<string, string>>; root?: string | string[] } = {},
 ): Promise<Map<string, string>> {
   if (worktreePaths.length === 0) return new Map();
   const now = opts.now ?? Date.now;
-  const scan = opts.scan ?? scanAgents;
-  const key = [...worktreePaths].sort().join('\n');
+  // `root` widens the patterns with the project's own `.baton/agents.json`.
+  // It joins the cache key: same paths under a different root (or none) must
+  // not reuse a scan taken with different patterns.
+  const scan = opts.scan ?? ((paths: string[]) => scanAgents(paths, patternsFor(opts.root)));
+  const key = `${rootKey(opts.root)}|${[...worktreePaths].sort().join('\n')}`;
   const t = now();
   if (detectCache && detectCache.key === key && t - detectCache.at < DETECT_TTL_MS) {
     return new Map(detectCache.result);
@@ -182,10 +208,10 @@ async function listProcessesWithPpid(): Promise<Array<{ pid: number; ppid: numbe
 }
 
 /** Every agent-matching process, with cwd resolved — the raw material for root-level (non-task) visibility. */
-async function scanAllAgentProcesses(): Promise<RootAgentSession[]> {
+async function scanAllAgentProcesses(patterns = AGENT_PATTERNS): Promise<RootAgentSession[]> {
   const procs = (await listProcessesWithPpid()).filter((p) => p.pid !== process.pid);
   const candidates = procs
-    .map((p) => ({ ...p, agent: classify(p.command) }))
+    .map((p) => ({ ...p, agent: classify(p.command, patterns) }))
     .filter((p): p is { pid: number; ppid: number; command: string; agent: string } => p.agent !== null);
   const resolved = await Promise.all(
     candidates.map(async (c): Promise<RootAgentSession | null> => {
@@ -214,12 +240,12 @@ export function resetDetectRootAgentsCache(): void {
 export async function detectRootAgents(
   includePaths: string[],
   excludePaths: string[] = [],
-  opts: { now?: () => number; scan?: () => Promise<RootAgentSession[]> } = {},
+  opts: { now?: () => number; scan?: () => Promise<RootAgentSession[]>; root?: string | string[] } = {},
 ): Promise<RootAgentSession[]> {
   if (includePaths.length === 0) return [];
   const now = opts.now ?? Date.now;
-  const scan = opts.scan ?? scanAllAgentProcesses;
-  const key = `${[...includePaths].sort().join('\n')}|${[...excludePaths].sort().join('\n')}`;
+  const scan = opts.scan ?? (() => scanAllAgentProcesses(patternsFor(opts.root)));
+  const key = `${rootKey(opts.root)}|${[...includePaths].sort().join('\n')}|${[...excludePaths].sort().join('\n')}`;
   const t = now();
   if (rootScanCache && rootScanCache.key === key && t - rootScanCache.at < ROOT_SCAN_TTL_MS) {
     return rootScanCache.result;

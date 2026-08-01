@@ -185,7 +185,14 @@ export function ActivityScreen({
     a.n++; a.commits += s.ahead; a.files += s.filesChanged;
     byAgent[s.agent!] = a;
   });
-  const agentRows = AGENT_REGISTRY.map((a) => ({ a, u: byAgent[a.id!] })).filter((r) => r.u);
+  // Registry rows first, then custom-agent ids — `agg` above already counts
+  // their commits and files, so omitting their rows would break the table's
+  // arithmetic against its own totals.
+  const inRegistry = new Set<string>(AGENT_REGISTRY.map((a) => a.id!));
+  const agentRows = [
+    ...AGENT_REGISTRY.map((a) => ({ a, u: byAgent[a.id!] })),
+    ...Object.keys(byAgent).filter((id) => !inRegistry.has(id)).sort().map((id) => ({ a: getAgent(id), u: byAgent[id] })),
+  ].filter((r) => r.u);
   const maxAgentTok = Math.max(1, ...agentRows.map((r) => r.u.in + r.u.out));
   const maxAgentWork = Math.max(1, ...agentRows.map((r) => r.u.commits + r.u.files));
 

@@ -17,7 +17,7 @@ import { readBrief } from './handoff/brief.js';
 import { memoryBriefSection, recallMemories } from './memory.js';
 import { tmuxSessionExists } from './util/tmux.js';
 import { bus } from './events.js';
-import { AGENTS, type HeadlessLauncher } from './agents/registry.js';
+import { AGENTS, agentsFor, type HeadlessLauncher } from './agents/registry.js';
 
 export type Launcher = HeadlessLauncher;
 
@@ -27,6 +27,14 @@ export const LAUNCHERS: Record<string, Launcher> = Object.fromEntries(
 );
 
 export const HEADLESS_AGENTS = Object.keys(LAUNCHERS);
+
+/** The per-root view: LAUNCHERS plus any headless agents the project's own
+ *  `.baton/agents.json` teaches. Used wherever a root is in hand. */
+export function launchersFor(root: string): Record<string, Launcher> {
+  return Object.fromEntries(
+    Object.values(agentsFor(root)).flatMap((a) => (a.headless ? [[a.id, a.headless] as const] : [])),
+  );
+}
 
 export class AgentRunningError extends Error {
   constructor(slug: string, agent: string) {
@@ -86,9 +94,10 @@ export async function startAgent(
   const task = await getTask(repoRoot, slug);
   if (!task) throw new Error(`No task '${slug}'`);
   const agent = opts.agent ?? 'claude';
-  const launcher = LAUNCHERS[agent];
+  const launchers = launchersFor(repoRoot);
+  const launcher = launchers[agent];
   if (!launcher) {
-    throw new Error(`'${agent}' has no headless mode baton can drive — supported: ${HEADLESS_AGENTS.join(', ')}. Start it manually in ${task.worktreePath}`);
+    throw new Error(`'${agent}' has no headless mode baton can drive — supported: ${Object.keys(launchers).join(', ')}. Start it manually in ${task.worktreePath}`);
   }
   if (running.has(slug)) throw new AgentRunningError(slug, running.get(slug)!.agent);
   // Cross-PROCESS exclusion: the in-memory map only sees this process, but an

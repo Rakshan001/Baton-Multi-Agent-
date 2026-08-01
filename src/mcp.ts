@@ -58,7 +58,7 @@ export async function startMcpServer(): Promise<void> {
   const selfSlug = taskSlug ?? sessionSlug(`p${process.pid}`);
   if (!taskSlug) {
     try {
-      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent());
+      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent(6, root));
       registerHookSession(root, selfSlug, agent, memRoot);
     } catch { /* identity is best-effort — tools still work anonymously */ }
   }
@@ -275,7 +275,7 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ title, done, pending, next, decisions, suggested_skills, to }) => {
       try {
-        const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent().catch(() => undefined)) || undefined;
+        const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent(6, root).catch(() => undefined)) || undefined;
         const brief = await createSessionHandoff(root, {
           slug: selfSlug, agent, title, done, pending, next, decisions, suggestedSkills: suggested_skills, to, cwd: process.cwd(),
         });

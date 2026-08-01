@@ -9,9 +9,9 @@
  * all: `~/.baton/agents.json` (bottom of this file) teaches Baton a new CLI
  * without a release.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export interface HeadlessLauncher {
   cmd: string;
@@ -145,7 +145,12 @@ function templateArgs(tpl: string[]): (prompt?: string, model?: string) => strin
         continue;
       }
       if (t.includes('{prompt}')) {
-        if (!prompt) { if (t !== '{prompt}') out.push(t.replaceAll('{prompt}', '')); continue; }
+        // undefined = no prompt AT ALL (an interactive launch) — drop the
+        // token, like positional() above. An empty STRING substitutes: the
+        // headless contract always passes a string, and dropping the token
+        // for '' would leave a flag-pair template like ['-p','{prompt}']
+        // with a dangling '-p' — built-ins keep the argv shape ('-p','').
+        if (prompt === undefined) { if (t !== '{prompt}') out.push(t.replaceAll('{prompt}', '')); continue; }
         const p = t.replaceAll('{prompt}', prompt);
         out.push(t === '{prompt}' && p.startsWith('-') ? ` ${p}` : p);
         continue;
@@ -268,7 +273,10 @@ export function loadCustomAgents(
     const def = cleanCustomAgent(entry, issues);
     if (!def) continue;
     if (into[def.id]) {
-      issues.push(`custom agent '${def.id}' collides with a built-in — the built-in wins`);
+      // "Existing", not "built-in": a project file can also collide with a
+      // ~/.baton custom. Earlier layers always win — config adds agents, it
+      // never redefines one.
+      issues.push(`custom agent '${def.id}' collides with an existing agent — the existing definition wins`);
       continue;
     }
     into[def.id] = def;
@@ -282,3 +290,70 @@ CUSTOM_AGENT_IDS.push(...loadCustomAgents(customAgentsPath(), AGENTS, CUSTOM_AGE
 // AFTER the custom merge, so every consumer that derives from this module —
 // spawn, terminals, detection, routing — sees custom agents as first-class.
 export const KNOWN_AGENT_IDS = Object.keys(AGENTS);
+
+/* ------------------------------------------------------------------ */
+/* Per-project agents — <root>/.baton/agents.json                      */
+/*                                                                     */
+/* The same format and the same validator as the machine-global file,  */
+/* scoped to one project: an agent only that repo's team uses does     */
+/* not belong in ~/.baton on every machine. Layering is additive and   */
+/* earlier-wins — built-ins, then ~/.baton, then the project file —    */
+/* because config exists to ADD agents, never to redefine one.         */
+/*                                                                     */
+/* Loaded on demand and stat-cached (mtime+ino, the members.json       */
+/* idiom) because detection sits on the daemon's poll path: the file   */
+/* is re-read only when it actually changed, and edits take effect     */
+/* without a daemon restart — unlike the global file, which loads at   */
+/* module init.                                                        */
+/* ------------------------------------------------------------------ */
+
+export function projectAgentsPath(root: string): string {
+  return join(root, '.baton', 'agents.json');
+}
+
+export interface ProjectAgents {
+  /** Ids that loaded from this project's file, in file order. */
+  ids: string[];
+  defs: Record<string, AgentDef>;
+  issues: string[];
+}
+
+const NO_PROJECT_AGENTS: ProjectAgents = { ids: [], defs: {}, issues: [] };
+const projectCache = new Map<string, { mtimeMs: number; ino: number; view: ProjectAgents }>();
+
+export function loadProjectAgents(root: string): ProjectAgents {
+  const key = resolve(root);
+  let st: { mtimeMs: number; ino: number };
+  try {
+    st = statSync(projectAgentsPath(root));
+  } catch {
+    projectCache.delete(key);
+    return NO_PROJECT_AGENTS; // absent is the normal case, not a problem
+  }
+  const hit = projectCache.get(key);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.ino === st.ino) return hit.view;
+  // Loading into a COPY of the merged global registry makes the existing
+  // collision check refuse built-ins and ~/.baton customs alike.
+  const into: Record<string, AgentDef> = { ...AGENTS };
+  const issues: string[] = [];
+  const ids = loadCustomAgents(projectAgentsPath(root), into, issues);
+  const defs: Record<string, AgentDef> = {};
+  for (const id of ids) defs[id] = into[id]!;
+  const view: ProjectAgents = { ids, defs, issues };
+  projectCache.set(key, { mtimeMs: st.mtimeMs, ino: st.ino, view });
+  return view;
+}
+
+/** The registry as seen from `root`: built-ins + ~/.baton + the project file.
+ *  Without a root (or without a project file) this IS the global registry —
+ *  same object, so rootless consumers lose nothing. */
+export function agentsFor(root?: string): Record<string, AgentDef> {
+  if (!root) return AGENTS;
+  const proj = loadProjectAgents(root);
+  if (!proj.ids.length) return AGENTS;
+  return { ...AGENTS, ...proj.defs };
+}
+
+export function knownAgentIdsFor(root?: string): string[] {
+  return Object.keys(agentsFor(root));
+}

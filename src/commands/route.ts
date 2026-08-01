@@ -7,8 +7,8 @@ import { gitRoot } from '../git.js';
 import { agentInstalled } from '../agents/roster.js';
 import { CONFIG_FILE, loadRouting, resolveChain, suggestRoute } from '../routing.js';
 
-const available = (agent: string): Promise<boolean> =>
-  agent === 'any' ? Promise.resolve(true) : agentInstalled(agent);
+const available = (agent: string, root: string): Promise<boolean> =>
+  agent === 'any' ? Promise.resolve(true) : agentInstalled(agent, root);
 
 export async function routeCmd(text: string): Promise<void> {
   const root = await gitRoot();
@@ -22,7 +22,7 @@ export async function routeCmd(text: string): Promise<void> {
     : s.source === 'single' ? 'single-agent mode'
     : 'no rule matched — default';
 
-  const resolved = await resolveChain(s.chain, available);
+  const resolved = await resolveChain(s.chain, (agent) => available(agent, root));
   const pick = resolved?.entry ?? s.chain[0];
   const model = pick.model ? ` (model: ${pick.model})` : '';
 

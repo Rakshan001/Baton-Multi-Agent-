@@ -23,7 +23,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { KNOWN_AGENT_IDS } from './agents/registry.js';
+import { KNOWN_AGENT_IDS, knownAgentIdsFor } from './agents/registry.js';
 import { escapeRegExp } from './util/regex.js';
 
 export type RoutingMode = 'auto' | 'manual' | 'single';
@@ -189,7 +189,10 @@ export function severityToTier(score: number, tiers: Record<string, TierEntry[]>
 /* Config validation                                                   */
 /* ------------------------------------------------------------------ */
 
-export function validateRoutingConfig(raw: unknown): { config: RoutingConfig | null; errors: string[] } {
+export function validateRoutingConfig(raw: unknown, knownIds?: string[]): { config: RoutingConfig | null; errors: string[] } {
+  // `knownIds` widens the agent check with a project's own `.baton/agents.json`
+  // (knownAgentIdsFor(root)); without it the machine-global registry is the list.
+  const known = knownIds ? new Set([...knownIds, 'any']) : KNOWN_AGENTS;
   const errors: string[] = [];
   if (typeof raw !== 'object' || raw === null) return { config: null, errors: ['config is not an object'] };
   const routing = (raw as { routing?: unknown }).routing;
@@ -222,7 +225,7 @@ export function validateRoutingConfig(raw: unknown): { config: RoutingConfig | n
           if (typeof e !== 'object' || e === null) return void errors.push(`tier "${name}" entry ${i + 1}: not an object`);
           const o = e as { agent?: unknown; model?: unknown };
           if (typeof o.agent !== 'string' || !o.agent.trim()) return void errors.push(`tier "${name}" entry ${i + 1}: "agent" is required`);
-          if (!KNOWN_AGENTS.has(o.agent)) errors.push(`tier "${name}": agent "${o.agent}" is not a known agent CLI (continuing anyway)`);
+          if (!known.has(o.agent)) errors.push(`tier "${name}": agent "${o.agent}" is not a known agent CLI (continuing anyway)`);
           if (o.model !== undefined && typeof o.model !== 'string') return void errors.push(`tier "${name}" entry ${i + 1}: "model" must be a string`);
           entries.push({ agent: o.agent, ...(o.model ? { model: o.model as string } : {}) });
         });
@@ -239,7 +242,7 @@ export function validateRoutingConfig(raw: unknown): { config: RoutingConfig | n
     if (typeof o !== 'object' || o === null || typeof o.agent !== 'string' || !o.agent.trim()) {
       errors.push('"routing.single" must be {agent, model?}');
     } else {
-      if (!KNOWN_AGENTS.has(o.agent)) errors.push(`"routing.single": agent "${o.agent}" is not a known agent CLI (continuing anyway)`);
+      if (!known.has(o.agent)) errors.push(`"routing.single": agent "${o.agent}" is not a known agent CLI (continuing anyway)`);
       single = { agent: o.agent, ...(typeof o.model === 'string' ? { model: o.model } : {}) };
     }
   }
@@ -264,7 +267,7 @@ export function validateRoutingConfig(raw: unknown): { config: RoutingConfig | n
       if (!hasAgent && !hasTier) {
         return void errors.push(`rule ${i + 1}: "agent" or "tier" is required`);
       }
-      if (hasAgent && !KNOWN_AGENTS.has(o.agent as string)) errors.push(`rule ${i + 1}: agent "${o.agent}" is not a known agent CLI (continuing anyway)`);
+      if (hasAgent && !known.has(o.agent as string)) errors.push(`rule ${i + 1}: agent "${o.agent}" is not a known agent CLI (continuing anyway)`);
       if (hasTier) {
         const known = tiers ?? BUILTIN_TIERS;
         if (!known[o.tier as string]) return void errors.push(`rule ${i + 1}: tier "${o.tier}" is not defined in routing.tiers`);
@@ -304,7 +307,7 @@ export async function loadRouting(root: string): Promise<{ config: RoutingConfig
   if (!existsSync(file)) return { config: BUILTIN_ROUTING, path: null, errors: [] };
   try {
     const raw = JSON.parse(await readFile(file, 'utf-8')) as unknown;
-    const { config, errors } = validateRoutingConfig(raw);
+    const { config, errors } = validateRoutingConfig(raw, knownAgentIdsFor(root));
     return { config: config ?? BUILTIN_ROUTING, path: file, errors };
   } catch (e) {
     return { config: BUILTIN_ROUTING, path: file, errors: [`could not parse ${CONFIG_FILE}: ${(e as Error).message}`] };

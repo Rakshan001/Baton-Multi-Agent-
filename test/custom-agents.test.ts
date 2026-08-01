@@ -9,10 +9,13 @@
  * launcher args stay argv arrays end to end.
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENTS, type AgentDef, KNOWN_AGENT_IDS, loadCustomAgents } from '../src/agents/registry.js';
+import {
+  AGENTS, type AgentDef, KNOWN_AGENT_IDS, agentsFor, knownAgentIdsFor,
+  loadCustomAgents, loadProjectAgents, projectAgentsPath,
+} from '../src/agents/registry.js';
 
 let dir: string;
 let file: string;
@@ -65,6 +68,9 @@ describe('loadCustomAgents', () => {
     expect(a.headless!.args('fix the bug', 'sonnet')).toEqual(['run', '--model=sonnet', '-p', 'fix the bug']);
     expect(a.headless!.args('fix the bug')).toEqual(['run', '-p', 'fix the bug']);
     expect(a.interactive!.args(undefined, undefined)).toEqual([]);
+    // An empty STRING keeps the argv shape (like the built-ins' '-p', '') —
+    // dropping the token would leave '-p' dangling. Only undefined drops.
+    expect(a.headless!.args('')).toEqual(['run', '-p', '']);
     // Detection defaults to the binary name in the same shape as built-ins.
     expect(a.detect.test('/opt/bin/myagent --tui')).toBe(true);
   });
@@ -81,7 +87,7 @@ describe('loadCustomAgents', () => {
     });
     expect(added).toEqual([]);
     expect(into.claude.binary).toBe('claude');
-    expect(issues.join(' ')).toMatch(/collides with a built-in/);
+    expect(issues.join(' ')).toMatch(/collides with an existing agent/);
   });
 
   it('skips malformed entries one by one, keeps the valid ones, and never throws', async () => {
@@ -130,5 +136,57 @@ describe('loadCustomAgents', () => {
     const { added, issues } = await load({ agents: many });
     expect(added.length).toBe(20);
     expect(issues.join(' ')).toMatch(/more than 20/);
+  });
+});
+
+describe('per-project agents — <root>/.baton/agents.json', () => {
+  // `dir` doubles as a project root here; ids are chosen to be unlikely to
+  // collide with anything a developer machine's real ~/.baton file defines.
+  const writeProject = async (content: unknown): Promise<void> => {
+    await mkdir(join(dir, '.baton'), { recursive: true });
+    await writeFile(projectAgentsPath(dir), JSON.stringify(content));
+  };
+
+  it('no file, no difference: agentsFor(root) IS the global registry object', () => {
+    expect(agentsFor(dir)).toBe(AGENTS);
+    expect(agentsFor()).toBe(AGENTS);
+  });
+
+  it('adds a project agent, visible to every per-root consumer surface', async () => {
+    await writeProject({
+      agents: [{ id: 'projx9', binary: 'projx9', headless: { args: ['-p', '{prompt}'] } }],
+    });
+    const view = agentsFor(dir);
+    expect(view.projx9.headless!.args('go')).toEqual(['-p', 'go']);
+    expect(knownAgentIdsFor(dir)).toContain('projx9');
+    // ...without leaking into the global registry or other roots.
+    expect(AGENTS.projx9).toBeUndefined();
+    expect(KNOWN_AGENT_IDS).not.toContain('projx9');
+  });
+
+  it('cannot redefine a built-in, and says so in the project issues', async () => {
+    await writeProject({ agents: [{ id: 'claude', binary: 'evil' }, { id: 'okx9', binary: 'ok' }] });
+    const proj = loadProjectAgents(dir);
+    expect(proj.ids).toEqual(['okx9']);
+    expect(proj.issues.join(' ')).toMatch(/collides with an existing agent/);
+    expect(agentsFor(dir).claude.binary).toBe('claude');
+  });
+
+  it('reloads when the file changes — no daemon restart needed', async () => {
+    await writeProject({ agents: [{ id: 'firstx9', binary: 'a' }] });
+    expect(knownAgentIdsFor(dir)).toContain('firstx9');
+    // mtime must actually move for the stat cache to notice.
+    await new Promise((r) => setTimeout(r, 20));
+    await writeProject({ agents: [{ id: 'secondx9', binary: 'b' }] });
+    const ids = knownAgentIdsFor(dir);
+    expect(ids).toContain('secondx9');
+    expect(ids).not.toContain('firstx9');
+  });
+
+  it('deleting the file returns the root to the global view', async () => {
+    await writeProject({ agents: [{ id: 'gonex9', binary: 'g' }] });
+    expect(knownAgentIdsFor(dir)).toContain('gonex9');
+    await unlink(projectAgentsPath(dir));
+    expect(agentsFor(dir)).toBe(AGENTS);
   });
 });

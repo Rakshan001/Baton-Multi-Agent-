@@ -353,6 +353,12 @@ function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState<string[]>([]);
   const rows = fleetOrder(fleet.data ?? []);
+  // A "stopping…" row un-greys the moment the poll stops listing it — and if
+  // its record SURVIVES a stop attempt (refused/failed), the key must not pin
+  // the row at half-opacity with a dead button forever.
+  useEffect(() => {
+    setStopping((s) => s.filter((k) => (fleet.data ?? []).some((d) => `${d.pid}-${d.port}` === k)));
+  }, [fleet.data]);
   if (!fleet.data || rows.length === 0) return null;
 
   const act = async (d: FleetDaemon) => {
@@ -364,12 +370,21 @@ function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
         // screen, and that banner is the honest report.
       } else {
         // pid + port, not port alone — a crash leftover and a live daemon can
-        // share a port, and this row is exactly one of them.
-        const r = await BatonAPI.stopFleetDaemon(d.port, d.pid);
-        setStopping((s) => [...s, `${d.pid}-${d.port}`]);
-        showToast(r.outcome === "cleaned"
-          ? { kind: "ok", title: "Cleaned up", desc: `${folderName(d.root)} — the daemon was already gone; only its record remained.` }
-          : { kind: "ok", title: `Stopped ${folderName(d.root)}`, desc: r.outcome === "signal" ? "Stopped by signal — that daemon predates graceful shutdown." : `Port ${d.port} is free again.` });
+        // share a port, and this row is exactly one of them. `expect` carries
+        // what this screen SHOWED, so a record that flipped live since the
+        // last poll gets a 409 instead of a surprise stop behind a dialog
+        // that promised only a file deletion.
+        const r = await BatonAPI.stopFleetDaemon(d.port, d.pid, d.status);
+        if (r.outcome === "refused-stale") {
+          // Nothing was stopped: the daemon went away on its own (or another
+          // daemon owns the port now). Saying "stopped" would be a lie.
+          showToast({ kind: "ok", title: "Already gone", desc: `${folderName(d.root)} — that daemon was no longer running; nothing needed stopping.` });
+        } else {
+          setStopping((s) => [...s, `${d.pid}-${d.port}`]);
+          showToast(r.outcome === "cleaned"
+            ? { kind: "ok", title: "Cleaned up", desc: `${folderName(d.root)} — the daemon was already gone; only its record remained.` }
+            : { kind: "ok", title: `Stopped ${folderName(d.root)}`, desc: r.outcome === "signal" ? "Stopped by signal — that daemon predates graceful shutdown." : `Port ${d.port} is free again.` });
+        }
       }
       setConfirm(null);
     } catch (e) {

@@ -1195,18 +1195,24 @@ class BatonClient {
    *  The pid rides along because a port is not a daemon: a crash leftover and
    *  a live daemon can both claim it, and the row the user clicked is a
    *  (pid, port) pair. */
-  async stopFleetDaemon(port: number, pid: number): Promise<{ ok: boolean; outcome: "graceful" | "signal" | "refused-stale" | "cleaned"; root: string }> {
+  /** `expect` echoes what the caller's screen showed ("stale" = the Clean-up
+   *  dialog promised a file deletion) — the server re-verifies, and refuses
+   *  with a 409 rather than stop a daemon that turned out to be alive. */
+  async stopFleetDaemon(port: number, pid: number, expect?: "stale" | "live"): Promise<{ ok: boolean; outcome: "graceful" | "signal" | "refused-stale" | "cleaned"; root: string }> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(200);
       const fleet = (this.demoFleet ??= structuredClone(DEMO_FLEET));
       const row = fleet.find((d) => d.port === port && d.pid === pid);
       if (!row) throw new ApiError("NOT_FOUND", `no daemon record for port ${port} with pid ${pid}`);
+      if (expect === "stale" && row.status === "live") {
+        throw new ApiError("CONFLICT", `the record for port ${port} is not a leftover — pid ${pid} is alive and answering`);
+      }
       this.demoFleet = fleet.filter((d) => !(d.port === port && d.pid === pid));
       this.emit();
       return { ok: true, outcome: row.status === "stale" ? "cleaned" : "graceful", root: row.root };
     }
-    return this.request(`/api/daemons/${port}/stop`, { method: "POST", body: JSON.stringify({ pid }) });
+    return this.request(`/api/daemons/${port}/stop`, { method: "POST", body: JSON.stringify({ pid, ...(expect ? { expect } : {}) }) });
   }
 
   /** Stop the daemon serving THIS dashboard. The daemon answers, then exits;

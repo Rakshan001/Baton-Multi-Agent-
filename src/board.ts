@@ -26,7 +26,7 @@ export interface StatusRow {
 export async function collectStatus(root: string): Promise<StatusRow[]> {
   const tasks = await loadTasks(root);
   const [agents, conflicts] = await Promise.all([
-    detectAgents(tasks.map((t) => t.worktreePath)),
+    detectAgents(tasks.map((t) => t.worktreePath), { root }),
     computeConflicts(tasks, root),
   ]);
 
@@ -70,7 +70,10 @@ export async function rootAgentSummary(
   taskWorktreePaths: string[],
   opts: { detect?: (include: string[], exclude: string[]) => Promise<RootAgentSession[]> } = {},
 ): Promise<RootAgentCount[]> {
-  const detect = opts.detect ?? detectRootAgents;
+  // Every scanned root contributes its patterns, not just the hub: a
+  // sub-project's own `.baton/agents.json` agents run in that sub-project's
+  // checkout, and hub-only patterns would drop them from the count.
+  const detect = opts.detect ?? ((inc: string[], exc: string[]) => detectRootAgents(inc, exc, { root: [hubRoot, ...kbProjectPaths] }));
   const sessions = await detect([hubRoot, ...kbProjectPaths], taskWorktreePaths);
   const counts = new Map<string, number>();
   for (const s of sessions) counts.set(s.agent, (counts.get(s.agent) ?? 0) + 1);

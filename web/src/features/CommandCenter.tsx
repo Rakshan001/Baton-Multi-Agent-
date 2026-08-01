@@ -5,7 +5,7 @@
 import type { ReactNode } from "react";
 import { Icon } from "../components/Icon";
 import { AgentBadge, SegmentedControl } from "../components/primitives";
-import { AGENT_REGISTRY, AgentGlyph } from "../lib/registry";
+import { AGENT_REGISTRY, AgentGlyph, getAgent } from "../lib/registry";
 import { deriveColumn } from "../lib/derive";
 import { Board } from "./Board";
 import { HandoffInbox } from "./Handoff";
@@ -62,7 +62,13 @@ export function CommandCenter({
   const byAgent: Record<string, number> = {};
   active.forEach((s) => { byAgent[s.agent!] = (byAgent[s.agent!] || 0) + 1; });
   (rootAgents ?? []).forEach((r) => { byAgent[r.agent] = (byAgent[r.agent] || 0) + r.count; });
-  const agentRows = AGENT_REGISTRY.map((a) => ({ a, n: byAgent[a.id!] || 0 })).filter((r) => r.n > 0);
+  // Non-registry ids (custom agents) get a chip too — the totals above count
+  // them, so dropping their rows would make the chips visibly not add up.
+  const inRegistry = new Set<string>(AGENT_REGISTRY.map((a) => a.id!));
+  const agentRows = [
+    ...AGENT_REGISTRY.map((a) => ({ a, n: byAgent[a.id!] || 0 })),
+    ...Object.keys(byAgent).filter((id) => !inRegistry.has(id)).sort().map((id) => ({ a: getAgent(id), n: byAgent[id] })),
+  ].filter((r) => r.n > 0);
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>

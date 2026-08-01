@@ -63,8 +63,16 @@ been verified against a real install.
 ### Add your own agent (no Baton release needed)
 
 Any agent CLI not in the table can be taught to Baton with
-`~/.baton/agents.json`. Entries are validated on load and `baton doctor`
-reports anything that didn't:
+`~/.baton/agents.json` — or, for an agent only one repo's team uses, with
+`.baton/agents.json` inside that project (commit it and the whole team gets
+it — Baton's managed `.gitignore` block leaves exactly this file unignored;
+on a repo initialized by an older Baton, re-run `baton kb init` once or
+`git add -f` it). Both use the same format. Layering is additive and earlier-wins:
+built-ins, then `~/.baton`, then the project file — a config file adds
+agents, it never redefines one. The machine-global file loads at startup;
+the project file reloads on every use, so edits need no daemon restart.
+Entries are validated on load and `baton doctor` reports anything that
+didn't:
 
 ```json
 {

@@ -112,7 +112,21 @@ export function HandoffDialog({
   const userPicked = useRef(false);
   const ref = useRef<HTMLDivElement>(null);
   const hasPending = (task?.filesChanged || 0) > 0;
-  const options = AGENT_REGISTRY.filter((a) => a.id !== task?.agent);
+  // Custom agents from meta.agents join the registry list: the server's
+  // routing can legitimately suggest a `.baton/agents.json` id, and a
+  // registry-only list would silently reject its own daemon's suggestion.
+  const [customIds, setCustomIds] = useState<string[]>([]);
+  useEffect(() => {
+    let on = true;
+    const inRegistry = new Set<string>(AGENT_REGISTRY.map((a) => a.id!));
+    BatonAPI.getMeta().then((m) => {
+      if (!on) return;
+      const ids = [...new Set([...(m.agents?.headless ?? []), ...(m.agents?.interactive ?? [])])];
+      setCustomIds(ids.filter((id) => !inRegistry.has(id)).sort());
+    }).catch(() => undefined);
+    return () => { on = false; };
+  }, []);
+  const options = [...AGENT_REGISTRY, ...customIds.map((id) => getAgent(id))].filter((a) => a.id !== task?.agent);
 
   const pick = (id: AgentId) => { userPicked.current = true; setTarget(id); };
 

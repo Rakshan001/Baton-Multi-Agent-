@@ -11,7 +11,7 @@ import { probeBinary } from '../util/exec.js';
 import { collectStatus } from '../board.js';
 import { runningHeadless } from '../spawn.js';
 import { listTerminals } from '../terminals.js';
-import { AGENTS } from './registry.js';
+import { agentsFor } from './registry.js';
 import { readMcpStatus, type McpStatus } from './connect.js';
 
 export type LiveKind = 'process' | 'headless' | 'terminal';
@@ -49,10 +49,12 @@ async function isInstalled(binary: string, now: number): Promise<boolean> {
 /**
  * Is an agent's CLI installed? Cached (30s TTL) and shared with the roster, so
  * the hot routing/handoff path doesn't fork a `<cli> --version` per resolve.
+ * `root` brings the project's `.baton/agents.json` layer in — a routing chain
+ * may legitimately name a project agent whose binary differs from its id.
  * Unknown ids fall back to probing the id as a binary name.
  */
-export function agentInstalled(agentId: string, now = Date.now()): Promise<boolean> {
-  return isInstalled(AGENTS[agentId]?.binary ?? agentId, now);
+export function agentInstalled(agentId: string, root?: string, now = Date.now()): Promise<boolean> {
+  return isInstalled(agentsFor(root)[agentId]?.binary ?? agentId, now);
 }
 
 /** Test seam — clear the install probe cache. */
@@ -66,7 +68,10 @@ export async function collectAgents(root: string, now = Date.now()): Promise<Age
   const terminals = listTerminals();
 
   return Promise.all(
-    Object.values(AGENTS).map(async (def): Promise<AgentRosterEntry> => {
+    // agentsFor, not the module registry: a project's `.baton/agents.json`
+    // agent must get a roster row — it is launchable and connectable, and its
+    // live sessions would otherwise be silently dropped from everyone's list.
+    Object.values(agentsFor(root)).map(async (def): Promise<AgentRosterEntry> => {
       const [installed, mcp] = await Promise.all([
         isInstalled(def.binary, now),
         readMcpStatus(def.id, root),

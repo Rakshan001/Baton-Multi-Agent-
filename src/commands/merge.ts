@@ -103,7 +103,7 @@ export async function mergeTaskBranch(
 
   // Capture the branch's commits BEFORE merging (squash would otherwise hide them).
   const commits = await branchCommits(task.branch, task.baseBranch, gitRepo);
-  const agents = await detectAgents([task.worktreePath]);
+  const agents = await detectAgents([task.worktreePath], { root: repoRoot });
   // Overlap snapshot before the merge — who else is touching the same files.
   const allTasks = await loadTasks(repoRoot);
   const overlapMap = await computeConflicts(allTasks, repoRoot).catch(() => new Map<string, string[]>());

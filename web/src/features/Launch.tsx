@@ -76,6 +76,14 @@ export function LaunchSession({
 
   const canHeadless = writeEnabled && headlessAgents.includes(agent);
   const canTerminal = writeEnabled && !!terminals?.available && (interactiveAgents === null || interactiveAgents.includes(agent));
+  // The picker is meta-driven, not registry-locked: `.baton/agents.json`
+  // agents arrive only through meta.agents, and the daemon can genuinely
+  // launch them — hiding them here would make the feature invisible.
+  const inRegistry = new Set<string>(AGENT_REGISTRY.map((x) => x.id!));
+  const agentGrid = [
+    ...AGENT_REGISTRY,
+    ...[...new Set([...headlessAgents, ...(interactiveAgents ?? [])])].filter((id) => !inRegistry.has(id)).sort().map((id) => getAgent(id)),
+  ];
   const mode = startMode === "headless" && !canHeadless ? "none"
     : startMode === "terminal" && !canTerminal ? "none"
     : startMode;
@@ -173,7 +181,7 @@ export function LaunchSession({
             <div>
               <div className="tag" style={{ marginBottom: 8 }}>Agent</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
-                {AGENT_REGISTRY.map((ag) => {
+                {agentGrid.map((ag) => {
                   const on = agent === ag.id;
                   return (
                     <button key={ag.id} className="fr" onClick={() => { userPickedAgent.current = true; acceptedModel.current = undefined; setAgent(ag.id as AgentId); }} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? `color-mix(in srgb, ${ag.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${ag.color} 45%, transparent)` : "var(--border-subtle)"}`, boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${ag.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1), background var(--dur-1)" }}>

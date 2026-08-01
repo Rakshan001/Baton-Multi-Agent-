@@ -4,8 +4,13 @@
    src/git.ts, src/server.ts). Kept in sync with a shape-guard test.
    ============================================================ */
 
-/** Agents Baton detects (src/agents.ts). `null` = no agent attached. */
-export type AgentId = "claude" | "cursor" | "codex" | "gemini" | "antigravity" | "aider" | "opencode";
+/** Agents Baton detects (src/agents.ts). `null` = no agent attached.
+ *  The union is OPEN (`string & {}` keeps literal autocomplete): the daemon
+ *  can report ids beyond the built-ins — `.baton/agents.json` custom agents —
+ *  and a closed union would make every screen silently drop their sessions. */
+export type AgentId =
+  | "claude" | "cursor" | "codex" | "gemini" | "antigravity" | "aider" | "opencode" | "openclaw"
+  | (string & {});
 
 /** Worktree state (src/git.ts). */
 export type Status = "clean" | "dirty" | "conflict";

@@ -112,7 +112,7 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
   if (!to || to === 'auto') {
     const { config } = await loadRouting(repoRoot);
     routed = suggestRoute(task.task, config);
-    const resolved = await resolveChain(routed.chain, (agent) => agentInstalled(agent));
+    const resolved = await resolveChain(routed.chain, (agent) => agentInstalled(agent, repoRoot));
     const pick = resolved?.entry ?? routed.chain[0];
     skipped = resolved?.skipped ?? [];
     to = pick.agent;

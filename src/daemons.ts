@@ -11,9 +11,11 @@
  *
  * Because of that, a record is a CLAIM, not a fact. Nothing here shows a
  * record as live — and nothing ever sends a signal to its pid — until it has
- * been verified: the pid must be alive AND the port must answer `/api/meta`
- * with the SAME repo root. Pid reuse and port reuse both fail the root match;
- * an entry that fails is "stale" and may only be cleaned up, never stopped.
+ * been verified: the pid must be alive, the port must answer `/api/meta` with
+ * the SAME repo root, and the answering process must BE that pid (meta carries
+ * it). Pid reuse, port reuse, and a same-repo restart on the old port all fail
+ * verification; an entry that fails is "stale" and may only be cleaned up,
+ * never stopped.
  *
  * Stopping is graceful-first, signal-second: POST /api/shutdown, and only when
  * the target predates that endpoint (404) or cannot answer does a SIGTERM go
@@ -135,29 +137,42 @@ export async function listDaemonRecords(dir = daemonsDir()): Promise<DaemonRecor
 export async function probeMeta(
   port: number,
   timeoutMs = 1500,
-): Promise<{ repo: string; version?: string } | null> {
+): Promise<{ repo: string; version?: string; pid?: number } | null> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/meta`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { repo?: unknown; version?: unknown };
+    const body = (await res.json()) as { repo?: unknown; version?: unknown; pid?: unknown };
     if (typeof body.repo !== 'string') return null;
-    return { repo: body.repo, ...(typeof body.version === 'string' ? { version: body.version } : {}) };
+    return {
+      repo: body.repo,
+      ...(typeof body.version === 'string' ? { version: body.version } : {}),
+      ...(typeof body.pid === 'number' ? { pid: body.pid } : {}),
+    };
   } catch {
     return null;
   }
 }
 
 /**
- * live ⇔ the pid is alive AND the port answers with the same root. Everything
- * else — dead pid, silent port, or a DIFFERENT repo answering (pid or port
- * reuse) — is stale, and stale entries are never signalled.
+ * live ⇔ the pid is alive AND the port answers with the same root AND — when
+ * the daemon is new enough to say — the answering process IS the record's pid.
+ * Everything else — dead pid, silent port, a DIFFERENT repo answering, or a
+ * same-repo daemon that merely inherited the port — is stale, and stale
+ * entries are never signalled.
+ *
+ * The pid comparison closes the one hole root can't: crash leaves a record,
+ * the same repo restarts on the same port, and the OS later recycles the dead
+ * pid to a stranger. Root matches, pid is alive — but it is not THIS daemon,
+ * and signalling it would hit an unrelated process. A daemon that predates the
+ * `pid` field in /api/meta is verified the old way (root only).
  */
 export async function verifyDaemon(rec: DaemonRecord, timeoutMs = 1500): Promise<DaemonStatus> {
   if (!pidAlive(rec.pid)) return 'stale';
   const meta = await probeMeta(rec.port, timeoutMs);
   if (!meta) return 'stale';
+  if (meta.pid !== undefined && meta.pid !== rec.pid) return 'stale';
   return resolve(meta.repo) === resolve(rec.root) ? 'live' : 'stale';
 }
 
@@ -184,7 +199,15 @@ export type StopOutcome = 'graceful' | 'signal' | 'refused-stale' | 'failed';
  * exists, or `baton ps` goes blind to the very process holding the port.
  */
 export async function stopDaemon(rec: DaemonRecord, dir = daemonsDir(), waitMs = 5000): Promise<StopOutcome> {
-  if ((await verifyDaemon(rec)) !== 'live') return 'refused-stale';
+  if ((await verifyDaemon(rec)) !== 'live') {
+    // Symmetric with the mid-flight re-check below: a record whose pid is
+    // provably gone is a corpse and leaves with us. A record that failed
+    // verification with its pid still alive (silent port, root mismatch — or
+    // just a probe timeout on a loaded box) is kept: deleting it on a flap
+    // would blind `baton ps` to a process that may well still hold the port.
+    if (!pidAlive(rec.pid)) await removeDaemonRecord(rec.pid, rec.port, dir);
+    return 'refused-stale';
+  }
   let path: Exclude<StopOutcome, 'refused-stale' | 'failed'> = 'signal';
   try {
     const res = await fetch(`http://127.0.0.1:${rec.port}/api/shutdown`, {
@@ -194,6 +217,17 @@ export async function stopDaemon(rec: DaemonRecord, dir = daemonsDir(), waitMs =
     if (res.ok) path = 'graceful';
   } catch { /* endpoint absent, daemon wedged — fall through to the signal */ }
   if (path === 'signal') {
+    // The graceful attempt above can take seconds (its fetch timeout is 3s) —
+    // long enough for the daemon to exit on its own and, in principle, for
+    // the OS to hand its pid to something else. Re-check at the last instant:
+    // a pid that died during the attempt is never signalled. (A wedged daemon
+    // — pid alive, port silent — still gets the SIGTERM; that fallback is the
+    // whole reason this branch exists, so only the pid is re-checked, never
+    // the port.)
+    if (!pidAlive(rec.pid)) {
+      await removeDaemonRecord(rec.pid, rec.port, dir);
+      return 'refused-stale';
+    }
     try {
       process.kill(rec.pid, 'SIGTERM');
     } catch {
