@@ -142,7 +142,13 @@ export async function newCmd(taskText: string, opts: { project?: string; scope?:
     console.log(`  scope: ${scope.join(', ')}`);
     // Advisory overlap warning at creation — the earliest point to catch two
     // tasks aimed at the same code (before either has edited anything).
-    const others = (await loadTasks(await resolveBatonRoot())).filter((t) => t.slug !== task.slug);
+    // Same-repo tasks only: `src/**` in proj-a and `src/**` in proj-b aim at
+    // different code, and a clash warning that fires on every hub task teaches
+    // people to ignore the one that matters.
+    const root = await resolveBatonRoot();
+    const others = (await loadTasks(root)).filter(
+      (t) => t.slug !== task.slug && (t.repoRoot ?? root) === (task.repoRoot ?? root),
+    );
     const clashes = overlappingScopes(scope, others);
     for (const c of clashes) {
       console.log(`  ⚠ scope overlaps '${c.slug}' (${c.scope.join(', ')}) — coordinate or narrow the scope.`);

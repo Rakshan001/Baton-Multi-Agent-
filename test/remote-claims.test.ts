@@ -153,8 +153,8 @@ describe('remoteHoldersFor', () => {
     linked: true, reachable: true,
     byPath: {
       'src/a.ts': [
-        { memberId: 'priya', memberName: 'Priya', agent: 'claude', branch: 'main', since: 'x' },
-        { memberId: 'me', memberName: 'Me', agent: 'cursor', branch: 'main', since: 'x' },
+        { memberId: 'priya', memberName: 'Priya', agent: 'claude', branch: 'main', projectId: null, since: 'x' },
+        { memberId: 'me', memberName: 'Me', agent: 'cursor', branch: 'main', projectId: null, since: 'x' },
       ],
     },
   };
@@ -171,6 +171,43 @@ describe('remoteHoldersFor', () => {
   it('drops the path entirely when the asker was the only holder', () => {
     const solo = { ...view, byPath: { 'src/a.ts': [view.byPath['src/a.ts'][1]] } };
     expect(remoteHoldersFor(solo, ['src/a.ts'], 'me')).toEqual({});
+  });
+
+  /*
+   * A claim is (projectId, relPath) on the host — but the local side used to
+   * key it on the path alone, so a teammate holding proj-b's `src/index.ts` was
+   * reported to an agent working in proj-a as a hold on THEIR file.
+   */
+  describe('project scoping in a hub', () => {
+    const hub = {
+      linked: true, reachable: true,
+      byPath: {
+        'src/index.ts': [
+          { memberId: 'priya', memberName: 'Priya', agent: 'claude', branch: 'main', projectId: 'proj-b', since: 'x' },
+          { memberId: 'sam', memberName: 'Sam', agent: 'codex', branch: 'main', projectId: 'proj-a', since: 'x' },
+        ],
+      },
+    };
+
+    it('reports only holders in the asker\'s project', () => {
+      expect(remoteHoldersFor(hub, ['src/index.ts'], undefined, 'proj-a')[
+        'src/index.ts'
+      ].map((h) => h.memberId)).toEqual(['sam']);
+    });
+
+    it('drops the path when every holder is in another project', () => {
+      const onlyB = { ...hub, byPath: { 'src/index.ts': [hub.byPath['src/index.ts'][0]] } };
+      expect(remoteHoldersFor(onlyB, ['src/index.ts'], undefined, 'proj-a')).toEqual({});
+    });
+
+    it('an asker with no project sees everyone — unknown must not silently hide a holder', () => {
+      expect(remoteHoldersFor(hub, ['src/index.ts'], undefined, null)['src/index.ts']).toHaveLength(2);
+    });
+
+    it('keeps a holder whose project is unknown, whoever asks', () => {
+      expect(remoteHoldersFor(view, ['src/a.ts'], 'me', 'proj-a')['src/a.ts'].map((h) => h.memberId))
+        .toEqual(['priya']);
+    });
   });
 });
 

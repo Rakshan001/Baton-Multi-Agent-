@@ -33,17 +33,51 @@ export async function changedFiles(task: Task, root: string): Promise<Set<string
 }
 
 /**
+ * slug → the repo its paths are relative to. Tasks recorded before `repoRoot`
+ * existed fall back to the served root, which is right for a single repo.
+ */
+export function taskRepos(tasks: Array<{ slug: string; repoRoot?: string }>, root: string): Map<string, string> {
+  return new Map(tasks.map((t) => [t.slug, t.repoRoot ?? root]));
+}
+
+/**
+ * Can two holders of the SAME path string actually collide? Every path Baton
+ * compares is worktree-relative, so in a multi-repo hub `src/index.ts` in
+ * proj-a and `src/index.ts` in proj-b are two unrelated files that merely spell
+ * the same string. A merge conflict needs a shared repo, so only same-repo
+ * holders can collide — without this, every conventional filename (index.ts,
+ * README.md, package.json) cross-warned between projects, and a signal that
+ * cries wolf is one agents learn to scroll past.
+ *
+ * A holder with no known repo — a session at a checkout root, a watched
+ * checkout; neither belongs to a task — pairs with anything, erring toward the
+ * warning as `scopesOverlap` does. Suppressing on a guess is the one mistake
+ * that loses data.
+ */
+export function canCollide(repoOf: Map<string, string> | undefined, a: string, b: string): boolean {
+  if (!repoOf) return true;
+  const ra = repoOf.get(a);
+  const rb = repoOf.get(b);
+  if (!ra || !rb) return true;
+  return ra === rb;
+}
+
+/**
  * For each task, the files it shares with at least one other task (sorted).
  * Pure given the per-task file sets — see `computeConflictsFromSets` for tests.
+ * Pass `repoOf` (from `taskRepos`) so same-named files in different sub-projects
+ * of a hub are not reported as overlapping.
  */
 export function computeConflictsFromSets(
   sets: Map<string, Set<string>>,
+  repoOf?: Map<string, string>,
 ): Map<string, string[]> {
   const result = new Map<string, string[]>();
   for (const [slug, mine] of sets) {
     const overlap = new Set<string>();
     for (const [other, theirs] of sets) {
       if (other === slug) continue;
+      if (!canCollide(repoOf, slug, other)) continue;
       for (const f of mine) if (theirs.has(f)) overlap.add(f);
     }
     result.set(slug, [...overlap].sort());
@@ -107,5 +141,5 @@ export async function computeConflicts(
       sets.set(t.slug, await changedFiles(t, root));
     }),
   );
-  return computeConflictsFromSets(sets);
+  return computeConflictsFromSets(sets, taskRepos(tasks, root));
 }

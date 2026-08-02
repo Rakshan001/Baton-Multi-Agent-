@@ -194,6 +194,17 @@ export async function getTask(gitRoot: string, slug: string): Promise<Task | und
   return (await loadTasks(gitRoot)).find((t) => t.slug === slug);
 }
 
+/**
+ * The sub-project a slug belongs to, or null when there is none to know: a
+ * single repo, an unrecorded slug, or a session that is not a task. Callers use
+ * it to scope path comparisons, so null must mean "don't scope", never "no
+ * project".
+ */
+export async function projectOf(gitRoot: string, slug?: string): Promise<string | null> {
+  if (!slug) return null;
+  return (await getTask(gitRoot, slug))?.projectId ?? null;
+}
+
 // Cross-process advisory lock: `serialized()` covers concurrent writes inside
 // ONE process, but the CLI (`baton new`) and a running daemon are separate
 // processes writing the same tasks.json — without a lock, simultaneous

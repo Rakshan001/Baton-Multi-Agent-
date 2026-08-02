@@ -17,6 +17,7 @@ import { createTask, ProjectRequiredError, UnknownProjectError } from '../src/co
 import { mergeTaskBranch } from '../src/commands/merge.js';
 import { removeTaskWorktree } from '../src/commands/rm.js';
 import { collectStatus } from '../src/board.js';
+import { checkFiles, getSignals, recordHookEdit } from '../src/signals.js';
 
 /** A git sub-repo with one commit on `main`. */
 async function initSubRepo(root: string): Promise<void> {
@@ -154,6 +155,62 @@ describe('createTask on a multi-repo hub', () => {
     const rows = await collectStatus(hub);
     expect(rows.find((r) => r.slug === a.slug)!.conflictFiles).toContain('shared.txt');
     expect(rows.find((r) => r.slug === b.slug)!.conflictFiles).toContain('shared.txt');
+  });
+
+  it('does NOT fabricate a conflict between identical paths in DIFFERENT projects', async () => {
+    // `src/index.ts` in proj-a and `src/index.ts` in proj-b are two unrelated
+    // files that merely spell the same relative path. Warning on them is worse
+    // than saying nothing: a coordination signal that cries wolf on every
+    // conventional filename is one agents learn to scroll past.
+    const a = await createTask('Task in a', hub, 'proj-a');
+    const b = await createTask('Task in b', hub, 'proj-b');
+    for (const t of [a, b]) {
+      await mkdir(join(t.worktreePath, 'src'), { recursive: true });
+      await fsWriteFile(join(t.worktreePath, 'src', 'index.ts'), `// ${t.slug}\n`, 'utf-8');
+      await git(['add', '.'], t.worktreePath);
+      await git(['commit', '-q', '-m', `touch index from ${t.slug}`], t.worktreePath);
+    }
+
+    const rows = await collectStatus(hub);
+    expect(rows.find((r) => r.slug === a.slug)!.conflictFiles).toEqual([]);
+    expect(rows.find((r) => r.slug === b.slug)!.conflictFiles).toEqual([]);
+  });
+
+  it('answers check_files per project — busy in my repo, free across repos', async () => {
+    // The same question the edit guard and the check_files MCP tool ask before
+    // an agent touches a file. Answering "busy" because an unrelated repo has a
+    // file of that name is how a coordination tool gets muted.
+    const a = await createTask('Holder in a', hub, 'proj-a');
+    const sameRepo = await createTask('Asker in a', hub, 'proj-a');
+    const otherRepo = await createTask('Asker in b', hub, 'proj-b');
+    await mkdir(join(a.worktreePath, 'src'), { recursive: true });
+    await fsWriteFile(join(a.worktreePath, 'src', 'index.ts'), '// held\n', 'utf-8');
+    await git(['add', '.'], a.worktreePath);
+    await git(['commit', '-q', '-m', 'hold index'], a.worktreePath);
+
+    const asSameRepo = (await checkFiles(hub, ['src/index.ts'], sameRepo.slug))['src/index.ts'];
+    expect(asSameRepo.busy).toBe(true);
+    expect(asSameRepo.by.map((h) => h.slug)).toContain(a.slug);
+
+    const asOtherRepo = (await checkFiles(hub, ['src/index.ts'], otherRepo.slug))['src/index.ts'];
+    expect(asOtherRepo.busy).toBe(false);
+    expect(asOtherRepo.by).toEqual([]);
+  });
+
+  it('keeps a live cross-project edit at info — both holders shown, no overlap warning', async () => {
+    // Every repo has a README.md. Two agents editing their own one are not in
+    // each other's way, and `warning` is what pushes a signal.overlap event to
+    // both of them.
+    const a = await createTask('Live in a', hub, 'proj-a');
+    const b = await createTask('Live in b', hub, 'proj-b');
+    for (const t of [a, b]) {
+      await fsWriteFile(join(t.worktreePath, 'README.md'), `# ${t.slug}\n`, 'utf-8'); // dirty, so it survives reconcile
+      recordHookEdit(hub, { slug: t.slug, path: 'README.md' });
+    }
+
+    const row = (await getSignals(hub)).find((s) => s.path === 'README.md')!;
+    expect(row.holders.map((h) => h.slug).sort()).toEqual([a.slug, b.slug].sort());
+    expect(row.level).toBe('info');
   });
 
   it('merges a sub-project task back into its own repo, then removes the worktree', async () => {

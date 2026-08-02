@@ -48,7 +48,7 @@ import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
 import { listBriefs } from './handoff/resume.js';
-import { getTask } from './store.js';
+import { getTask, projectOf } from './store.js';
 import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
 import { agentActiveLoads, pickHandoffTarget } from './handoff/workload.js';
@@ -1306,8 +1306,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     // Same two-source answer as the MCP tool — an agent without MCP must not get
     // a blinder version of "is anyone on this file". Reachability is reported
     // separately so "could not ask" never reads as "nobody is there".
-    const [checked, view] = await Promise.all([checkFiles(root, files, exclude), remoteClaims(root)]);
-    for (const [p, holders] of Object.entries(remoteHoldersFor(view, files))) {
+    const [checked, view, project] = await Promise.all([
+      checkFiles(root, files, exclude), remoteClaims(root), projectOf(root, exclude),
+    ]);
+    for (const [p, holders] of Object.entries(remoteHoldersFor(view, files, undefined, project))) {
       if (checked[p]) checked[p] = { ...checked[p], busy: true, elsewhere: holders };
     }
     const note = remoteNote(view);

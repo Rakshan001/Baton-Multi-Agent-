@@ -36,6 +36,8 @@ export interface RemoteHolder {
   memberName: string;
   agent: string | null;
   branch: string | null;
+  /** Which sub-project the claim is in; null from a single-repo publisher. */
+  projectId: string | null;
   /** Host-assigned; when they opened the claim. */
   since: string;
 }
@@ -134,6 +136,10 @@ async function fetchClaims(link: HostLink): Promise<RemoteClaimsView> {
         memberName: typeof c.memberName === 'string' ? c.memberName : memberId,
         agent: typeof c.agent === 'string' ? c.agent : null,
         branch: typeof c.branch === 'string' ? c.branch : null,
+        // Kept, not dropped: the host keys claims by (projectId, relPath) —
+        // without it a teammate's `src/index.ts` in another sub-project reads
+        // as a hold on ours, which is the conflict this tool exists to avoid.
+        projectId: typeof c.projectId === 'string' ? c.projectId : null,
         since: typeof c.openedAt === 'string' ? c.openedAt : '',
       });
     }
@@ -166,11 +172,26 @@ export async function remoteClaims(root: string, now = Date.now()): Promise<Remo
  * where the caller knows it. Paths are matched exactly: claims are repo-relative
  * by contract (see federation.ts), so normalising here would only paper over a
  * publisher that got it wrong.
+ *
+ * `projectId` is the ASKER's sub-project, when known. A path is only
+ * repo-relative, so across a hub the same string names different files; the
+ * host already keys its claims by (projectId, relPath) and this is where the
+ * local side stops throwing that half away. A holder whose projectId is null
+ * came from a single-repo publisher and still matches — unknown pairs with
+ * anything, exactly as `canCollide` does locally.
  */
-export function remoteHoldersFor(view: RemoteClaimsView, paths: string[], exceptMemberId?: string): Record<string, RemoteHolder[]> {
+export function remoteHoldersFor(
+  view: RemoteClaimsView,
+  paths: string[],
+  exceptMemberId?: string,
+  projectId?: string | null,
+): Record<string, RemoteHolder[]> {
   const out: Record<string, RemoteHolder[]> = {};
   for (const p of paths) {
-    const holders = (view.byPath[p] ?? []).filter((h) => !exceptMemberId || h.memberId !== exceptMemberId);
+    const holders = (view.byPath[p] ?? []).filter(
+      (h) => (!exceptMemberId || h.memberId !== exceptMemberId)
+        && (!projectId || !h.projectId || h.projectId === projectId),
+    );
     if (holders.length) out[p] = holders;
   }
   return out;

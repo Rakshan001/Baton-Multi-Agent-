@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { collectStatus } from './board.js';
 import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
-import { activeBatonRoot } from './store.js';
+import { activeBatonRoot, projectOf } from './store.js';
 import { queryFile, searchHistory } from './history.js';
 import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
@@ -115,11 +115,12 @@ export async function startMcpServer(): Promise<void> {
        * this file" from "I could not find out", and only the first is a reason
        * to proceed confidently.
        */
-      const [files, view] = await Promise.all([
+      const [files, view, project] = await Promise.all([
         checkFiles(root, paths, selfSlug),
         remoteClaims(root),
+        projectOf(root, selfSlug),
       ]);
-      const elsewhere = remoteHoldersFor(view, paths);
+      const elsewhere = remoteHoldersFor(view, paths, undefined, project);
       for (const [p, holders] of Object.entries(elsewhere)) {
         if (files[p]) files[p] = { ...files[p], busy: true, elsewhere: holders };
       }
