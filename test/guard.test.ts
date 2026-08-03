@@ -1,10 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder } from '../src/commands/guard.js';
+import { git } from '../src/util/exec.js';
+import { checkoutForEdit, guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder } from '../src/commands/guard.js';
 import { GUARDRAIL_REINJECT_MS } from '../src/handoff/guardrails.js';
 import type { FileCheck } from '../src/signals.js';
+
+async function initRepo(dir: string): Promise<void> {
+  await git(['init', '-q'], dir);
+  await git(['config', 'user.email', 'test@baton.dev'], dir);
+  await git(['config', 'user.name', 'Baton Test'], dir);
+  await git(['config', 'core.hooksPath', '/dev/null'], dir);
+  await git(['checkout', '-q', '-b', 'main'], dir);
+  await writeFile(join(dir, 'README.md'), '# r\n', 'utf-8');
+  await git(['add', '.'], dir);
+  await git(['commit', '-q', '-m', 'initial'], dir);
+}
 
 describe('guardTarget — extract the repo-relative file a PreToolUse edit targets', () => {
   const wt = '/repo/.baton/wt/fix-auth';
@@ -23,6 +36,50 @@ describe('guardTarget — extract the repo-relative file a PreToolUse edit targe
 
   it('ignores files outside the worktree', () => {
     expect(guardTarget({ tool_name: 'Edit', tool_input: { file_path: '/etc/hosts' } }, wt)).toBeNull();
+  });
+});
+
+/**
+ * A session at the root of a multi-repo hub is not inside a git repo, so the
+ * guard's `gitRoot(cwd)` threw and its fail-open swallowed the whole call:
+ * every edit made from a hub root recorded NOTHING, leaving those sessions
+ * invisible to each other and to every task. Verified before the fix — the
+ * probe recorded a signal in a plain repo and none from a hub root.
+ */
+describe('checkoutForEdit — which checkout an edit is filed under', () => {
+  let hub = '', projA = '', outside = '';
+
+  beforeEach(async () => {
+    hub = realpathSync(await mkdtemp(join(tmpdir(), 'baton-guardhub-')));
+    projA = join(hub, 'proj-a');
+    await mkdir(join(projA, 'src'), { recursive: true });
+    await initRepo(projA);
+    await mkdir(join(hub, '.baton'), { recursive: true });
+    outside = realpathSync(await mkdtemp(join(tmpdir(), 'baton-guardout-')));
+    await initRepo(outside);
+  }, 60_000);
+  afterEach(async () => {
+    await rm(hub, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('uses the session cwd when that IS a git checkout', async () => {
+    expect(await checkoutForEdit(projA, join(projA, 'src', 'x.ts'), hub)).toBe(projA);
+  });
+
+  it("falls back to the FILE's repo from a non-git hub root", async () => {
+    // The path is then relative to proj-a — the same repo proj-a's own tasks
+    // record against, which is what makes the two comparable at all.
+    expect(await checkoutForEdit(hub, join(projA, 'src', 'x.ts'), hub)).toBe(projA);
+  });
+
+  it('refuses a file in an unrelated repo outside the baton root', async () => {
+    expect(await checkoutForEdit(hub, join(outside, 'f.ts'), hub)).toBeNull();
+  });
+
+  it('refuses when there is no usable path at all', async () => {
+    expect(await checkoutForEdit(hub, undefined, hub)).toBeNull();
+    expect(await checkoutForEdit(hub, 'relative/f.ts', hub)).toBeNull();
   });
 });
 

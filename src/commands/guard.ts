@@ -10,7 +10,7 @@
  * editing is never stalled by coordination plumbing.
  */
 import { spawn } from 'node:child_process';
-import { relative, isAbsolute, dirname, basename, join } from 'node:path';
+import { relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
 import { activeBatonRoot, batonDir } from '../store.js';
@@ -162,13 +162,44 @@ async function canonicalTarget(payload: GuardPayload): Promise<GuardPayload> {
   }
 }
 
+/**
+ * The checkout an edit belongs to — normally the session's own cwd.
+ *
+ * A session at the root of a multi-repo HUB is not inside a git repo at all,
+ * so `gitRoot(cwd)` threw and the guard's fail-open swallowed it whole: every
+ * edit made from a hub root recorded nothing, so those sessions were invisible
+ * to each other and to every task — the exact blindness G2 exists to remove.
+ * Fall back to the repo the FILE lives in, which is also the only answer that
+ * keeps the recorded path relative to the same repo the tasks in it record
+ * against, so the two actually compare.
+ *
+ * Only inside the baton root: an edit in an unrelated repo elsewhere on disk is
+ * not this root's business, and recording it would file a foreign path in the
+ * store under a path string that could collide with a real one.
+ *
+ * (A session that roams between sub-projects re-registers its root on each
+ * edit, so its earlier signals may settle a little early. Recording the repo
+ * per signal would fix that properly; today's alternative is recording nothing
+ * at all, which is strictly worse.)
+ */
+export async function checkoutForEdit(cwd: string, file: string | undefined, root: string): Promise<string | null> {
+  const fromCwd = await gitRoot(cwd).catch(() => null);
+  if (fromCwd) return fromCwd;
+  if (!file || !isAbsolute(file)) return null;
+  const fromFile = await gitRoot(dirname(file)).catch(() => null);
+  if (!fromFile) return null;
+  const canonRoot = await realpath(root).catch(() => root);
+  return fromFile === canonRoot || fromFile.startsWith(canonRoot + sep) ? fromFile : null;
+}
+
 async function runGuard(agent: string): Promise<string | null> {
-  const payload = normalizeGuardPayload(JSON.parse(await readStdin()) as GuardPayload);
+  const payload = await canonicalTarget(normalizeGuardPayload(JSON.parse(await readStdin()) as GuardPayload));
   const cwd = payload.cwd ?? process.cwd();
-  const worktreeRoot = await gitRoot(cwd);
-  const rel = guardTarget(await canonicalTarget(payload), worktreeRoot);
-  if (!rel) return null;
   const root = await activeBatonRoot(cwd);
+  const worktreeRoot = await checkoutForEdit(cwd, payload.tool_input?.file_path, root);
+  if (!worktreeRoot) return null;
+  const rel = guardTarget(payload, worktreeRoot);
+  if (!rel) return null;
   const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG, agent);
   // G2: the guard WRITES the signal too — the daemon-less path that makes
   // sessions at the repo root (and worktree sessions with no daemon) visible
