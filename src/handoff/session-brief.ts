@@ -46,6 +46,12 @@ export interface SessionHandoffInput {
   note?: string;
   /** Where the session works (worktree or repo root); defaults sensibly. */
   cwd?: string;
+  /**
+   * Derived by a hook from git state, with no agent behind it. Recorded in the
+   * frontmatter because the two kinds share one directory and only the AUTHORED
+   * kind is irreplaceable — automatic pruning must be able to tell them apart.
+   */
+  derived?: boolean;
 }
 
 export interface SessionHandoffResult {
@@ -75,10 +81,21 @@ function safeSlug(slug: string): string {
 /** `git status --porcelain` line → repo-relative path ('R  old -> new' → new).
  *  Parsed by token, not position — exec output trimming can eat the leading
  *  status space, so slicing a fixed column count would corrupt the path. */
-function porcelainPath(line: string): string {
+export function porcelainPath(line: string): string {
   const p = line.trim().replace(/^\S{1,2}\s+/, '');
   const renamed = p.includes(' -> ') ? p.slice(p.indexOf(' -> ') + 4) : p;
   return renamed.replace(/^"|"$/g, '').trim();
+}
+
+/**
+ * Baton's own coordination state, which is never the session's work.
+ *
+ * Writing a brief dirties `.baton/`, so a brief that reports the tree verbatim
+ * reports ITSELF as pending — and then anchors memory facts to it. Invisible in
+ * a repo whose .gitignore Baton manages; plainly wrong in one where it doesn't.
+ */
+export function isBatonArtifact(path: string): boolean {
+  return path === '.baton' || path === '.baton/' || path.startsWith('.baton/');
 }
 
 /** Decisions shorter than this carry no reusable knowledge ("use jwt"). */
@@ -145,7 +162,9 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
   // Git ground truth — fail-safe: outside a git repo these sections are skipped.
   const branch = await gitTry(['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD']);
   const dirty = await gitTry(['-C', cwd, 'status', '--porcelain']);
-  const dirtyFiles = dirty.ok && dirty.stdout ? dirty.stdout.split('\n').filter(Boolean) : [];
+  const dirtyFiles = dirty.ok && dirty.stdout
+    ? dirty.stdout.split('\n').filter(Boolean).filter((l) => !isBatonArtifact(porcelainPath(l)))
+    : [];
 
   // Files this session declared it is editing (live signals).
   let inFlight: string[] = [];
@@ -166,6 +185,7 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
     created: new Date().toISOString(),
     repo: root,
     ...(branch.ok && branch.stdout ? { branch: branch.stdout.trim() } : {}),
+    ...(input.derived ? { derived: true } : {}),
   };
 
   const body: string[] = [`# Handoff: ${title}`];
