@@ -284,6 +284,9 @@ export async function startMcpServer(): Promise<void> {
           brief: brief.path,
           pickup: brief.resume,
           ...(brief.capturedFacts.length ? { memorized: brief.capturedFacts } : {}),
+          // A decision the memory gate refused is worth one line back: you are
+          // the only one who can restate it durably, and the brief still has it.
+          ...(brief.skippedFacts.length ? { notMemorized: brief.skippedFacts } : {}),
           tip: 'Tell the user the pickup command — the next agent runs it to continue.',
         });
       } catch (e) {

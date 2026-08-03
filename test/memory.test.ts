@@ -7,7 +7,7 @@ import {
   detectSecret, factSimilarity, fingerprintOf, listMemories, memoryBriefSection, parseFactFile,
   recallMemories, renderFactFile, saveMemory, scoreMemory, slugifyId,
   deriveProject, factsToPrune,
-  MemoryValidationError, type MemoryFact, type MemoryStatus,
+  MemoryValidationError, UndurableFactError, type MemoryFact, type MemoryStatus,
 } from '../src/memory.js';
 
 describe('deriveProject (per-server scoping)', () => {
@@ -250,6 +250,82 @@ describe('memory store (real temp git repo)', () => {
     await expect(saveMemory(root, { fact: 'too short' })).rejects.toThrow(MemoryValidationError);
     await expect(saveMemory(root, { fact: 'The deploy key is ghp_abcdefghijklmnopqrstuvwxyz012345 for CI.' }))
       .rejects.toThrow(/refusing to store/);
+  });
+
+  /*
+   * The anti-capture gate (memory-durability.ts) at the write path. Truth is
+   * checked on every READ via anchors; this is the question that comes before
+   * it — knowledge that was never about the code cannot be policed by hashing
+   * the code, so it must not be stored at all.
+   */
+  describe('anti-capture gate', () => {
+    it('refuses a never-durable fact and writes nothing', async () => {
+      const before = (await listMemories(root)).length;
+      await expect(saveMemory(root, { fact: 'In this session I fixed the guard and pushed the branch.' }))
+        .rejects.toThrow(/not durable knowledge \(narrative/);
+      expect(await listMemories(root)).toHaveLength(before);
+    });
+
+    it('names the phrase and the rewrite, so a rejection is one edit from a save', async () => {
+      await expect(saveMemory(root, { fact: 'The playwright MCP server is broken, so skip it entirely.' }))
+        .rejects.toThrow(/"is broken".*hardens into a refusal/s);
+      // Same knowledge, stated durably — accepted.
+      const ok = await saveMemory(root, {
+        fact: 'The playwright MCP server fails to attach under a hub root; drive the dashboard with curl instead.',
+      });
+      expect(ok.id).toMatch(/^mem-/);
+    });
+
+    it('EXPLICIT file anchors waive the evidence-backed classes', async () => {
+      const saved = await saveMemory(root, {
+        fact: 'The a.txt fast path does not work once the file is rewritten by the release script.',
+        files: ['a.txt'],
+      });
+      expect(saved.anchors.files.map((f) => f.path)).toEqual(['a.txt']);
+    });
+
+    it('a filename merely MENTIONED does not waive it — only an asserted anchor does', async () => {
+      // Anchors derived from the prose (deriveFileAnchors) would find a.txt here,
+      // which would make the waiver self-serving: every claim naming any real
+      // file would exempt itself. The caller has to vouch for the evidence.
+      await expect(saveMemory(root, { fact: 'The a.txt loader is broken and always has been.' }))
+        .rejects.toThrow(/not durable knowledge \(tool-disparagement/);
+    });
+
+    it('does not waive a session narrative or a self-resolved flake, anchored or not', async () => {
+      await expect(saveMemory(root, { fact: 'In this session we rewrote a.txt twice.', files: ['a.txt'] }))
+        .rejects.toThrow(/narrative/);
+      await expect(saveMemory(root, { fact: 'The a.txt check failed once, then it passed on the second run.', files: ['a.txt'] }))
+        .rejects.toThrow(/transient/);
+    });
+
+    it('an anchor that does not resolve is not evidence, so it grants no waiver', async () => {
+      // A missing file hashes to '' and stays '' forever, so it never trips the
+      // staleness check. Honouring it would hand out a waiver that also opts the
+      // fact out of the very verification the waiver is justified by — i.e. the
+      // gate would be bypassable by naming any path at all.
+      await expect(saveMemory(root, {
+        fact: 'The uploader is broken and always has been, top to bottom.',
+        files: ['does-not-exist.ts'],
+      })).rejects.toThrow(/not durable knowledge/);
+    });
+
+    it('is a distinct error class, so callers can tell "restate this" from "that had a credential in it"', async () => {
+      await expect(saveMemory(root, { fact: 'In this session I rewrote the loader.' }))
+        .rejects.toThrow(UndurableFactError);
+      // Both are still MemoryValidationError — every existing catch keeps working.
+      await expect(saveMemory(root, { fact: 'In this session I rewrote the loader.' }))
+        .rejects.toThrow(MemoryValidationError);
+      // The credential rejection must NOT be the durable-rewrite class.
+      await expect(saveMemory(root, { fact: 'The deploy key is ghp_abcdefghijklmnopqrstuvwxyz012345 for CI.' }))
+        .rejects.not.toThrow(UndurableFactError);
+    });
+
+    it('reports a secret before durability, so a rejected fact is never echoed back with a token in it', async () => {
+      await expect(saveMemory(root, {
+        fact: 'In this session the CI token ghp_abcdefghijklmnopqrstuvwxyz012345 stopped working.',
+      })).rejects.toThrow(/refusing to store/);
+    });
   });
 
   it('ignores absolute and traversal file anchors', async () => {

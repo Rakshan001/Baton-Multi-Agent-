@@ -26,6 +26,11 @@ export const TOOL_HELP = {
     'Declare files YOU are editing (live signals). Call when you start editing shared files — especially at the repo root where no watcher covers you. Self-cleans once committed.',
   save_memory:
     'Persist a LEARNED fact (decision, gotcha, convention): 1-3 sentences, why + how to apply. Pass the repo-relative files it is about — evidence anchors; if they change it is flagged stale. Never store secrets or code-derivable facts.',
+  // The anti-capture gate (memory-durability.ts) is deliberately NOT described
+  // here either: T1 leaves 4 chars of budget (2096/2100), and a rule that fires on a
+  // minority of saves does not deserve a permanent tax on every session. The
+  // rejection message names the class AND the rewrite, which teaches it at the
+  // one moment the agent is able to act on it.
   // Progressive disclosure (M2) is deliberately NOT described here: the `ids`
   // schema field + the in-answer tip teach it exactly when a preview row
   // appears — cheaper than a permanent description tax in every session.

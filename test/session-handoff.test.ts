@@ -175,6 +175,42 @@ describe('auto-capture: handoff decisions become memory facts (M4, zero LLM cost
     expect(facts.some((f) => f.fact === 'use jwt')).toBe(false);
   });
 
+  /*
+   * This is Baton's ONLY autonomous memory writer, so it is where the
+   * anti-capture gate matters most: a decisions list is exactly where "in this
+   * session we…" gets written down and then outlives the session it describes.
+   * A refused decision must be REPORTED, not silently dropped — the agent that
+   * wrote it is the only party who can restate it durably.
+   */
+  it('refuses an undurable decision, reports it back, and still captures the durable one', async () => {
+    const { listMemories } = await import('../src/memory.js');
+    const r = await createSessionHandoff(root, {
+      slug: 'sess-m4d', agent: 'claude', title: 'Mixed decisions',
+      decisions: [
+        'In this session we rewrote the expiry handling twice before it stuck',
+        'token.ts keeps a 5-minute skew allowance because mobile clocks drift',
+      ],
+    });
+    expect(r.capturedFacts).toHaveLength(1);
+    expect(r.skippedFacts).toHaveLength(1);
+    expect(r.skippedFacts[0].decision).toContain('In this session');
+    expect(r.skippedFacts[0].reason).toMatch(/not durable knowledge \(narrative/);
+    expect((await listMemories(root)).some((f) => f.fact.includes('In this session'))).toBe(false);
+    expect(existsSync(r.path)).toBe(true); // the brief itself still lands
+  });
+
+  it('never quotes back a decision refused for containing a credential', async () => {
+    // skippedFacts is echoed to the caller; the credential rejection is a
+    // DIFFERENT error class precisely so it can never travel that path.
+    const r = await createSessionHandoff(root, {
+      slug: 'sess-m4e', agent: 'claude', title: 'Key rotation',
+      decisions: ['the deploy token is ghp_' + 'b'.repeat(30) + ' for CI pushes only'],
+    });
+    expect(r.capturedFacts).toHaveLength(0);
+    expect(r.skippedFacts).toHaveLength(0);
+    expect(JSON.stringify(r.skippedFacts)).not.toContain('ghp_');
+  });
+
   it('a handoff outside any git repo still works — capture is silently skipped', async () => {
     const bare = await mkdtemp(join(tmpdir(), 'baton-handoffnogit-'));
     await mkdir(join(bare, '.baton'), { recursive: true });

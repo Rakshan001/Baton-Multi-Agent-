@@ -18,7 +18,7 @@ import { batonDir, getTask } from '../store.js';
 import { handoffPath } from './brief.js';
 import { recordHandoff } from '../commands/pass.js';
 import { getSignals } from '../signals.js';
-import { saveMemory } from '../memory.js';
+import { UndurableFactError, saveMemory } from '../memory.js';
 import { bus } from '../events.js';
 
 /** A brief must stay a brief — cap every agent-supplied list. */
@@ -56,6 +56,10 @@ export interface SessionHandoffResult {
   /** Memory fact ids harvested from `decisions` (M4) — the agent already wrote
    *  that text, so capturing it costs zero extra tokens. */
   capturedFacts: string[];
+  /** Decisions the memory gate refused, with why. A silently dropped decision
+   *  is indistinguishable from a captured one, and the agent that wrote it is
+   *  the only party who can restate it durably — so say so instead. */
+  skippedFacts: Array<{ decision: string; reason: string }>;
 }
 
 function cleanList(items: string[] | undefined): { items: string[]; more: number } {
@@ -83,9 +87,15 @@ const CAPTURE_MIN_CHARS = 20;
 /**
  * M4 — zero-LLM auto-capture: the decisions the agent wrote for the brief are
  * exactly the "things git cannot show", so persist each as an anchored memory
- * fact. Strictly best-effort: validation rejects (secrets, too short), the
- * fact cap, or a non-git cwd skip the item — a handoff must never fail
- * because capture did.
+ * fact. Strictly best-effort: validation rejects (secrets, undurable phrasing,
+ * too short), the fact cap, or a non-git cwd skip the item — a handoff must
+ * never fail because capture did.
+ *
+ * This is Baton's only autonomous memory writer, which makes it the place the
+ * anti-capture gate earns its keep: a decisions list is where "in this session
+ * we…" is most likely to be written down and outlive the session it describes.
+ * A gate rejection is reported back (`skipped`); everything else stays quiet,
+ * since a non-git cwd is not something the agent can act on.
  */
 async function captureDecisions(
   cwd: string,
@@ -93,8 +103,9 @@ async function captureDecisions(
   anchors: string[],
   agent: string | undefined,
   slug: string,
-): Promise<string[]> {
+): Promise<{ captured: string[]; skipped: Array<{ decision: string; reason: string }> }> {
   const captured: string[] = [];
+  const skipped: Array<{ decision: string; reason: string }> = [];
   for (const d of decisions) {
     if (d.length < CAPTURE_MIN_CHARS) continue;
     // Precision over coverage: anchor to the files the decision actually
@@ -106,9 +117,15 @@ async function captureDecisions(
       captured.push((await saveMemory(cwd, {
         fact: d, type: 'decision', files: mentioned.length ? mentioned : anchors, agent, task: slug,
       })).id);
-    } catch { /* capture is a bonus, never a blocker */ }
+    } catch (e) {
+      // Only the durability gate — it is the sole rejection the agent can act
+      // on by restating. Quoting the text back is safe here precisely because
+      // this class excludes the credential rejection, which must not be echoed.
+      if (e instanceof UndurableFactError) skipped.push({ decision: d.slice(0, 120), reason: e.message });
+      /* anything else (secret, cap, non-git cwd): capture is a bonus, never a blocker */
+    }
   }
-  return captured;
+  return { captured, skipped };
 }
 
 export async function createSessionHandoff(root: string, input: SessionHandoffInput): Promise<SessionHandoffResult> {
@@ -208,7 +225,7 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
   // Anchor harvested decisions to where the work actually happened: files this
   // session declared (signals) + the tree's dirty files at handoff time.
   const anchors = [...new Set([...inFlight, ...dirtyFiles.map(porcelainPath)])].slice(0, 8);
-  const capturedFacts = await captureDecisions(cwd, decisions.items, anchors, input.agent, slug);
+  const capture = await captureDecisions(cwd, decisions.items, anchors, input.agent, slug);
 
-  return { path, markdown, resume, capturedFacts };
+  return { path, markdown, resume, capturedFacts: capture.captured, skippedFacts: capture.skipped };
 }

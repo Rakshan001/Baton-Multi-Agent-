@@ -100,10 +100,29 @@ Example listing:
 
 Agents save and recall memory through the Baton coordination MCP server (`baton mcp`):
 
-- **`save_memory`** — store a new fact (same validation as the CLI: length cap, secret rejection, cap of 500).
+- **`save_memory`** — store a new fact (same validation as the CLI: length cap, secret rejection, the anti-capture gate below, cap of 500).
 - **`recall_memory`** — return the facts an agent should read: **fresh + aging only**, relevance-ranked when a topic is given. Stale facts are dropped from the bodies and reported as a withheld count.
 
 Memory also appears in handoff briefs: `baton pass` embeds a compact "Project memory (evidence-checked)" section of the top fresh facts, with a note about how many stale memories were withheld.
+
+## The anti-capture gate
+
+Anchors answer *"is this fact still true?"*. The gate answers the question that comes first — **should this ever have been saved?** Some knowledge is false the moment the environment moves, and re-hashing the code cannot police a claim that was never about the code.
+
+Four classes are refused, wherever the write comes from (MCP, CLI, dashboard, or the automatic capture in `create_handoff`):
+
+| Refused | Why | Save this instead |
+| --- | --- | --- |
+| Environment-dependent failures — `command not found`, a key that is not set, a package not installed | The user can fix these; they are not rules about the code | The **fix** — the install or config step |
+| Standalone "X is broken" / "doesn't work" | It hardens into a refusal the next agent cites for months after the cause is fixed | The specific behaviour **plus** the workaround |
+| Errors that resolved on retry | If the retry worked, the retry is the lesson | The retry rule, if there is one |
+| Narratives about the current session | Memory is read by an agent who was never in that session | The rule you want them to know, with no reference to the session |
+
+The first two are **waived by evidence or by a remedy**: pass `files` that resolve, or state the fix, and the claim is kept — an anchored claim is one the staleness sweep can police, and a stated fix is the durable half. Nothing waives a session narrative or a self-resolved flake, because neither has a durable half.
+
+A remedy has to be *stated*, not merely spelled: "run npm ci first" waives, "affects every user of the export path" does not, and a remedy word inside a URL or inside the complaint itself (`is not set`) never waives. The rules match phrasing, not topic, and they are narrow on purpose — a false accept leaves you where you were, a false reject costs a real fact.
+
+Rejections name the class, quote the phrase that tripped, and say what to write instead, so a refusal is one rewrite away from a save. `create_handoff` reports refused decisions back as `notMemorized` rather than dropping them silently — the brief still keeps the text either way.
 
 ## Retention policy
 

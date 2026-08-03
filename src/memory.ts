@@ -23,6 +23,7 @@ import { git } from './util/exec.js';
 import { readAuthor, resolveAuthor, UNKNOWN_AUTHOR } from './identity.js';
 import { escapeRegExp } from './util/regex.js';
 import { rankFacts } from './memory-rank.js';
+import { classifyDurability } from './memory-durability.js';
 
 export type MemoryType = 'decision' | 'gotcha' | 'convention' | 'reference' | 'preference';
 export const MEMORY_TYPES: MemoryType[] = ['decision', 'gotcha', 'convention', 'reference', 'preference'];
@@ -85,6 +86,20 @@ export class MemoryValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MemoryValidationError';
+  }
+}
+
+/**
+ * The anti-capture gate specifically (memory-durability.ts). A subclass, not a
+ * flag, so every existing `instanceof MemoryValidationError` catch keeps
+ * working — while the one caller that echoes the rejected text back
+ * (session-brief.ts) can tell "restate this durably" apart from "this had a
+ * credential in it", which must never be quoted back.
+ */
+export class UndurableFactError extends MemoryValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UndurableFactError';
   }
 }
 
@@ -153,6 +168,25 @@ const SECRET_PATTERNS: Array<{ re: RegExp; what: string }> = [
 export function detectSecret(text: string): string | null {
   for (const { re, what } of SECRET_PATTERNS) if (re.test(text)) return what;
   return null;
+}
+
+/**
+ * Caller-supplied anchor paths, reduced to safe repo-relative form (max 8).
+ * Anything absolute, escaping, or not a string is DROPPED rather than repaired
+ * — a path we had to rewrite is not evidence the caller vouched for.
+ *
+ * The parameter is `unknown` even though `SaveMemoryInput.files` is declared
+ * `string[]`, because that declaration is a runtime lie on one path: server.ts
+ * hands `saveMemory` an unvalidated JSON body, so `files` arrives with whatever
+ * shape the request had (`{"files":[5]}` used to reach `fileHash` and 500).
+ */
+export function normalizeAnchorPaths(files: unknown): string[] {
+  if (!Array.isArray(files)) return [];
+  return files
+    .filter((f): f is string => typeof f === 'string')
+    .map((f) => f.trim().replace(/^\.\//, ''))
+    .filter((f) => f && !isAbsolute(f) && !f.includes('..'))
+    .slice(0, 8);
 }
 
 /** Word-boundary relevance scoring against a topic (same approach as routing.ts). */
@@ -377,6 +411,26 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   if (fact.length > FACT_MAX_CHARS) throw new MemoryValidationError(`fact too long (${fact.length} > ${FACT_MAX_CHARS} chars) — store the insight, not the artifact`);
   const secret = detectSecret(fact);
   if (secret) throw new MemoryValidationError(`refusing to store what looks like a ${secret} — describe where the credential lives instead of pasting it`);
+
+  // Evidence anchors are resolved BEFORE the durability gate, because evidence
+  // is what waives two of its four classes: a claim tied to files in THIS repo
+  // is a claim the staleness sweep can police from here on.
+  const relFiles = normalizeAnchorPaths(input.files);
+  const files: FileAnchor[] = [];
+  for (const path of relFiles) files.push({ path, hash: await fileHash(mainRoot, path) });
+  // Truth is re-checked on every read (anchors); this is the question that
+  // comes first — should this ever have been saved? See memory-durability.ts.
+  //
+  // The waiver requires an anchor that RESOLVED. An absent file hashes to ''
+  // and stays '' forever, so it never trips the staleness check (empty equals
+  // empty) — accepting it as evidence would hand out a waiver that also opts
+  // the fact out of the verification the waiver is justified by.
+  const undurable = classifyDurability(fact, { anchored: files.some((f) => f.hash !== '') });
+  if (undurable) {
+    throw new UndurableFactError(
+      `not durable knowledge (${undurable.kind}: "${undurable.matched}") — ${undurable.instead}`,
+    );
+  }
   const type: MemoryType = MEMORY_TYPES.includes(input.type as MemoryType) ? (input.type as MemoryType) : 'reference';
 
   const dir = memoryDir(mainRoot);
@@ -386,17 +440,10 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
     throw new MemoryValidationError(`memory is at its cap (${FACT_CAP} facts) — run \`baton memory gc\` to clear stale/superseded facts`);
   }
 
-  // Evidence anchors: HEAD now + content hash of each referenced file.
   let commit: string | null = null;
   try {
     commit = await git(['rev-parse', 'HEAD'], mainRoot);
   } catch { /* empty repo — commit anchor unavailable */ }
-  const relFiles = (input.files ?? [])
-    .map((f) => f.trim().replace(/^\.\//, ''))
-    .filter((f) => f && !isAbsolute(f) && !f.includes('..'))
-    .slice(0, 8);
-  const files: FileAnchor[] = [];
-  for (const path of relFiles) files.push({ path, hash: await fileHash(mainRoot, path) });
   // No files given → anchor to any real files the fact's own text names.
   // Without this, the fact bypasses staleness verification permanently.
   if (files.length === 0) files.push(...(await deriveFileAnchors(mainRoot, fact)));
