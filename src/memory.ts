@@ -172,7 +172,7 @@ const SECRET_PATTERNS: Array<{ re: RegExp; what: string }> = [
    * The old rule required the value to be QUOTED, which meant it caught a
    * credential pasted from source and missed one pasted from a .env file or a
    * shell line — the far likelier way a key reaches a memory:
-   *     AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+   *     AWS_SECRET_ACCESS_KEY=EXAMPLE/NOTAREAL/SECRETVALUE
    * Quotes are now optional, but the VALUE must look like a credential rather
    * than like prose or code: 12+ chars of key alphabet only. That is what keeps
    * `apiKey: z.string().describe(...)` and `token: string` from tripping it —
