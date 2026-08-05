@@ -324,6 +324,54 @@ describe('secret redaction', () => {
     const onDisk = await readFile(join(root, '.baton', 'reviews', 'sec.json'), 'utf-8');
     expect(onDisk).not.toContain('BEGIN RSA PRIVATE KEY');
   });
+
+  it('redacts the sibling fields too — skipped.why and partial', async () => {
+    /*
+     * The findings fields were redacted from day one; these took the same path
+     * to every member unredacted. "Why an axis was skipped" is exactly where an
+     * agent writes "could not run SAST — needs KEY=…", and `partial` is a
+     * reproduce-command magnet ("re-run with GH_TOKEN=… gh pr diff").
+     */
+    await saveReview(root, 'sib', {
+      fixedPoint: 'main', head: 'aaa',
+      findings: [finding()],
+      skipped: [{ axis: 'security', why: `could not run SAST — needs ${SK}` }],
+      partial: `diff truncated; reproduce with ${AWS}`,
+    });
+    const onDisk = await readFile(join(root, '.baton', 'reviews', 'sib.json'), 'utf-8');
+    expect(onDisk).not.toContain(SK);
+    expect(onDisk).not.toContain(AWS);
+    // Read-side symmetry: a hand-edited file is redacted on the way out too.
+    await writeFile(join(root, '.baton', 'reviews', 'sib.json'),
+      onDisk.replace('"partial": "', `"partial": "${AWS} `), 'utf-8');
+    const rec = (await loadReview(root, 'sib'))!;
+    expect(JSON.stringify(rec)).not.toContain(AWS);
+  });
+});
+
+describe('concurrent writes', () => {
+  it('two racing resolves both persist — the lock serializes read-modify-write', async () => {
+    /*
+     * The daemon is one process serving concurrent requests, and resolve is
+     * load → mutate → save with awaits in between. Unserialized, both loads
+     * see the same file, and the later rename silently reverts the earlier
+     * resolve — while BOTH callers got a record back claiming success. The
+     * tmp+rename only ever prevented torn files, not lost updates.
+     */
+    await saveReview(root, 'race', {
+      fixedPoint: 'main', head: 'aaa',
+      findings: [
+        finding({ title: 'first' }),
+        finding({ title: 'second' }),
+      ],
+    });
+    await Promise.all([
+      resolveFinding(root, 'race', 0, 'fixed'),
+      resolveFinding(root, 'race', 1, 'dismissed'),
+    ]);
+    const rec = (await loadReview(root, 'race'))!;
+    expect(rec.findings.map((f) => f.status).sort()).toEqual(['dismissed', 'fixed']);
+  });
 });
 
 /**

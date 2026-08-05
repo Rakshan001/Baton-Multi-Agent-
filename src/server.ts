@@ -56,7 +56,7 @@ import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from '
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION } from './version.js';
 import { usageForRepo } from './usage.js';
-import { AgentRunningError, runningHeadless, startAgent, stopAgent, TerminalConflictError } from './spawn.js';
+import { AgentRunningError, runningHeadless, startAgent, stopAgent, stopAllAgents, TerminalConflictError } from './spawn.js';
 import {
   captureScreen, createTerminal, detectTmux, getScrollback, hasTerminal, killTerminal, listTerminals,
   reattachOrphans, resizeTerminal, writeInput,
@@ -92,7 +92,7 @@ import {
 } from './daemons.js';
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
-import { decideAccess, requiresOwner, type AccessDecision } from './access.js';
+import { canSeeWarnings, decideAccess, requiresOwner, type AccessDecision } from './access.js';
 import { PresenceStore, PRESENCE_TTL_MS, type HeartbeatInput } from './federation.js';
 import { loadHostLink, sendHeartbeat, type HeartbeatPayload } from './host-link.js';
 import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
@@ -203,6 +203,11 @@ async function buildRoster(root: string, access: AccessDecision, now: number) {
   const claimCount = new Map<string, number>();
   for (const c of claims) claimCount.set(c.memberId, (claimCount.get(c.memberId) ?? 0) + 1);
 
+  // Owner sees every warning; a member only their own — the rule lives in
+  // access.ts (canSeeWarnings) with the rest of the authorization boundary.
+  const visibleWarnings = (id: string) =>
+    canSeeWarnings(access, id) ? federation.warningsFor(id) : [];
+
   const rows = reg.members.map((m) => {
     const live = presence.get(m.id);
     return {
@@ -228,7 +233,7 @@ async function buildRoster(root: string, access: AccessDecision, now: number) {
       since: live?.since ?? null,
       lastSeen: live?.lastSeen ?? null,
       claims: claimCount.get(m.id) ?? 0,
-      warnings: federation.warningsFor(m.id),
+      warnings: visibleWarnings(m.id),
     };
   });
 
@@ -241,7 +246,7 @@ async function buildRoster(root: string, access: AccessDecision, now: number) {
       id, name: live.memberName, role: 'member', registered: false, team: null,
       createdAt: live.since, online: true, device: live.device, sessions: live.sessions,
       since: live.since, lastSeen: live.lastSeen, claims: claimCount.get(id) ?? 0,
-      warnings: federation.warningsFor(id),
+      warnings: visibleWarnings(id),
     });
   }
 
@@ -284,6 +289,17 @@ interface ServeOptions {
    * hostname), because the anti-rebinding check compares the dialled name.
    */
   allowedHosts?: string[];
+  /**
+   * A reverse proxy on THIS machine forwards traffic to this port.
+   *
+   * Set it and loopback stops implying owner: the proxy dials the daemon from
+   * 127.0.0.1, so without this every request that walked in off the public
+   * internet is indistinguishable from the operator at the keyboard — which is
+   * the entire member boundary, bypassed. Costs the operator their own
+   * credential-free access (they need a member token like everyone else),
+   * because no daemon can tell its proxy apart from its owner over one socket.
+   */
+  behindProxy?: boolean;
 }
 
 /** Lazily-started per-daemon live infrastructure (one per `serve()`). */
@@ -524,6 +540,22 @@ function send(res: ServerResponse, status: number, body: unknown, origin: string
 }
 
 /** Single definition of the write-gate response — every mutating route uses it. */
+/**
+ * May this caller act as the machine's OPERATOR — see and stop daemons, shut
+ * this one down?
+ *
+ * Loopback is the normal proof. Under `--behind-proxy` loopback proves nothing
+ * (that is the entire point of the flag), so the owner token stands in for it:
+ * without this, turning the flag on made graceful shutdown unreachable by
+ * anyone at all, including the person at the keyboard.
+ *
+ * A `--host` member never qualifies, owner or not — that boundary is unchanged.
+ */
+function isOperator(access: AccessDecision, opts: ServeOptions): boolean {
+  if (access.allow && access.local) return true;
+  return !!opts.behindProxy && !requiresOwner(access);
+}
+
 function denyReadOnly(res: ServerResponse, origin: string): void {
   send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
 }
@@ -725,9 +757,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // The authorization boundary — one pure decision, defined and tested in
   // src/access.ts. A loopback connection is unaffected (no credential); anything
   // over a network needs a member token and can never reach a terminal.
+  //
+  // Under --behind-proxy a loopback peer is NOT trusted, so it also needs the
+  // real registry: handing decideAccess an empty one there would fail every
+  // token and lock the daemon out of itself.
+  const trustLoopback = !opts.behindProxy;
+  const skipRegistry = trustLoopback && isLoopbackAddr(req.socket.remoteAddress);
   const access = decideAccess(
-    { remoteAddr: req.socket.remoteAddress, path, authorization: req.headers.authorization },
-    isLoopbackAddr(req.socket.remoteAddress) ? EMPTY_REGISTRY() : await currentMembers(root),
+    { remoteAddr: req.socket.remoteAddress, path, authorization: req.headers.authorization, trustLoopback },
+    skipRegistry ? EMPTY_REGISTRY() : await currentMembers(root),
   );
   if (!access.allow) {
     if (access.challenge) res.setHeader('WWW-Authenticate', 'Bearer realm="baton"');
@@ -1036,14 +1074,20 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   /*
    * The daemon fleet (src/daemons.ts) — every Baton on this machine.
    *
-   * Loopback-only, all three routes, and deliberately stricter than owner: a
+   * Operator-only, all three routes, and deliberately stricter than owner: a
    * `--host` member — even one you would call an owner — must not learn what
-   * else runs on this machine, and must never be able to stop it. On loopback,
-   * `decideAccess` already treats the caller as owner, so `access.local` is
-   * the entire test. The global anti-CSRF Origin gate above covers the POSTs.
+   * else runs on this machine, and must never be able to stop it. The global
+   * anti-CSRF Origin gate above covers the POSTs.
+   *
+   * "Operator" is normally just loopback, where `decideAccess` already treats
+   * the caller as owner. Under `--behind-proxy` there IS no loopback caller by
+   * construction, so `access.local` alone locked the operator out of their own
+   * daemon — shutdown became unreachable for everybody, and the Daemons card
+   * 403'd — while the flag's whole premise is that the owner token is now the
+   * only thing that can prove operator identity. See isOperator.
    */
   if (method === 'GET' && path === '/api/daemons') {
-    if (!access.local) return send(res, 403, { error: 'the daemon fleet is visible from this machine only' }, origin);
+    if (!isOperator(access, opts)) return send(res, 403, { error: 'the daemon fleet is visible from this machine only' }, origin);
     // Both pid AND port: after pid reuse, a crash leftover can carry this
     // process's pid — matching pid alone would tag a corpse "this dashboard".
     const daemons = (await listVerifiedDaemons()).map((d) => ({ ...d, self: d.pid === process.pid && d.port === opts.port }));
@@ -1051,7 +1095,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'POST' && path === '/api/shutdown') {
-    if (!access.local) return send(res, 403, { error: 'shutdown is accepted from this machine only' }, origin);
+    if (!isOperator(access, opts)) return send(res, 403, { error: 'shutdown is accepted from this machine only' }, origin);
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     // Answer FIRST, then die: exiting inside the handler would race the
     // response onto a socket the process no longer owns, and the caller —
@@ -1065,7 +1109,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'POST' && path === '/api/daemons/clean') {
-    if (!access.local) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
+    if (!isOperator(access, opts)) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     // Bulk clean-up: deletion only, and only of records whose pid is provably
     // dead — no probe is consulted, so a flap can never widen this into
@@ -1077,7 +1121,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   const daemonStopM = path.match(/^\/api\/daemons\/(\d{1,5})\/stop$/);
   if (daemonStopM && method === 'POST') {
-    if (!access.local) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
+    if (!isOperator(access, opts)) return send(res, 403, { error: 'the daemon fleet is controlled from this machine only' }, origin);
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const port = Number(daemonStopM[1]);
     // Optional `{ "pid": n }` body narrows to ONE record. A port is not a
@@ -1224,7 +1268,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
           hint: 'warn them when they reconnect, or revoke their token if it cannot wait',
         }, origin);
       }
-      bus.publish({ type: 'member.warned', memberId: targetId, memberName: targetName, message, by });
+      // No `message` on the bus: SSE fans out to every member (see events.ts).
+      bus.publish({ type: 'member.warned', memberId: targetId, memberName: targetName, by });
       return send(res, 200, { ok: true, warning }, origin);
     }
 
@@ -1623,6 +1668,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'POST' && path === '/api/tasks') {
+    // Not a bookkeeping write: createTask makes a git branch and a worktree.
+    // This was the one state-changing route missing the read-only gate.
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
     let parsed: { task?: unknown; project?: unknown };
     try {
       parsed = JSON.parse((await readBody(req)) || '{}');
@@ -1907,11 +1955,24 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   // POST /api/storage/purge — permanently delete selected data + reclaim git objects.
-  // Triple-guarded: --write, a loopback Origin (anti-CSRF, also enforced globally
-  // above — kept here as explicit defense-in-depth), and a typed confirm phrase.
+  // Quadruple-guarded: --write, OWNER, an allowed Origin (anti-CSRF, also enforced
+  // globally above — kept here as explicit defense-in-depth), and a typed phrase.
   if (method === 'POST' && path === '/api/storage/purge') {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
-    if (!isLoopbackOrigin(req.headers.origin)) return send(res, 403, { error: 'cross-origin request refused' }, origin);
+    // This is the most destructive endpoint Baton has — it deletes memory,
+    // history and reports outright and then reclaims the git objects — and it
+    // was reachable by any member. The confirm phrase is an "are you sure",
+    // not an authorization check, and GET /api/storage/purge hands the phrase
+    // to whoever asks, so a member could read it back and echo it.
+    if (requiresOwner(access)) return denyNotOwner(res, origin);
+    // The shared gate, not a private loopback-only one: under
+    // `--allowed-host hub.example.com` the operator's OWN dashboard sends that
+    // name as its Origin, passes the global check at the top of handle(), then
+    // used to fail this stricter copy — purge 403'd for the one person allowed
+    // to run it. Defense in depth has to mean the same rule twice, not two.
+    if (!isAllowedOrigin(req.headers.origin, allowedNames(opts))) {
+      return send(res, 403, { error: 'cross-origin request refused' }, origin);
+    }
     const body = await readJsonBody<{ categories?: unknown; confirm?: string }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     const categories = sanitizeCategories(body.categories);
@@ -1995,6 +2056,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (am[2] === 'stop') {
       return send(res, 200, { stopped: stopAgent(slug) }, origin);
     }
+    // Loopback-only, refused up in decideAccess (isHostProcessPath) — this
+    // starts a process on the host, the capability rule 2 reserves.
     if (hasTerminal(slug)) {
       return send(res, 409, { error: `an interactive terminal is already open for '${slug}' — close it before starting a headless run` }, origin);
     }
@@ -2107,6 +2170,10 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const stop = () => {
     clearInterval(reaper);
     void graphPool?.shutdown();
+    // Headless agents run in their own process group now (spawn.ts), which
+    // opted them out of execa's kill-on-parent-exit — so take them with us
+    // explicitly or a daemon restart leaves them editing worktrees unwatched.
+    stopAllAgents();
     // Sync, because the event loop is about to die with us. Best-effort: a
     // record left behind is exactly what verification exists to catch.
     removeDaemonRecordSync(process.pid, opts.port);
@@ -2240,6 +2307,37 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
       process.exit(1);
     }
     console.warn(`baton serve: bound ${bindAddr} — /api requires a member token; terminals stay loopback-only.`);
+  }
+  /*
+   * --behind-proxy withdraws the loopback trust that every other mode rests on,
+   * so with no member registered NOBODY can authenticate — including the owner.
+   * Same fail-closed shape as --host, and for the same reason: a mode whose
+   * whole point is "check tokens now" must not start with no tokens to check.
+   */
+  if (opts.behindProxy && !hasActiveMembers(await loadMembers(root))) {
+    console.error('baton serve: --behind-proxy requires a member — it stops trusting loopback, so with no token nobody can get in at all.');
+    console.error('  Create one first:  baton member add "<your name>"');
+    process.exit(1);
+  }
+  /*
+   * The shape this flag exists for, caught at the door.
+   *
+   * Declaring a public name while bound to loopback is how a tunnel is wired:
+   * cloudflared/ngrok/nginx forward to 127.0.0.1, so every request off the
+   * public internet arrives as loopback and reads as owner — no token, plus
+   * terminals and agent launches, which are supposed to be unreachable
+   * remotely. A warning rather than a refusal because the same shape is
+   * legitimate when the name resolves to 127.0.0.1 (a local alias), which the
+   * daemon cannot distinguish from a tunnel without resolving it.
+   */
+  if (!opts.behindProxy && isLoopbackAddr(bindAddr)) {
+    const proxied = (opts.allowedHosts ?? []).filter((h) => !isLoopbackHost(h));
+    if (proxied.length) {
+      console.warn(`baton serve: '${proxied.join(', ')}' is declared reachable, but this daemon is bound to loopback only.`);
+      console.warn('  If a tunnel or reverse proxy forwards to this port, every public request reads as LOCAL — no member token,');
+      console.warn('  and terminals plus agent launches are reachable. Restart with --behind-proxy to check tokens on those requests.');
+      console.warn('  (Ignore this if the name just resolves to 127.0.0.1 on this machine.)');
+    }
   }
 
   const server = createServer((req, res) => {

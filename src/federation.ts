@@ -298,7 +298,11 @@ export class PresenceStore {
    */
   holdersFor(paths: string[], now: number, exceptMemberId?: string): Record<string, Claim[]> {
     const wanted = new Set(paths.map((p) => p.replace(/\\/g, '/')));
-    const out: Record<string, Claim[]> = {};
+    // Null-prototype, like remote-claims.ts: `__proto__` is a legal filename,
+    // and on a plain object `out['__proto__'] ??= []` finds the inherited
+    // accessor, skips the assignment, and throws on .push. No production
+    // caller reaches this today, but it is the same loaded gun as its sibling.
+    const out: Record<string, Claim[]> = Object.create(null) as Record<string, Claim[]>;
     for (const c of this.claims(now)) {
       if (!wanted.has(c.relPath)) continue;
       if (exceptMemberId && c.memberId === exceptMemberId) continue;
@@ -307,48 +311,56 @@ export class PresenceStore {
     return out;
   }
 
-  /** Overlaps touching one member's claims. */
-  overlapsFor(memberId: string, now: number): ClaimOverlap[] {
-    const mine = this.members.get(memberId);
-    if (!mine) return [];
-    const live = this.claims(now);
+  /** Live claims grouped by (projectId, relPath) — one scan, shared by both overlap views. */
+  private liveByKey(now: number): Map<string, Claim[]> {
     const byKey = new Map<string, Claim[]>();
-    for (const c of live) {
+    for (const c of this.claims(now)) {
       const k = keyOf(c.projectId, c.relPath);
       const at = byKey.get(k);
       if (at) at.push(c);
       else byKey.set(k, [c]);
     }
+    return byKey;
+  }
 
+  private toOverlap(holders: Claim[]): ClaimOverlap {
+    const branches = new Set(holders.map((h) => h.branch ?? ''));
+    return {
+      projectId: holders[0].projectId,
+      relPath: holders[0].relPath,
+      // One distinct branch across all holders = they are in each other's way.
+      sameBranch: branches.size === 1,
+      holders: holders.map((h) => ({
+        memberId: h.memberId, memberName: h.memberName, agent: h.agent, branch: h.branch, since: h.openedAt,
+      })),
+    };
+  }
+
+  /** Overlaps touching one member's claims. */
+  overlapsFor(memberId: string, now: number): ClaimOverlap[] {
+    const mine = this.members.get(memberId);
+    if (!mine) return [];
+    const byKey = this.liveByKey(now);
     const out: ClaimOverlap[] = [];
     for (const key of mine.claims.keys()) {
       const holders = byKey.get(key) ?? [];
-      if (holders.length < 2) continue;
-      const branches = new Set(holders.map((h) => h.branch ?? ''));
-      out.push({
-        projectId: holders[0].projectId,
-        relPath: holders[0].relPath,
-        // One distinct branch across all holders = they are in each other's way.
-        sameBranch: branches.size === 1,
-        holders: holders.map((h) => ({
-          memberId: h.memberId, memberName: h.memberName, agent: h.agent, branch: h.branch, since: h.openedAt,
-        })),
-      });
+      if (holders.length >= 2) out.push(this.toOverlap(holders));
     }
     return out;
   }
 
-  /** Every current overlap, for the dashboard's who's-editing view. */
+  /**
+   * Every current overlap, for the dashboard's who's-editing view.
+   *
+   * A key with two or more live holders is an overlap no matter whose claims
+   * you start from, so this reads the grouped map directly — asking
+   * overlapsFor() once per member repeated the full presence scan, claim scan,
+   * and sort M times per call, on endpoints the dashboard polls every 10s.
+   */
   allOverlaps(now: number): ClaimOverlap[] {
-    const seen = new Set<string>();
     const out: ClaimOverlap[] = [];
-    for (const id of this.members.keys()) {
-      for (const o of this.overlapsFor(id, now)) {
-        const k = keyOf(o.projectId, o.relPath);
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push(o);
-      }
+    for (const holders of this.liveByKey(now).values()) {
+      if (holders.length >= 2) out.push(this.toOverlap(holders));
     }
     return out;
   }

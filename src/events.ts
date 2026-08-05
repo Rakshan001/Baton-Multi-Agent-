@@ -49,8 +49,14 @@ export type BatonEvent =
      Every one of these is an owner acting ON someone, so every one carries who
      did it. They exist as events precisely so the action lands in the same
      stream everything else does — an owner cannot warn, disconnect or remove a
-     member without it being visible to the room. */
-  | { type: 'member.warned'; memberId: string; memberName: string; message: string; by: string }
+     member without it being visible to the room.
+
+     `member.warned` deliberately carries NO message text: the bus fans every
+     event to every subscriber, so the payload here is readable by the whole
+     hub — and the warning text is private owner↔member correspondence. The
+     fact of the warning is public; the words reach the target through their
+     own heartbeat response (federation.warningsFor). */
+  | { type: 'member.warned'; memberId: string; memberName: string; by: string }
   | { type: 'member.disconnected'; memberId: string; memberName: string; by: string }
   | { type: 'member.revoked'; memberId: string; memberName: string; by: string }
   | { type: 'claim.cleared'; memberId: string; relPath: string; projectId: string | null; by: string }

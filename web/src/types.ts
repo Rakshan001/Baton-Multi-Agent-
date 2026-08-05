@@ -150,6 +150,16 @@ export interface TerminalInfo {
   startedAt: string;
 }
 
+/** One headless run this daemon is driving — GET /api/agents/running (src/spawn.ts). */
+export interface RunningAgentInfo {
+  slug: string;
+  agent: string;
+  model?: string;
+  startedAt: string;
+  /** Tail of the run's output, already redacted server-side. */
+  recentLines: string[];
+}
+
 /** One project-memory fact with evidence-checked freshness — GET /api/memory (src/memory.ts). */
 export interface MemoryFactStatus {
   id: string;

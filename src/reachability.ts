@@ -117,9 +117,19 @@ function tools(installed: Record<string, boolean>, port: number, lan: string): T
         'cloudflared tunnel create baton',
         'cloudflared tunnel route dns baton baton.<your-domain>',
         `cloudflared tunnel run --url http://localhost:${port} baton`,
-        'baton serve --write --allowed-host baton.<your-domain>',
+        'baton serve --write --behind-proxy --allowed-host baton.<your-domain>',
       ],
-      then: 'Put Cloudflare Access in front of the hostname, so a stolen member token is not the only thing between the internet and your knowledge base.',
+      /*
+       * --behind-proxy is not optional here, and it is the whole reason this
+       * recipe was unsafe: cloudflared dials the daemon over loopback, so
+       * without it every request off the public internet arrives wearing
+       * 127.0.0.1 and `decideAccess` reads it as the owner at the keyboard —
+       * no member token, and terminals and agent launches reachable, both of
+       * which are meant to be loopback-only forever. It costs you your own
+       * credential-free access on this machine; that is the trade for putting
+       * the daemon on the internet.
+       */
+      then: 'You will need a member token yourself now — --behind-proxy stops trusting loopback, because your proxy arrives on it too. Put Cloudflare Access in front of the hostname as well, so a stolen member token is not the only thing between the internet and your knowledge base.',
     },
   ];
 }

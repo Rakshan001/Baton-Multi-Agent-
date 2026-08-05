@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { scanDocSprawl } from '../src/kb/sprawl.js';
+import { scanDocSprawl, listRepoFiles } from '../src/kb/sprawl.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execa } from 'execa';
 
 /**
  * P12 — `.md`-sprawl scan (propose-only). Detects the scattered agent files
@@ -38,5 +42,33 @@ describe('scanDocSprawl (P12)', () => {
 
   it('ignores the Baton / tooling footprint', () => {
     expect(scanDocSprawl(['.baton/memory/facts/x.md', 'node_modules/pkg/NOTES.md', 'dist/NOTES.md'])).toEqual([]);
+  });
+});
+
+/**
+ * "Scanned and found nothing" and "could not scan" are different answers, and
+ * conflating them made `baton doctor --docs` print a clean bill of health at a
+ * multi-repo hub root — which is not a git repo, and is the setup with the
+ * WORST sprawl, since every sub-repo brings its own .cursorrules / GEMINI.md.
+ */
+describe('listRepoFiles', () => {
+  it('returns null (not an empty list) when the root is not a git repo', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'baton-sprawl-'));
+    try {
+      expect(await listRepoFiles(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns the file list for a real repo', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'baton-sprawl-git-'));
+    try {
+      await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await execa('sh', ['-c', 'echo hi > NOTES.md'], { cwd: dir });
+      expect(await listRepoFiles(dir)).toContain('NOTES.md');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

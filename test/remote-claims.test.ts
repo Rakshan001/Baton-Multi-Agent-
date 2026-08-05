@@ -89,6 +89,33 @@ describe('reachable host', () => {
     const view = await remoteClaims(root);
     expect(Object.keys(view.byPath)).toEqual(['src/a.ts']);
   });
+
+  it('survives a teammate whose file is named __proto__ or constructor', async () => {
+    /*
+     * `{}` inherits from Object.prototype, so `byPath['__proto__'] ??= []`
+     * found a truthy inherited object, skipped the assignment, and threw on
+     * .push — and the catch reported the whole HOST unreachable, every 10s for
+     * the claim's TTL. One teammate's file name silently blinded everyone
+     * else's check_files. `constructor` needed no host at all: the read side
+     * reached a function's .filter.
+     *
+     * Both are legal file names, so the fix is not to reject them: the map is
+     * what must be inert.
+     */
+    await listen(() => ({
+      status: 200,
+      json: { claims: [claim({ relPath: '__proto__' }), claim({ relPath: 'constructor', memberId: 'sam' })] },
+    }));
+    await saveHostLink(root, { url: `http://127.0.0.1:${port}`, token: 'baton_t' });
+
+    const view = await remoteClaims(root);
+    expect(view.reachable).toBe(true); // NOT reported as an unreachable host
+    expect(view.byPath['__proto__']).toHaveLength(1);
+
+    // The read side must not reach an inherited member either.
+    expect(remoteHoldersFor(view, ['constructor'])['constructor']).toHaveLength(1);
+    expect(remoteHoldersFor(view, ['toString', 'hasOwnProperty'])).toEqual({});
+  });
 });
 
 describe('unreachable host', () => {

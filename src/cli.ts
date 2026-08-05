@@ -145,8 +145,9 @@ program
   .option('--write', 'enable write actions (merge / remove) from the dashboard')
   .option('--host <addr>', 'EXPOSE on a network address (default 127.0.0.1). Requires a member token on every /api request; refuses to start with no members')
   .option('--allowed-host <name>', 'Host header to accept besides loopback (repeatable) — needed when reached by DNS name', (v: string, acc: string[]) => [...acc, v], [] as string[])
+  .option('--behind-proxy', 'a tunnel or reverse proxy on THIS machine forwards to this port: stop treating loopback as the owner, so proxied requests need a member token like any other')
   .description('start the local daemon: JSON API + the built web dashboard')
-  .action((opts: { port?: string; write?: boolean; host?: string; allowedHost?: string[] }) => run(() => serveCmd(opts)));
+  .action((opts: { port?: string; write?: boolean; host?: string; allowedHost?: string[]; behindProxy?: boolean }) => run(() => serveCmd(opts)));
 
 // `baton stop <slug>` already stops a headless agent, so the fleet gets its
 // own group — with `baton ps` kept as the short way to ask "what's running".

@@ -93,7 +93,14 @@ export class StatusPoller {
     try {
       const task = (await loadTasks(this.root)).find((t) => t.slug === slug);
       if (!task) return;
-      const commits = await branchCommits(task.branch, task.baseBranch, this.root);
+      // task.repoRoot, not this.root: in a hub the branch lives in the
+      // SUB-PROJECT and the served root is often not a git repo at all. Asking
+      // the wrong repo made `branchCommits` fail into `[]`, so `commit.created`
+      // never fired for any hub task — the Live feed stayed empty, and worse,
+      // that event is one of only two things that settle a signal, so committed
+      // files kept reading as busy to every other agent. Sixth instance of the
+      // wrong-root shape; every other consumer already spells it this way.
+      const commits = await branchCommits(task.branch, task.baseBranch, task.repoRoot ?? this.root);
       for (const c of commits.slice(0, count)) {
         bus.publish({ type: 'commit.created', slug, sha: c.sha, message: c.message });
       }

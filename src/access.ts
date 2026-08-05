@@ -10,6 +10,9 @@
  *
  * 1. A LOOPBACK connection keeps the historical behaviour exactly — no
  *    credential. Baton is local-first and that is the normal way to run it.
+ *    UNLESS the operator ran `--behind-proxy`: a reverse proxy on this machine
+ *    dials the daemon over loopback, so once one exists, a loopback peer
+ *    address stops meaning "a person at this keyboard" (see `trustLoopback`).
  * 2. A non-loopback connection may not touch a terminal at all. A terminal is an
  *    interactive shell on the host; exposing it deserves its own decision, not
  *    an accidental consequence of `--host`.
@@ -31,6 +34,17 @@ export interface AccessRequest {
   remoteAddr: string | undefined | null;
   path: string;
   authorization: string | undefined | null;
+  /**
+   * May a loopback peer address be taken as proof the caller is at this machine?
+   *
+   * Absent = yes, the local-first default. `baton serve --behind-proxy` sets it
+   * false, because a reverse proxy (a Cloudflare tunnel, nginx, ssh -R) running
+   * on this host connects to the daemon FROM loopback — so every public request
+   * arrives wearing 127.0.0.1 and rule 1 would hand the whole internet owner
+   * rights with no token. When false, a loopback caller is treated exactly like
+   * a remote one: token required, no terminals, no agent launches.
+   */
+  trustLoopback?: boolean;
 }
 
 export type AccessDecision =
@@ -42,8 +56,29 @@ export function isTerminalPath(path: string): boolean {
   return path === '/api/terminals' || /^\/api\/tasks\/[^/]+\/terminal(\/|$)/.test(path);
 }
 
+/**
+ * Endpoints that START a process on this machine — rule 2 by capability rather
+ * than by name.
+ *
+ * `POST /api/tasks/:slug/agent/start` execas an agent CLI in the host's
+ * worktree with the host's credentials, from a caller-supplied prompt. That is
+ * the capability rule 2 refuses for terminals, reached through a different
+ * door: it was write-gated but neither owner- nor loopback-gated, so any
+ * authenticated member of a `--host --write` daemon could run one. The team
+ * plan enumerates terminals and the daemon fleet as member-forbidden and simply
+ * did not consider this route.
+ *
+ * `stop` is deliberately not here. Ending a run is not starting one.
+ */
+export function isHostProcessPath(path: string): boolean {
+  return /^\/api\/tasks\/[^/]+\/agent\/start$/.test(path);
+}
+
 export function decideAccess(req: AccessRequest, registry: MemberRegistry): AccessDecision {
-  const local = isLoopbackAddr(req.remoteAddr);
+  // One `&&` carries the whole --behind-proxy mode: every rule below keys off
+  // `local`, so withdrawing it here tightens terminals, agent launches, the
+  // token requirement and requiresOwner together, with no second code path.
+  const local = isLoopbackAddr(req.remoteAddr) && req.trustLoopback !== false;
   if (local) return { allow: true, local: true, member: null };
 
   if (isTerminalPath(req.path)) {
@@ -52,6 +87,15 @@ export function decideAccess(req: AccessRequest, registry: MemberRegistry): Acce
       status: 403,
       error: 'terminals are loopback-only',
       hint: 'use SSH port-forwarding to reach a terminal from another machine',
+    };
+  }
+
+  if (isHostProcessPath(req.path)) {
+    return {
+      allow: false,
+      status: 403,
+      error: 'starting an agent is accepted from this machine only',
+      hint: 'use SSH port-forwarding, the same as a terminal',
     };
   }
 
@@ -84,4 +128,18 @@ export function requiresOwner(decision: AccessDecision): boolean {
   if (!decision.allow) return true;
   if (decision.local) return false;
   return decision.member?.role !== 'owner';
+}
+
+/**
+ * May this viewer read the warnings attached to `memberId`'s roster row?
+ *
+ * Warnings are owner↔member correspondence, not roster data. The roster itself
+ * is deliberately visible to every member — but "you're touching billing/
+ * again, stop" is a private reprimand naming one person, and serving it to the
+ * whole hub turns a moderation tool into a pillory. Owner sees all; a member
+ * sees only their own; everyone else sees none.
+ */
+export function canSeeWarnings(decision: AccessDecision, memberId: string): boolean {
+  if (!requiresOwner(decision)) return true;
+  return decision.allow && decision.member?.id === memberId;
 }

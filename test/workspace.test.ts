@@ -27,6 +27,30 @@ describe('redactRemote', () => {
     expect(hasEmbeddedCredentials('https://user:ghp_secret@github.com/acme/api.git')).toBe(true);
   });
 
+  it('strips the colon-less token form — git\'s own PAT idiom', () => {
+    // `git clone https://ghp_xxx@github.com/o/r` writes exactly this into
+    // remote.origin.url. Requiring a colon in the userinfo let the single most
+    // common credential-bearing form through untouched — and unflagged, so the
+    // joiner-side "rotate it" warning stayed silent too.
+    const url = 'https://ghp_16C7e42F292c6912E7710c838347Ae178B4a@github.com/acme/api.git';
+    expect(redactRemote(url)).toBe('https://github.com/acme/api.git');
+    expect(hasEmbeddedCredentials(url)).toBe(true);
+    // A bare username goes with it: git ignores it, and this function cannot
+    // tell `alice@` from `ghp_…@`.
+    expect(redactRemote('https://alice@github.com/acme/api.git')).toBe('https://github.com/acme/api.git');
+  });
+
+  it('leaves ssh:// alone — the userinfo there is the login name git needs', () => {
+    // Widening the strip to every scheme ate the `git@` out of ssh:// remotes,
+    // so the manifest cloned as the joiner's local username and failed with
+    // "Permission denied (publickey)" — and warned them about a credential
+    // that was never there.
+    for (const url of ['ssh://git@github.com/acme/api.git', 'ssh://git@gitlab.com:2222/acme/api.git']) {
+      expect(redactRemote(url)).toBe(url);
+      expect(hasEmbeddedCredentials(url)).toBe(false);
+    }
+  });
+
   it('leaves an scp-like remote alone — `git@host` is a username, not a secret', () => {
     expect(redactRemote('git@github.com:acme/api.git')).toBe('git@github.com:acme/api.git');
     expect(hasEmbeddedCredentials('git@github.com:acme/api.git')).toBe(false);

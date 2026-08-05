@@ -51,11 +51,23 @@ export function DetailSheet({
   const [diffError, setDiffError] = useState(false); // an errored diff is NOT the same as "no changes"
   // One spawn action at a time — a double-click must not start two agents.
   const [spawning, setSpawning] = useState<null | "terminal" | "headless">(null);
+  /** Is a headless run live for THIS task? null = not yet known. */
+  const [running, setRunning] = useState<boolean | null>(null);
+
+  // The daemon is the authority on what is running: this sheet can be opened
+  // long after a run began, or by a second browser that never saw it start.
+  const refreshRunning = () =>
+    BatonAPI.getRunningAgents()
+      .then((rs) => setRunning(rs.some((r) => r.slug === slug)))
+      .catch(() => setRunning(null));   // unknown beats claiming "not running"
 
   useEffect(() => {
-    let on = true; setTask(null); setError(null); setDiffFiles(null); setDiffError(false);
+    let on = true; setTask(null); setError(null); setDiffFiles(null); setDiffError(false); setRunning(null);
     BatonAPI.getTask(slug).then((t) => on && setTask(t)).catch((e) => on && setError(e as Error));
     BatonAPI.getDiff(slug).then((f) => on && setDiffFiles(f)).catch(() => { if (on) { setDiffFiles([]); setDiffError(true); } });
+    BatonAPI.getRunningAgents()
+      .then((rs) => on && setRunning(rs.some((r) => r.slug === slug)))
+      .catch(() => on && setRunning(null));
     return () => { on = false; };
   }, [slug]);
 
@@ -212,6 +224,30 @@ export function DetailSheet({
                   <Icon name="terminal" size={14} style={{ color: "var(--accent-text)" }} />
                   <span style={{ textAlign: "left" }}>{spawning === "terminal" ? "Opening…" : "Open terminal"}<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>interactive · in Live</span></span>
                 </button>
+                {/* Start OR stop — a run you cannot stop from the screen that
+                    started it is a control panel with no off switch. */}
+                {running ? (
+                  <button className="btn btn-danger fr" disabled={!writeEnabled || spawning !== null}
+                    onClick={gate(async () => {
+                      if (spawning) return;
+                      setSpawning("headless");
+                      try {
+                        const r = await BatonAPI.stopAgentRun(slug);
+                        // `stopped: false` means the daemon had no such run —
+                        // say so rather than reporting a stop that never was.
+                        showToast(r.stopped
+                          ? { kind: "ok", title: "Stopping agent", desc: "The run and anything it started are being terminated" }
+                          : { kind: "error", title: "Nothing to stop", desc: "That run had already finished" });
+                      } catch (e) {
+                        showToast({ kind: "error", title: "Could not stop agent", desc: (e as Error).message });
+                      } finally { setSpawning(null); await refreshRunning(); }
+                    })}
+                    style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }) }}
+                    data-tip={writeEnabled ? "Stop the headless run and every process it started" : readOnlyTip}>
+                    <Icon name="square" size={14} />
+                    <span style={{ textAlign: "left" }}>{spawning === "headless" ? "Stopping…" : "Stop agent"}<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>running now · output in Live</span></span>
+                  </button>
+                ) : (
                 <button className="btn fr" disabled={!writeEnabled || spawning !== null}
                   onClick={gate(async () => {
                     if (spawning) return;
@@ -222,13 +258,14 @@ export function DetailSheet({
                       onLive(slug);
                     } catch (e) {
                       showToast({ kind: "error", title: "Could not start agent", desc: (e as Error).message });
-                    } finally { setSpawning(null); }
+                    } finally { setSpawning(null); await refreshRunning(); }
                   })}
                   style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }) }}
                   data-tip={writeEnabled ? "Run claude -p with the brief/task in this worktree" : readOnlyTip}>
                   <Icon name="zap" size={14} style={{ color: "var(--accent-text)" }} />
                   <span style={{ textAlign: "left" }}>{spawning === "headless" ? "Starting…" : "Start agent"}<br /><span style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontWeight: 400 }}>headless · output in Live</span></span>
                 </button>
+                )}
               </div>
             </div>
           </>

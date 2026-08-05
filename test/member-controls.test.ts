@@ -270,6 +270,24 @@ describe.runIf(hasDist)('owner controls on a read-only daemon', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).members.map((m: any) => m.id)).toContain('priya');
   });
+
+  it('refuses the purge — the most destructive endpoint is gated first, not last', async () => {
+    /*
+     * POST /api/storage/purge deletes memory, history and reports outright and
+     * then reclaims the git objects. It now also requires OWNER (it was
+     * reachable by any member, and GET /api/storage/purge hands the confirm
+     * phrase to whoever asks, so "type the phrase" was never a credential).
+     * Read-only is checked before that, so this daemon refuses on write alone.
+     */
+    const res = await fetch(`${RO}/api/storage/purge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: ['memory'], confirm: 'whatever' }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('read-only');
+  });
 });
 
 /**

@@ -7,7 +7,7 @@ import {
   hashToken, isExpiredInvite, loadMembers, markTokenUsed, MemberError, memberId, membersPath,
   mintToken, revokeMember, rotateMember, verifyToken, type MemberRegistry,
 } from '../src/members.js';
-import { decideAccess, isTerminalPath, requiresOwner } from '../src/access.js';
+import { canSeeWarnings, decideAccess, isHostProcessPath, isTerminalPath, requiresOwner } from '../src/access.js';
 import { hostnameOf, isAllowedHostHeader, isLoopbackAddr } from '../src/util/origin.js';
 
 /**
@@ -278,6 +278,92 @@ describe('decideAccess', () => {
     expect(isTerminalPath('/api/tasks/x/terminals-report')).toBe(false);
     expect(isTerminalPath('/api/tasks')).toBe(false);
   });
+
+  it('refuses a remote member the right to START an agent on this machine', () => {
+    /*
+     * agent/start execas an agent CLI in the host's worktree with the host's
+     * credentials and a caller-supplied prompt — the same capability rule 2
+     * refuses for terminals, reached through a different door. It was
+     * write-gated only, so any authenticated member of a `--host --write`
+     * daemon could run one.
+     *
+     * The refusal lands BEFORE token verification, exactly as the terminal one
+     * does: 403 (never allowed from here) rather than 401 (bring a credential),
+     * because no credential makes this reachable remotely.
+     */
+    const path = '/api/tasks/feat/agent/start';
+    const d = decideAccess({ remoteAddr: '192.168.1.9', path, authorization: 'Bearer baton_anything' }, reg());
+    expect(d.allow).toBe(false);
+    expect(d.allow === false && d.status).toBe(403);
+
+    // Locally it stays exactly as it was — this is the normal way to run Baton.
+    expect(decideAccess({ remoteAddr: '127.0.0.1', path, authorization: undefined }, reg()).allow).toBe(true);
+  });
+
+  it('classifies host-process paths without catching lookalikes', () => {
+    expect(isHostProcessPath('/api/tasks/x/agent/start')).toBe(true);
+    expect(isHostProcessPath('/api/tasks/x/agent/stop')).toBe(false);   // ending a run is not starting one
+    expect(isHostProcessPath('/api/tasks/x/agent/started')).toBe(false);
+    expect(isHostProcessPath('/api/agents')).toBe(false);
+  });
+});
+
+/**
+ * `--behind-proxy`, and the hole it closes.
+ *
+ * Baton's own Share panel told you to run a Cloudflare tunnel with
+ * `--url http://localhost:7077` and no `--host`. cloudflared then dials the
+ * daemon over LOOPBACK, so every request that walked in off the public internet
+ * arrived wearing 127.0.0.1 and rule 1 handed it owner rights: no member token,
+ * plus terminals and agent launches — an interactive shell and arbitrary process
+ * execution on the host, both of which rule 2 is supposed to make unreachable
+ * from anywhere but this machine, forever. The member registry was not consulted
+ * at all, so revoking a token changed nothing.
+ */
+describe('decideAccess behind a reverse proxy', () => {
+  const proxied = (path: string, authorization?: string) =>
+    ({ remoteAddr: '127.0.0.1', path, authorization, trustLoopback: false });
+
+  it('demands a token from a loopback caller once a proxy can reach the port', async () => {
+    const d = decideAccess(proxied('/api/tasks'), EMPTY_REGISTRY());
+    expect(d.allow).toBe(false);
+    expect(d.allow === false && d.status).toBe(401);   // bring a credential
+  });
+
+  it('admits a proxied caller carrying a real token, as a member and NOT as local', async () => {
+    const m = await addMember(root, 'Priya');
+    const d = decideAccess(proxied('/api/tasks', `Bearer ${m.token}`), await loadMembers(root));
+    expect(d.allow).toBe(true);
+    // `local` is what gates terminals, agent launches and every owner control.
+    // A member reaching us through the tunnel must never inherit it.
+    expect(d.allow && d.local).toBe(false);
+    expect(d.allow && d.member?.id).toBe('priya');
+    expect(requiresOwner(d)).toBe(false);              // ...but Priya really is the owner
+  });
+
+  it('still refuses terminals and agent launches, token or not', async () => {
+    const m = await addMember(root, 'Priya');
+    const reg = await loadMembers(root);
+    for (const path of ['/api/terminals', '/api/tasks/x/terminal', '/api/tasks/x/agent/start']) {
+      const d = decideAccess(proxied(path, `Bearer ${m.token}`), reg);
+      expect(d.allow).toBe(false);
+      expect(d.allow === false && d.status).toBe(403);
+    }
+  });
+
+  it('leaves the local-first default completely alone when the flag is absent', () => {
+    // The flag is opt-in: absent means today's behaviour, byte for byte.
+    const d = decideAccess({ remoteAddr: '127.0.0.1', path: '/api/tasks', authorization: undefined }, EMPTY_REGISTRY());
+    expect(d.allow).toBe(true);
+    expect(d.allow && d.local).toBe(true);
+  });
+
+  it('still serves the dashboard static assets, or the login page is unreachable', () => {
+    // Non-/api paths carry no repo data, and a browser cannot put an
+    // Authorization header on a navigation — gating them would leave a proxied
+    // member staring at a 401 with no page to type a token into.
+    expect(decideAccess(proxied('/assets/index.js'), EMPTY_REGISTRY()).allow).toBe(true);
+  });
 });
 
 describe('requiresOwner', () => {
@@ -299,6 +385,39 @@ describe('requiresOwner', () => {
   it('gates a denied decision', () => {
     const d = decideAccess({ remoteAddr: '10.0.0.2', path: '/api/x', authorization: undefined }, EMPTY_REGISTRY());
     expect(requiresOwner(d)).toBe(true);
+  });
+});
+
+describe('canSeeWarnings', () => {
+  /*
+   * Warnings are owner↔member correspondence. The roster row is public to the
+   * hub; the reprimand text on it is not — a member reads their own and nobody
+   * else's, or the warn button becomes a broadcast.
+   */
+  it('owner (loopback or remote owner token) sees every member\'s warnings', async () => {
+    const local = decideAccess({ remoteAddr: '127.0.0.1', path: '/api/members', authorization: undefined }, EMPTY_REGISTRY());
+    expect(canSeeWarnings(local, 'anyone')).toBe(true);
+
+    const owner = await addMember(root, 'Priya');          // first → owner
+    await addMember(root, 'Sam');
+    const registry = await loadMembers(root);
+    const asOwner = decideAccess({ remoteAddr: '10.0.0.2', path: '/api/members', authorization: `Bearer ${owner.token}` }, registry);
+    expect(canSeeWarnings(asOwner, 'sam')).toBe(true);
+  });
+
+  it('a plain member sees exactly their own row\'s warnings', async () => {
+    await addMember(root, 'Priya');
+    const plain = await addMember(root, 'Sam');
+    const registry = await loadMembers(root);
+    const asMember = decideAccess({ remoteAddr: '10.0.0.2', path: '/api/members', authorization: `Bearer ${plain.token}` }, registry);
+    expect(canSeeWarnings(asMember, 'sam')).toBe(true);
+    expect(canSeeWarnings(asMember, 'priya')).toBe(false);
+    expect(canSeeWarnings(asMember, 'local')).toBe(false);
+  });
+
+  it('a denied decision sees none', () => {
+    const d = decideAccess({ remoteAddr: '10.0.0.2', path: '/api/members', authorization: undefined }, EMPTY_REGISTRY());
+    expect(canSeeWarnings(d, 'sam')).toBe(false);
   });
 });
 

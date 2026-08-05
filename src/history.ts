@@ -57,14 +57,18 @@ function getDb(root: string): DatabaseSync {
   if (!db) {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
+    // FIRST, before any statement that needs a lock. Concurrent writers
+    // (signals.ts, reports.ts, agent MCP/guard processes) share this file, and
+    // the default timeout is 0 — so setting it last left the two statements
+    // MOST likely to contend unprotected: the SCHEMA DDL on a fresh file, and
+    // the journal_mode switch below, which needs an exclusive lock and throws
+    // outright if signals.ts opened the file first (it never sets WAL).
+    db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
     // WAL (persisted in the file header) + NORMAL sync keep merge-time writes from
     // fsync-stalling the daemon's single event loop. synchronous is per-connection,
     // so reports.ts (a separate handle to this same file) sets it too.
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-    // Concurrent writers (signals.ts, reports.ts, agent MCP/guard processes) share
-    // this file; without a busy timeout a locked write throws immediately.
-    db.exec('PRAGMA busy_timeout = 5000;');
     conns.set(path, db);
   }
   return db;
@@ -79,6 +83,11 @@ export function closeHistoryDb(root: string): void {
     try { db.close(); } catch { /* already closed */ }
     conns.delete(path);
   }
+  // Forget the FTS probe too. This is called so the FILE can be deleted (purge),
+  // and the daemon outlives that: a remembered `true` sent the next search
+  // straight at a virtual table the new db has never had, which throws into a
+  // silent LIKE fallback for the rest of the process's life.
+  ftsReady.delete(path);
 }
 
 export interface TaskRecord {

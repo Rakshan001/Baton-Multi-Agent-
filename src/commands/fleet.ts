@@ -103,7 +103,11 @@ export async function stopCmd(target: string, pidArg?: string): Promise<void> {
     }
     const outcome = await stopDaemon(d);
     if (outcome === 'graceful') console.log(`✓ stopped daemon on port ${d.port} (${d.root})`);
-    else if (outcome === 'signal') console.log(`✓ stopped daemon on port ${d.port} (${d.root}) by SIGTERM — it predates /api/shutdown or was not answering`);
+    // Not "was not answering": a read-only daemon ANSWERS /api/shutdown with a
+    // deliberate 403, and we SIGTERM it anyway — rightly, since whoever runs
+    // this already has the shell and `kill` would work regardless. Naming a
+    // cause we did not observe sent people hunting a hang that never happened.
+    else if (outcome === 'signal') console.log(`✓ stopped daemon on port ${d.port} (${d.root}) by SIGTERM — it declined or did not answer the graceful shutdown`);
     else if (outcome === 'refused-stale') console.log(`· port ${d.port} went away on its own before we acted`);
     else throw new Error(`could not stop pid ${d.pid} on port ${d.port} — it did not exit (or this process may not signal it); its record stays until it is truly gone`);
   }

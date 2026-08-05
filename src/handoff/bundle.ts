@@ -69,6 +69,10 @@ export interface WorkBundle {
   findings: ReviewFinding[];
   /** Carried for READING, never re-saved on import (see importBundle). */
   memory: Array<{ id: string; type: string; fact: string; files: string[] }>;
+  /** Untracked paths this bundle carried that we refused to write. Not part of
+   *  the wire format — set by cleanBundle so import can report the omission
+   *  instead of the recipient discovering a missing file later. */
+  droppedFiles?: string[];
 }
 
 export class BundleError extends Error {
@@ -92,13 +96,26 @@ async function fullHead(dir: string): Promise<string | null> {
   return r.ok && /^[0-9a-f]{40}$/.test(r.stdout.trim()) ? r.stdout.trim() : null;
 }
 
-/** A path that may be written inside the target repo. Same rule as workspace.ts. */
+/**
+ * A path that may be written inside the target repo. Same rule as workspace.ts,
+ * plus one this needs and that does not: **no dot-directory component**.
+ *
+ * Staying inside the repo is not the same as being harmless inside it. `.git/`,
+ * `.claude/`, `.baton/` are all repo-relative and all execute or configure
+ * something — `.git/config` alone (`core.fsmonitor`) runs a command on the next
+ * git invocation. `git apply` refuses `.git/**` for exactly this reason, and
+ * the untracked-file writer beside it had no equivalent guard.
+ *
+ * Dot-FILES are still allowed: `.gitignore`, `.env.example`, `.eslintrc` are
+ * ordinary content. It is the directory that carries the machinery.
+ */
 export function isSafeBundlePath(p: string): boolean {
   if (!p || p.length > 400) return false;
   if (/\p{Cc}/u.test(p)) return false;
   if (isAbsolute(p) || /^[A-Za-z]:/.test(p)) return false;
   const parts = p.split(/[\\/]+/).filter(Boolean);
   if (!parts.length || parts.some((s) => s === '..' || s === '.')) return false;
+  if (parts.slice(0, -1).some((s) => s.startsWith('.'))) return false;
   return !normalize(p).startsWith('..');
 }
 
@@ -123,6 +140,12 @@ export function scanBundleSecrets(patch: string, untracked: BundleFile[]): strin
   return null;
 }
 
+/** Filename-safe slug — the same rule the task, session and review stores use.
+ *  Empty only if the input held no usable character at all. */
+function safeSlug(slug: string): string {
+  return slug.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
 /** Redact prose. Safe here precisely because prose survives it — a patch does not. */
 function redactNote(s: string): string {
   const what = detectSecret(s);
@@ -140,16 +163,30 @@ export function cleanBundle(raw: unknown): WorkBundle {
   if (patch.length > MAX_PATCH_BYTES) throw new BundleError('bundle patch exceeds the size cap');
 
   const untracked: BundleFile[] = [];
+  /** Files refused on the way in, so the caller can say what was left out. */
+  const droppedFiles: string[] = [];
   for (const f of Array.isArray(b.untracked) ? b.untracked : []) {
     const path = str((f as BundleFile)?.path).replace(/\\/g, '/');
     const content = typeof (f as BundleFile)?.content === 'string' ? (f as BundleFile).content : '';
-    if (!isSafeBundlePath(path)) throw new BundleError(`bundle carries an unsafe file path '${path}'`);
+    // DROP the file, do not reject the bundle. Refusing outright made one
+    // unwanted path destroy an entire handoff — the patch, the brief, the
+    // progress ledger, the findings — and bundles built before this rule
+    // existed legitimately carry `.github/workflows/*` or a `.claude/`
+    // settings file that Claude Code writes by default. Not writing the file
+    // is the whole of the protection; taking the rest down with it was not.
+    if (!isSafeBundlePath(path)) { droppedFiles.push(path || '(unnamed)'); continue; }
     if (content.length > MAX_UNTRACKED_BYTES) throw new BundleError(`bundled file '${path}' exceeds the size cap`);
     untracked.push({ path, content });
   }
   if (untracked.length > MAX_UNTRACKED_FILES) throw new BundleError('bundle carries too many untracked files');
 
-  const slug = str(b.slug, 80);
+  // Sanitized HERE, at the boundary where untrusted JSON becomes a WorkBundle,
+  // not at each use. The slug reaches `join(batonDir(root), 'progress', …)` in
+  // restoreContext, and a bundle arrives from someone else by definition: a
+  // slug of `../../../.claude/settings` wrote attacker-chosen JSON wherever it
+  // pointed, on nothing more than `baton handoff import`. Same rule as the
+  // task/session/review stores, so a bundle can never name a file they cannot.
+  const slug = safeSlug(str(b.slug, 80));
   if (!slug) throw new BundleError('bundle has no slug');
 
   return {
@@ -167,6 +204,7 @@ export function cleanBundle(raw: unknown): WorkBundle {
     ...(b.progress && typeof b.progress === 'object' ? { progress: b.progress as ProgressLedger } : {}),
     findings: Array.isArray(b.findings) ? (b.findings as ReviewFinding[]).slice(0, 60) : [],
     memory: Array.isArray(b.memory) ? b.memory.slice(0, 20) : [],
+    ...(droppedFiles.length ? { droppedFiles } : {}),
   };
 }
 
@@ -366,6 +404,13 @@ export async function importBundle(dir: string, b: WorkBundle, opts: ImportOpts 
     }
   }
 
+  // Paths cleanBundle refused to write (dot-directories: .git/, .claude/ …).
+  // Named, not counted: "1 file was dropped" says a decision happened without
+  // saying which file, which is the actionable half.
+  const droppedNote = b.droppedFiles?.length
+    ? ` ${b.droppedFiles.length} bundled file(s) were not written — Baton never writes into a dot-directory: ${b.droppedFiles.join(', ')}.`
+    : '';
+
   const hasPatch = b.patch.trim().length > 0;
   const newFiles = b.untracked.filter((f) => !existsSync(join(dir, f.path)));
   const blocked = b.untracked.filter((f) => existsSync(join(dir, f.path)));
@@ -377,8 +422,8 @@ export async function importBundle(dir: string, b: WorkBundle, opts: ImportOpts 
       // but not which file, which is the half of the message that is actionable.
       detail: blocked.length
         ? `no diff to apply; ${blocked.length} bundled file(s) already exist here and were left untouched: ${
-            blocked.map((f) => f.path).join(', ')}.`
-        : 'the bundle carries no uncommitted work — the brief and ledger are all there is.',
+            blocked.map((f) => f.path).join(', ')}.${droppedNote}`
+        : `the bundle carries no uncommitted work — the brief and ledger are all there is.${droppedNote}`,
       filesWritten,
     };
   }
@@ -426,7 +471,7 @@ export async function importBundle(dir: string, b: WorkBundle, opts: ImportOpts 
     : '';
   return {
     status: 'applied',
-    detail: `working state restored.${note}`,
+    detail: `working state restored.${note}${droppedNote}`,
     filesWritten,
   };
 }

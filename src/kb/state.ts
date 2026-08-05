@@ -7,6 +7,7 @@ import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/prom
 import { dirname, join, sep } from 'node:path';
 import { batonDir } from '../store.js';
 import { readStats, type GraphStats } from './graphify.js';
+import { PROJECT_MARKERS } from './projects.js';
 
 export interface KbProject {
   id: string;
@@ -43,6 +44,14 @@ export function graphPathFor(projectPath: string): string {
 // Warn once per bad path — loadKb runs on 2s poll paths and must not spam.
 const invalidWarned = new Set<string>();
 
+/** The same test `detectProjects` uses to MINT a project, so the validator and
+ *  the detector cannot disagree about what one is. */
+async function looksLikeProject(dir: string): Promise<boolean> {
+  const candidates = ['.git', ...PROJECT_MARKERS].map((m) => join(dir, m));
+  const found = await Promise.all(candidates.map((f) => stat(f).then(() => true, () => false)));
+  return found.some(Boolean);
+}
+
 /** Test-only: clear the warn-once memory between test cases. */
 export function resetKbValidationWarnings(): void {
   invalidWarned.clear();
@@ -50,16 +59,27 @@ export function resetKbValidationWarnings(): void {
 
 /**
  * A kb.json project entry is trusted only if its path realpath-resolves to the
- * Baton root or below AND is a directory containing `.git` (dir for a repo,
- * file for a git worktree). kb.json is plain JSON on disk — a tampered or
- * stale entry must not steer graphify spawns or stats reads elsewhere.
+ * Baton root or below AND looks like a project: `.git` (dir for a repo, file
+ * for a git worktree) or a build-system marker. kb.json is plain JSON on disk —
+ * a tampered or stale entry must not steer graphify spawns or stats reads
+ * elsewhere, and CONTAINMENT is the check that guarantees that.
+ *
+ * Requiring `.git` specifically was a silent KB wipe. `detectProjects` splits on
+ * `isProjectDir`, which is "marker OR .git" — so the ordinary polyglot layout
+ * (one repo at the root, `api/pyproject.toml` + `web/package.json` beneath it,
+ * neither a repo of its own) registered two projects that this function then
+ * dropped on every single read. `/api/kb` reported none, every graphify MCP
+ * query 502'd, and `baton doctor` called it healthy because health.ts never
+ * checked `.git` — the two files disagreed about what a project is. Worse, the
+ * filtered array is written back by `refreshCodebaseDocs`, so the first rebuild
+ * after that turned a hidden KB into a deleted one.
  */
 async function isValidProject(root: string, p: KbProject): Promise<boolean> {
   try {
     const [realRoot, realProj] = await Promise.all([realpath(root), realpath(p.path)]);
     if (realProj !== realRoot && !realProj.startsWith(realRoot + sep)) throw new Error('outside the Baton root');
     if (!(await stat(p.path)).isDirectory()) throw new Error('not a directory');
-    await stat(join(p.path, '.git')); // repo dir or worktree file — either is fine
+    if (!(await looksLikeProject(p.path))) throw new Error('no .git and no project marker');
     return true;
   } catch (e) {
     if (!invalidWarned.has(p.path)) {

@@ -26,6 +26,7 @@ import { batonDir, loadTasks } from './store.js';
 import { headCommit } from './git.js';
 import { readAuthor, resolveAuthor } from './identity.js';
 import { detectSecret } from './memory.js';
+import { withLock } from './util/lock.js';
 
 /** The axes the code-review skill runs. Kept separate at every layer — a
  *  combined score is exactly what the skill exists to prevent. */
@@ -206,9 +207,12 @@ export function cleanFinding(raw: Partial<ReviewFinding>): ReviewFinding | null 
 }
 
 function cleanSkips(raw: AxisSkip[] | undefined): AxisSkip[] {
+  // redact() here too: "why an axis was skipped" is exactly where an agent
+  // writes "could not run X — needs SOME_API_KEY=…". The findings fields were
+  // redacted from day one; these siblings took the same path to every member.
   return (raw ?? [])
     .filter((s) => s && isAxis(s.axis))
-    .map((s) => ({ axis: s.axis, why: str(s.why, 200) || 'not run' }))
+    .map((s) => ({ axis: s.axis, why: redact(str(s.why, 200)) || 'not run' }))
     .slice(0, REVIEW_AXES.length);
 }
 
@@ -223,12 +227,12 @@ export async function loadReview(root: string, slug: string): Promise<ReviewReco
       .slice(0, FINDING_CAP);
     return {
       slug: str(r.slug, 80) || safeSlug(slug),
-      fixedPoint: str(r.fixedPoint, 200),
+      fixedPoint: redact(str(r.fixedPoint, 200)),
       head: str(r.head, 80),
       axes: [...new Set(findings.map((f) => f.axis))],
       skipped: cleanSkips(r.skipped),
       findings,
-      ...(str(r.partial, PARTIAL_MAX) ? { partial: str(r.partial, PARTIAL_MAX) } : {}),
+      ...(str(r.partial, PARTIAL_MAX) ? { partial: redact(str(r.partial, PARTIAL_MAX)) } : {}),
       ...(str(r.agent, 60) ? { agent: str(r.agent, 60) } : {}),
       author: readAuthor(r.author),
       createdAt: str(r.createdAt, 40) || new Date(0).toISOString(),
@@ -255,44 +259,50 @@ export async function saveReview(root: string, slug: string, input: ReviewInput)
     .filter((f): f is ReviewFinding => f !== null)
     .slice(0, FINDING_CAP);
 
-  const prev = await loadReview(root, slug);
+  // withLock: this is load → mutate → save with awaits between, in a daemon
+  // serving concurrent requests — the exact interleave lock.ts exists for. The
+  // tmp+rename below prevents TORN files, not lost updates; two unserialized
+  // writers each get a 200 and the later rename silently reverts the earlier.
+  return withLock(reviewPath(root, slug), async () => {
+    const prev = await loadReview(root, slug);
 
-  /*
-   * Carry triage decisions across a re-review — but only the ones that are
-   * still true.
-   *
-   * `dismissed` is a human judgement ("this is not a problem"). It must
-   * survive, or every re-review makes someone re-triage the same noise.
-   *
-   * `fixed` must NOT survive. If the reviewer reports the finding again, it
-   * demonstrably is not fixed; the fresh report is ground truth, and carrying
-   * `fixed` would hide a live problem behind a stale claim. It reverts to open.
-   */
-  const dismissed = new Set(
-    (prev?.findings ?? []).filter((f) => f.status === 'dismissed').map((f) => f.id),
-  );
-  const findings = fresh.map((f) => (dismissed.has(f.id) ? { ...f, status: 'dismissed' as const } : f));
-  const now = new Date().toISOString();
-  const record: ReviewRecord = {
-    slug: safeSlug(slug),
-    fixedPoint,
-    head,
-    axes: [...new Set(findings.map((f) => f.axis))],
-    skipped: cleanSkips(input.skipped),
-    findings,
-    ...(str(input.partial, PARTIAL_MAX) ? { partial: str(input.partial, PARTIAL_MAX) } : {}),
-    ...(str(input.agent, 60) ? { agent: str(input.agent, 60) } : {}),
-    author: await resolveAuthor(root),
-    createdAt: prev?.createdAt && prev.createdAt !== new Date(0).toISOString() ? prev.createdAt : now,
-    updatedAt: now,
-  };
+    /*
+     * Carry triage decisions across a re-review — but only the ones that are
+     * still true.
+     *
+     * `dismissed` is a human judgement ("this is not a problem"). It must
+     * survive, or every re-review makes someone re-triage the same noise.
+     *
+     * `fixed` must NOT survive. If the reviewer reports the finding again, it
+     * demonstrably is not fixed; the fresh report is ground truth, and carrying
+     * `fixed` would hide a live problem behind a stale claim. It reverts to open.
+     */
+    const dismissed = new Set(
+      (prev?.findings ?? []).filter((f) => f.status === 'dismissed').map((f) => f.id),
+    );
+    const findings = fresh.map((f) => (dismissed.has(f.id) ? { ...f, status: 'dismissed' as const } : f));
+    const now = new Date().toISOString();
+    const record: ReviewRecord = {
+      slug: safeSlug(slug),
+      fixedPoint: redact(fixedPoint),
+      head,
+      axes: [...new Set(findings.map((f) => f.axis))],
+      skipped: cleanSkips(input.skipped),
+      findings,
+      ...(str(input.partial, PARTIAL_MAX) ? { partial: redact(str(input.partial, PARTIAL_MAX)) } : {}),
+      ...(str(input.agent, 60) ? { agent: str(input.agent, 60) } : {}),
+      author: await resolveAuthor(root),
+      createdAt: prev?.createdAt && prev.createdAt !== new Date(0).toISOString() ? prev.createdAt : now,
+      updatedAt: now,
+    };
 
-  const path = reviewPath(root, slug);
-  await mkdir(reviewsDir(root), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(record, null, 2), 'utf-8');
-  await rename(tmp, path);
-  return record;
+    const path = reviewPath(root, slug);
+    await mkdir(reviewsDir(root), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(record, null, 2), 'utf-8');
+    await rename(tmp, path);
+    return record;
+  });
 }
 
 /** Every recorded review, newest first. */
@@ -337,27 +347,31 @@ export async function resolveFinding(
   ref: string | number,
   status: Exclude<FindingStatus, 'open'>,
 ): Promise<ReviewRecord | null> {
-  const rec = await loadReview(root, slug);
-  if (!rec) return null;
+  // Same lock as saveReview: two dashboard clicks resolving two findings race
+  // their read-modify-write cycles, and the loser's resolve silently reverts.
+  return withLock(reviewPath(root, slug), async () => {
+    const rec = await loadReview(root, slug);
+    if (!rec) return null;
 
-  const index = typeof ref === 'number'
-    ? ref
-    : rec.findings.findIndex((f) => f.id === ref);
-  // Number.isInteger, not just a range check: 1.5 and NaN both PASS `index < 0
-  // || index >= length` (NaN compares false to everything), and the assignment
-  // below then creates a named property (`findings['1.5']`) instead of touching
-  // an element — so the caller got a successful-looking record back, the file
-  // was rewritten, and nothing was actually resolved.
-  if (!Number.isInteger(index) || index < 0 || index >= rec.findings.length) return null;
-  rec.findings[index] = { ...rec.findings[index], status };
-  rec.updatedAt = new Date().toISOString();
+    const index = typeof ref === 'number'
+      ? ref
+      : rec.findings.findIndex((f) => f.id === ref);
+    // Number.isInteger, not just a range check: 1.5 and NaN both PASS `index < 0
+    // || index >= length` (NaN compares false to everything), and the assignment
+    // below then creates a named property (`findings['1.5']`) instead of touching
+    // an element — so the caller got a successful-looking record back, the file
+    // was rewritten, and nothing was actually resolved.
+    if (!Number.isInteger(index) || index < 0 || index >= rec.findings.length) return null;
+    rec.findings[index] = { ...rec.findings[index], status };
+    rec.updatedAt = new Date().toISOString();
 
-  const path = reviewPath(root, slug);
-  await mkdir(reviewsDir(root), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(rec, null, 2), 'utf-8');
-  await rename(tmp, path);
-  return rec;
+    const path = reviewPath(root, slug);
+    await mkdir(reviewsDir(root), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(rec, null, 2), 'utf-8');
+    await rename(tmp, path);
+    return rec;
+  });
 }
 
 /**

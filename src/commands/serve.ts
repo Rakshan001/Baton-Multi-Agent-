@@ -13,6 +13,7 @@ export interface ServeCmdOpts {
   write?: boolean;
   host?: string;
   allowedHost?: string[];
+  behindProxy?: boolean;
 }
 
 /** Reject anything that is not a bare hostname or IP literal before it reaches bind(). */
@@ -45,5 +46,6 @@ export async function serveCmd(opts: ServeCmdOpts = {}): Promise<void> {
     writeEnabled: !!opts.write,
     ...(opts.host ? { host: opts.host } : {}),
     ...(allowedHosts.length ? { allowedHosts } : {}),
+    ...(opts.behindProxy ? { behindProxy: true } : {}),
   });
 }

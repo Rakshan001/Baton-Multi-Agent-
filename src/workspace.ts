@@ -70,15 +70,30 @@ export function manifestPath(root: string): string {
  * are kept so the entry still identifies the repo — the joiner authenticates
  * with their OWN credentials, which is the intended behaviour anyway.
  */
+/**
+ * ANY userinfo in an HTTP(S) remote, not just `user:pass`. Git's own token
+ * idiom has no colon — `git clone https://ghp_xxx@github.com/o/r` writes
+ * exactly that into remote.origin.url — and requiring one let the single most
+ * common credential-bearing form through untouched. A bare username in an
+ * https remote is decorative for git, and this function cannot tell `alice@`
+ * from `ghp_…@`, so the whole segment goes.
+ *
+ * SSH is deliberately excluded, both spellings. In `ssh://git@host/path` and
+ * scp-like `git@host:path` the userinfo is the SSH LOGIN NAME, not a secret —
+ * git authenticates with a key, and stripping it hands the joiner a manifest
+ * that clones as their local username and fails with "Permission denied
+ * (publickey)". Widening this to every scheme broke exactly that, and told the
+ * joiner their remote embedded a credential while doing it.
+ */
+const USERINFO_RE = /^(https?:\/\/)([^/@]+)@/i;
+
 export function redactRemote(url: string): string {
-  // Only the userinfo segment of an authority is touched; scp-like `git@host:p`
-  // has no password component and is left alone (it is a username, not a secret).
-  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/@]*:[^/@]*)@/i, '$1');
+  return url.replace(USERINFO_RE, '$1');
 }
 
-/** True when a clone URL carries what looks like an embedded password. */
+/** True when a clone URL carries userinfo — what redactRemote would strip. */
 export function hasEmbeddedCredentials(url: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:\/\/[^/@]*:[^/@]*@/i.test(url);
+  return USERINFO_RE.test(url);
 }
 
 /**

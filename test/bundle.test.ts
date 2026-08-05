@@ -95,8 +95,12 @@ describe('cleanBundle', () => {
     expect(() => cleanBundle(ok({ version: 99 }))).toThrow(BundleError);
   });
 
-  it('refuses a bundled file that would be written outside the repo', () => {
-    expect(() => cleanBundle(ok({ untracked: [{ path: '../../pwn', content: 'x' }] }))).toThrow(/unsafe file path/);
+  it('drops a bundled file that would be written outside the repo, and says so', () => {
+    // Dropped, not thrown: not writing the file IS the protection, and taking
+    // the patch, brief, ledger and findings down with it protects nobody.
+    const b = cleanBundle(ok({ untracked: [{ path: '../../pwn', content: 'x' }] }));
+    expect(b.untracked).toEqual([]);
+    expect(b.droppedFiles).toEqual(['../../pwn']);
   });
 
   it('ignores a malformed head rather than passing it to git', () => {
@@ -293,5 +297,63 @@ describe('export → import', () => {
     const bad = join(root, 'bad.json');
     await writeFile(bad, '{not json', 'utf-8');
     await expect(readBundle(bad)).rejects.toThrow(/not valid JSON/);
+  });
+});
+
+describe('a bundle is written by someone else — the file names it carries are hostile input', () => {
+  it('cannot escape .baton/progress through the slug', async () => {
+    // restoreContext joins the slug into `.baton/progress/<slug>.json`, and
+    // `str()` only slices. A slug of `../../../.claude/settings` wrote
+    // attacker-chosen JSON into the agent's own hook config on nothing more
+    // than `baton handoff import`.
+    const b = cleanBundle({
+      version: BUNDLE_VERSION,
+      slug: '../../../.claude/settings',
+      task: 'x', branch: 'b', baseBranch: 'main', head: null,
+      patch: '', untracked: [], findings: [], progress: { evil: true },
+    });
+    expect(b.slug).not.toContain('..');
+    expect(b.slug).not.toContain('/');
+
+    const dir = join(root, 'target');
+    await mkdir(dir, { recursive: true });
+    const written = await restoreContext(root, dir, b);
+    for (const w of written) expect(w.startsWith('.baton/progress/')).toBe(true);
+    expect(existsSync(join(root, '..', '..', '..', '.claude', 'settings.json'))).toBe(false);
+  });
+
+  it('refuses a dot-DIRECTORY, which is repo-relative but not harmless', async () => {
+    // Staying inside the repo is not the same as being harmless inside it:
+    // .git/config with core.fsmonitor runs a command on the next git call.
+    // git apply refuses .git/** for this reason; this writer had no guard.
+    expect(isSafeBundlePath('.git/config')).toBe(false);
+    expect(isSafeBundlePath('.git/hooks/pre-commit')).toBe(false);
+    expect(isSafeBundlePath('.claude/settings.json')).toBe(false);
+    expect(isSafeBundlePath('src/.baton/x')).toBe(false);
+    // Dot-FILES stay allowed — they are ordinary content.
+    expect(isSafeBundlePath('.gitignore')).toBe(true);
+    expect(isSafeBundlePath('src/.eslintrc.json')).toBe(true);
+  });
+
+  it('drops a file targeting a dot-directory but keeps the rest of the handoff', () => {
+    /*
+     * The `.git/config` never reaches disk — that is the whole protection.
+     * Rejecting the BUNDLE for it was collateral damage: bundles built before
+     * this rule legitimately carry `.github/workflows/*` or the
+     * `.claude/settings.local.json` Claude Code writes by itself, and refusing
+     * outright made one such path destroy a patch that exists nowhere else.
+     */
+    const b = cleanBundle({
+      version: BUNDLE_VERSION,
+      slug: 'feat', task: 'x', branch: 'b', baseBranch: 'main', head: null,
+      patch: 'diff --git a/x b/x\n', findings: [],
+      untracked: [
+        { path: '.git/config', content: '[core]\n\tfsmonitor = touch /tmp/pwned\n' },
+        { path: 'src/real.ts', content: 'export const x = 1;\n' },
+      ],
+    });
+    expect(b.untracked.map((f) => f.path)).toEqual(['src/real.ts']);
+    expect(b.droppedFiles).toEqual(['.git/config']);
+    expect(b.patch).toContain('diff --git');   // the work itself survives
   });
 });

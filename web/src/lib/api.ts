@@ -16,7 +16,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
@@ -84,6 +84,9 @@ class BatonClient {
   project = ls.get<string>("baton:project", "orbit");
   private demoSessions: DemoSession[] = [];
   private demoHistory: TaskHistory[] = [];
+  /** Runs "started" in demo, so the showcase can demonstrate the stop control
+   *  rather than a Start button that never changes. */
+  private demoRunning = new Map<string, { agent: string; startedAt: string }>();
   private scenarioOffline = false;
 
   // handoff is still a PREVIEW (no server endpoint) — applied as a local overlay.
@@ -446,11 +449,31 @@ class BatonClient {
   }
 
   /* ---- headless agent control ---- */
+  /**
+   * Which runs this daemon is driving right now.
+   *
+   * The dashboard could start an agent but had no way to ask whether one was
+   * already running, so it could not offer to stop one either — `stopAgentRun`
+   * existed with nothing calling it. Demo returns nothing running: the showcase
+   * has no daemon to drive a process.
+   */
+  async getRunningAgents(): Promise<RunningAgentInfo[]> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return [...this.demoRunning.entries()].map(([slug, r]) => ({
+        slug, agent: r.agent, startedAt: r.startedAt, recentLines: [],
+      }));
+    }
+    const r = await this.request<{ running: RunningAgentInfo[] }>("/api/agents/running");
+    return r.running ?? [];
+  }
   async startAgentRun(slug: string, opts: { agent?: AgentId; model?: string; prompt?: string } = {}): Promise<{ slug: string; agent: string; promptSource: string }> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(200);
-      return { slug, agent: opts.agent ?? "claude", promptSource: "task" };
+      const agent = opts.agent ?? "claude";
+      this.demoRunning.set(slug, { agent, startedAt: new Date().toISOString() });
+      return { slug, agent, promptSource: "task" };
     }
     const r = await this.request<{ slug: string; agent: string; promptSource: string }>(
       `/api/tasks/${encodeURIComponent(slug)}/agent/start`,
@@ -463,7 +486,7 @@ class BatonClient {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(120);
-      return { stopped: true };
+      return { stopped: this.demoRunning.delete(slug) };
     }
     const r = await this.request<{ stopped: boolean }>(`/api/tasks/${encodeURIComponent(slug)}/agent/stop`, { method: "POST", body: "{}" });
     this.emit();
@@ -1077,6 +1100,11 @@ class BatonClient {
   /* ---- WRITE: create (real Phase-1 endpoint, or demo store) ---- */
   /** @param project in a multi-repo hub, which sub-project the task targets. */
   async createTask(task: string, project?: string): Promise<Task> {
+    // Creating a task makes a git branch and a worktree, so it is a write like
+    // any other — this was the only mutator on the client that never said so,
+    // which left the button live against a read-only daemon and turned the
+    // server's gate into a bare 403 toast.
+    this.assertWrite();
     const t = task.trim();
     if (!t) throw new ApiError("BAD_REQUEST", "Task description is required");
     if (this.demo) {

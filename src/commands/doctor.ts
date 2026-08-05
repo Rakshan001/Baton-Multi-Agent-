@@ -6,7 +6,7 @@ import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanup.js';
 import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from '../kb/sprawl.js';
-import { batonDir, loadTasks, resolveBatonRoot , activeBatonRoot } from '../store.js';
+import { batonDir, loadTasks, activeBatonRoot } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { auditKb, type KbFinding } from '../kb/health.js';
 import {
@@ -63,7 +63,15 @@ export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): P
     const dirty = report.items.some((i) => i.blocked === 'dirty');
     console.log(`\n  Reclaim with: baton clean --fix${dirty ? '   (add --force to remove worktrees with uncommitted changes)' : ''}`);
   }
-  const root = await resolveBatonRoot();
+  // activeBatonRoot, matching the line above. resolveBatonRoot alone is
+  // defeated by the very thing reportShadowBatons exists to find: inside a
+  // worktree polluted with a shadow `.baton`, its upward walk stops AT that
+  // shadow, so auditKb read the worktree's empty store and announced "no
+  // knowledge base in this repo" for a perfectly healthy hub — then the shadow
+  // scan, handed the same wrong root, stayed silent about the shadow that
+  // caused it. The suggested fix would have created a second KB in a
+  // throwaway checkout.
+  const root = await activeBatonRoot();
   console.log('');
   printKb(await auditKb(root));
   await reportShadowBatons(root, !!opts.fix);
@@ -209,7 +217,14 @@ const SPRAWL_LABEL: Record<SprawlFinding['kind'], string> = {
  */
 export async function doctorDocsCmd(): Promise<void> {
   const root = await activeBatonRoot();
-  const findings = scanDocSprawl(await listRepoFiles(root));
+  const files = await listRepoFiles(root);
+  if (files === null) {
+    // Say we could not look, rather than that there was nothing to see.
+    console.log(`· cannot scan ${root} — it is not a git repository (a multi-repo hub root usually isn't).`);
+    console.log('  Run `baton doctor --docs` from inside each project instead.');
+    return;
+  }
+  const findings = scanDocSprawl(files);
   if (!findings.length) {
     console.log('✓ no doc sprawl found — the knowledge base is the single source');
     return;

@@ -146,6 +146,91 @@ const PROJECT_BIN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/;
 export type AgentScope = 'global' | 'project';
 const MAX_CUSTOM_AGENTS = 20;
 const DETECT_MAX = 80;
+
+/**
+ * A project `detect` pattern may not nest a quantifier inside a quantifier.
+ *
+ * The round that added PROJECT_BIN_RE closed the path where a cloned repo ran
+ * its own binaries, but left `detect` free — and it is compiled with
+ * `new RegExp` and run in-process against every line of `ps -axo command=` on
+ * the status-poll path, with no timeout. `((\w|\s)+)+X` is twelve characters
+ * and never returns against a realistic command line: the single-threaded
+ * daemon simply stops, on the first poll after a clone, with nothing opted in.
+ *
+ * The rule is deliberately narrow rather than a general catastrophic-backtracking
+ * analysis, which is not decidable here: a REPEATED group whose body itself
+ * contains a repeat, another group, or an alternation is rejected (see
+ * bodyRepeats for why alternation belongs on that list — `(a|aa)+` blows up
+ * without nesting anything). Real detection patterns look like
+ * `(^|/|\s)agy(\s|$)` and quantify no group at all, so none of this reaches
+ * them.
+ *
+ * `~/.baton/agents.json` keeps the unrestricted form: you wrote that file
+ * yourself, the same split that governs `binary`.
+ */
+export function nestsQuantifier(src: string): boolean {
+  const stack: number[] = [];
+  // Parens inside a character class are LITERAL — `[(]` opens nothing and `[)]`
+  // closes nothing. Without tracking the class, a pattern containing either
+  // popped or pushed the stack wrongly and every paren after it was paired
+  // against the wrong partner, so the scan silently stopped describing the
+  // pattern it was reading. Skipping class interiors keeps the pairing honest.
+  let inClass = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '\\') { i++; continue; }        // an escaped paren is a literal
+    if (inClass) { if (c === ']') inClass = false; continue; }
+    if (c === '[') { inClass = true; continue; }
+    if (c === '(') { stack.push(i); continue; }
+    if (c !== ')') continue;
+    const start = stack.pop();
+    if (start === undefined) continue;         // unbalanced; `new RegExp` will reject it
+    // `includes('')` is TRUE for every string, so the `?? ''` fallback used to
+    // read a group at the very END of a pattern as repeated — and `(\s|$)` is
+    // how nearly every real detect pattern finishes. It stayed invisible only
+    // because such a body contained no quantifier to find; the moment
+    // alternation joined the list it started rejecting the legitimate shape.
+    const next = src[i + 1];
+    if (next === undefined || !'+*{'.includes(next)) continue;  // the group does not repeat
+    const body = src.slice(start + 1, i);
+    // A repeat or group in the body is the blow-up shape — but only outside a
+    // character class: `[+*]` is a literal plus, not a quantifier.
+    if (bodyRepeats(body)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does this REPEATED group's body contain a quantifier, a nested group, or an
+ * alternation (ignoring character-class interiors, where all of those are
+ * literals)?
+ *
+ * Alternation is in the list because of overlapping branches. `(a|aa)+$` is
+ * eight characters, contains no nested quantifier and no nested group, and
+ * takes ~180 ms on a 28-character subject — doubling per character after that,
+ * so a 45-character command line is hours of a wedged single-threaded daemon.
+ * It is the same catastrophic class, the same trigger (a cloned repo's
+ * `.baton/agents.json`), and the same target (`ps -axo command=` on the poll
+ * path), and an earlier version of this rule waved it through while its
+ * comment asserted `(a|b)+` was "fine — it is linear". That is true of `(a|b)+`
+ * and false of the family it admits, and the two cannot be told apart without
+ * deciding branch overlap. So a repeated group may not alternate at all.
+ *
+ * This costs nothing real: detection patterns look like `(^|/|\s)agy(\s|$)`,
+ * where the groups alternate but are never repeated, so this never runs on
+ * them. `~/.baton/agents.json` keeps the unrestricted form.
+ */
+function bodyRepeats(body: string): boolean {
+  let inClass = false;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '\\') { i++; continue; }
+    if (inClass) { if (c === ']') inClass = false; continue; }
+    if (c === '[') { inClass = true; continue; }
+    if ('+*{(|'.includes(c)) return true;
+  }
+  return false;
+}
 const ARG_MAX = 200;
 const ARGS_MAX = 32;
 
@@ -220,6 +305,13 @@ function cleanCustomAgent(raw: unknown, issues: string[], scope: AgentScope = 'g
     issues.push(`agents.json (${id}): detect regex longer than ${DETECT_MAX} chars — entry skipped`);
     return null;
   }
+  if (detectSrc && scope === 'project' && nestsQuantifier(detectSrc)) {
+    issues.push(
+      `agents.json (${id}): detect nests a quantifier inside a repeated group, which can hang the daemon `
+      + `matching it against the process list — entry skipped`,
+    );
+    return null;
+  }
   let detect: RegExp;
   try {
     // Default detection is the binary name in a word boundary, same shape as
@@ -234,17 +326,36 @@ function cleanCustomAgent(raw: unknown, issues: string[], scope: AgentScope = 'g
   const launcher = (which: 'headless' | 'interactive'): { cmd: string; args: (prompt?: string, model?: string) => string[] } | undefined => {
     const l = r[which];
     if (!l) return undefined;
+    /*
+     * A PROJECT file may describe an agent; it may never say how to RUN one.
+     *
+     * The earlier round stopped `binary` from naming a path, so a repo could no
+     * longer run a file it ships. It left the argv template free, and that is
+     * the same hole through a different door: `cmd` only has to be an installed
+     * command NAME, and `sh` is installed everywhere — so
+     * `{cmd: 'sh', args: ['-c', '<anything>']}` in a cloned repo's
+     * .baton/agents.json is arbitrary code execution, needing nothing but for
+     * someone to pick that agent in the Launch dialog. No denylist of
+     * interpreters closes that; there is always another one.
+     *
+     * Detection still works, which is what a repo legitimately needs — the
+     * antigravity and openclaw built-ins are detection-only and useful. To make
+     * a custom agent launchable, put the launcher in ~/.baton/agents.json,
+     * which you wrote yourself. That is the same split that governs `binary`.
+     */
+    if (scope === 'project') {
+      issues.push(
+        `agents.json (${id}): ${which} mode dropped — a project file may describe an agent but never how to run one `
+        + `(add the launcher to ~/.baton/agents.json, which arrives from you rather than with the code)`,
+      );
+      return undefined;
+    }
     const args = cleanArgsTemplate(l.args, `agents.json (${id}) ${which}`, issues);
     if (!args) return undefined;
-    // A launcher cmd is spawned directly, so it faces the same rule as
-    // `binary` — and in a project file a bad one is REPORTED rather than
-    // quietly swapped for the binary: silently launching something other than
-    // what the file named is how a repo-supplied path gets a second chance.
+    // Only ~/.baton reaches here now. A launcher cmd is spawned directly, so it
+    // still faces the same rule as `binary`; an unusable one falls back to the
+    // binary rather than dropping the mode, since this file's author is you.
     if (typeof l.cmd === 'string' && !binRe.test(l.cmd)) {
-      if (scope === 'project') {
-        issues.push(`agents.json (${id}) ${which}: cmd '${l.cmd}' ${binHelp} — ${which} mode dropped`);
-        return undefined;
-      }
       return { cmd: binary, args: templateArgs(args) };
     }
     const cmd = typeof l.cmd === 'string' ? l.cmd : binary;

@@ -56,7 +56,9 @@ export interface RemoteClaimsView {
   note?: string;
 }
 
-const UNLINKED: RemoteClaimsView = { linked: false, reachable: false, byPath: {} };
+const emptyPaths = (): Record<string, RemoteHolder[]> => Object.create(null) as Record<string, RemoteHolder[]>;
+
+const UNLINKED: RemoteClaimsView = { linked: false, reachable: false, byPath: emptyPaths() };
 
 interface Cached { at: number; view: RemoteClaimsView }
 let cache: Cached | null = null;
@@ -108,10 +110,10 @@ async function fetchClaims(link: HostLink): Promise<RemoteClaimsView> {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (res.status === 401) {
-      return { linked: true, reachable: false, byPath: {}, note: 'the host rejected this machine\'s token (revoked?) — remote claims unavailable' };
+      return { linked: true, reachable: false, byPath: emptyPaths(), note: 'the host rejected this machine\'s token (revoked?) — remote claims unavailable' };
     }
     if (!res.ok) {
-      return { linked: true, reachable: false, byPath: {}, note: `the host replied ${res.status} — remote claims unavailable` };
+      return { linked: true, reachable: false, byPath: emptyPaths(), note: `the host replied ${res.status} — remote claims unavailable` };
     }
     const body = (await res.json()) as PresencePayload;
     /*
@@ -125,7 +127,15 @@ async function fetchClaims(link: HostLink): Promise<RemoteClaimsView> {
      * that can say who we are.
      */
     const me = selfId(body);
-    const byPath: Record<string, RemoteHolder[]> = {};
+    // Null-prototype: these keys are file paths chosen by a REMOTE teammate,
+    // and `{}` inherits from Object.prototype, so `byPath['__proto__'] ??= []`
+    // finds a truthy inherited object, skips the assignment, and throws on
+    // .push — the catch below then reports the whole host unreachable, every
+    // 10s for the claim's TTL. One member silently blinds every teammate's
+    // check_files. The read side needs no host at all: `?files=constructor`
+    // reached a function's .filter and 500'd. `isClaimablePath` accepts both,
+    // and should: they are legal file names. The map is what must be inert.
+    const byPath: Record<string, RemoteHolder[]> = Object.create(null) as Record<string, RemoteHolder[]>;
     for (const c of body.claims ?? []) {
       const relPath = typeof c?.relPath === 'string' ? c.relPath : '';
       const memberId = typeof c?.memberId === 'string' ? c.memberId : '';
@@ -147,7 +157,7 @@ async function fetchClaims(link: HostLink): Promise<RemoteClaimsView> {
   } catch (e) {
     // Asleep, tunnel down, DNS gone — all routine, none of them an error the
     // agent should see as a failure. It is a gap in knowledge, and it says so.
-    return { linked: true, reachable: false, byPath: {}, note: `could not reach the host (${(e as Error).message}) — remote claims unavailable` };
+    return { linked: true, reachable: false, byPath: emptyPaths(), note: `could not reach the host (${(e as Error).message}) — remote claims unavailable` };
   }
 }
 
@@ -186,7 +196,7 @@ export function remoteHoldersFor(
   exceptMemberId?: string,
   projectId?: string | null,
 ): Record<string, RemoteHolder[]> {
-  const out: Record<string, RemoteHolder[]> = {};
+  const out: Record<string, RemoteHolder[]> = Object.create(null) as Record<string, RemoteHolder[]>;
   for (const p of paths) {
     const holders = (view.byPath[p] ?? []).filter(
       (h) => (!exceptMemberId || h.memberId !== exceptMemberId)

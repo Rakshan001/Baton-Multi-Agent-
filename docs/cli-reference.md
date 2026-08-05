@@ -103,8 +103,19 @@ baton serve [-p|--port <port>] [--write]
 
 | Flag | Effect |
 |---|---|
-| `-p, --port <port>` | Port to bind (default **7077**). Binds `127.0.0.1` only. |
+| `-p, --port <port>` | Port to bind (default **7077**). Binds `127.0.0.1` unless `--host` says otherwise. |
 | `--write` | Enable mutating actions (merge / remove / rebuild / install …) from the dashboard. |
+| `--host <addr>` | Expose on a network address. Every `/api` request then needs a member token; refuses to start with no members registered. |
+| `--allowed-host <name>` | Extra `Host` header to accept (repeatable) — needed when the daemon is reached by a DNS name. |
+| `--behind-proxy` | A tunnel or reverse proxy **on this machine** forwards to this port. |
+
+**When you need `--behind-proxy`:** a proxy (Cloudflare tunnel, nginx, `ssh -R`)
+connects to the daemon over loopback, so without this flag every request that
+arrived from the public internet looks identical to you sitting at the keyboard
+— no member token, and terminals and agent launches reachable, both of which are
+supposed to be local-only. The flag withdraws that trust: loopback callers
+authenticate like everyone else. The cost is that **you need a member token too**,
+because no daemon can tell its own proxy apart from its owner over one socket.
 
 See [Dashboard](./dashboard.md) and [Security](./security.md).
 

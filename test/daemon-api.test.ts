@@ -168,6 +168,17 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect((await api(PORT_RO, '/api/daemons')).status).toBe(200);
   });
 
+  it('a read-only daemon refuses to create tasks', async () => {
+    // This was the ONE state-changing route missing the gate — and it is not a
+    // bookkeeping write: createTask makes a git branch and a worktree, and the
+    // task text feeds agent prompts. "Observers only" must mean this too.
+    const { status, body } = await api(PORT_RO, '/api/tasks', {
+      method: 'POST', body: JSON.stringify({ task: 'sneak a task past --write' }),
+    });
+    expect(status).toBe(403);
+    expect(body.error).toMatch(/read-only/);
+  });
+
   it('POST /api/daemons/clean buries every dead-pid record at once and touches nothing alive', async () => {
     // Two crash leftovers from different ports; the three real daemons stand
     // among them. The bulk clean is deletion-by-pid-death only, so it must

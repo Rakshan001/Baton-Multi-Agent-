@@ -34,13 +34,14 @@ function getDb(root: string): DatabaseSync {
   if (!db) {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
+    // FIRST, before anything that takes a lock — same ordering as history.ts and
+    // signals.ts. Concurrent writers share this file, and the DDL and the
+    // journal_mode switch below are exactly where a 0-timeout write throws.
+    db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
     // Match history.ts: WAL persists in the file header; synchronous is per-handle,
     // and this is a separate connection to the same .baton/history.db.
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-    // Concurrent writers share this file; without a busy timeout a locked write
-    // throws immediately instead of waiting out a millisecond-scale WAL commit.
-    db.exec('PRAGMA busy_timeout = 5000;');
     conns.set(path, db);
   }
   return db;

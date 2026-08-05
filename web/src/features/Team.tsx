@@ -480,7 +480,9 @@ function useAudit(subscribe?: (type: string, fn: (e: any) => void) => () => void
     const offs = [
       subscribe("member.joined", (e) => push(`${e.memberName} connected`)),
       subscribe("member.left", (e) => push(`${e.memberName} dropped off (no heartbeat)`)),
-      subscribe("member.warned", (e) => push(`${e.by} warned ${e.memberName}: ${e.message}`)),
+      // The fact of the warning is room-visible; the TEXT is private to the
+      // warned member (their heartbeat delivers it) and never rides the bus.
+      subscribe("member.warned", (e) => push(`${e.by} warned ${e.memberName}`)),
       subscribe("member.disconnected", (e) => push(`${e.by} disconnected ${e.memberName}`)),
       subscribe("member.revoked", (e) => push(`${e.by} removed ${e.memberName}`)),
       subscribe("claim.cleared", (e) => push(`${e.by} cleared ${e.memberId}'s claim on ${e.relPath}`)),
