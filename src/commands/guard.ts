@@ -139,11 +139,40 @@ export async function maybeGuardrailReminder(root: string, slug: string, now: nu
   return formatGuardrailReminder(`\`baton done ${slug}\``);
 }
 
+/** A PreToolUse payload is small and the host has already buffered it; this only
+ *  bounds the pathological case of a writer that never closes the pipe. */
+const HOOK_STDIN_BUDGET_MS = 300;
+const HOOK_STDIN_MAX = 64_000;
+
+/**
+ * The hook payload on stdin, or '' when there is none.
+ *
+ * Read stdin ONLY when it is actually piped, and never unboundedly. An
+ * unguarded `for await (…process.stdin)` stalls the guard two different ways,
+ * and the guard runs before EVERY edit:
+ *   - on a TTY it blocks until EOF, so `baton guard` typed by hand freezes;
+ *   - a pending read keeps the event loop alive, so it outlives the
+ *     GUARD_BUDGET_MS race and `process.exitCode = 0` never exits — the host
+ *     waits forever and the edit is never released.
+ * The second is why the timeout DESTROYS stdin instead of merely winning the
+ * race: resolving first ends the await, not the process.
+ * pass.ts::readHookSessionId is the same guard against the first half.
+ */
 async function readStdin(): Promise<string> {
-  let data = '';
-  process.stdin.setEncoding('utf-8');
-  for await (const chunk of process.stdin) data += chunk;
-  return data;
+  if (process.stdin.isTTY) return '';
+  const read = (async (): Promise<string> => {
+    let data = '';
+    process.stdin.setEncoding('utf-8');
+    for await (const chunk of process.stdin) {
+      data += chunk;
+      if (data.length > HOOK_STDIN_MAX) break; // a hook payload is small; don't buffer a firehose
+    }
+    return data;
+  })().catch(() => '');
+  const timeout = new Promise<string>((res) => {
+    setTimeout(() => { process.stdin.destroy(); res(''); }, HOOK_STDIN_BUDGET_MS).unref?.();
+  });
+  return Promise.race([read, timeout]);
 }
 
 /**
@@ -193,7 +222,9 @@ export async function checkoutForEdit(cwd: string, file: string | undefined, roo
 }
 
 async function runGuard(agent: string): Promise<string | null> {
-  const payload = await canonicalTarget(normalizeGuardPayload(JSON.parse(await readStdin()) as GuardPayload));
+  const raw = await readStdin();
+  if (!raw.trim()) return null; // no payload: a TTY, or a writer that never sent one
+  const payload = await canonicalTarget(normalizeGuardPayload(JSON.parse(raw) as GuardPayload));
   const cwd = payload.cwd ?? process.cwd();
   const root = await activeBatonRoot(cwd);
   const worktreeRoot = await checkoutForEdit(cwd, payload.tool_input?.file_path, root);

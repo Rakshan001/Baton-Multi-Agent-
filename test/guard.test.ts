@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
@@ -191,4 +192,33 @@ describe('maybeGuardrailReminder — debounced mid-session re-injection (ISS-07)
     await utimes(marker, old, old);
     expect(await maybeGuardrailReminder(root, 'fix-auth')).toContain('Stay inside this worktree');
   });
+});
+
+/**
+ * The guard runs on PreToolUse, before EVERY edit, so its wall-clock cost is the
+ * cost of editing anything. GUARD_BUDGET_MS bounds the ADVISORY but not the
+ * process: a pending `for await (…process.stdin)` keeps the event loop alive, so
+ * before the stdin fix `process.exitCode = 0` was set and then never reached —
+ * a host that opened the pipe without writing hung the edit forever.
+ *
+ * Spawns the real CLI because that is the only way to observe process exit;
+ * gated on dist/cli.js (run `npm run build` first).
+ */
+describe('baton guard — stdin can never outlive the edit it gates', () => {
+  const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
+  const TIMED_OUT = Symbol('timed out');
+
+  it.runIf(existsSync(DIST_CLI))('exits when the hook host opens a pipe and never writes to it', async () => {
+    // stdin is piped and deliberately never written to and never closed.
+    const child = spawn('node', [DIST_CLI, 'guard'], { stdio: ['pipe', 'ignore', 'ignore'] });
+    const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)));
+    const outcome = await Promise.race([
+      exited,
+      new Promise<typeof TIMED_OUT>((res) => setTimeout(() => res(TIMED_OUT), 5_000)),
+    ]);
+    if (outcome === TIMED_OUT) child.kill('SIGKILL');
+
+    expect(outcome).not.toBe(TIMED_OUT);
+    expect(outcome).toBe(0); // fail open: no payload is not an error
+  }, 15_000);
 });
