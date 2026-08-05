@@ -37,9 +37,12 @@ export async function collectEvidence(task: Task, attested: boolean): Promise<Ev
   const status = await worktreeStatus(task.worktreePath);
   return {
     commits: commits.length,
-    headSha: await headCommit(task.worktreePath),
+    // The worktree can be gone while the branch is intact — `branchCommits` is
+    // newest-first and answers from the repo, so it still knows the head.
+    headSha: (await headCommit(task.worktreePath)) ?? commits[0]?.sha.slice(0, 7) ?? null,
     files,
     scope: task.scope ?? [],
+    worktreeMissing: status.state === 'missing',
     dirtyFiles: status.changedFiles,
     conflictFiles: [...new Set([...status.conflictFiles, ...(await conflictMarkers(task.worktreePath, files))])],
     expects: task.expects ?? [],

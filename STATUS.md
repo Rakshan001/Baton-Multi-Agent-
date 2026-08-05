@@ -544,6 +544,30 @@ Two gaps the tests found, both now closed in `baton next`:
 1518 tests green, both workspaces build. Eight mutations tested; each killed exactly its
 own tests.
 
+### Session 19f — a deleted worktree stops reading as a clean one
+
+The bug flagged (and deferred) in 19b, now fixed at the root. `worktreeStatus` mapped
+**both** "git could not answer" and "git says nothing changed" to `clean` — opposite facts
+under one word. Reproduced first against real git: a path that had *never existed*
+returned byte-identical output to a pristine checkout.
+
+So a task whose worktree someone deleted was drawn as tidy on the board, in `baton ls`,
+and in the dashboard (`STATUS_META[status] || STATUS_META.clean` rendered the unknown
+status as a green **Clean** pill) — and `baton done` printed *"working tree clean"* about a
+directory it had never read.
+
+`WorktreeStatus.state` now has a fourth value, `missing`. The reason this was deferred is
+that `cleanup` and `rm` both asked `state !== 'clean'` to mean "there is work here to
+lose", so adding a state would have made them refuse to clean up a worktree *because it
+was already gone*. Both now call `hasUnsavedWork(st)` — the question they were actually
+asking — which is `dirty || conflict` and nothing else.
+
+The done gate warns rather than refuses: the commits are the evidence and the branch
+outlives the directory, so `finishedSha` falls back to the branch head. But it must not
+print that a check passed when it never ran — that is the same confusion one layer up.
+
+1528 tests green (+10). Four mutations tested, including restoring the original bug.
+
 ## Pending / next 🔜
 
 0. **Task pipeline, remaining phases** — phases 2, 3 and 3.5 are done (plans, apply,

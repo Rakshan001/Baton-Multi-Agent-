@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm, rmdir, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import {
-  deleteBranch, listBatonBranches, listWorktrees, removeWorktree, worktreeStatus,
+  deleteBranch, hasUnsavedWork, listBatonBranches, listWorktrees, removeWorktree, worktreeStatus,
   type WorktreeEntry,
 } from './git.js';
 import { batonDir, loadTasks, type Task } from './store.js';
@@ -227,7 +227,7 @@ export async function auditJunk(root: string, now = Date.now()): Promise<AuditRe
   for (const item of worktreeItems) {
     if (item.path && existsSync(item.path)) {
       const st = await worktreeStatus(item.path);
-      if (st.state !== 'clean') item.blocked = 'dirty';
+      if (hasUnsavedWork(st)) item.blocked = 'dirty';
     }
   }
 
@@ -261,7 +261,7 @@ async function reclaim(root: string, item: JunkItem, force: boolean): Promise<vo
       return;
     case 'orphan-worktree-disk':
       if (item.path && existsSync(item.path)) {
-        if (!force && (await worktreeStatus(item.path)).state !== 'clean') {
+        if (!force && hasUnsavedWork(await worktreeStatus(item.path))) {
           throw new DirtyWorktreeError(item.id, 'dirty');
         }
       }

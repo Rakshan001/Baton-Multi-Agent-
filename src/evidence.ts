@@ -35,6 +35,8 @@ export interface Evidence {
   files: string[];
   /** Declared path globs, from the plan. Empty means "undeclared", not "none". */
   scope: string[];
+  /** The worktree is recorded but not on disk, so the check below never ran. */
+  worktreeMissing?: boolean;
   /** Uncommitted changes in the worktree. */
   dirtyFiles: string[];
   /** Files carrying conflict markers. */
@@ -77,7 +79,17 @@ export function verdictFor(e: Evidence): Verdict {
 
   // Uncommitted work is not done work: a merge takes the branch, and anything
   // still in the worktree would be silently left behind.
-  if (e.dirtyFiles.length) {
+  if (e.worktreeMissing) {
+    // Not a refusal: the commits are the evidence, and the branch outlives the
+    // directory. But it must not print "working tree clean" — that would be
+    // claiming a check passed when it never ran, which is the exact confusion
+    // that made a deleted worktree look pristine in the first place.
+    checks.push({
+      level: 'warn',
+      label: 'worktree is gone — could not check for uncommitted work',
+      detail: 'judging by the branch alone; anything left in that directory is already lost.',
+    });
+  } else if (e.dirtyFiles.length) {
     checks.push({
       level: 'refuse',
       label: `${e.dirtyFiles.length} uncommitted change${e.dirtyFiles.length === 1 ? '' : 's'}`,

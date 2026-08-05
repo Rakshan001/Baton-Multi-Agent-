@@ -27,9 +27,10 @@ function pad(s: string, n: number): string {
 /**
  * Git state, or `queued` for a task that has no worktree yet.
  *
- * The guard is load-bearing twice over. `worktreeStatus` reports a failed call
- * as `clean`, so without it every unclaimed task on the board reads as a tidy
- * checkout — and a 40-task plan would spawn 80 git subprocesses to say so.
+ * The guard is load-bearing twice over. Without it a 40-task plan spawns 80 git
+ * subprocesses to ask about paths that do not exist yet — and every unclaimed
+ * task would read `missing`, which is true of the directory and a lie about the
+ * task: it is queued, and queued work is not supposed to have a worktree.
  */
 async function gitCells(t: Task, root: string): Promise<{ status: string; sync: string }> {
   // Not "clean" — there is no worktree to be clean. The state column already

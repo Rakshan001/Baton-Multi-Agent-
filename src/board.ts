@@ -12,7 +12,8 @@ export interface StatusRow {
   slug: string;
   task: string;
   agent: string | null;
-  status: 'clean' | 'dirty' | 'conflict';
+  /** `missing` = the worktree is recorded but not on disk. See `worktreeStatus`. */
+  status: 'clean' | 'dirty' | 'conflict' | 'missing';
   repoState: RepoState;
   ahead: number;
   behind: number;
@@ -25,10 +26,10 @@ export interface StatusRow {
 
 export async function collectStatus(root: string): Promise<StatusRow[]> {
   // Worktree-backed tasks only. A queued plan row names the branch and path it
-  // INTENDS to use but has neither yet, and `worktreeStatus` reports a failed
-  // git call as `clean` — so including them would draw every unclaimed task as
-  // a tidy checkout, and spawn git + agent detection per phantom path on a 2s
-  // poll. The pipeline view is where queued work belongs.
+  // INTENDS to use but has neither yet, so including them would report every
+  // unclaimed task as `missing` — true of the directory, wrong about the task —
+  // and spawn git + agent detection per phantom path on a 2s poll. The pipeline
+  // view is where queued work belongs.
   const tasks = (await loadTasks(root)).filter(isMaterialized);
   const [agents, conflicts] = await Promise.all([
     detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) }),

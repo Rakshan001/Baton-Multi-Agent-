@@ -47,6 +47,9 @@ export const STATUS_META: Record<Status, { label: string; color: string; soft: s
   clean: { label: "Clean", color: "var(--clean-text)", soft: "var(--clean-soft)", border: "var(--clean-border)", dot: "var(--clean)" },
   dirty: { label: "Dirty", color: "var(--dirty-text)", soft: "var(--dirty-soft)", border: "var(--dirty-border)", dot: "var(--dirty)" },
   conflict: { label: "Conflict", color: "var(--conflict-text)", soft: "var(--conflict-soft)", border: "var(--conflict-border)", dot: "var(--conflict)" },
+  // Grey, not green: nothing is wrong with the code, there is simply no
+  // checkout to report on. The fallback below would have drawn this as "Clean".
+  missing: { label: "No worktree", color: "var(--text-tertiary)", soft: "var(--idle-soft)", border: "var(--idle-border)", dot: "var(--idle)" },
 };
 export function StatusPill({ status, pulse = false }: { status: Status; pulse?: boolean }) {
   const m = STATUS_META[status] || STATUS_META.clean;

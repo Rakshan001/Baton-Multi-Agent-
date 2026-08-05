@@ -27,13 +27,30 @@ export interface ConflictEntry {
 }
 
 export interface WorktreeStatus {
-  state: 'clean' | 'dirty' | 'conflict';
+  /**
+   * `missing` is the one that has to exist separately from `clean`: git failing
+   * to answer and git answering "nothing changed" are opposite facts, and
+   * collapsing them made a deleted worktree read as a pristine checkout on
+   * every surface that shows one.
+   */
+  state: 'clean' | 'dirty' | 'conflict' | 'missing';
   repoState: RepoState;
   changedFiles: string[];
   conflictFiles: string[];
   conflictDetails: ConflictEntry[];
   insertions: number;
   deletions: number;
+}
+
+/**
+ * Is there work here that deleting the worktree would destroy?
+ *
+ * The question every removal guard actually asks. They asked `state !== 'clean'`
+ * instead, which was the same thing until `missing` existed — and would now
+ * refuse to clean up a worktree precisely because it is already gone.
+ */
+export function hasUnsavedWork(st: WorktreeStatus): boolean {
+  return st.state === 'dirty' || st.state === 'conflict';
 }
 
 export interface WorktreeEntry {
@@ -242,13 +259,20 @@ export async function repoState(path: string): Promise<RepoState> {
   return 'clean';
 }
 
-/** Working-tree status of a worktree: clean / dirty / conflict, with churn. */
+/** Working-tree status of a worktree: missing / clean / dirty / conflict, with churn. */
 export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   const repo = await repoState(path);
   const r = await gitTry(['-C', path, 'status', '--porcelain=v2']);
   if (!r.ok || r.stdout === '') {
+    // `!r.ok` means git could not answer at all — the directory was deleted, or
+    // it is no longer a worktree. Reporting that as `clean` (which is what this
+    // did) drew a checkout that is not there as a tidy one, and let the done
+    // gate print "working tree clean" about a path it never read.
+    //
+    // Empty stdout is the opposite fact — git looked and found nothing changed.
+    const state = r.ok ? 'clean' : 'missing';
     return {
-      state: 'clean',
+      state,
       repoState: repo,
       changedFiles: [],
       conflictFiles: [],

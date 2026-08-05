@@ -13,7 +13,10 @@ export type AgentId =
   | (string & {});
 
 /** Worktree state (src/git.ts). */
-export type Status = "clean" | "dirty" | "conflict";
+/** `missing` = the task records a worktree that is not on disk. Deliberately not
+ *  folded into `clean`: git failing to answer is the opposite of git saying
+ *  nothing changed, and the pill has to show which one it is. */
+export type Status = "clean" | "dirty" | "conflict" | "missing";
 
 /** In-progress git operation marker (src/git.ts RepoState). */
 export type RepoState = "clean" | "merging" | "rebasing" | "cherry-picking" | "reverting";
