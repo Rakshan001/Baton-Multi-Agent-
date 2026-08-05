@@ -300,4 +300,30 @@ describe('loadPlan', () => {
     expect(err!.issues.length).toBeGreaterThan(1);
     expect(err!.message).toContain('plan is not valid');
   });
+
+  /**
+   * The mistake the probe made: `- scope:` reads perfectly to a person and is
+   * prose to the parser, so the task ships with no scope — and scope is what
+   * keeps two agents in one phase off the same file. `**foo:**` already errored
+   * as an unknown field; this closes the looser half of the same hole.
+   */
+  it('refuses a field written as prose instead of silently dropping it', () => {
+    for (const line of ['- scope: src/**', 'scope: src/**', '*scope*: src/**', '- **expects:** it works']) {
+      const { plan, issues } = parsePlan(`## Phase 1\n\n### auth-api\nDo it.\n${line}\n`, 'p');
+      expect(issues.length, line).toBe(1);
+      expect(issues[0]!.message, line).toMatch(/written as prose/);
+      expect(issues[0]!.message, line).toMatch(/\*\*(scope|expects):\*\*/);
+      expect(plan.tasks[0]!.scope, line).toEqual([]);
+    }
+  });
+
+  it('still accepts the documented form, and prose that merely mentions a word', () => {
+    const { plan, issues } = parsePlan(
+      '## Phase 1\n\n### auth-api\n**scope:** `src/**`\nKeep the scope tight and the expects honest.\n',
+      'p',
+    );
+    expect(issues).toEqual([]);
+    expect(plan.tasks[0]!.scope).toEqual(['src/**']);
+    expect(plan.tasks[0]!.task).toContain('Keep the scope tight');
+  });
 });

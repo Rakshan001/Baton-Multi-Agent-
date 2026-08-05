@@ -17,7 +17,8 @@ import { z } from 'zod';
 import { collectStatus } from './board.js';
 import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
-import { activeBatonRoot, projectOf } from './store.js';
+import { activeBatonRoot, loadTasks, projectOf } from './store.js';
+import { diffStampFor, groundMovedNotice, registerPipelineTools, type RegisterTool } from './mcp-pipeline.js';
 import { queryFile, searchHistory } from './history.js';
 import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
@@ -40,6 +41,9 @@ const SIGNALS_CAP = 30;
  * reads as live, without a DB write on every single tool invocation.
  */
 const PRESENCE_TOUCH_MS = 30_000;
+/** How often a task-bound session re-reads its own row to notice a cancellation
+ *  or a takeover. Cheap (one small JSON read) but not free, so debounced. */
+const STATE_CHECK_MS = 15_000;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
@@ -83,10 +87,36 @@ export async function startMcpServer(): Promise<void> {
     lastPresenceTouch = now;
     try { touchHookSession(root, selfSlug); } catch { /* presence is best-effort */ }
   };
+  // Cancellation notice. An agent working in a worktree has no reason to look
+  // at the board again, so a task cancelled (or taken over) under it would be
+  // discovered at `complete_task` — after the work. Every tool answer carries
+  // the notice instead, because whatever the agent called next is the soonest
+  // moment it can hear. Debounced, and only for a session that holds a task.
+  const noticeState = { at: 0, sent: '' };
+  const cancellationNotice = async (): Promise<string | null> => {
+    if (!taskSlug) return null;                           // no task, no ground to move
+    const now = Date.now();
+    if (now - noticeState.at < STATE_CHECK_MS) return null;
+    noticeState.at = now;
+    try {
+      const notice = groundMovedNotice(
+        (await loadTasks(root)).find((x) => x.slug === taskSlug), taskSlug, selfSlug,
+      );
+      if (!notice || notice === noticeState.sent) return null;   // say it once, not every call
+      noticeState.sent = notice;
+      return notice;
+    } catch { return null; }                              // never break a tool call over this
+  };
+
   const reg = ((name: string, config: unknown, cb: (...a: unknown[]) => unknown) =>
-    (server.registerTool as (...x: unknown[]) => unknown)(name, config, (...a: unknown[]) => {
+    (server.registerTool as (...x: unknown[]) => unknown)(name, config, async (...a: unknown[]) => {
       presenceTouch();
-      return cb(...a);
+      const res = await cb(...a) as { content?: { type: string; text: string }[] };
+      const notice = await cancellationNotice();
+      if (notice && Array.isArray(res?.content)) {
+        return { ...res, content: [{ type: 'text' as const, text: JSON.stringify({ batonNotice: notice }) }, ...res.content] };
+      }
+      return res;
     })) as unknown as typeof server.registerTool;
 
   reg(
@@ -225,8 +255,18 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ plan, notes, next, files }) => {
       try {
-        const led = await saveProgress(root, selfSlug, { plan, notes, next, filesEdited: files });
-        return asText({ saved: selfSlug, plan: led.plan.length, notes: led.notes.length, files: led.filesEdited.length });
+        // Stamp the checkpoint with the diff at this moment. A ledger is what
+        // everyone downstream reads INSTEAD of the diff, so a ticked-off item
+        // with nothing behind it is invisible unless the two are compared here.
+        const stamp = taskSlug ? await diffStampFor(root, taskSlug) : undefined;
+        const led = await saveProgress(root, selfSlug, { plan, notes, next, filesEdited: files, stamp });
+        return asText({
+          saved: selfSlug, plan: led.plan.length, notes: led.notes.length, files: led.filesEdited.length,
+          ...(led.stamp ? { stamp: led.stamp } : {}),
+          // Returned to the agent that wrote it, not just recorded: the moment
+          // it can still correct the claim is right now.
+          ...(led.flagged ? { flagged: led.flagged } : {}),
+        });
       } catch (e) {
         return asText({ rejected: e instanceof Error ? e.message : String(e) });
       }
@@ -375,6 +415,8 @@ export async function startMcpServer(): Promise<void> {
       });
     },
   );
+
+  registerPipelineTools(reg as unknown as RegisterTool, root);
 
   await server.connect(new StdioServerTransport());
 }

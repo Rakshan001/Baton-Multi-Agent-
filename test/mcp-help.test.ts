@@ -12,6 +12,7 @@ const EXPECTED_TOOLS = [
   'orient', 'check_files', 'list_signals', 'get_report', 'who_touched',
   'list_tasks', 'report_progress', 'touch_files', 'save_memory', 'recall_memory',
   'create_handoff', 'search_history', 'save_progress',
+  'my_tasks', 'take_task', 'complete_task', 'report_blocked',
 ] as const;
 
 describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
@@ -22,9 +23,10 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
   it('stays inside the total budget (the whole point of T1)', () => {
     const total = Object.values(TOOL_HELP).reduce((n, d) => n + d.length, 0);
     expect(total).toBeLessThanOrEqual(TOOL_HELP_BUDGET);
-    // 13 tools now (save_progress joined for ISS-06 agent-agnostic capture).
-    // Raising this needs a deliberate edit — keep every new tool lean.
-    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(2100);
+    // 17 tools now — the four pipeline tools joined in phase 4, the one raise
+    // this budget has taken for a feature rather than for a convenience.
+    // Raising it again needs a deliberate edit — keep every new tool lean.
+    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(2800);
   });
 
   it('keeps every tool description individually lean', () => {
@@ -50,5 +52,14 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
     expect(TOOL_HELP.create_handoff).toMatch(/resume|continue/i);
     // save_progress must justify itself by the artifact it feeds.
     expect(TOOL_HELP.save_progress).toMatch(/handoff|snapshot/i);
+    // The pipeline triggers. my_tasks has to read as the answer to the question
+    // an agent actually asks, or it never gets called at session start.
+    expect(TOOL_HELP.my_tasks).toMatch(/pending task/i);
+    expect(TOOL_HELP.my_tasks).toMatch(/session start/i);
+    // Working outside the worktree is what breaks parallel agents.
+    expect(TOOL_HELP.take_task).toMatch(/ONLY/);
+    // The two failures the gate exists to catch, named where the agent reads them.
+    expect(TOOL_HELP.complete_task).toMatch(/commit/i);
+    expect(TOOL_HELP.report_blocked).toMatch(/instead of/i);
   });
 });

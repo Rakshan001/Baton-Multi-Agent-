@@ -568,6 +568,45 @@ print that a check passed when it never ran — that is the same confusion one l
 
 1528 tests green (+10). Four mutations tested, including restoring the original bug.
 
+### Session 19g — the MCP surface (phase 4)
+
+`my_tasks`, `take_task`, `complete_task`, `report_blocked` (`src/mcp-pipeline.ts`). These
+are the same operations the CLI already exposes, reached from inside an agent's own
+session — the difference between a pipeline a person drives and one the agents drive
+themselves. They call the same lifecycle functions rather than re-deciding anything; a
+second copy of "may I claim this" would drift, and the copy an agent reaches for is the one
+that must not.
+
+Two deliberate omissions: **no `force`** (an agent that can waive its own attestation has
+no attestation — that stays a person's call in a terminal), and no plan editing.
+
+**The tool-description budget went 2100 → 2800**, the one raise it has taken for a feature
+rather than a convenience. Everything situational still costs nothing: each answer carries
+its own next command, so the permanent per-session tax stays down to the trigger phrase.
+
+**Cancellation notices** ride on the `reg()` wrapper. An agent inside a worktree has no
+reason to look at the board again, so a task cancelled underneath it would be discovered at
+`complete_task` — after the work. `groundMovedNotice` is pure and covers three cases: the
+task was cancelled, the task is gone, or another agent adopted it while this one was quiet.
+
+**Checkpoint diff-stamping** (§6.2): every `save_progress` is stamped with the repo as it
+stood, and `checkpointFlag` fires when items move to completed with no commits and no
+uncommitted changes behind them. Narrow on purpose — thinking, reading and failed
+experiments are honest checkpoints, and a flag that cries wolf gets scrolled past. The flag
+goes back to the agent that wrote it, at the one moment it can still correct the claim.
+
+Probed through the real MCP server over stdio, not just the unit harness: 17 tools
+register, `my_tasks` answers with the contract, `take_task` returns the worktree and the
+work-only-here rule, `complete_task` refuses with the zero-commit check.
+
+**A bug the probe found.** A plan field written as `- scope: src/**` was silently swallowed
+into the description, and the task shipped with no scope — in a phase full of parallel
+agents, exactly the collision scope exists to prevent. The asymmetry was the tell: an
+unknown **bold** field already errored, so the stricter mistake was reported and the looser
+one was not. Now refused, with the correction shown.
+
+1553 tests green (+25). Six mutations tested; each killed exactly its own tests.
+
 ## Pending / next 🔜
 
 0. **Task pipeline, remaining phases** — phases 2, 3 and 3.5 are done (plans, apply,

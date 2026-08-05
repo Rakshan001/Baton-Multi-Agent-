@@ -27,6 +27,16 @@ const ITEM_MAX = 300;
 const NOTE_MAX = 600;
 const NEXT_MAX = 600;
 
+/** The repository as it stood when a checkpoint was written. */
+export interface DiffStamp {
+  /** Uncommitted files in the worktree. */
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  /** Commits on the task branch since it was created. */
+  commits: number;
+}
+
 export interface ProgressLedger {
   /** The plan/checklist — the closest thing to "what's done, what's left". */
   plan: TodoItem[];
@@ -36,7 +46,37 @@ export interface ProgressLedger {
   next?: string;
   /** Files the agent has touched (accumulated across patches). */
   filesEdited: string[];
+  /** What the repo actually looked like at this checkpoint. */
+  stamp?: DiffStamp;
+  /** Set when the checkpoint claimed progress the repository does not show. */
+  flagged?: string;
   updatedAt: string;
+}
+
+/**
+ * Did this checkpoint claim work the repository cannot corroborate?
+ *
+ * A checkpoint is self-reported, and a model that has lost the thread will
+ * happily tick items it never did — the failure is invisible precisely because
+ * the ledger is what everyone downstream reads INSTEAD of the diff. Stamping
+ * each checkpoint with the diff at that moment makes the claim checkable.
+ *
+ * Deliberately narrow: it fires only when items moved to completed and the
+ * repository shows nothing at all — no commits, no uncommitted change. Anything
+ * looser would flag honest checkpoints (thinking, reading, a failed experiment),
+ * and a flag that cries wolf is one people learn to scroll past.
+ */
+export function checkpointFlag(
+  prev: TodoItem[],
+  next: TodoItem[],
+  stamp: DiffStamp | undefined,
+): string | undefined {
+  if (!stamp) return undefined;
+  const done = (items: TodoItem[]): number => items.filter((t) => t.status === 'completed').length;
+  const gained = done(next) - done(prev);
+  if (gained <= 0) return undefined;
+  if (stamp.commits > 0 || stamp.filesChanged > 0) return undefined;
+  return `${gained} item${gained === 1 ? '' : 's'} marked complete, but the worktree has no commits and no uncommitted changes — nothing here shows that work.`;
 }
 
 /** Plan items as an agent supplies them — status is optional (defaults to
@@ -48,6 +88,9 @@ export interface ProgressPatch {
   notes?: string[];
   next?: string;
   filesEdited?: string[];
+  /** The diff at this moment. Supplied by the caller so this module stays free
+   *  of git — it knows a slug, not which worktree that slug lives in. */
+  stamp?: DiffStamp;
 }
 
 /** Filename-safe slug — never lets a hostile slug escape .baton/progress. */
@@ -84,6 +127,8 @@ export async function loadProgress(root: string, slug: string): Promise<Progress
       notes: cleanStrings(p.notes, NOTE_MAX),
       next: typeof p.next === 'string' && p.next.trim() ? p.next.trim().slice(0, NEXT_MAX) : undefined,
       filesEdited: cleanStrings(p.filesEdited, ITEM_MAX),
+      ...(p.stamp ? { stamp: p.stamp } : {}),
+      ...(typeof p.flagged === 'string' && p.flagged ? { flagged: p.flagged } : {}),
       updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : EMPTY().updatedAt,
     };
   } catch {
@@ -100,13 +145,19 @@ export async function loadProgress(root: string, slug: string): Promise<Progress
  */
 export async function saveProgress(root: string, slug: string, patch: ProgressPatch): Promise<ProgressLedger> {
   const prev = (await loadProgress(root, slug)) ?? EMPTY();
+  const plan = patch.plan !== undefined ? cleanPlan(patch.plan) : prev.plan;
+  const flagged = checkpointFlag(prev.plan, plan, patch.stamp);
   const next: ProgressLedger = {
-    plan: patch.plan !== undefined ? cleanPlan(patch.plan) : prev.plan,
+    plan,
     notes: patch.notes !== undefined ? cleanStrings(patch.notes, NOTE_MAX) : prev.notes,
     next: patch.next !== undefined ? (patch.next.trim().slice(0, NEXT_MAX) || undefined) : prev.next,
     filesEdited: patch.filesEdited !== undefined
       ? [...new Set([...prev.filesEdited, ...cleanStrings(patch.filesEdited, ITEM_MAX)])].slice(0, LIST_CAP)
       : prev.filesEdited,
+    ...(patch.stamp ? { stamp: patch.stamp } : prev.stamp ? { stamp: prev.stamp } : {}),
+    // Not sticky: a flag describes the checkpoint that earned it, and carrying
+    // it forward would smear one bad checkpoint over every honest one after.
+    ...(flagged ? { flagged } : {}),
     updatedAt: new Date().toISOString(),
   };
   const path = ledgerPath(root, slug);

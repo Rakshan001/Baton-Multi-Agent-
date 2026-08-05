@@ -99,6 +99,8 @@ const SECTION_HEADING = /^##(?!#)\s/;
 const TASK_HEADING = /^###\s+(.+?)\s*$/;
 const TRAILING_ASSIGNEE = /\s@(\S+)$/;
 const FIELD = /^\*\*([a-z]+):\*\*\s*(.*)$/i;
+/** A known field key in any shape but the one that works — see `parsePlan`. */
+const MISWRITTEN_FIELD = /^(?:[-*+]\s+)?[*_]{0,2}(scope|skills|principles|expects|dependsOn|after|task)[*_]{0,2}\s*:\s*(.*)$/i;
 /**
  * Differs from a safe slug only by case or spacing — a typo, not an attack.
  * Must START and END alphanumeric: that is what keeps `__proto__` out of the
@@ -210,6 +212,20 @@ export function parsePlan(text: string, fallbackId = 'plan'): { plan: Plan; issu
       else if (key === 'dependson' || key === 'after') current.dependsOn = listField(val);
       else if (key === 'task') current.task = val.trim();
       else issues.push({ where: current.slug, message: `unknown field '${key}'` });
+      continue;
+    }
+    // A field written the wrong way silently becomes prose, and the task ships
+    // with no scope at all — which in a phase full of parallel agents is the
+    // collision the scope declaration exists to prevent. `**foo:**` already
+    // errors as an unknown field; not catching `- scope:` too meant the stricter
+    // mistake was reported and the looser one was not.
+    const miswritten = MISWRITTEN_FIELD.exec(trimmed);
+    if (miswritten) {
+      const key = miswritten[1].toLowerCase();
+      issues.push({
+        where: current.slug,
+        message: `'${miswritten[1]}' is written as prose, not a field — use \`**${key}:** ${miswritten[2] || '<value>'}\`. As written the task has no ${key}.`,
+      });
       continue;
     }
     if (trimmed) descr.push(trimmed);
