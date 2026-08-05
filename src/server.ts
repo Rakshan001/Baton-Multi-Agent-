@@ -670,7 +670,7 @@ async function ingestAllProjects(root: string): Promise<void> {
     const kb = await loadKb(root);
     if (!kb) return;
     for (const p of kb.projects) {
-      await ingestGitLog(root, { slug: `git:${p.id}`, task: `${p.name} · direct commits`, cwd: p.path }).catch(() => 0);
+      await ingestGitLog(root, { slug: `git:${p.id}`, task: `${p.name} · direct commits`, cwd: p.path, projectId: p.id }).catch(() => 0);
     }
   } catch { /* ingestion is best-effort — never break the daemon */ }
 }

@@ -177,7 +177,11 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { file: z.string().describe('Repo-relative file path') },
     },
     async ({ file }) => {
-      const [hits, live] = [queryFile(root, file), await checkFiles(root, [file], selfSlug)];
+      // Scope blame to the asker's sub-project: paths are worktree-relative, so
+      // an unscoped `src/index.ts` in a hub returned every project's history and
+      // named agents that never opened this file. projectOf yields null outside
+      // a hub, which queryFile reads as "don't scope".
+      const [hits, live] = [queryFile(root, file, await projectOf(root, selfSlug)), await checkFiles(root, [file], selfSlug)];
       const capped = capList(hits, WHO_TOUCHED_CAP);
       return asText({ merged: capped.items, moreMerged: capped.more, live: live[file] });
     },

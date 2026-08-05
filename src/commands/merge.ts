@@ -121,6 +121,7 @@ export async function mergeTaskBranch(
     if (ok) archivedRef = `refs/baton/archive/${slug}`;
   }
   recordMerge(repoRoot, {
+    projectId: task.projectId ?? null,
     slug,
     agent: agents.get(task.worktreePath) ?? null,
     mergedAt: new Date().toISOString(),
