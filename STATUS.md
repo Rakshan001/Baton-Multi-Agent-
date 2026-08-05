@@ -442,6 +442,44 @@ the placeholder positively against a deliberately dirty repo, and re-mutated.
 
 1427 tests green, both workspaces build.
 
+### Session 19c — lifecycle: claim, stall, pause, block
+
+`baton next` · `baton take [--resume]` · `baton pause` · `baton block`. The transitions
+live in `src/lifecycle.ts` as pure `(tasks, args) → tasks | refusal`, run inside
+`mutateTasks` — so the check and the write happen against the same list under the lock,
+and the claim race is a unit test rather than a hope. Verified with six real processes
+racing one task: one winner, five correct refusals, contributor chain intact.
+
+**Claim first, build second, roll back on failure.** The claim is written under the lock;
+the worktree is created after, outside it, because it is slow. If git fails the claim is
+released — a task stuck `claimed` with no worktree is worse than one never claimed:
+invisible to `next` (not queued), useless to its holder, and holding its phase against
+everyone else. A branch that already exists is never reused; it may hold someone else's
+work.
+
+**Liveness = max(heartbeat, newest worktree mtime)** (`src/liveness.ts`), per the spec's
+correction to its own first draft: an agent running a 20-minute build makes no MCP calls
+and is very much alive. The mtime walk is bounded (2000 entries, depth 6, skips
+`.git`/`node_modules`/build dirs) and the cap can only make liveness look OLDER — so the
+failure direction is refusing a takeover we might have allowed, which is the safe one.
+The claim timestamp is a floor, so a task claimed a minute ago is never "silent for two
+hours".
+
+**`pause` is the honest counterpart to `done`.** An interruption must never be recorded
+as a completion — a session that hits its limit hands the task back queued, worktree and
+contributor history intact. `block` differs deliberately: it stays OWNED, because a
+blocked task returned to the pool is a loop, not a queue.
+
+`take` now serves both meanings of "pick up work" — a queued pipeline task is claimed, a
+pre-pipeline row (no stored `state`) still reads its HANDOFF.md exactly as before.
+
+**Bug found by racing real processes:** four of five losers fell through to the brief path
+and printed "No HANDOFF.md" — which reads as *nothing here* when the truth is *occupied by
+agent5*. Now they get the holder's name and the `--resume` hint. This is the third time
+this session that a probe against real behavior found something reading the code did not.
+
+1466 tests green, both workspaces build.
+
 ## Pending / next 🔜
 
 0. **Task pipeline, remaining phases** — phase 2 is done (plans, apply, board,

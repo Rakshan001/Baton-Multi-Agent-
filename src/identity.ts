@@ -78,6 +78,29 @@ export async function resolveAuthor(cwd?: string): Promise<string> {
   return email || systemAuthor();
 }
 
+/**
+ * Which tool is running right now, and which session it is.
+ *
+ * `agent` decides what work is offered (assignee matching); `sessionSlug` is the
+ * claim's owner and is what a takeover compares against — two Claude windows are
+ * one agent and two sessions, and only the session distinction stops the second
+ * one from adopting the first one's task as if it were its own.
+ *
+ * Both fall back rather than throw: an unidentified caller still gets to work,
+ * it just lands in the open pool.
+ */
+export async function resolveAgentId(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const declared = sanitizeAuthor(env.BATON_AGENT ?? '');
+  if (declared) return declared;
+  const { detectParentAgent } = await import('./agents.js');
+  return (await detectParentAgent().catch(() => null)) ?? 'unknown';
+}
+
+/** This process's session identity. Stable for the life of the process. */
+export function resolveSessionSlug(env: NodeJS.ProcessEnv = process.env): string {
+  return sanitizeAuthor(env.BATON_SLUG ?? '') || `pid-${process.pid}`;
+}
+
 /** Read an author off a persisted record. Absent/!string → `unknown` (no migration). */
 export function readAuthor(v: unknown): string {
   return (typeof v === 'string' ? sanitizeAuthor(v) : '') || UNKNOWN_AUTHOR;

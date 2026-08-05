@@ -51,6 +51,8 @@ import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } 
 import { bugsCmd } from './commands/bugs.js';
 import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
 import { taskAddCmd, taskRmCmd, type TaskAddOpts } from './commands/task.js';
+import { nextCmd } from './commands/next.js';
+import { blockCmd, pauseCmd } from './commands/pause.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -439,9 +441,30 @@ program
 
 program
   .command('take')
+  .argument('[slug]', 'task slug (default: the next task for you, else the worktree you are in)')
+  .option('--resume', 'adopt a stalled task another agent is holding')
+  .description('pick up work: claim a queued task (worktree built on the spot), or read a HANDOFF.md brief')
+  .action((slug: string | undefined, opts: { resume?: boolean }) => run(() => takeCmd(slug, opts)));
+
+program
+  .command('next')
+  .option('--agent <id>', 'ask on behalf of another agent id')
+  .description('what may I start right now — and, when nothing, exactly why not')
+  .action((opts: { agent?: string }) => run(() => nextCmd(opts)));
+
+program
+  .command('pause')
   .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .description('pick up a HANDOFF.md brief: prints the execution prompt, marks it in-progress')
-  .action((slug: string | undefined) => run(() => takeCmd(slug)));
+  .option('--reason <why>', 'why you stopped — shown to whoever picks it up')
+  .description('hand a task back unfinished: queued again, worktree and history kept')
+  .action((slug: string | undefined, opts: { reason?: string }) => run(() => pauseCmd(slug, opts)));
+
+program
+  .command('block')
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .argument('<reason>', 'what is in the way')
+  .description('report that a task cannot proceed — stays yours, waits for a person')
+  .action((slug: string | undefined, reason: string) => run(() => blockCmd(slug, reason)));
 
 program
   .command('done')
