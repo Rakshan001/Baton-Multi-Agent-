@@ -142,4 +142,37 @@ describe('tasks.json cross-process lock', () => {
     expect(Date.now() - t0).toBeLessThan(500); // no lock contention
     expect((await loadTasks(root)).map((t) => t.slug)).toEqual(['a', 'b']);
   });
+
+  /**
+   * The retry loop used to `continue` when the lock could not be stat'ed, which
+   * skipped BOTH the deadline check and the sleep. Any mkdir failure that was
+   * not EEXIST while the lock also did not exist — .baton read-only, on a
+   * read-only FS, out of inodes, or removed mid-run by `baton clean` — spun at
+   * 100% CPU forever and blocked the serialized() queue behind it. Measured on
+   * the old code: 2,000,001 iterations in 8.5s without ever reaching the
+   * deadline.
+   *
+   * A read-only .baton reproduces it exactly: mkdir(tasks.lock) fails EACCES
+   * and stat(tasks.lock) fails ENOENT. The property under test is TERMINATION —
+   * the call must come back (here by failing to write) rather than hang.
+   */
+  it.runIf(process.getuid?.() !== 0)('terminates when the lock can be neither created nor read', async () => {
+    const { mkdtemp, mkdir, chmod } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = await mkdtemp(join(tmpdir(), 'baton-lock3-'));
+    const baton = join(root, '.baton');
+    await mkdir(baton, { recursive: true });
+    await chmod(baton, 0o500); // readable + traversable, NOT writable
+    try {
+      const t0 = Date.now();
+      await expect(addTask(root, {
+        slug: 'spin', task: 'spin', branch: 'baton/spin', worktreePath: join(root, 'wt'),
+        baseBranch: 'main', baseCommit: null, createdAt: new Date().toISOString(),
+      })).rejects.toThrow(); // cannot write into a read-only dir — but it RETURNS
+      expect(Date.now() - t0).toBeLessThan(8_000); // bounded by LOCK_TIMEOUT_MS, not unbounded
+    } finally {
+      await chmod(baton, 0o700); // or the tmpdir cleanup cannot remove it
+    }
+  }, 20_000);
 });

@@ -225,15 +225,19 @@ async function withTasksLock<T>(gitRoot: string, fn: () => Promise<T>): Promise<
       await mkdir(lock); // atomic: only one process can create it
       acquired = true;
     } catch {
+      // Why mkdir failed does not change what we do — wait and retry — but it
+      // MUST NOT skip the deadline and the sleep. It used to: `continue` here
+      // bypassed both, so any failure that was not EEXIST while the lock also
+      // could not be stat'ed (.baton read-only or removed mid-run by `baton
+      // clean`, EROFS, ENOSPC) spun at 100% CPU forever, blocking the
+      // `serialized()` queue behind it. Measured before the fix: 2,000,001
+      // iterations in 8.5s without once reaching the deadline check.
       try {
         const st = await stat(lock);
         if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
           await rm(lock, { recursive: true, force: true }); // crashed holder — break it
-          continue;
         }
-      } catch {
-        continue; // lock vanished between mkdir and stat — retry immediately
-      }
+      } catch { /* gone or unreadable — same answer: fall through and retry */ }
       if (Date.now() >= deadline) {
         // Availability over strictness: a wedged lock must not brick task writes.
         console.warn(`[baton] tasks.lock busy for ${LOCK_TIMEOUT_MS}ms — proceeding without it`);
