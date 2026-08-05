@@ -18,7 +18,7 @@ import { execa, type ResultPromise } from 'execa';
 import { gitRoot } from './git.js';
 import { getTask } from './store.js';
 import { probeBinary } from './util/exec.js';
-import { detectTmux, repoPrefix, sessionNameFor, slugFromSession, tmux, tmuxTry } from './util/tmux.js';
+import { detectTmux, exactPane, exactSession, repoPrefix, sessionNameFor, slugFromSession, tmux, tmuxTry } from './util/tmux.js';
 import { bus } from './events.js';
 import { hasHeadlessRun } from './spawn.js';
 import { AGENTS, agentsFor, type InteractiveLauncher } from './agents/registry.js';
@@ -202,7 +202,7 @@ export async function captureScreen(slug: string): Promise<Buffer | null> {
   const session = terminals.get(slug);
   if (!session || session.exited) return null;
   try {
-    const { stdout } = await tmux(['capture-pane', '-p', '-e', '-q', '-t', session.sessionName, '-S', '-2000']);
+    const { stdout } = await tmux(['capture-pane', '-p', '-e', '-q', '-t', exactPane(session.sessionName), '-S', '-2000']);
     if (!stdout) return null;
     return Buffer.from(stdout.replace(/\n/g, '\r\n') + '\r\n', 'utf8');
   } catch {
@@ -228,7 +228,7 @@ function attachControl(session: TerminalSession): void {
   // -d detaches any stale client (e.g. a control client orphaned by a killed
   // daemon). An orphan that stops draining output wedges the whole tmux
   // server, hanging every tmux command on the machine — never leave one attached.
-  const child = execa('tmux', ['-C', 'attach-session', '-d', '-t', session.sessionName], {
+  const child = execa('tmux', ['-C', 'attach-session', '-d', '-t', exactSession(session.sessionName)], {
     buffer: false,
     stdin: 'pipe',
     env: { ...process.env },
@@ -275,7 +275,7 @@ const REATTACH_MAX = 5;
 /** Control client died: session over (normal) or hiccup (reattach with backoff). */
 async function onControlExit(session: TerminalSession): Promise<void> {
   if (session.exited || terminals.get(session.slug) !== session) return;
-  if (await tmuxTry(['has-session', '-t', session.sessionName])) {
+  if (await tmuxTry(['has-session', '-t', exactSession(session.sessionName)])) {
     // tmux session is alive — control client hiccuped. A stable attach (>10s)
     // resets the counter; rapid deaths back off and eventually give up so a
     // wedged session can't turn into a tmux-spawning CPU spin.
@@ -327,7 +327,7 @@ export async function createTerminal(
 
   const sessionName = sessionNameFor(repoRoot, slug);
   if (terminals.has(slug)) throw new TerminalRunningError(slug, terminals.get(slug)!.agent);
-  if (await tmuxTry(['has-session', '-t', sessionName])) {
+  if (await tmuxTry(['has-session', '-t', exactSession(sessionName)])) {
     // Daemon restarted while the session lived on — adopt it instead of failing.
     const adopted = await adoptSession(repoRoot, sessionName);
     if (adopted) throw new TerminalRunningError(slug, adopted.agent);
@@ -351,10 +351,10 @@ export async function createTerminal(
       BATON_AGENT: agent,
     }),
   ]);
-  await tmuxTry(['set-option', '-t', sessionName, 'status', 'off']);
-  await tmuxTry(['set-option', '-t', sessionName, 'history-limit', '5000']);
-  await tmuxTry(['set-option', '-t', sessionName, 'window-size', 'manual']);
-  await tmuxTry(['set-environment', '-t', sessionName, 'BATON_AGENT', agent]);
+  await tmuxTry(['set-option', '-t', exactPane(sessionName), 'status', 'off']);
+  await tmuxTry(['set-option', '-t', exactPane(sessionName), 'history-limit', '5000']);
+  await tmuxTry(['set-option', '-t', exactPane(sessionName), 'window-size', 'manual']);
+  await tmuxTry(['set-environment', '-t', exactSession(sessionName), 'BATON_AGENT', agent]);
 
   const session: TerminalSession = {
     slug, agent, sessionName,
@@ -388,7 +388,7 @@ export function writeInput(slug: string, bytes: Buffer): boolean {
   const stdin = session.control.stdin;
   if (!stdin || stdin.destroyed) return false;
   const hex = toHexArgs(bytes.subarray(0, INPUT_CAP));
-  stdin.write(`send-keys -t ${session.sessionName} -H ${hex.join(' ')}\n`);
+  stdin.write(`send-keys -t ${exactPane(session.sessionName)} -H ${hex.join(' ')}\n`);
   return true;
 }
 
@@ -396,7 +396,7 @@ export async function resizeTerminal(slug: string, cols: number, rows: number): 
   const session = terminals.get(slug);
   if (!session || session.exited) return false;
   return tmuxTry([
-    'resize-window', '-t', session.sessionName,
+    'resize-window', '-t', exactPane(session.sessionName),
     '-x', String(clampDim(cols, 80, 20, 500)),
     '-y', String(clampDim(rows, 24, 5, 200)),
   ]);
@@ -407,7 +407,7 @@ export async function killTerminal(slug: string): Promise<boolean> {
   if (!session) return false;
   session.exited = true;
   terminals.delete(slug);
-  await tmuxTry(['kill-session', '-t', session.sessionName]);
+  await tmuxTry(['kill-session', '-t', exactSession(session.sessionName)]);
   session.control?.kill('SIGTERM');
   bus.publish({ type: 'terminal.exited', slug: session.slug, agent: session.agent });
   return true;
@@ -423,7 +423,7 @@ async function adoptSession(root: string, sessionName: string): Promise<Terminal
 
   let agent = 'claude';
   try {
-    const { stdout } = await tmux(['show-environment', '-t', sessionName, 'BATON_AGENT']);
+    const { stdout } = await tmux(['show-environment', '-t', exactSession(sessionName), 'BATON_AGENT']);
     const m = stdout.match(/^BATON_AGENT=(\S+)/m);
     if (m) agent = m[1];
   } catch { /* default stands */ }
@@ -440,7 +440,7 @@ async function adoptSession(root: string, sessionName: string): Promise<Terminal
   // Seed scrollback with the current screen + recent history so reconnecting
   // viewers see where the agent is, not a blank pane (handler.dev's trick).
   try {
-    const { stdout } = await tmux(['capture-pane', '-p', '-e', '-q', '-t', sessionName, '-S', '-2000']);
+    const { stdout } = await tmux(['capture-pane', '-p', '-e', '-q', '-t', exactPane(sessionName), '-S', '-2000']);
     if (stdout) session.scrollback.push(Buffer.from(stdout.replace(/\n/g, '\r\n') + '\r\n', 'utf8'));
   } catch { /* scrollback is best-effort */ }
 

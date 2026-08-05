@@ -50,10 +50,39 @@ export function slugFromSession(root: string, sessionName: string): string | nul
   return sessionName.startsWith(prefix) ? sessionName.slice(prefix.length) : null;
 }
 
+/**
+ * tmux resolves `-t <name>` as exact match, then fnmatch, then **prefix** — so a
+ * bare session name aims at the wrong session whenever one slug prefixes
+ * another. With `fix-login` running, `-t fix` hits it: `baton rm fix` killed a
+ * different task's agent, and `attach-session -t fix` streamed (and accepted
+ * keystrokes for) the wrong terminal. Verified on tmux 3.6b.
+ *
+ * A leading `=` forces exact matching (tmux 1.8+), but the two forms are NOT
+ * interchangeable — the target grammar differs by argument type, also verified:
+ *
+ *   target-session   has-session, kill-session, attach-session,     `=name`
+ *                    set-environment, show-environment
+ *   target-pane and  capture-pane, send-keys, set-option,           `=name:`
+ *   target-window    resize-window
+ *
+ * A bare `=name` handed to capture-pane fails outright ("can't find pane"), and
+ * to set-option ("no such session"), so picking the wrong helper breaks the
+ * command rather than silently mistargeting it.
+ */
+export function exactSession(sessionName: string): string {
+  return `=${sessionName}`;
+}
+
+/** Exact-match target for pane/window arguments — see {@link exactSession}. The
+ *  trailing colon selects that session's current window/pane. */
+export function exactPane(sessionName: string): string {
+  return `=${sessionName}:`;
+}
+
 /** Cross-process check: does a live tmux session exist for this task? */
 export async function tmuxSessionExists(root: string, slug: string): Promise<boolean> {
   if (!(await detectTmux())) return false;
-  return tmuxTry(['has-session', '-t', sessionNameFor(root, slug)]);
+  return tmuxTry(['has-session', '-t', exactSession(sessionNameFor(root, slug))]);
 }
 
 /** All live tmux session names (empty when tmux is missing or no server runs). */
@@ -75,5 +104,5 @@ export async function listSessions(): Promise<string[]> {
  */
 export async function killSessionFor(root: string, slug: string): Promise<boolean> {
   if (!(await detectTmux())) return false;
-  return tmuxTry(['kill-session', '-t', sessionNameFor(root, slug)]);
+  return tmuxTry(['kill-session', '-t', exactSession(sessionNameFor(root, slug))]);
 }

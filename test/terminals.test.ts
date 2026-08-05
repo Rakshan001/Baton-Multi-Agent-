@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildSessionCommand, parseControlLine, repoPrefix, ScrollbackRing, sessionNameFor,
   shQuote, slugFromSession, toHexArgs, unescapeControlOutput,
   INTERACTIVE_LAUNCHERS,
 } from '../src/terminals.js';
 import { bus } from '../src/events.js';
+import { detectTmux, exactPane, exactSession, killSessionFor, tmuxSessionExists, tmuxTry } from '../src/util/tmux.js';
 
 describe('session naming', () => {
   const root = '/Users/me/code/repo';
@@ -168,5 +169,71 @@ describe('events ring exclusion', () => {
   it('terminal.started/exited do replay from the ring', () => {
     const stamped = bus.publish({ type: 'terminal.started', slug: 't', agent: 'claude' });
     expect(bus.since(stamped.id - 1).some((e) => e.event.type === 'terminal.started')).toBe(true);
+  });
+});
+
+/**
+ * tmux resolves `-t <name>` exact → fnmatch → PREFIX, so every bare target
+ * aimed at the wrong session whenever one slug prefixed another. Verified
+ * against real tmux 3.6b before the fix: with only `probe-x-long` alive,
+ * `attach-session -t probe-x` attached to it, and `kill-session -t probe-x`
+ * killed it.
+ *
+ * The two helpers are not interchangeable — a bare `=name` given to
+ * capture-pane fails ("can't find pane") and to set-option ("no such
+ * session"), so the pane/window form carries the trailing colon.
+ */
+describe('exact tmux targets', () => {
+  it('session targets use =name', () => {
+    expect(exactSession('baton-abc123-fix')).toBe('=baton-abc123-fix');
+  });
+
+  it('pane and window targets use =name: — the bare form is rejected by tmux', () => {
+    expect(exactPane('baton-abc123-fix')).toBe('=baton-abc123-fix:');
+  });
+
+  it('a prefix no longer resolves: the two targets differ by more than the slug', () => {
+    const short = sessionNameFor('/repo', 'fix');
+    const long = sessionNameFor('/repo', 'fix-login');
+    expect(long.startsWith(short)).toBe(true);           // the collision is real
+    expect(exactSession(long).startsWith(exactSession(short))).toBe(true);
+    expect(exactPane(short)).not.toBe(exactPane(long));   // ...but the colon terminates it
+    expect(exactPane(long).startsWith(exactPane(short))).toBe(false);
+  });
+});
+
+/**
+ * The real proof, against a live tmux server: only `<prefix>fix-login` exists,
+ * and nothing addressed to `fix` may touch it. Before the fix both assertions
+ * failed — has-session matched and kill-session destroyed another task's agent.
+ * Session names are hashed from a unique temp root, so these can never collide
+ * with a session the developer is actually using.
+ */
+const HAS_TMUX = await detectTmux();
+
+describe.runIf(HAS_TMUX)('tmux targeting against a live server', () => {
+  const root = `/tmp/baton-target-test-${process.pid}`;
+  const victim = sessionNameFor(root, 'fix-login');
+
+  beforeEach(async () => {
+    await tmuxTry(['new-session', '-d', '-s', victim, 'sleep 300']);
+  });
+  afterEach(async () => {
+    await tmuxTry(['kill-session', '-t', exactSession(victim)]);
+  });
+
+  it('a session that only PREFIX-matches is reported as absent', async () => {
+    expect(await tmuxSessionExists(root, 'fix-login')).toBe(true);
+    expect(await tmuxSessionExists(root, 'fix')).toBe(false);
+  });
+
+  it('killing "fix" leaves "fix-login" running', async () => {
+    await killSessionFor(root, 'fix');
+    expect(await tmuxSessionExists(root, 'fix-login')).toBe(true);
+  });
+
+  it('killing the exact slug still works', async () => {
+    expect(await killSessionFor(root, 'fix-login')).toBe(true);
+    expect(await tmuxSessionExists(root, 'fix-login')).toBe(false);
   });
 });
