@@ -14,10 +14,11 @@
 import { activeBatonRoot, getTask, loadTasks } from '../store.js';
 import { briefStalenessWarning, readBrief, setBriefStatus } from '../handoff/brief.js';
 import { resolveTask } from './pass.js';
-import { stateOf } from '../pipeline.js';
+import { isTerminal, stateOf } from '../pipeline.js';
 import { nextFor } from '../lifecycle.js';
 import { claimTask, ClaimRefused } from './claim.js';
 import { describeTask } from './next.js';
+import { finishTask, reportFinish } from './finish.js';
 import { resolveAgentId, resolveSessionSlug } from '../identity.js';
 
 /** Did this call reach the pipeline? Returns false to fall through to briefs. */
@@ -115,7 +116,7 @@ export async function takeCmd(slug: string | undefined, opts: { resume?: boolean
   console.log(`(brief: ${task.worktreePath}/HANDOFF.md · status → in-progress)`);
 }
 
-export async function doneCmd(slug: string | undefined): Promise<void> {
+export async function doneCmd(slug: string | undefined, opts: { attest?: boolean; force?: boolean } = {}): Promise<void> {
   const root = await activeBatonRoot();
   const task = await resolveTask(root, slug);
   if (!task) {
@@ -123,6 +124,33 @@ export async function doneCmd(slug: string | undefined): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  // A pipeline task goes through the evidence gate. Anything predating the
+  // pipeline (no stored state) keeps flipping its brief, as it always did.
+  if (task.state !== undefined) {
+    const state = stateOf(task);
+    if (isTerminal(state)) {
+      console.error(`✗ '${task.slug}' is already ${state}.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (state === 'review') {
+      console.error(`✗ '${task.slug}' is in review — a different agent decides it now.`);
+      process.exitCode = 1;
+      return;
+    }
+    const who = { agent: await resolveAgentId(), sessionSlug: resolveSessionSlug() };
+    if (task.claimedBy && task.claimedBy.agent !== who.agent) {
+      // Marking someone else's task done is the "wrong task" hallucination in
+      // its most damaging form: it closes work nobody checked.
+      console.error(`✗ '${task.slug}' is held by ${task.claimedBy.agent}, not you.`);
+      process.exitCode = 1;
+      return;
+    }
+    reportFinish(task.slug, await finishTask(root, task, who, opts));
+    return;
+  }
+
   const ok = await setBriefStatus(task.worktreePath, 'done');
   console.log(ok ? `✓ ${task.slug} marked done — merge with: baton merge ${task.slug}` : 'No HANDOFF.md to update.');
 }

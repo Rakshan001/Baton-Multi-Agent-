@@ -63,6 +63,12 @@ export interface PipelineFields {
   contributors?: Array<{ agent: string; from: string; to?: string }>;
   stoppedReason?: string;
   cancelledBy?: { actor: string; at: string; reason?: string };
+  /** From the plan. Absent means ON — opting out has to be written down. */
+  requireReview?: boolean;
+  /** Files the finished diff touched outside `scope`. Recorded, never refused. */
+  outOfScope?: string[];
+  /** Branch head when the done gate accepted it — what a reviewer reviews. */
+  finishedSha?: string;
   /** Team mode: proof the work is on the shared remote, not just this disk. */
   pushedSha?: string;
   reviewedBy?: { actor: string; at: string; verdict: 'approve' | 'reject' };

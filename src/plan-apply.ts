@@ -123,6 +123,7 @@ function queuedRow(p: PlanTask, plan: Plan, o: ApplyOpts): Task {
     skills: p.skills,
     principles: p.principles,
     expects: p.expects,
+    requireReview: plan.requireReview,
     state: 'queued',
   };
 }
@@ -140,6 +141,7 @@ function merged(t: Task, p: PlanTask, plan: Plan): Task {
     skills: p.skills,
     principles: p.principles,
     expects: p.expects,
+    requireReview: plan.requireReview,
   };
 }
 

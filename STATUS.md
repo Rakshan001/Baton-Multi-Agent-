@@ -480,6 +480,33 @@ this session that a probe against real behavior found something reading the code
 
 1466 tests green, both workspaces build.
 
+### Session 19d — the done gate
+
+`baton done <slug>` on a pipeline task now runs the evidence gate (`src/evidence.ts`,
+pure) and lands the task in `review` — or `done` when the plan wrote down that it opted
+out. Baton still executes nothing: a plan file is inert data, which is what makes it safe
+to apply one that arrived over git, so the gate verifies that work HAPPENED and is honest
+that it cannot verify the work is right.
+
+Hard refusals (facts about the repo, and `--force` cannot buy past them): **zero commits**,
+uncommitted changes, conflict markers. Zero commits is the one that matters most — an
+agent that ran out of context and reported success is the most expensive failure in a
+five-agent pipeline, because every later phase then builds on nothing. Uncommitted work
+refuses because a merge takes the branch, not the worktree.
+
+Out-of-scope edits are **recorded, never refused** (`outOfScope` on the task): a real fix
+often needs a line somewhere the plan did not predict, and refusing would only teach
+agents to declare `**` and defeat the mechanism. `expects` becomes an agent
+**attestation** — held until `--attest`, then labelled *"agent attestation — not verified
+by baton"* so nothing downstream mistakes it for a test run.
+
+A failed gate writes nothing: the task stays active and still owned, so a refused `done`
+never leaves work in a half-finished state. Closing a task held by another agent is
+refused outright — that is the "wrong task marked done" hallucination in its most
+damaging form.
+
+1490 tests green, both workspaces build.
+
 ## Pending / next 🔜
 
 0. **Task pipeline, remaining phases** — phase 2 is done (plans, apply, board,

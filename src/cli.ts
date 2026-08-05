@@ -469,8 +469,10 @@ program
 program
   .command('done')
   .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .description('mark a handoff brief as done')
-  .action((slug: string | undefined) => run(() => doneCmd(slug)));
+  .option('--attest', 'confirm you actually ran what the plan expects')
+  .option('--force', 'proceed without attesting (never past a real refusal)')
+  .description('finish a task: evidence gate, then review — or mark a handoff brief done')
+  .action((slug: string | undefined, opts: { attest?: boolean; force?: boolean }) => run(() => doneCmd(slug, opts)));
 
 program
   .command('resume')
