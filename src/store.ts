@@ -5,8 +5,19 @@
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitRoot, mainRepoRoot } from './git.js';
+import type { PipelineFields } from './pipeline.js';
 
-export interface Task {
+/**
+ * A recorded task.
+ *
+ * The `branch`/`worktreePath`/`baseCommit` trio is what a task HAS ONCE CLAIMED.
+ * A planned-but-unstarted task is a row and nothing else — no branch, no
+ * checkout, no disk — so twenty planned tasks cost twenty JSON objects, and the
+ * base commit is read when work actually starts rather than when it was
+ * imagined. They stay non-optional here because every task that exists today
+ * has them; `baton take` is what will begin writing rows without them.
+ */
+export interface Task extends PipelineFields {
   slug: string;
   task: string;
   branch: string;
