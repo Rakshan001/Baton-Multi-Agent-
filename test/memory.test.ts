@@ -86,6 +86,49 @@ describe('detectSecret', () => {
     expect(detectSecret('The auth middleware lives in src/auth.ts and reads JWT_SECRET from env')).toBeNull();
     expect(detectSecret('Merge with --no-squash keeps history')).toBeNull();
   });
+
+  /**
+   * The original seven patterns matched exact prefixes and a QUOTED assignment,
+   * which between them missed every shape probed here — including the likeliest
+   * one, a line pasted straight out of a .env file. Memories are plain files
+   * read by every agent, and once the KB is git-tracked a missed key is one
+   * that gets pushed, so a leak stops being local.
+   */
+  it('catches the shapes that actually leak', () => {
+    const cases: Array<[string, string]> = [
+      ['Stripe secret key', 'the billing key is sk_live_EXAMPLENOTAREALKEY'],
+      ['unquoted assignment', 'set DATABASE_PASSWORD=hunter2correcthorse in the env'],
+      // `_` is a word char, so \bsecret\b never matched inside AWS_SECRET_ACCESS_KEY.
+      ['.env line', 'AWS_SECRET_ACCESS_KEY=EXAMPLE/NOTAREAL/SECRETVALUE'],
+      ['database password in a URL', 'connect via postgres://admin:s3cr3tP4ss@db.internal:5432/app'],
+      ['mongodb URL', 'mongodb+srv://user:MyP4ssw0rd123@cluster0.mongodb.net'],
+      ['Google API key', 'the maps key is AIzaEXAMPLENOTAREALGOOGLEAPIKEYXXX'],
+      ['bearer token', 'send Authorization: Bearer EXAMPLENOTAREALBEARERTOKEN'],
+      ['npm token', 'npm_EXAMPLENOTAREALNPMTOKENVALUEXX'],
+      ['GitHub token', 'ghp_EXAMPLENOTAREALGITHUBTOKENXX'],
+    ];
+    for (const [name, text] of cases) expect(detectSecret(text), name).toBeTruthy();
+  });
+
+  /**
+   * False positives cost more than they look: this gate has no override, so a
+   * wrongly refused fact is knowledge permanently lost. Every one of these is a
+   * thing an engineering memory legitimately says.
+   */
+  it('stays silent on facts that merely TALK about credentials', () => {
+    const fine = [
+      'The member token is hashed with scrypt and never logged in full.',
+      'Password reset flows live in src/auth/reset.ts and expire after 1 hour.',
+      "apiKey: z.string().describe('the caller key')", // code shape, not a value
+      'token: string',
+      'The API key is stored in 1Password under Engineering, never in the repo.',
+      'the base commit was 9f8c2b1a4d6e0f37a5b8c9d0e1f2a3b4c5d6e7f8 on baton/fix.',
+      'anchor hash 9f8c2b1a4d6e0f37a5b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0',
+      'docs live at https://baton.dev/guide/memory',
+      'clone git@github.com:Rakshan001/Baton.git over ssh',
+    ];
+    for (const text of fine) expect(detectSecret(text), text.slice(0, 40)).toBeNull();
+  });
 });
 
 describe('fact file round-trip', () => {

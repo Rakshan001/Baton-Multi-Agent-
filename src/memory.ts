@@ -159,10 +159,42 @@ const SECRET_PATTERNS: Array<{ re: RegExp; what: string }> = [
   { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, what: 'private key block' },
   { re: /\bAKIA[0-9A-Z]{16}\b/, what: 'AWS access key id' },
   { re: /\bsk-[A-Za-z0-9_-]{20,}\b/, what: 'API secret key (sk-…)' },
+  { re: /\b[sr]k_(live|test)_[A-Za-z0-9]{16,}\b/, what: 'Stripe secret key' },
   { re: /\bgh[pousr]_[A-Za-z0-9]{28,}\b/, what: 'GitHub token' },
+  { re: /\bnpm_[A-Za-z0-9]{30,}\b/, what: 'npm token' },
+  { re: /\bAIza[0-9A-Za-z_-]{30,}\b/, what: 'Google API key' },
   { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, what: 'Slack token' },
   { re: /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, what: 'JWT' },
-  { re: /\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*['"][^'"]{8,}['"]/i, what: 'inline credential assignment' },
+  { re: /\bBearer\s+[A-Za-z0-9_\-.=]{20,}/i, what: 'bearer token' },
+  // scheme://user:password@host — the shape that leaks a database password.
+  { re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s:@/]{6,}@/i, what: 'connection string with a password' },
+  /*
+   * The old rule required the value to be QUOTED, which meant it caught a
+   * credential pasted from source and missed one pasted from a .env file or a
+   * shell line — the far likelier way a key reaches a memory:
+   *     AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+   * Quotes are now optional, but the VALUE must look like a credential rather
+   * than like prose or code: 12+ chars of key alphabet only. That is what keeps
+   * `apiKey: z.string().describe(...)` and `token: string` from tripping it —
+   * dots, parens and spaces are not in the class. A fact refused wrongly is a
+   * fact lost, so the value shape carries the weight, not the label alone.
+   */
+  {
+    // The keyword must be allowed to end an IDENTIFIER, not just stand alone:
+    // `_` is a word character, so `\bpassword\b` never matches inside
+    // DATABASE_PASSWORD or AWS_SECRET_ACCESS_KEY — which is exactly how these
+    // arrive. Hence the optional identifier prefix instead of a leading \b.
+    re: /(?:^|[\s"'`,;({[])[A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*['"]?[A-Za-z0-9_\-+/=]{12,}/i,
+    what: 'inline credential assignment',
+  },
+  /*
+   * Deliberately NOT here: a generic high-entropy rule (e.g. 64 hex chars).
+   * Commit shas, sha256 file hashes and content digests are all legitimate
+   * things for a memory to discuss — Baton anchors facts to file hashes itself.
+   * A wrongly refused fact is knowledge lost, and this gate has no override, so
+   * every pattern above names a specific credential shape rather than guessing
+   * from entropy.
+   */
 ];
 
 export function detectSecret(text: string): string | null {
