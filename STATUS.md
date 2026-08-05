@@ -507,12 +507,49 @@ damaging form.
 
 1490 tests green, both workspaces build.
 
+### Session 19e — the review gate
+
+`baton review approve|reject <slug>` gives the verdict, alongside the existing
+save/list/show/resolve that record what a review *found*. The evidence gate proves work
+happened; this is the only layer aimed at whether it is right, which is why
+`requireReview` defaults on.
+
+**The reviewer must not be a contributor** — enforced in `gateReview` (`src/lifecycle.ts`),
+by agent id rather than session, so a fresh session does not launder authorship. No flag
+gets past it: `--force` applies only to open findings, which is a judgement call, never to
+who you are. A human running the CLI without `BATON_AGENT` is the intended escape hatch
+for a one-agent fleet, and the refusal says so.
+
+`--reject` returns the task to `active` with the reason on `reviewedBy.notes`; the branch,
+worktree and contributor chain all survive, and `finishedSha` is dropped because it
+recorded a head that is no longer accepted. A rejection with no reason is refused for the
+same reason `block` refuses one — the agent would go back to work with nothing to change.
+Approving over the review record's own open findings is refused too: two pieces of shared
+state contradicting each other, and the next agent believes whichever it reads first.
+
+`review` is deliberately non-terminal, so a task awaiting a verdict holds its phase exactly
+like unfinished work (`◍` on the board, and `blockers()` says *"awaiting review — a
+different agent must judge it"* instead of reporting it as work in flight).
+
+Two gaps the tests found, both now closed in `baton next`:
+
+- A **rejected task was invisible to its own author** — back to `active` and held, so
+  nothing eligible ever picked it and `next` said "Nothing eligible". `next` now leads
+  with the work you already hold, which also answers "do you have any pending task?"
+  correctly for a session returning after an interruption.
+- **Reviewing was not offered as work.** An idle agent was told the pipeline was quiet
+  while a task sat in `review` holding the barrier. `reviewableBy(agent, tasks)` now
+  surfaces it, filtered to agents who did not write it.
+
+1518 tests green, both workspaces build. Eight mutations tested; each killed exactly its
+own tests.
+
 ## Pending / next 🔜
 
-0. **Task pipeline, remaining phases** — phase 2 is done (plans, apply, board,
-   `task add`). Next: lifecycle (`take`/`done`/stall/`--resume`), the review gate,
-   the MCP surface (`my_tasks`, `take_task`, `complete_task`, `report_blocked`),
-   `Baton-Task:` commit trailers, team mode, and UI swimlanes. Spec:
+0. **Task pipeline, remaining phases** — phases 2, 3 and 3.5 are done (plans, apply,
+   board, `task add`, lifecycle, the done gate, the review gate). Next: the MCP surface
+   (`my_tasks`, `take_task`, `complete_task`, `report_blocked`), `Baton-Task:` commit
+   trailers, team mode, and UI swimlanes. Spec:
    `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.
 
 1. **Headless one-shot runs still aren't shown as "active" on the status board**

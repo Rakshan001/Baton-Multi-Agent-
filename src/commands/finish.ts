@@ -106,7 +106,7 @@ export function reportFinish(slug: string, r: FinishResult): void {
     return;
   }
   console.log(r.landedIn === 'review'
-    ? `\n→ ${slug} is in review. A different agent must approve it: baton review resolve ${slug}`
+    ? `\n→ ${slug} is in review. A different agent decides it: baton review approve ${slug}`
     : `\n✓ ${slug} done.`);
   if (r.verdict.outOfScope.length) {
     console.log(`  ${r.verdict.outOfScope.length} out-of-scope file(s) recorded on the task.`);

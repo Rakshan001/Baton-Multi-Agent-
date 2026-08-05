@@ -32,7 +32,7 @@ import { pathCmd } from './commands/path.js';
 import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
 import { mcpBridgeCmd } from './commands/mcp-bridge.js';
-import { reviewListCmd, reviewResolveCmd, reviewSaveCmd, reviewShowCmd } from './commands/review.js';
+import { reviewApproveCmd, reviewListCmd, reviewRejectCmd, reviewResolveCmd, reviewSaveCmd, reviewShowCmd } from './commands/review.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
 import { doneCmd, takeCmd } from './commands/take.js';
@@ -588,7 +588,21 @@ plan
 
 const review = program
   .command('review')
-  .description('durable code-review findings (from the code-review skill): save, list, show, resolve');
+  .description('code review: record findings (save/list/show/resolve) and give the verdict (approve/reject)');
+
+review
+  .command('approve')
+  .argument('<slug>', 'the task awaiting a verdict')
+  .option('--force', 'approve even though the recorded review still has open findings')
+  .description('accept a task in review → done (the reviewer must not have contributed to it)')
+  .action((slug: string, opts: { force?: boolean }) => run(() => reviewApproveCmd(slug, opts)));
+
+review
+  .command('reject')
+  .argument('<slug>', 'the task awaiting a verdict')
+  .requiredOption('-n, --notes <what>', 'what has to change — the agent gets this back')
+  .description('send a task in review back to active, branch and history intact')
+  .action((slug: string, opts: { notes?: string }) => run(() => reviewRejectCmd(slug, opts)));
 
 review
   .command('save')

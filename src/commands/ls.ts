@@ -68,11 +68,14 @@ function widths(rows: Row[]): { slug: number; state: number; status: number; syn
   };
 }
 
-/** ✓ finished · ● someone has it · ○ free to start · ⊘ needs a human. */
+/** ✓ finished · ● someone has it · ◍ awaiting a verdict · ○ free to start · ⊘ needs a human. */
 function bullet(state: string): string {
   return state === 'done' ? '✓'
     : state === 'cancelled' ? '✗'
     : state === 'blocked' ? '⊘'
+    // Not ●: nobody is working on it. It holds its phase like active work, but
+    // it is waiting on a different agent, which is a different thing to do.
+    : state === 'review' ? '◍'
     : state === 'queued' ? '○'
     : '●';
 }

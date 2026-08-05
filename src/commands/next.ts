@@ -7,7 +7,7 @@
  * a pipeline that genuinely cannot advance says so in those words.
  */
 import { activeBatonRoot, loadTasks, type Task } from '../store.js';
-import { blockers, isDeadlocked, isStalled, openPhase, phaseOf, stateOf, STALL_GRACE_MS } from '../pipeline.js';
+import { blockers, isDeadlocked, isStalled, openPhase, phaseOf, reviewableBy, stateOf, STALL_GRACE_MS } from '../pipeline.js';
 import { nextFor } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
 import { resolveAgentId } from '../identity.js';
@@ -17,6 +17,11 @@ export function describeTask(t: Task): string[] {
   if (t.scope?.length) out.push(`    scope: ${t.scope.join(', ')}`);
   if (t.principles?.length) out.push(`    principles: ${t.principles.join('; ')}`);
   if (t.expects?.length) out.push(`    expects: ${t.expects.join('; ')}`);
+  // A rejection that nobody reads is a rejection loop: the same agent redoes the
+  // same work and hands back the same thing. This is where they see the reason.
+  if (t.reviewedBy?.verdict === 'reject' && t.reviewedBy.notes) {
+    out.push(`    ✗ sent back by ${t.reviewedBy.actor}: ${t.reviewedBy.notes}`);
+  }
   return out;
 }
 
@@ -30,11 +35,52 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
     return;
   }
 
+  // Work you already hold, before anything new. Two reasons: a session that came
+  // back from an interruption is asking exactly this question and needs to be
+  // pointed at its own worktree, and a task sent back by a reviewer lands here —
+  // `active`, held, and otherwise invisible, since nothing eligible ever picks it.
+  const held = tasks.filter((t) => {
+    const s = stateOf(t);
+    return (s === 'active' || s === 'claimed' || s === 'blocked') && t.claimedBy?.agent === agent;
+  });
+  if (held.length) {
+    console.log(`You already hold ${held.length} task${held.length === 1 ? '' : 's'}:\n`);
+    for (const t of held) {
+      for (const line of describeTask(t)) console.log(line);
+      console.log(`    cd ${t.worktreePath}`);
+      console.log(stateOf(t) === 'blocked'
+        ? `    blocked: ${t.stoppedReason ?? 'no reason recorded'} — hand it back with: baton pause ${t.slug}`
+        : `    finish it: baton done ${t.slug}   ·   hand it back: baton pause ${t.slug}`);
+    }
+    console.log('');
+  }
+
+  // Reviewing comes first, and not out of politeness: a task in `review` holds
+  // its phase exactly like an unfinished one, so clearing the verdict is what
+  // lets the barrier lift. Starting yet another task does not.
+  const toReview = reviewableBy(agent, tasks) as Task[];
+  if (toReview.length) {
+    console.log(`Awaiting your verdict (${toReview.length}) — you did not write ${toReview.length === 1 ? 'it' : 'these'}:\n`);
+    for (const t of toReview) {
+      console.log(`  ${t.slug}  by ${t.contributors?.map((c) => c.agent).join(' → ') ?? t.claimedBy?.agent ?? 'unknown'}`);
+      console.log(`    ${t.task}`);
+      console.log(`    review it:  cd ${t.worktreePath}  ·  then: baton review approve ${t.slug}  |  baton review reject ${t.slug} -n "<what to fix>"`);
+    }
+    console.log('');
+  }
+
   const pick = nextFor(agent, tasks);
   if (pick) {
     console.log(`Next for ${agent}:\n`);
     for (const line of describeTask(pick)) console.log(line);
     console.log(`\n  Start it:  baton take ${pick.slug}`);
+    return;
+  }
+
+  if (toReview.length || held.length) {
+    // "Nothing eligible" directly under a list of work would read as a
+    // contradiction, and an agent that believes the second line stops.
+    console.log('Nothing new to start — the work above is yours to finish.');
     return;
   }
 

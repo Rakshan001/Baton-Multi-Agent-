@@ -28,6 +28,9 @@ export type BatonEvent =
   /** A code review was recorded. Per-axis counts only — the axes are separate
    *  by design, so no combined total rides on the event. */
   | { type: 'review.completed'; slug: string; standards: number; spec: number; security: number }
+  /** A verdict on a task, not a set of findings — the moment a task leaves
+   *  `review` for `done` or goes back to `active`. */
+  | { type: 'task.reviewed'; slug: string; verdict: 'approve' | 'reject'; actor: string }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
   | { type: 'terminal.output'; slug: string; data: string /* base64 */ }

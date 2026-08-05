@@ -13,7 +13,7 @@
  * leaves the task exactly where it was — owned, with its worktree and its
  * contributor record intact. Only `done` writes done.
  */
-import { eligibleFor, isStalled, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
+import { eligibleFor, isContributor, isStalled, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
 import type { Task } from './store.js';
 
 export interface Who {
@@ -27,6 +27,8 @@ export type Refusal =
   | { code: 'not-eligible'; message: string }
   | { code: 'not-yours'; message: string }
   | { code: 'not-stalled'; message: string }
+  | { code: 'self-review'; message: string }
+  | { code: 'open-findings'; message: string }
   | { code: 'wrong-state'; message: string };
 
 export type Outcome =
@@ -204,6 +206,88 @@ export function block(tasks: readonly Task[], slug: string, who: Who, reason: st
     return fail('wrong-state', 'A blocker needs a reason — "blocked" with no cause is indistinguishable from silence.');
   }
   const next: Task = { ...t, state: 'blocked', stoppedReason: reason.trim(), contributors: t.contributors, claimedBy: t.claimedBy };
+  return { ok: true, tasks: replace(tasks, next), task: next };
+}
+
+/** Shared by both verdicts: the task must be awaiting one, and the agent giving
+ *  it must not be the agent who wrote the code. */
+function gateReview(tasks: readonly Task[], slug: string, who: Who): Task | Outcome {
+  const t = tasks.find((x) => x.slug === slug);
+  if (!t) return fail('missing', `No task '${slug}'.`);
+  const state = stateOf(t);
+  if (state !== 'review') {
+    return fail('wrong-state', `'${slug}' is ${state} — only work awaiting a verdict can be reviewed.`);
+  }
+  if (isContributor(t as PipelineTask, who.agent)) {
+    // The one rule that makes the gate worth having. An author reviewing their
+    // own work re-runs the same judgement that produced it, with the same blind
+    // spots — the second opinion has to come from a second party or it is not
+    // one. Identity is by agent id, so a fresh session does not launder it.
+    return fail('self-review', `'${slug}' was written by ${who.agent} — a reviewer must not be a contributor.`);
+  }
+  return t;
+}
+
+const isOutcome = (x: Task | Outcome): x is Outcome => 'ok' in x;
+
+export interface VerdictOpts {
+  /** Open findings on the recorded review, injected — lifecycle stays pure. */
+  openFindings?: number;
+  /** Approve past open findings anyway. Applies ONLY to findings: no flag gets
+   *  past the contributor rule, because that one is about who you are. */
+  force?: boolean;
+  notes?: string;
+}
+
+/**
+ * Approve: the work is right, as far as a second agent can tell.
+ *
+ * Stated plainly, because the design does: a reviewing agent can hallucinate
+ * too. This reduces the chance of wrong code landing; it does not eliminate it.
+ */
+export function approve(tasks: readonly Task[], slug: string, who: Who, now: string, opts: VerdictOpts = {}): Outcome {
+  const gated = gateReview(tasks, slug, who);
+  if (isOutcome(gated)) return gated;
+
+  const open = opts.openFindings ?? 0;
+  if (open > 0 && !opts.force) {
+    // Approving over a recorded review's own open findings leaves two pieces of
+    // shared state contradicting each other, and the next agent believes
+    // whichever it happens to read.
+    return fail('open-findings', `'${slug}' has ${open} open finding${open === 1 ? '' : 's'} — resolve them (baton review resolve ${slug} <n>), or approve anyway with --force.`);
+  }
+
+  const next: Task = {
+    ...gated,
+    state: 'done',
+    reviewedBy: { actor: who.agent, at: now, verdict: 'approve', ...(opts.notes ? { notes: opts.notes } : {}) },
+  };
+  return { ok: true, tasks: replace(tasks, next), task: next };
+}
+
+/**
+ * Reject: back to `active`, with the reason attached.
+ *
+ * Not back to `queued`, and never a cancellation — the branch, the worktree and
+ * the contributor chain all survive, because the work exists and needs another
+ * pass rather than a fresh start. `finishedSha` is dropped: it recorded the head
+ * the gate accepted, and nothing is accepted now.
+ */
+export function reject(tasks: readonly Task[], slug: string, who: Who, notes: string, now: string): Outcome {
+  const gated = gateReview(tasks, slug, who);
+  if (isOutcome(gated)) return gated;
+  if (!notes.trim()) {
+    // Same rule as `block`: a verdict with no reason sends the agent back to
+    // work with nothing to change, which is how a rejection loop starts.
+    return fail('wrong-state', 'A rejection needs a reason — the agent has to know what to fix.');
+  }
+
+  const next: Task = {
+    ...gated,
+    state: 'active',
+    finishedSha: undefined,
+    reviewedBy: { actor: who.agent, at: now, verdict: 'reject', notes: notes.trim() },
+  };
   return { ok: true, tasks: replace(tasks, next), task: next };
 }
 

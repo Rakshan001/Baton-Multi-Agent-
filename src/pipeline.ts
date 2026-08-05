@@ -71,7 +71,9 @@ export interface PipelineFields {
   finishedSha?: string;
   /** Team mode: proof the work is on the shared remote, not just this disk. */
   pushedSha?: string;
-  reviewedBy?: { actor: string; at: string; verdict: 'approve' | 'reject' };
+  /** The last verdict. `notes` is the rejection's reason — the one thing the
+   *  agent picking the work back up actually needs. */
+  reviewedBy?: { actor: string; at: string; verdict: 'approve' | 'reject'; notes?: string };
 }
 
 /** The minimum a task must expose for the pipeline to reason about it. */
@@ -186,6 +188,29 @@ export function takeable(tasks: readonly PipelineTask[], opts: StallOpts): Pipel
   return tasks.filter((t) => isStalled(t, opts));
 }
 
+/**
+ * Did this agent write any of it? Both handles count: the current holder, and
+ * every closed stretch in the contributor chain. Identity is by agent id, not
+ * by session — the same agent in a fresh session is still the author, and
+ * "review it yourself tomorrow" is precisely the check being made.
+ */
+export function isContributor(t: PipelineTask, agent: string): boolean {
+  if (t.claimedBy?.agent === agent) return true;
+  return (t.contributors ?? []).some((c) => c.agent === agent);
+}
+
+/**
+ * Work awaiting a verdict that THIS agent is allowed to give.
+ *
+ * Reviewing is work, and an agent with nothing else to do should be handed it
+ * rather than told the pipeline is quiet — a task sitting in `review` holds its
+ * phase exactly like an unfinished one, so an idle fleet staring past it is how
+ * a plan silently stops advancing.
+ */
+export function reviewableBy(agent: string, tasks: readonly PipelineTask[]): PipelineTask[] {
+  return tasks.filter((t) => stateOf(t) === 'review' && !isContributor(t, agent));
+}
+
 export interface Blocker {
   slug: string;
   reason: string;
@@ -210,6 +235,12 @@ export function blockers(
     if (TERMINAL.has(st)) continue;
     if (st === 'blocked') {
       out.push({ slug: t.slug, reason: t.stoppedReason ? `blocked — ${t.stoppedReason}` : 'blocked, needs a decision' });
+      continue;
+    }
+    // Nobody is working on a task in review, so "review (claude)" would read as
+    // work in flight. It is waiting on a person or another agent — say which.
+    if (st === 'review') {
+      out.push({ slug: t.slug, reason: 'awaiting review — a different agent must judge it' });
       continue;
     }
     if (st !== 'queued') {
