@@ -132,6 +132,56 @@ export interface HeartbeatResult {
 
 const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
+/** One local edit signal, as `getSignals` shapes it — the publish-side input. */
+export interface LocalSignal {
+  path: string;
+  holders: Array<{ slug: string; agent: string | null; state: 'active' | 'settled' }>;
+}
+
+/**
+ * This machine's active signals, shaped as claims to publish.
+ *
+ * Pure so both halves of the bug it fixes stay pinned by tests:
+ *
+ * 1. **Every claim carries its sub-project.** Only tasks record `projectId`, so
+ *    `co-*` checkouts and `sess-*` root sessions used to publish null — and a
+ *    null matches ANY project on the receiving side (see `remoteHoldersFor`,
+ *    which deliberately treats an unknown project as "could be mine"). That
+ *    reported a teammate's `src/index.ts` in proj-a as a hold on proj-b's:
+ *    exactly the false conflict 87b4114 removed locally, still alive
+ *    cross-machine because the publish side discarded the id. `projectOfSlug`
+ *    (conflicts.ts `holderProjects`) recovers it for all three holder kinds.
+ *
+ * 2. **One claim per (projectId, path), not per path.** `getSignals` groups
+ *    holders by path STRING alone, so a hub's proj-a and proj-b `src/index.ts`
+ *    arrive as a single signal. Stopping at the first active holder therefore
+ *    dropped the second project's claim entirely — it was never published at
+ *    all. The key matches how the host stores them (`keyOf`).
+ *
+ * Only `active` holders publish: `settled` means touched recently but since
+ * committed or reverted, which is explicitly not a reason for anyone to wait.
+ */
+export function localClaims(
+  signals: LocalSignal[],
+  tasks: Array<{ slug: string; projectId?: string; branch?: string }>,
+  projectOfSlug: Map<string, string>,
+): Array<{ projectId: string | null; relPath: string; agent: string | null; branch: string | null }> {
+  const bySlug = new Map(tasks.map((t) => [t.slug, t]));
+  const claims: Array<{ projectId: string | null; relPath: string; agent: string | null; branch: string | null }> = [];
+  const seen = new Set<string>();
+  for (const s of signals) {
+    for (const h of s.holders) {
+      if (h.state !== 'active') continue;
+      const projectId = bySlug.get(h.slug)?.projectId ?? projectOfSlug.get(h.slug) ?? null;
+      const key = keyOf(projectId, s.path);
+      if (seen.has(key)) continue; // the host merges across members; don't duplicate within one
+      seen.add(key);
+      claims.push({ projectId, relPath: s.path, agent: h.agent ?? null, branch: bySlug.get(h.slug)?.branch ?? null });
+    }
+  }
+  return claims;
+}
+
 /** Repo-relative, no traversal, no absolute paths — the cross-machine contract. */
 export function isClaimablePath(p: string): boolean {
   if (!p || p.length > PATH_MAX) return false;

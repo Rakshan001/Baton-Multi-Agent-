@@ -42,7 +42,8 @@ import {
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
 import { StatusPoller } from './poller.js';
-import { checkFiles, getSignals, isWatcherActive, SIGNAL_WINDOW_MIN, SignalTracker } from './signals.js';
+import { checkFiles, getSignals, isWatcherActive, liveSessions, SIGNAL_WINDOW_MIN, SignalTracker } from './signals.js';
+import { holderProjects } from './conflicts.js';
 import { getReport, listReports } from './reports.js';
 import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
@@ -93,7 +94,7 @@ import {
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
 import { canSeeWarnings, decideAccess, requiresOwner, type AccessDecision } from './access.js';
-import { PresenceStore, PRESENCE_TTL_MS, type HeartbeatInput } from './federation.js';
+import { localClaims, PresenceStore, PRESENCE_TTL_MS, type HeartbeatInput } from './federation.js';
 import { loadHostLink, sendHeartbeat, type HeartbeatPayload } from './host-link.js';
 import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
 
@@ -114,22 +115,11 @@ const federation = new PresenceStore();
  * make the claim silently match nothing.
  */
 async function localClaimsPayload(root: string, device?: string): Promise<HeartbeatPayload> {
-  const [signals, tasks] = await Promise.all([getSignals(root), loadTasks(root)]);
-  const byslug = new Map(tasks.map((t) => [t.slug, t]));
-  const claims: HeartbeatPayload['claims'] = [];
-  for (const s of signals) {
-    for (const h of s.holders) {
-      if (h.state !== 'active') continue;
-      const task = byslug.get(h.slug);
-      claims.push({
-        projectId: task?.projectId ?? null,
-        relPath: s.path,
-        agent: h.agent ?? null,
-        branch: task?.branch ?? null,
-      });
-      break; // one claim per path from this machine; the host merges across members
-    }
-  }
+  const [signals, tasks, kb] = await Promise.all([getSignals(root), loadTasks(root), loadKb(root).catch(() => null)]);
+  // Only tasks carry projectId; `co-*` checkouts and `sess-*` root sessions hold
+  // paths too, and holderProjects recovers the id for those. See localClaims for
+  // what publishing null cost, and why one claim per path was one too few.
+  const claims = localClaims(signals, tasks, holderProjects(tasks, kb?.projects ?? [], liveSessions(root)));
   return { ...(device ? { device } : {}), sessions: new Set(signals.flatMap((s) => s.holders.map((h) => h.slug))).size, claims };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
+import { localClaims,
   CLAIM_TTL_MS, PRESENCE_TTL_MS, PresenceStore, isClaimablePath,
 } from '../src/federation.js';
 
@@ -343,5 +343,76 @@ describe('warn', () => {
     s.warn('priya', 'careful', 'Sam', T0);
     s.remove('priya');
     expect(s.warningsFor('priya')).toEqual([]);
+  });
+});
+
+/**
+ * The publish side of the cross-machine claim protocol. Two independent bugs
+ * lived in the loop this replaces, and both are pinned here.
+ */
+describe('localClaims — shaping this machine\'s signals for a host', () => {
+  const active = (slug: string, agent: string | null = null) =>
+    ({ slug, agent, state: 'active' as const });
+
+  it('publishes a task claim with its projectId and branch', () => {
+    const out = localClaims(
+      [{ path: 'src/auth.ts', holders: [active('fix-auth', 'claude')] }],
+      [{ slug: 'fix-auth', projectId: 'proj-a', branch: 'baton/fix-auth' }],
+      new Map(),
+    );
+    expect(out).toEqual([{ projectId: 'proj-a', relPath: 'src/auth.ts', agent: 'claude', branch: 'baton/fix-auth' }]);
+  });
+
+  it('scopes a co-* checkout holder, which carries no task at all', () => {
+    // Before: projectId null -> matched every project on the receiving side.
+    const out = localClaims(
+      [{ path: 'src/index.ts', holders: [active('co-proj-a')] }],
+      [],
+      new Map([['co-proj-a', 'proj-a']]),
+    );
+    expect(out[0].projectId).toBe('proj-a');
+  });
+
+  it('publishes BOTH projects when a path collides across sub-projects', () => {
+    // getSignals groups by path STRING alone, so a hub's proj-a and proj-b
+    // src/index.ts arrive as ONE signal. Stopping at the first active holder
+    // did not merely mis-scope proj-b's claim — it never sent it.
+    const out = localClaims(
+      [{ path: 'src/index.ts', holders: [active('co-proj-a'), active('co-proj-b')] }],
+      [],
+      new Map([['co-proj-a', 'proj-a'], ['co-proj-b', 'proj-b']]),
+    );
+    expect(out.map((c) => c.projectId).sort()).toEqual(['proj-a', 'proj-b']);
+    expect(out).toHaveLength(2);
+  });
+
+  it('still emits ONE claim per (project, path) when two holders share both', () => {
+    const out = localClaims(
+      [{ path: 'src/index.ts', holders: [active('a'), active('b')] }],
+      [{ slug: 'a', projectId: 'proj-a' }, { slug: 'b', projectId: 'proj-a' }],
+      new Map(),
+    );
+    expect(out).toHaveLength(1);
+  });
+
+  it('never publishes a settled holder — committed or reverted is not a reason to wait', () => {
+    const out = localClaims(
+      [{ path: 'src/a.ts', holders: [{ slug: 'x', agent: null, state: 'settled' }] }],
+      [{ slug: 'x', projectId: 'proj-a' }],
+      new Map(),
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('leaves projectId null when the holder genuinely belongs to no sub-project', () => {
+    // A single repo, or a hub-root session. Null here is correct and the
+    // receiving side deliberately treats it as "could be mine" rather than
+    // suppressing on a guess.
+    const out = localClaims(
+      [{ path: 'src/a.ts', holders: [active('sess-hub')] }],
+      [],
+      new Map(),
+    );
+    expect(out[0].projectId).toBeNull();
   });
 });

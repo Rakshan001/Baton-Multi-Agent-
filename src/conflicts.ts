@@ -40,6 +40,41 @@ export function taskRepos(tasks: Array<{ slug: string; repoRoot?: string }>, roo
   return new Map(tasks.map((t) => [t.slug, t.repoRoot ?? root]));
 }
 
+/** Trailing-separator-insensitive compare for two absolute checkout paths. */
+const samePath = (a: string, b: string): boolean =>
+  a.replace(/[/\\]+$/, '') === b.replace(/[/\\]+$/, '');
+
+/**
+ * slug → sub-project id, for EVERY kind of holder rather than tasks alone.
+ *
+ * Only tasks carry `projectId`, but three kinds of holder appear in signals:
+ *   task       `projectId` is recorded on the task
+ *   checkout   the fs-watcher registers projects as `co-<projectId>`, so the
+ *              id is in the slug itself (watch.ts probeCheckouts)
+ *   session    a root session records the checkout it connected from; that
+ *              path identifies the project when it IS one
+ *
+ * A holder this cannot place is simply absent from the map, and callers must
+ * read that as "don't scope" — never as "no project". A session sitting at the
+ * hub root genuinely belongs to no single sub-project, and guessing one there
+ * would hide a real collision, which costs data rather than noise.
+ */
+export function holderProjects(
+  tasks: Array<{ slug: string; projectId?: string }>,
+  projects: Array<{ id: string; path: string }>,
+  sessions: Array<{ slug: string; root: string | null }> = [],
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const t of tasks) if (t.projectId) out.set(t.slug, t.projectId);
+  for (const p of projects) out.set(`co-${p.id}`, p.id);
+  for (const s of sessions) {
+    if (!s.root || out.has(s.slug)) continue;
+    const hit = projects.find((p) => samePath(p.path, s.root!));
+    if (hit) out.set(s.slug, hit.id);
+  }
+  return out;
+}
+
 /**
  * Can two holders of the SAME path string actually collide? Every path Baton
  * compares is worktree-relative, so in a multi-repo hub `src/index.ts` in
