@@ -49,6 +49,7 @@ import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
 import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
 import { bugsCmd } from './commands/bugs.js';
+import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -519,6 +520,24 @@ program
   .argument('<url>', 'daemon graphify proxy URL (http://127.0.0.1:<port>/mcp/g/<token>/<id>)')
   .description('stdio↔HTTP bridge so Codex can query the shared graphify pool (requires baton serve)')
   .action((url: string) => run(() => mcpBridgeCmd(url)));
+
+const plan = program
+  .command('plan')
+  .description(`phased task plans written as markdown in ${PLANS_DIR}/: check, apply`);
+
+plan
+  .command('check')
+  .argument('<file>', `plan name (looked up in ${PLANS_DIR}/) or a path to a .md file`)
+  .description('parse and validate a plan — every problem at once, nothing written')
+  .action((file: string) => run(() => planCheckCmd(file)));
+
+plan
+  .command('apply')
+  .argument('<file>', `plan name (looked up in ${PLANS_DIR}/) or a path to a .md file`)
+  .option('--dry-run', 'show the diff and write nothing')
+  .option('--force', 'proceed even when the change lands under a working agent')
+  .description('turn a plan into queued tasks — shows the diff first, refuses in-flight changes')
+  .action((file: string, opts: { dryRun?: boolean; force?: boolean }) => run(() => planApplyCmd(file, opts)));
 
 const review = program
   .command('review')

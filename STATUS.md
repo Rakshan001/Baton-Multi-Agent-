@@ -367,7 +367,63 @@ win32). It had appeared in no doc at all.
 
 718 tests green, both workspaces build.
 
+### Session 19 — the task pipeline: phases, plans, apply
+
+Phase 0 (six fixes) and phase 1 (`src/pipeline.ts`) shipped earlier this round. This
+entry covers the plan layer.
+
+**Plans are markdown, and applying one is a three-way merge.** `src/plan.ts` parses and
+validates; `src/plan-apply.ts` diffs the file against the board against whatever an agent
+is holding right now; `baton plan check|apply` is the surface. Both modules are pure, so
+every rule below is a unit test rather than a fleet run.
+
+Two rules carry the design. **Finished work is never rewound** — a re-applied plan that
+edits a `done` task is reported and skipped, because the plan states intent and history
+states fact. **Removal is not deletion** — dropping a task that never materialized removes
+a row, but dropping one with a branch and a worktree *cancels* it; deleting would orphan
+the worktree with nothing left pointing at it. An edit landing under a working agent needs
+`--force`; a slug owned by another plan is refused outright, `--force` included, since both
+rows resolve to the same `baton/<slug>` branch.
+
+Validation is all-or-nothing (every problem at once, nothing applied) and includes the gap
+the design review found: **two tasks in the same phase may not claim overlapping scope**.
+The barrier gates *between* phases and does nothing *within* one — and within a phase is
+exactly where parallel agents run.
+
+**Four bugs found by probe, not by reading**, all in the parser as first written:
+- A task heading matched only `\S+`, so `### add auth schema` failed the regex, became
+  indistinguishable from prose, and **the task and everything under it vanished with no
+  issue raised** — a plan that applies "successfully" while missing work.
+- `## Phase two` (spelled out) parsed as prose, so every task under it joined the
+  *previous* phase — serialized work silently running in parallel.
+- `scopesOverlap` used a bare `startsWith`, so `src/db` covered `src/dbutil.ts`. Overlap
+  is a hard error, so the false positive rejected good plans.
+- `@../../etc/passwd` was kept verbatim as an assignee.
+
+Each fix was mutation-verified (revert → exactly the intended test fails → restore). Two
+mutations initially *survived* the conflict tests, which meant the tests were weaker than
+the code; the half-applied case (`one slug conflicts, the rest are fine → write nothing`)
+was added to close it.
+
+`mutateTasks` (src/store.ts) is new: read-modify-write of the whole list under the lock,
+because `loadTasks` then `saveTasks` from a command is a lost update against a running
+daemon — and the diff has to be decided against the list about to be overwritten. `--dry-run`
+is the same code path with the write suppressed, so what is shown is what happens.
+
+Plans live in tracked `baton/plans/` (see its README), not `.baton/` — in team mode that
+directory is how a teammate's plan arrives. Plan files are inert data: nothing in them is
+ever executed, which is what makes applying a plan that arrived over git safe. Their prose
+still reaches agent context, so it stays untrusted input.
+
+1409 tests green, both workspaces build.
+
 ## Pending / next 🔜
+
+0. **Task pipeline, remaining phases** — `baton ls` phase view and `baton task add`
+   (rest of phase 2); then lifecycle (`take`/`done`/stall/`--resume`), the review gate,
+   the MCP surface (`my_tasks`, `take_task`, `complete_task`, `report_blocked`),
+   `Baton-Task:` commit trailers, team mode, and UI swimlanes. Spec:
+   `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.
 
 1. **Headless one-shot runs still aren't shown as "active" on the status board**
    (`claude -p` children are too short-lived for the `src/agents.ts` ps scan).

@@ -274,6 +274,31 @@ export async function addTask(gitRoot: string, task: Task): Promise<void> {
   );
 }
 
+/**
+ * Read-modify-write the whole task list under the lock.
+ *
+ * `loadTasks` then `saveTasks` from a command is a lost update waiting to
+ * happen: a running daemon writes the same file, and applying a plan rewrites
+ * every row rather than one. The decision has to be made against the list that
+ * is about to be overwritten, not against one read a second earlier — so the
+ * caller's `fn` runs INSIDE the lock and receives the current tasks.
+ *
+ * Returning `tasks: null` writes nothing, which is how a dry run and a refused
+ * apply share exactly one code path with a real one.
+ */
+export async function mutateTasks<T>(
+  gitRoot: string,
+  fn: (tasks: Task[]) => Promise<{ tasks: Task[] | null; result: T }> | { tasks: Task[] | null; result: T },
+): Promise<T> {
+  return serialized(() =>
+    withTasksLock(gitRoot, async () => {
+      const { tasks, result } = await fn(await loadTasks(gitRoot));
+      if (tasks) await saveTasks(gitRoot, tasks);
+      return result;
+    }),
+  );
+}
+
 export async function removeTask(gitRoot: string, slug: string): Promise<void> {
   await serialized(() =>
     withTasksLock(gitRoot, async () => {

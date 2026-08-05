@@ -38,6 +38,11 @@ export const TASK_STATES: readonly TaskState[] = [
  */
 const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled']);
 
+/** Finished for good: no longer holds a phase, and never rewound by a re-apply. */
+export function isTerminal(state: TaskState): boolean {
+  return TERMINAL.has(state);
+}
+
 /** Default silence before an `active` task is offered to someone else. */
 export const STALL_GRACE_MS = 45 * 60_000;
 
