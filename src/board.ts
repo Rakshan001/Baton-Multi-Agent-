@@ -5,7 +5,7 @@
 import { detectAgents, detectionRoots, detectRootAgents, type RootAgentSession } from './agents.js';
 import { computeConflicts } from './conflicts.js';
 import { aheadBehind, worktreeStatus, type RepoState } from './git.js';
-import { loadTasks } from './store.js';
+import { isMaterialized, loadTasks } from './store.js';
 import { liveSessions, WATCHER_HEARTBEAT_STALE_MS } from './signals.js';
 
 export interface StatusRow {
@@ -24,7 +24,12 @@ export interface StatusRow {
 }
 
 export async function collectStatus(root: string): Promise<StatusRow[]> {
-  const tasks = await loadTasks(root);
+  // Worktree-backed tasks only. A queued plan row names the branch and path it
+  // INTENDS to use but has neither yet, and `worktreeStatus` reports a failed
+  // git call as `clean` — so including them would draw every unclaimed task as
+  // a tidy checkout, and spawn git + agent detection per phantom path on a 2s
+  // poll. The pipeline view is where queued work belongs.
+  const tasks = (await loadTasks(root)).filter(isMaterialized);
   const [agents, conflicts] = await Promise.all([
     detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) }),
     computeConflicts(tasks, root),

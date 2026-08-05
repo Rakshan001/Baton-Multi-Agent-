@@ -35,6 +35,21 @@ export interface Task extends PipelineFields {
   scope?: string[];
 }
 
+/**
+ * Has this task's worktree actually been created?
+ *
+ * A queued plan row carries the branch and path it INTENDS to use — naming them
+ * early is what makes collisions visible at plan time — but no git object and no
+ * directory exists until it is claimed. Only a recorded baseCommit proves git
+ * ran. Asking git about the rest is both wrong and expensive: `worktreeStatus`
+ * reports a failed call as `clean`, so a task with no worktree renders exactly
+ * like a tidy one, and a 40-task plan would spawn 80 subprocesses per poll to
+ * produce that.
+ */
+export function isMaterialized(t: Task): boolean {
+  return Boolean(t.baseCommit);
+}
+
 /** Thrown when a slug doesn't resolve to a recorded task. */
 export class TaskNotFoundError extends Error {
   slug: string;

@@ -50,6 +50,7 @@ import { progressCmd } from './commands/progress.js';
 import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
 import { bugsCmd } from './commands/bugs.js';
 import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
+import { taskAddCmd, taskRmCmd, type TaskAddOpts } from './commands/task.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -115,7 +116,7 @@ program
 
 program
   .command('ls')
-  .description('list tasks with git status, ahead/behind, and age')
+  .description('the board: tasks grouped by phase, which phase is open, and what is blocked')
   .action(() => run(lsCmd));
 
 program
@@ -520,6 +521,27 @@ program
   .argument('<url>', 'daemon graphify proxy URL (http://127.0.0.1:<port>/mcp/g/<token>/<id>)')
   .description('stdio↔HTTP bridge so Codex can query the shared graphify pool (requires baton serve)')
   .action((url: string) => run(() => mcpBridgeCmd(url)));
+
+const task = program
+  .command('task')
+  .description('queue work without writing a plan file: add, rm');
+
+task
+  .command('add')
+  .argument('<what>', 'what the task is')
+  .option('--phase <n>', 'phase number; omit for ungated work that starts immediately')
+  .option('--after <slugs>', 'comma-separated tasks this one waits for')
+  .option('--assignee <agent>', 'agent id; omit to leave it in the open pool')
+  .option('--scope <globs>', 'comma-separated path globs this task owns')
+  .option('--expects <list>', 'semicolon-separated evidence required before done')
+  .description('queue one task — a JSON row, no branch and no worktree until it is taken')
+  .action((what: string, opts: TaskAddOpts) => run(() => taskAddCmd(what, opts)));
+
+task
+  .command('rm')
+  .argument('<slug>', 'the queued task to drop')
+  .description('remove a queued task that never started (use `baton rm` once it has a worktree)')
+  .action((slug: string) => run(() => taskRmCmd(slug)));
 
 const plan = program
   .command('plan')

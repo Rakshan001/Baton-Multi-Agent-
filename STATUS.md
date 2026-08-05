@@ -415,12 +415,37 @@ directory is how a teammate's plan arrives. Plan files are inert data: nothing i
 ever executed, which is what makes applying a plan that arrived over git safe. Their prose
 still reaches agent context, so it stays untrusted input.
 
-1409 tests green, both workspaces build.
+**The board (`baton ls`) and `baton task add|rm`** finish phase 2. `ls` keeps its flat
+table when nothing is phased and groups by phase once a plan is applied — complete /
+open / locked behind — because "what may I start now" is the only question a five-agent
+board is really asked. When nothing is eligible it says *which*: finished, or waiting on
+a human. `task add` is the thing you noticed halfway through — same queued row, same
+barrier, no plan file.
+
+**Lazy worktrees exposed a board that lied.** `worktreeStatus` reports a *failed* git
+call as `clean`, which was harmless when every task had a worktree. A queued task has
+none, so every unstarted task rendered as a tidy checkout — and `collectStatus` spawned
+git + agent detection per phantom path on the dashboard's 2s poll (a 40-task plan: ~80
+subprocesses to produce that fiction). `isMaterialized` (baseCommit, not path existence)
+now gates both; `collectStatus` carries worktree-backed tasks only, since queued work
+belongs in the pipeline view. **Note for the UI phase:** a task whose worktree was
+*deleted* still reads as `clean` — the same conflation, pre-existing, and fixing it means
+touching `cleanup`/`rm` semantics that key off `state !== 'clean'`.
+
+`task add` refuses an unknown or later-phase dependency (unsatisfiable is never what
+anyone meant) but only *warns* on same-phase scope overlap — the same rule as a plan, in
+a different room: a plan is applied unattended, this command has a human in front of it.
+
+One test initially passed for the wrong reason — the temp repo was dirty from untracked
+`.baton/`, so the "not clean" assertion held with the guard removed. Rewritten to assert
+the placeholder positively against a deliberately dirty repo, and re-mutated.
+
+1427 tests green, both workspaces build.
 
 ## Pending / next 🔜
 
-0. **Task pipeline, remaining phases** — `baton ls` phase view and `baton task add`
-   (rest of phase 2); then lifecycle (`take`/`done`/stall/`--resume`), the review gate,
+0. **Task pipeline, remaining phases** — phase 2 is done (plans, apply, board,
+   `task add`). Next: lifecycle (`take`/`done`/stall/`--resume`), the review gate,
    the MCP surface (`my_tasks`, `take_task`, `complete_task`, `report_blocked`),
    `Baton-Task:` commit trailers, team mode, and UI swimlanes. Spec:
    `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.

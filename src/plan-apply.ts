@@ -23,7 +23,7 @@
 import { join } from 'node:path';
 import type { Plan, PlanTask } from './plan.js';
 import { isTerminal, stateOf } from './pipeline.js';
-import type { Task } from './store.js';
+import { isMaterialized, type Task } from './store.js';
 
 export type PlanChange =
   /** No such task — a queued row will be created. */
@@ -96,15 +96,6 @@ function movedFields(t: Task, p: PlanTask): string[] {
     if (differs) out.push(f);
   }
   return out;
-}
-
-/**
- * Has this task ever become real on disk? A queued plan row carries the branch
- * NAME it intends to use, which is not the same as owning a branch — only a
- * recorded baseCommit proves the worktree was actually created.
- */
-function materialized(t: Task): boolean {
-  return Boolean(t.baseCommit);
 }
 
 function holderOf(t: Task): string | undefined {
@@ -219,7 +210,7 @@ export function applyPlan(existing: readonly Task[], plan: Plan, opts: ApplyOpts
       entries.push({ slug: t.slug, change: 'keep', fields: [], state, note: 'no longer in the plan; history kept' });
       continue;
     }
-    if (!materialized(t) && state === 'queued') {
+    if (!isMaterialized(t) && state === 'queued') {
       entries.push({ slug: t.slug, change: 'drop', fields: [], state });
       dropped.add(t.slug);
       continue;
