@@ -687,6 +687,38 @@ both branches landed, phase 2 offered.
 **Deviation from spec §9:** one commit per task, not one per phase. A phase-wide squash
 would land the work and lose which task produced it.
 
+### Session 19k — phase 6 started: reachability (spec §13 open question 2)
+
+`isFetchable` and `pushedSha` existed only inside pipeline.ts — a contract with **no
+producer and no consumer**. `done` on a teammate's laptop does not mean the commits are
+here, and starting against them builds on code no other machine has.
+
+Built the answering half, which is the part with a real difficulty: the naive shape is a
+network call per task per query, while `baton next` runs on every agent's turn and the
+board polls every 2s.
+
+- `src/git.ts` — `defaultRemote()`, `fetchRemote()` (offline is normal, not an error),
+  `remoteContains()`. The last is `git branch -r --contains`, deliberately NOT "does the
+  object exist locally": after a fetch our own unpushed commits are present too, and a
+  yes there is exactly the false positive that matters.
+- `src/fetchable.ts` — `fetchableProbe()`: one fetch per repo per 30s, then every task
+  answered locally. **Positive answers cached, negative never** — remembering "no" would
+  hide a teammate's push for the life of the process, which looks identical to a wedged
+  pipeline. Solo repos return null so nothing is gated and behaviour is unchanged.
+
+1599 tests green (+6), including the two that matter: an unpushed local commit reads as
+not fetchable, and a push becomes visible after the TTL.
+
+**Deliberately NOT wired into the gate yet.** Nothing writes `pushedSha`, so turning
+`isFetchable` on now would mark every dependency "waiting to be pushed" and wedge every
+team plan. The producer comes first.
+
+**Phase 6 remaining:** a `pushedSha` producer (an explicit `baton push <slug>` — recording
+it on a read path would mean a write during GET, which this codebase does not do); then
+wire `isFetchable` into next/take/my_tasks; memory migration to `baton/`; operator/member
+split per §7.6 — note `baton integrate` is listed operator-only there and currently has no
+such check; claims fail-closed.
+
 ### Session 19i — three bugs nobody's tests were watching
 
 Each one reproduced before it was touched; each guard mutation-tested.

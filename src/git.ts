@@ -469,6 +469,33 @@ export function parseMergeTreeConflicts(raw: string): string[] {
   return [...paths];
 }
 
+/** The remote to treat as shared — `origin` when present, else the first one, else null. */
+export async function defaultRemote(cwd?: string): Promise<string | null> {
+  const r = await gitTry(['remote'], cwd);
+  if (!r.ok || !r.stdout.trim()) return null;
+  const names = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  return names.includes('origin') ? 'origin' : (names[0] ?? null);
+}
+
+/** Update remote-tracking refs. Best-effort: offline is a normal state, not an error. */
+export async function fetchRemote(remote: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['fetch', '--quiet', '--prune', remote], cwd);
+  return r.ok;
+}
+
+/**
+ * Is this commit on the remote — reachable from some remote-tracking ref?
+ *
+ * Deliberately not "does the object exist locally". After a fetch our own
+ * unpushed commits are present too, and answering yes for one of those is
+ * exactly the mistake that would let a teammate start against work that exists
+ * on nobody else's machine.
+ */
+export async function remoteContains(sha: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['branch', '-r', '--contains', sha], cwd);
+  return r.ok && r.stdout.trim().length > 0;
+}
+
 /** Is every commit of `maybeAncestor` already reachable from `tip`? */
 export async function isAncestor(maybeAncestor: string, tip: string, cwd?: string): Promise<boolean> {
   const r = await gitTry(['merge-base', '--is-ancestor', maybeAncestor, tip], cwd);
