@@ -651,6 +651,33 @@ bug, which failed four tests.
 but unmerged branches in a phase should hold the barrier and keep the next phase locked
 (§5, "barrier" row). Not started.
 
+### Session 19i — three bugs nobody's tests were watching
+
+Each one reproduced before it was touched; each guard mutation-tested.
+
+1. **The board didn't show agents Baton itself started.** `detectAgents` memoizes its ps
+   scan for 5s while the poller ticks every 2s, so a just-started run read as nobody's for
+   up to five seconds — and a print-mode run shorter than that never showed as working at
+   all. The Agents screen was right the whole time; it already merges `runningHeadless()`.
+   `collectStatus` now does too (scan first, headless second — roster.ts's precedence, so
+   one agent can't get two names on two screens). The first test **passed unfixed**: the ps
+   scan caught the test's own `node` child. Warming the cache first reproduced it properly.
+2. **The published package shipped without a dashboard.** `files` listed only `dist` while
+   `baton serve` resolves `../web/dist`. Adding `web/dist` alone did nothing — with no
+   `.npmignore` in `web/`, npm falls back to `web/.gitignore`, which ignores `dist/`, and
+   an allowlist does not override a nested ignore file. `npm pack --dry-run` said 0 web
+   files before, 4 after. Both halves are needed and both are guarded by
+   `test/packaging.test.ts`, which asks npm rather than asserting on config.
+3. **Every install doc named a Node floor four majors too low.** package.json, SETUP.md and
+   installation.md say ≥ 24 (the floor is `node:sqlite` + FTS5); seven other places said 20
+   — including `AGENTS.md`, which the new landing docs page calls the source of truth.
+   Fails silently both ways: `ensureFts` falls back to a weaker LIKE scorer without a word,
+   and installing from source never enforces `engines`. All seven corrected across both
+   repos; the one hit in a dated plan doc left alone rather than rewrite what was believed
+   then.
+
+1577 tests green (+2, +1 file). Closes pending items 1 and 5.
+
 ## Pending / next 🔜
 
 0. **Task pipeline, remaining phases** — phases 2, 3 and 3.5 are done (plans, apply,
@@ -659,19 +686,14 @@ but unmerged branches in a phase should hold the barrier and keep the next phase
    trailers, team mode, and UI swimlanes. Spec:
    `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.
 
-1. **Headless one-shot runs still aren't shown as "active" on the status board**
-   (`claude -p` children are too short-lived for the `src/agents.ts` ps scan).
-   Interactive tmux terminals DO show as active — the agent process persists with
-   the worktree cwd, so the scan catches it (verified 2026-06-12). Worth wiring
-   `runningHeadless()` into `collectStatus` for the one-shot case too.
-2. **tmux test-environment caveat** (2026-06-12): a daemon launched inside a
+1. **tmux test-environment caveat** (2026-06-12): a daemon launched inside a
    sandboxed wrapper (e.g. the IDE preview helper) can wedge the shared tmux server
    (orphaned control client stops draining → every tmux command on the machine
    hangs). Hardening added: control clients attach with `-d` (kick stale clients),
    all one-shot tmux calls have a 10s timeout, errors surface as clean 4xx/503.
    Normal usage — `baton serve` run from a real terminal — is unaffected (verified
    end-to-end). If tmux ever wedges: `pkill -f 'tmux -C attach' && rm -rf /tmp/tmux-$UID`.
-3. **Visual pass** — confirmed in-browser 2026-06-12: Launch 3-way start mode (radio
+2. **Visual pass** — confirmed in-browser 2026-06-12: Launch 3-way start mode (radio
    group, Preview badge clears on real modes), real claude TUI rendering in the Live
    Terminal tab via SSE, keystrokes from the browser moving the TUI selector, tmux
    session create/adopt/kill from the UI. Still pending a look when Chrome MCP is up:
@@ -680,9 +702,7 @@ but unmerged branches in a phase should hold the barrier and keep the next phase
    (src/usage.ts is Claude-only); their sessions show no token data.
 4. **Fleet broadcast** (Daintree-style: one prompt → N sessions at once) — researched,
    deferred by user choice this round.
-5. **npm packaging** — `package.json` `files` only ships `dist/`; `web/dist` must be
-   included (or copied into `dist/web`) before publishing the CLI to npm.
-6. **Roadmap (MVP.md)** — M3 redaction-first secret stripping for safe export; M4 link
+5. **Roadmap (MVP.md)** — M3 redaction-first secret stripping for safe export; M4 link
    sharing + permissions (hosted phase).
 
 ## Where things live

@@ -54,7 +54,7 @@ Do the expensive thinking where it's powerful (or included in your plan); do the
 > which port), run every command itself, and leave you a personalized
 > `GETTING_STARTED.md` in your project when it's done.
 
-Requires **Node ≥ 20**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
+Requires **Node ≥ 24**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
 
 ```bash
 git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton && cd baton
