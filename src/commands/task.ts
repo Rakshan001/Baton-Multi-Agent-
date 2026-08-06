@@ -9,6 +9,7 @@
 import { activeBatonRoot, batonDir, isMaterialized, mutateTasks, slugify, type Task } from '../store.js';
 import { overlappingPair } from '../plan.js';
 import { phaseOf, stateOf } from '../pipeline.js';
+import { requireOperator } from '../operator.js';
 import { join } from 'node:path';
 
 export interface TaskAddOpts {
@@ -101,6 +102,8 @@ export async function taskAddCmd(text: string, opts: TaskAddOpts = {}): Promise<
 /** `baton task rm <slug>` — drop a queued task that never started. */
 export async function taskRmCmd(slug: string): Promise<void> {
   const root = await activeBatonRoot();
+  // §7.6: dropping a task changes the plan, and the plan is the hub's.
+  if (!(await requireOperator(root, `baton task rm ${slug}`))) return;
   const outcome = await mutateTasks(root, (tasks) => {
     const t = tasks.find((x) => x.slug === slug);
     if (!t) return { tasks: null, result: 'missing' as const };

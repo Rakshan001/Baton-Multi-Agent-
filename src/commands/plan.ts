@@ -13,6 +13,7 @@ import { activeBatonRoot, batonDir, mutateTasks } from '../store.js';
 import { loadPlan, PlanError } from '../plan.js';
 import { applyPlan, renderDiff } from '../plan-apply.js';
 import { resolveAuthor } from '../identity.js';
+import { requireOperator } from '../operator.js';
 
 /** Where tracked plans live. Inside git on purpose: a plan is a shared
  *  statement of intent, and in team mode it is how a teammate's plan arrives. */
@@ -61,6 +62,9 @@ export async function planApplyCmd(
   opts: { dryRun?: boolean; force?: boolean } = {},
 ): Promise<void> {
   const root = await activeBatonRoot();
+  // §7.6: the plan belongs to the hub. Checked before the file is even read, so
+  // a member gets the rule rather than a parse error about someone else's plan.
+  if (!(await requireOperator(root, 'baton plan apply'))) return;
   const { text, path } = await readPlanFile(root, file);
   let plan;
   try {

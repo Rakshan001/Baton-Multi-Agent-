@@ -747,9 +747,46 @@ An earlier 0.7s reading was machine load, not the gate.
 1610 tests green (+5), 136 files, 57s on a quiet machine — the same suite that had just run
 red twice under load, which is what settled the flakiness question below.
 
-**Phase 6 remaining:** memory migration to `baton/`; operator/member split per §7.6 — note
-`baton integrate` and `baton push` are operator-only in that table and neither has a check;
+**Phase 6 remaining:** memory migration to `baton/`; operator/member split per §7.6;
 claims fail-closed.
+
+### Session 19n — §7.6: the operator/member split on the CLI
+
+`src/access.ts` answers "who are you" for the daemon, from a token. The CLI has none —
+whoever is at the machine is the caller — so the question a command can actually ask is
+*whose plan is this*, and `.baton/host.json` settles it: its presence means this repo's
+plan comes from someone else's hub.
+
+The failure being prevented is a **silent fork**, not an escalation. A member who runs
+`plan apply` locally rewrites their own tasks.json while the hub's stands; from then on
+the two machines coordinate against different plans, agree on nothing, and nothing
+reports an error.
+
+- `src/operator.ts` (new) — `decideOperator()` (pure) + `requireOperator()`. Wired into
+  the three operator-only commands that exist today: `plan apply`, `task rm`, `integrate`.
+- `integrate --dry-run` stays open to members. The trial writes nothing and tells them
+  only what `git merge-tree` on branches they already hold would. What is the operator's
+  alone is landing it on the shared base.
+- No `--force`. An escape hatch on an authorization gate is the gate, and this is a
+  surface agents call; `baton host clear` is the explicit way out and the refusal says so.
+
+**Correction to 19l/19m:** those notes claimed `baton push` is operator-only in §7.6. It
+is not in that table at all, and it must not be — a member finishing a task and publishing
+it is the whole mechanism team mode exists for. Gating it would wedge every cross-machine
+plan. Verified a member can still `take` and `push`.
+
+Also not yet built, so not gated: `cancel` and `phase open --force` (phase 8). The MCP
+surface needs no check — it never exposed plan editing, by the design note in
+`mcp-pipeline.ts`.
+
+`test/operator-gate.test.ts` (8 tests) covers the rule *and* the wiring, the latter by
+driving the real commands and asserting the repository afterwards — the pure tests alone
+would all pass with the gate called from nowhere, which is the 19m defect exactly.
+Mutation-tested at all three call sites. The first pass at the `task rm` test **survived**
+its mutation: it pointed at a `done` task, which `task rm` refuses on its own merits, so
+it was watching the wrong refusal. Re-pointed at a queued, unmaterialized task.
+
+1618 tests green (+8), 137 files, 36s.
 
 ### Session 19l — `baton push`: the producer, and the CI guard (§7.4)
 
@@ -829,11 +866,11 @@ Each one reproduced before it was touched; each guard mutation-tested.
 0. **Task pipeline — phases 1–5 done.** Plans + apply, board, `task add`, lifecycle,
    the done gate, the review gate, the MCP surface (`my_tasks`, `take_task`,
    `complete_task`, `report_blocked`), `Baton-Task:` trailers + `history reindex`, and
-   the integration barrier + `baton integrate`. **Next: phase 6 — team mode** (memory
-   migration to `baton/`, push/fetch gating, `isFetchable` with caching — defined in
-   pipeline.ts but still unwired, operator/member split, claims fail-closed), then
-   **phase 7 — UI** (phase swimlanes, markdown plan view, cancel controls with blast
-   radius, demo fixtures kept working). Spec:
+   the integration barrier. **Phase 6 is most of the way there**: `baton integrate`,
+   `baton push` + the §7.4 CI guard, `isFetchable` wired and enforced at the claim, and
+   the §7.6 operator/member split. **Remaining: memory migration to `baton/`, and claims
+   fail-closed.** Then **phase 7 — UI** (phase swimlanes, markdown plan view, cancel
+   controls with blast radius, demo fixtures kept working). Spec:
    `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.
 
 1. **Rename to "Baton Lane" — decided 2026-08-06, not yet done.** `baton-cli` on npm is

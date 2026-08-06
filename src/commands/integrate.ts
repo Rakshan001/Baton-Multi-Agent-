@@ -18,6 +18,7 @@ import { integrationHold, openPhase, phaseComplete, phaseOf, stateOf, type Pipel
 import { integratedPhases } from '../integrate.js';
 import { isAncestor } from '../git.js';
 import { mergeTaskBranch } from './merge.js';
+import { requireOperator } from '../operator.js';
 
 /** The phase to integrate when none was named: the one holding the barrier. */
 async function inferPhase(root: string, tasks: Task[]): Promise<number | null> {
@@ -91,6 +92,12 @@ export async function integrateCmd(phaseArg?: string, opts: { dryRun?: boolean }
     console.log(`\nWould integrate phase ${phase}. Nothing written (--dry-run).`);
     return;
   }
+
+  // §7.6, checked here rather than at the top: the trial above writes nothing,
+  // and telling a member whether their phase would conflict is useful to them
+  // and reveals only what `git merge-tree` on branches they already have would.
+  // What is the operator's alone is landing it on the shared base.
+  if (!(await requireOperator(root, `baton integrate ${phase}`))) return;
 
   // Clean. Land them, skipping any that a human already merged.
   console.log('');
