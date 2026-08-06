@@ -1,0 +1,11 @@
+# Do not delete — this file is what puts the dashboard in the published package.
+#
+# `package.json` allowlists `web/dist`, but with no `.npmignore` here npm falls
+# back to `web/.gitignore`, which ignores `dist/` (correctly — build output does
+# not belong in git). The allowlist does not override a nested ignore file, so
+# the tarball shipped with no dashboard at all and `baton serve` answered every
+# installed user with its own "dashboard not built" error.
+#
+# Listing node_modules alone replaces that fallback: `files` decides what ships
+# and nothing here vetoes it. Guarded by test/packaging.test.ts.
+node_modules/
