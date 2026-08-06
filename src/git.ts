@@ -345,9 +345,13 @@ export async function aheadBehind(
 
 export interface CommitInfo {
   sha: string;
+  /** Subject line only — what every existing caller means by "message". */
   message: string;
   at: string; // ISO
   files: string[];
+  /** The FULL message, including the trailer block. Only `branchCommits` fills
+   *  this in; lineage is the only reader that needs more than the subject. */
+  body?: string;
 }
 
 /** Commits on `branch` that aren't on `base`, newest-first, with their files. */
@@ -357,22 +361,26 @@ export async function branchCommits(
   cwd?: string,
 ): Promise<CommitInfo[]> {
   // %x1f = unit separator between fields, %x1e = record separator between commits.
+  // %B (the full message) comes LAST because it is the only field that may
+  // contain newlines — everything before it keeps a fixed position, and the
+  // record still ends at %x1e. Trailers live in the body, so a reader that only
+  // has %s cannot see them at all.
   const r = await gitTry(
-    ['log', `${base}..${branch}`, '--no-merges', '--pretty=format:%H%x1f%s%x1f%cI%x1e'],
+    ['log', `${base}..${branch}`, '--no-merges', '--pretty=format:%H%x1f%s%x1f%cI%x1f%B%x1e'],
     cwd,
   );
   if (!r.ok || !r.stdout) return [];
 
   const commits: CommitInfo[] = [];
   for (const rec of r.stdout.split('\x1e').map((s) => s.trim()).filter(Boolean)) {
-    const [sha, message, at] = rec.split('\x1f');
+    const [sha, message, at, body] = rec.split('\x1f');
     if (!sha) continue;
     const nameR = await gitTry(
       ['show', '--name-only', '--pretty=format:', sha],
       cwd,
     );
     const files = nameR.ok ? nameR.stdout.split('\n').filter(Boolean) : [];
-    commits.push({ sha, message: message ?? '', at: at ?? '', files });
+    commits.push({ sha, message: message ?? '', at: at ?? '', files, body: body ?? message ?? '' });
   }
   return commits;
 }

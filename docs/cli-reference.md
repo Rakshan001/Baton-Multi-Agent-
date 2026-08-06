@@ -80,7 +80,16 @@ Trace which task / agent / commits touched a file (from the local index). Omit `
 
 ```bash
 baton history [file]
+baton history reindex
 ```
+
+`reindex` rebuilds the index from `Baton-Task:` trailers in git log. `.baton/` is
+disposable by design — delete `history.db` and this puts the lineage back, because
+every commit made inside a task worktree carries the task that produced it.
+
+A trailer is evidence, never authority: anyone who can push can write one, so a
+trailer is honored only when its slug names a task this repository actually
+created. The rest are reported and not indexed.
 
 ### `blame`
 Who touched a file — live editors + merged history.

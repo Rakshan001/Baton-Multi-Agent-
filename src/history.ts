@@ -165,7 +165,12 @@ export function recordMerge(
   db.exec('BEGIN');
   try {
     for (const c of args.commits) {
-      insCommit.run(c.sha, args.slug, c.message, c.at);
+      // Files only for genuinely-new shas. At merge time every commit is new, so
+      // this was invisible — until `history reindex` began re-recording the same
+      // commits, and each run added another copy of every file row. The same
+      // guard `ingestGitLog` already uses, for the same reason.
+      const res = insCommit.run(c.sha, args.slug, c.message, c.at);
+      if (res.changes === 0) continue;
       for (const f of c.files) insFile.run(c.sha, args.slug, f, args.projectId ?? null);
     }
     db.exec('COMMIT');
@@ -339,6 +344,16 @@ export interface FileHit {
   sha: string;
   message: string;
   at: string;
+  /**
+   * Has this task's work actually landed?
+   *
+   * `history reindex` walks task branches, so the index now carries commits
+   * that are real but still IN FLIGHT on someone's branch. Presenting those the
+   * same as merged work would be the stale-peer-state failure in its quietest
+   * form: an agent reads "src/db.ts was changed by auth-schema", assumes the
+   * change is on main, and builds against code that is not there.
+   */
+  merged: boolean;
 }
 
 /**
@@ -359,7 +374,8 @@ export function queryFile(root: string, path: string, projectId?: string | null)
   return getDb(root)
     .prepare(
       `SELECT cf.path AS path, c.slug AS slug, t.task AS task, t.agent AS agent,
-              c.sha AS sha, c.message AS message, c.at AS at
+              c.sha AS sha, c.message AS message, c.at AS at,
+              (t.archived_ref IS NOT NULL) AS merged
        FROM commit_files cf
        JOIN commits c ON c.sha = cf.sha
        JOIN tasks t ON t.slug = c.slug
@@ -367,7 +383,10 @@ export function queryFile(root: string, path: string, projectId?: string | null)
          AND (? IS NULL OR cf.project IS NULL OR cf.project = ?)
        ORDER BY c.at DESC`,
     )
-    .all(path, scope, scope) as unknown as FileHit[];
+    .all(path, scope, scope)
+    // SQLite has no boolean: the expression comes back as 0/1, and a raw 0 is
+    // truthy in JSON once it reaches an agent as `"merged": 0`.
+    .map((r) => ({ ...(r as unknown as FileHit), merged: Boolean((r as { merged?: number }).merged) }));
 }
 
 export interface TaskHistory {

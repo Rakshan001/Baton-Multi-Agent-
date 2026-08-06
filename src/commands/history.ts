@@ -14,14 +14,18 @@ export async function historyCmd(file?: string): Promise<void> {
   if (file) {
     const hits = queryFile(root, file);
     if (hits.length === 0) {
-      console.log(`No recorded changes to '${file}'. (Only merged tasks are indexed.)`);
+      console.log(`No recorded changes to '${file}'.`);
+      console.log('  Merged work is indexed automatically; for work still on a branch: baton history reindex');
       return;
     }
     console.log(`Changes to ${file}:`);
     for (const h of hits) {
       const when = h.at ? h.at.slice(0, 10) : '';
+      // Marked, not filtered out: knowing a change exists but has NOT landed is
+      // the useful half — it is why your file looks unchanged on main.
+      const where = h.merged ? '' : '  (on a branch, not merged)';
       console.log(
-        `  ${h.sha.slice(0, 8)}  ${when}  [${h.agent ?? '?'} · ${h.slug}]  ${h.message}`,
+        `  ${h.sha.slice(0, 8)}  ${when}  [${h.agent ?? '?'} · ${h.slug}]  ${h.message}${where}`,
       );
     }
     return;

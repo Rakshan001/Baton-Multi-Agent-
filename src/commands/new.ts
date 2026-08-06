@@ -7,6 +7,7 @@
  */
 import { join } from 'node:path';
 import { branchExists, createWorktree, currentBranch, headCommit, isGitRepo } from '../git.js';
+import { installCommitHook } from '../hooks-git.js';
 import { recordTask } from '../history.js';
 import { addTask, batonDir, loadTasks, resolveBatonRoot, slugify, type Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
@@ -90,6 +91,7 @@ export async function createTask(taskText: string, root?: string, projectId?: st
   const baseBranch = await currentBranch(gitRepo);
 
   await createWorktree(worktreePath, branch, 'HEAD', gitRepo);
+  await installCommitHook(gitRepo, process.argv[1] ?? '');   // best-effort: lineage, not correctness
   const baseCommit = await headCommit(worktreePath);
 
   const task: Task = {

@@ -22,6 +22,7 @@ import { newCmd } from './commands/new.js';
 import { lsCmd } from './commands/ls.js';
 import { statusCmd } from './commands/status.js';
 import { historyCmd } from './commands/history.js';
+import { historyReindexCmd, stampCommitCmd } from './commands/reindex.js';
 import { serveCmd } from './commands/serve.js';
 import { cleanCmd as daemonCleanCmd, psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
 import { mergeCmd } from './commands/merge.js';
@@ -138,10 +139,21 @@ program
   );
 
 program
+  .command('stamp-commit')
+  .argument('<file>', 'the commit message file git passes to prepare-commit-msg')
+  .description('internal: add a Baton-Task: trailer when committing inside a task worktree')
+  .action((file: string) => run(() => stampCommitCmd(file)));
+
+const history = program
   .command('history')
   .argument('[file]', 'file path to trace (omit to list all tasks)')
   .description('trace which task/agent/commits touched a file (from the local index)')
   .action((file: string | undefined) => run(() => historyCmd(file)));
+
+history
+  .command('reindex')
+  .description('rebuild the commit index from Baton-Task: trailers in git — .baton/ is disposable')
+  .action(() => run(historyReindexCmd));
 
 program
   .command('serve')

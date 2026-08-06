@@ -9,6 +9,7 @@
  * useless to its holder, and holding its phase against everyone else.
  */
 import { branchExists, createWorktree, currentBranch, headCommit } from '../git.js';
+import { installCommitHook } from '../hooks-git.js';
 import { batonDir, isMaterialized, mutateTasks, type Task } from '../store.js';
 import { activate, claim, releaseClaim, takeover, type Outcome, type Who } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
@@ -95,6 +96,10 @@ export async function claimTask(
       ? task.baseBranch
       : (await currentBranch(repo)) || 'HEAD';
     await createWorktree(worktreePath, branch, 'HEAD', repo);
+    // Lineage in git, so losing .baton/ costs nothing permanent. Best-effort by
+    // design: a task that cannot be claimed is a real failure, a commit without
+    // a trailer is a smaller one.
+    await installCommitHook(repo, process.argv[1] ?? '');
     const baseCommit = await headCommit(worktreePath);
 
     const active = await mutateTasks(root, (tasks) => {

@@ -213,7 +213,18 @@ export async function startMcpServer(): Promise<void> {
       // a hub, which queryFile reads as "don't scope".
       const [hits, live] = [queryFile(root, file, await projectOf(root, selfSlug)), await checkFiles(root, [file], selfSlug)];
       const capped = capList(hits, WHO_TOUCHED_CAP);
-      return asText({ merged: capped.items, moreMerged: capped.more, live: live[file] });
+      // Landed vs still on a branch. `history reindex` walks task branches, so
+      // the index now carries real commits that are NOT on main — and reporting
+      // those under `merged` would tell an agent to build against code that is
+      // nowhere it can see.
+      const landed = capped.items.filter((h) => h.merged);
+      const inFlight = capped.items.filter((h) => !h.merged);
+      return asText({
+        merged: landed,
+        moreMerged: capped.more,
+        ...(inFlight.length ? { onBranchNotYetMerged: inFlight } : {}),
+        live: live[file],
+      });
     },
   );
 

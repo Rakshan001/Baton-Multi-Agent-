@@ -607,6 +607,50 @@ one was not. Now refused, with the correction shown.
 
 1553 tests green (+25). Six mutations tested; each killed exactly its own tests.
 
+### Session 19h — lineage that lives in git (phase 5, part 1)
+
+The storage model claims that losing `.baton/` costs nothing permanent, because
+`baton history reindex` rebuilds the index from git. That was aspirational until now.
+
+**`Baton-Task:` trailers** (`src/trailers.ts`, pure). Baton makes none of these commits —
+agents do, with plain `git commit` — so the trailer comes from a `prepare-commit-msg`
+hook (`src/hooks-git.ts`). One shared hook, deciding per invocation: linked worktrees
+share `.git/hooks`, so it asks Baton at commit time which task owns the directory it is
+running in and does nothing everywhere else, including the main checkout. It never
+overwrites a hook it did not write, and exits 0 on every path — a hook that can block
+`git commit` can strand an agent's work.
+
+**`baton history reindex`** walks `baton/*` branches and honors a trailer only when its
+slug names a task this repo created (§7.5). Forged claims are counted and shown, not
+silently dropped: something writing trailers for tasks that do not exist is worth seeing.
+
+**Lineage now distinguishes landed from in-flight.** Reindex walks branches, so the index
+holds real commits that are NOT on main. `who_touched` returns those under
+`onBranchNotYetMerged`, and `baton history` marks them — an agent told a file "was
+changed" that assumes the change landed builds against code nowhere it can see.
+
+Three bugs found by probing rather than reading:
+
+1. **The hook installed itself into the repository root.** Baton's own git hardening sets
+   `core.hooksPath=` so its calls never fire repo hooks — and that override makes
+   `rev-parse --git-path hooks` answer `./`. The file was written where nothing runs it,
+   and nothing reported a problem, so the install looked like it worked. `hooksDir()` now
+   uses `--git-common-dir`, and `gitConfigValue()` (new, in `util/exec.ts`) reads a config
+   key with our own override for that key dropped — which is also what makes a husky-style
+   `core.hooksPath` visible at all.
+2. **`branchCommits` read `%s`** — the subject only — so the trailer in the body was
+   invisible to the one reader that needed it. It now carries `body` as a separate field;
+   `message` still means the subject for every existing caller.
+3. **`recordMerge` inserted file rows unconditionally**, so every reindex added another
+   copy of every file. Invisible at merge time, where each commit is new by construction.
+
+1573 tests green (+20). Seven mutations tested, including restoring the exact hooks-path
+bug, which failed four tests.
+
+**Still open in phase 5:** barrier integration — an integration conflict between finished
+but unmerged branches in a phase should hold the barrier and keep the next phase locked
+(§5, "barrier" row). Not started.
+
 ## Pending / next 🔜
 
 0. **Task pipeline, remaining phases** — phases 2, 3 and 3.5 are done (plans, apply,
