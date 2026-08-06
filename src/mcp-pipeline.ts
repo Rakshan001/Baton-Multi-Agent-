@@ -24,7 +24,7 @@ import { loadTasks, type Task } from './store.js';
 import { branchCommits, worktreeStatus } from './git.js';
 import type { DiffStamp } from './handoff/progress-ledger.js';
 import { blockers, eligibleFor, integrationHold, isTerminal, phaseOf, reviewableBy, stateOf, takeable } from './pipeline.js';
-import { integratedPhases } from './integrate.js';
+import { resolveGate } from './gate.js';
 import { block, nextFor, type Who } from './lifecycle.js';
 import { claimTask, ClaimRefused } from './commands/claim.js';
 import { finishTask } from './commands/finish.js';
@@ -151,8 +151,8 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
       const held = tasks.filter((t) => holds(t, who));
       // Gated: listing work as startable that take_task would then refuse is
       // how an agent ends up in a retry loop against a locked phase.
-      const landed = await integratedPhases(root, tasks);
-      const startable = eligibleFor(who.agent, tasks, { integrated: (p) => landed.has(p) }) as Task[];
+      const gate = await resolveGate(root, tasks);
+      const startable = eligibleFor(who.agent, tasks, gate) as Task[];
       const toReview = reviewableBy(who.agent, tasks) as Task[];
       // Someone else's work that went quiet. Offered, not taken: adopting it is
       // an explicit act, because two agents in one worktree is the failure the
@@ -185,7 +185,10 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
         })),
         ...(held.length || startable.length || toReview.length ? {} : {
           // An empty answer with no cause looks identical to a finished plan.
-          waitingOn: blockers(tasks).slice(0, 10),
+          // Gated like the list above, or the two causes an agent cannot see
+          // for itself — an unlanded phase, an unpushed dependency — are
+          // exactly the ones missing from the explanation.
+          waitingOn: blockers(tasks, gate).slice(0, 10),
         }),
         tip: held.length
           ? 'Finish what you hold before starting anything else.'
@@ -213,8 +216,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
         // Same gate the CLI uses: a phase whose branches have not landed keeps
         // the next one locked, and an agent over MCP must not be handed work
         // that `baton next` refuses to offer a human.
-        const landed = await integratedPhases(root, tasks);
-        const gate = { integrated: (p: number) => landed.has(p) };
+        const gate = await resolveGate(root, tasks);
         const pick = nextFor(who.agent, tasks, gate);
         if (!pick) {
           const held = integrationHold(tasks, gate);

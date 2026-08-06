@@ -713,6 +713,44 @@ not fetchable, and a push becomes visible after the TTL.
 `isFetchable` on now would mark every dependency "waiting to be pushed" and wedge every
 team plan. The producer comes first.
 
+### Session 19m — the barrier was advisory: enforce it where the write happens
+
+Both gates were enforced only where work is *offered*. `baton next` refused a task in a
+locked phase; `baton take <that same slug>` claimed it and built its worktree. Reproduced
+before touching anything, on a two-task probe repo.
+
+The cause is one line. `claim()` in lifecycle.ts takes `EligibilityOpts` and its own doc
+comment says the barrier "is only worth anything if it is enforced at the moment of the
+write" — and every caller passed `{}`. The intent shipped; the wiring did not.
+
+- `src/gate.ts` (new) — `resolveGate(root, tasks)`, the one place the two git-backed
+  predicates are assembled. Four call sites had been hand-rolling their own; that is how
+  one of them ends up with half a gate, which is exactly what happened.
+- `src/commands/claim.ts` — resolves the gate before the lock and passes it to `claim()`.
+  Every path into the pipeline (CLI `take`, MCP `take_task`) goes through here, so this is
+  the chokepoint rather than four enforcement points that must be kept in step.
+- `src/lifecycle.ts` — the refusal now carries the *cause* (`blockers()`'s reason) instead
+  of "not startable yet — see: baton next". Both new causes name a command and neither is
+  guessable.
+- `src/commands/next.ts`, `src/commands/take.ts`, `src/mcp-pipeline.ts` — collapsed onto
+  `resolveGate`. `my_tasks`'s `waitingOn` was ungated, so its explanation omitted precisely
+  the two causes an agent cannot see for itself.
+
+`test/claim-gate.test.ts` (new, 5 tests) against real repos, both directions: refuses a
+locked phase and an unpushed dependency, allows both once cleared, and gates nothing in a
+repo with no remote. Mutation-tested — dropping the gate kills exactly the two "refuses"
+tests and leaves the three "allows" green.
+
+Measured, since this adds git calls to every claim: `resolveGate` is 57ms cold / 20ms warm.
+An earlier 0.7s reading was machine load, not the gate.
+
+1610 tests green (+5), 136 files, 57s on a quiet machine — the same suite that had just run
+red twice under load, which is what settled the flakiness question below.
+
+**Phase 6 remaining:** memory migration to `baton/`; operator/member split per §7.6 — note
+`baton integrate` and `baton push` are operator-only in that table and neither has a check;
+claims fail-closed.
+
 ### Session 19l — `baton push`: the producer, and the CI guard (§7.4)
 
 The gate from 19k is now live end to end.
@@ -743,14 +781,21 @@ and says nothing is wrong, it just has not been published.
 1605 tests green (+6).
 
 **Note on suite flakiness (likely the long-standing "1 failure in ~7 runs").** Under CPU
-load — e.g. the graphify rebuild a commit hook launches — timeout-bounded tests fail:
-observed 2 then 8 failures at 95–111s wall clock, all passing in isolation and all passing
-again at 70s once idle. Not a logic bug; the suite is sensitive to machine load. Worth a
-timeout review before trusting a red run.
+load, timeout-bounded tests fail: observed 2, then 8, then a *different* 8 and a *different*
+9 across consecutive runs at 96–233s wall clock against ~70s clean. Every failing file
+passes in isolation, and the set of failures moves between runs — which is the signature.
+Not a logic bug; the suite is sensitive to machine load. Worth a timeout review before
+trusting a red run.
 
-**Phase 6 remaining:** wire `isFetchable` into `take` and the MCP surface (`next` only so
-far); memory migration to `baton/`; operator/member split per §7.6 — note `baton integrate`
-and `baton push` are operator-only in that table and neither has a check; claims fail-closed.
+The cause is NOT the graphify rebuild the commit hook launches — that was 19l's guess and
+it was wrong. Traced in 19m to something entirely outside this repo: `~/.claude/statusline.sh`
+shells out to `ccusage statusline` on every statusline render, and each invocation spikes to
+400–800% CPU. Load average was 118–126 with nothing of Baton's running. That is a per-turn
+cost on any agent session in any project, which fits the symptom nobody could pin down — the
+suite goes red on whichever timeout-bounded tests happen to overlap a render.
+
+Before blaming a red run on anything in here: `ps -Ao pcpu,pid,comm -r | head`. If the set
+of failures moves between runs and each file passes in isolation, it is this.
 
 ### Session 19i — three bugs nobody's tests were watching
 

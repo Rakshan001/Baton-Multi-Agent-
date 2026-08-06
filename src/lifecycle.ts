@@ -13,7 +13,7 @@
  * leaves the task exactly where it was — owned, with its worktree and its
  * contributor record intact. Only `done` writes done.
  */
-import { eligibleFor, isContributor, isStalled, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
+import { blockers, eligibleFor, isContributor, isStalled, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
 import type { Task } from './store.js';
 
 export interface Who {
@@ -75,7 +75,12 @@ export function claim(
   // The barrier and the dependency rule, re-derived here rather than read from
   // a flag: `eligibleFor` is the one definition, and a second copy would drift.
   if (!eligibleFor(who.agent, tasks as readonly PipelineTask[], opts).some((e) => e.slug === slug)) {
-    return fail('not-eligible', `'${slug}' is not startable yet — see: baton next`);
+    // The cause, not just the verdict. "Not startable yet" sends someone to
+    // `baton next` to be told the phase has not landed or a dependency has not
+    // been pushed — both of which name a command, and neither of which anyone
+    // guesses. The same reason string the board and `next` already print.
+    const why = blockers(tasks as readonly PipelineTask[], opts).find((b) => b.slug === slug)?.reason;
+    return fail('not-eligible', `'${slug}' is not startable yet${why ? ` — ${why}` : ' — see: baton next'}`);
   }
 
   const next: Task = {

@@ -8,8 +8,7 @@
  */
 import { activeBatonRoot, loadTasks, type Task } from '../store.js';
 import { blockers, integrationHold, isDeadlocked, isStalled, openPhase, phaseOf, reviewableBy, stateOf, STALL_GRACE_MS } from '../pipeline.js';
-import { integratedPhases } from '../integrate.js';
-import { fetchableProbe } from '../fetchable.js';
+import { resolveGate } from '../gate.js';
 import { nextFor } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
 import { resolveAgentId } from '../identity.js';
@@ -31,17 +30,10 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
   const root = await activeBatonRoot();
   const tasks = await loadTasks(root);
   const agent = opts.agent ?? (await resolveAgentId());
-  // The barrier's git half, resolved once: a phase whose tasks are all done but
-  // whose branches have not landed still holds, so the next phase must not be
-  // offered to anyone. Asked here rather than inside the pure layer, which has
-  // no business talking to git.
-  const landed = await integratedPhases(root, tasks);
-  // Team mode's other half: a dependency marked done on someone else's machine
-  // is not startable here until its commits are reachable. One fetch answers
-  // every task; a repo with no remote yields null and nothing is gated, so solo
-  // behaviour is untouched.
-  const isFetchable = await fetchableProbe(root, tasks.map((t) => t.pushedSha)) ?? undefined;
-  const gate = { integrated: (p: number) => landed.has(p), isFetchable };
+  // Both git-backed halves of "may this start", resolved once: an unlanded
+  // phase, and a dependency whose commits have not reached this machine. Asked
+  // at the edge because the pure layer has no business talking to git.
+  const gate = await resolveGate(root, tasks);
 
   if (!tasks.length) {
     console.log('No tasks yet. Apply a plan (baton plan apply <name>) or add one (baton task add "<what>").');

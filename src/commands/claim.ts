@@ -10,7 +10,8 @@
  */
 import { branchExists, createWorktree, currentBranch, headCommit } from '../git.js';
 import { installCommitHook } from '../hooks-git.js';
-import { batonDir, isMaterialized, mutateTasks, type Task } from '../store.js';
+import { resolveGate } from '../gate.js';
+import { batonDir, isMaterialized, loadTasks, mutateTasks, type Task } from '../store.js';
 import { activate, claim, releaseClaim, takeover, type Outcome, type Who } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
 import { join } from 'node:path';
@@ -52,6 +53,14 @@ export async function claimTask(
   const now = new Date().toISOString();
   let adoptedFrom: string | undefined;
 
+  // The gate's git half, resolved before the lock because it talks to git and
+  // nothing slow may run inside a mutation. Every path into the pipeline comes
+  // through here, so this is where the barrier stops being advice: without it
+  // `baton next` refuses a locked task and `baton take <slug>` claims the very
+  // same one. The predicates are keyed by phase number and commit sha, not by
+  // task identity, so they stay true against the fresh read below.
+  const gate = await resolveGate(root, await loadTasks(root));
+
   // Step 1 — win it. Inside the lock, decided against freshly read state.
   const won = await mutateTasks(root, (tasks) => {
     const existing = tasks.find((t) => t.slug === slug);
@@ -61,7 +70,7 @@ export async function claimTask(
       const out = takeover(tasks, slug, who, now, { now: Date.now(), livenessOf: probe });
       return { tasks: out.ok ? out.tasks : null, result: out };
     }
-    const out = claim(tasks, slug, who, now);
+    const out = claim(tasks, slug, who, now, gate);
     return { tasks: out.ok ? out.tasks : null, result: out };
   });
   const task = unwrap(won);
