@@ -27,6 +27,7 @@ import { serveCmd } from './commands/serve.js';
 import { cleanCmd as daemonCleanCmd, psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
 import { mergeCmd } from './commands/merge.js';
 import { integrateCmd } from './commands/integrate.js';
+import { pushCmd } from './commands/push.js';
 import { rmCmd } from './commands/rm.js';
 import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
@@ -138,6 +139,13 @@ program
   .action((slug: string, opts: { squash?: boolean; archive?: boolean }) =>
     run(() => mergeCmd(slug, opts)),
   );
+
+program
+  .command('push')
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .option('--allow-ci', 'permit pushing changes to CI configuration')
+  .description("publish a task's branch and record it as reachable for dependent tasks")
+  .action((slug: string | undefined, opts: { allowCi?: boolean }) => run(() => pushCmd(slug, opts)));
 
 program
   .command('integrate')

@@ -9,6 +9,7 @@
 import { activeBatonRoot, loadTasks, type Task } from '../store.js';
 import { blockers, integrationHold, isDeadlocked, isStalled, openPhase, phaseOf, reviewableBy, stateOf, STALL_GRACE_MS } from '../pipeline.js';
 import { integratedPhases } from '../integrate.js';
+import { fetchableProbe } from '../fetchable.js';
 import { nextFor } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
 import { resolveAgentId } from '../identity.js';
@@ -35,7 +36,12 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
   // offered to anyone. Asked here rather than inside the pure layer, which has
   // no business talking to git.
   const landed = await integratedPhases(root, tasks);
-  const gate = { integrated: (p: number) => landed.has(p) };
+  // Team mode's other half: a dependency marked done on someone else's machine
+  // is not startable here until its commits are reachable. One fetch answers
+  // every task; a repo with no remote yields null and nothing is gated, so solo
+  // behaviour is untouched.
+  const isFetchable = await fetchableProbe(root, tasks.map((t) => t.pushedSha)) ?? undefined;
+  const gate = { integrated: (p: number) => landed.has(p), isFetchable };
 
   if (!tasks.length) {
     console.log('No tasks yet. Apply a plan (baton plan apply <name>) or add one (baton task add "<what>").');
@@ -131,10 +137,24 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
   }
 
   if (isDeadlocked(tasks, gate)) {
-    const waiting = blockers(tasks, gate).filter((b) => b.reason.startsWith('blocked'));
+    const all = blockers(tasks, gate);
+    const waiting = all.filter((b) => b.reason.startsWith('blocked'));
+    // Work that is finished and correct but never left the machine it was
+    // written on. Listing it under "resolve a blocker, or cancel a task" sends
+    // someone to undo work that is already right — the fix is one push.
+    const unpushed = [...new Set(all.flatMap((b) => {
+      const m = /waiting for '([^']+)' to be pushed/.exec(b.reason);
+      return m ? [m[1]!] : [];
+    }))];
     console.log('\n  PIPELINE STALLED: no agent can proceed.');
     for (const b of waiting) console.log(`    ${b.slug}: ${b.reason}`);
-    console.log('  This needs a person — resolve a blocker, or cancel a task to let the phase close.');
+    if (unpushed.length) {
+      console.log(`    ${unpushed.length} finished task${unpushed.length === 1 ? ' is' : 's are'} not on the remote yet:`);
+      for (const s of unpushed) console.log(`      baton push ${s}`);
+    }
+    console.log(waiting.length
+      ? '  This needs a person — resolve a blocker, or cancel a task to let the phase close.'
+      : '  This needs a person — nothing here is wrong, it just has not been published.');
     process.exitCode = 2;
   }
 }

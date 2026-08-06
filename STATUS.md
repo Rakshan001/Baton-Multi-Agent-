@@ -713,11 +713,44 @@ not fetchable, and a push becomes visible after the TTL.
 `isFetchable` on now would mark every dependency "waiting to be pushed" and wedge every
 team plan. The producer comes first.
 
-**Phase 6 remaining:** a `pushedSha` producer (an explicit `baton push <slug>` — recording
-it on a read path would mean a write during GET, which this codebase does not do); then
-wire `isFetchable` into next/take/my_tasks; memory migration to `baton/`; operator/member
-split per §7.6 — note `baton integrate` is listed operator-only there and currently has no
-such check; claims fail-closed.
+### Session 19l — `baton push`: the producer, and the CI guard (§7.4)
+
+The gate from 19k is now live end to end.
+
+- `src/commands/push.ts` — `baton push [slug] [--allow-ci]`. Pushes the branch, records
+  `pushedSha`, clears the fetchable cache so the next `baton next` sees it immediately,
+  and names the tasks that were waiting.
+- `src/git.ts` — `refSha()`, `pushBranch()` (never `--force`: a force-push from an
+  automated path can destroy a teammate's commits, and nothing here needs one).
+- `isFetchable` wired into `baton next`.
+
+**§7.4, the CI guard.** A task scoped to CI config + an agent that edits it + a push is
+remote code execution on the runner. `ciPaths()` covers GitHub Actions, GitLab, CircleCI,
+Jenkins, Azure, Bitbucket, Drone, Travis and Buildkite; anchored, so `vendor/.travis.yml`
+cannot trip it. On by default **for every caller** — `baton push` is a CLI command and
+agents run CLI commands, so a guard that only covered some future "auto" mode would miss
+how this actually gets invoked. Also re-checks state at push time: a cancelled task cannot
+publish, because stopping work is only real if it also stops the work leaving the machine.
+
+Verified live against a bare remote: dependent blocked with *"waiting for 'schema' to be
+pushed"* → `baton push schema` → dependent offered. CI guard refused with the remote still
+holding only `refs/heads/main` (nothing published), then `--allow-ci` pushed and warned.
+
+Fixed while probing: the PIPELINE STALLED message listed nothing and advised "resolve a
+blocker, or cancel a task" when the real fix was a push — it now prints `baton push <slug>`
+and says nothing is wrong, it just has not been published.
+
+1605 tests green (+6).
+
+**Note on suite flakiness (likely the long-standing "1 failure in ~7 runs").** Under CPU
+load — e.g. the graphify rebuild a commit hook launches — timeout-bounded tests fail:
+observed 2 then 8 failures at 95–111s wall clock, all passing in isolation and all passing
+again at 70s once idle. Not a logic bug; the suite is sensitive to machine load. Worth a
+timeout review before trusting a red run.
+
+**Phase 6 remaining:** wire `isFetchable` into `take` and the MCP surface (`next` only so
+far); memory migration to `baton/`; operator/member split per §7.6 — note `baton integrate`
+and `baton push` are operator-only in that table and neither has a check; claims fail-closed.
 
 ### Session 19i — three bugs nobody's tests were watching
 

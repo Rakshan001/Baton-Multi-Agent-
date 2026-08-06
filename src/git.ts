@@ -477,6 +477,24 @@ export async function defaultRemote(cwd?: string): Promise<string | null> {
   return names.includes('origin') ? 'origin' : (names[0] ?? null);
 }
 
+/** The commit a ref points at, or null. Asked of the repo, so it works with no worktree. */
+export async function refSha(ref: string, cwd?: string): Promise<string | null> {
+  const r = await gitTry(['rev-parse', '--verify', `${ref}^{commit}`], cwd);
+  return r.ok ? r.stdout.trim() : null;
+}
+
+/** Push a branch to a remote. Returns git's own words on failure — they are better than ours. */
+export async function pushBranch(
+  remote: string,
+  branch: string,
+  cwd?: string,
+): Promise<{ ok: boolean; error: string }> {
+  // No --force, ever. A force-push from an automated path can destroy a
+  // teammate's commits, and nothing in the pipeline needs one.
+  const r = await gitTry(['push', '--set-upstream', remote, `${branch}:${branch}`], cwd);
+  return { ok: r.ok, error: r.ok ? '' : (r.stderr || r.stdout) };
+}
+
 /** Update remote-tracking refs. Best-effort: offline is a normal state, not an error. */
 export async function fetchRemote(remote: string, cwd?: string): Promise<boolean> {
   const r = await gitTry(['fetch', '--quiet', '--prune', remote], cwd);

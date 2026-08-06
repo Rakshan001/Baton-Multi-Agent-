@@ -75,6 +75,28 @@ Merge a task's branch into the current branch. Squashes to one commit and archiv
 baton merge <slug> [--no-squash] [--no-archive]
 ```
 
+### `push`
+Publish a task's branch and record it as reachable for tasks that depend on it.
+
+```bash
+baton push [slug] [--allow-ci]
+```
+
+In team mode, `done` on a teammate's machine does not mean the commits are on
+yours. A dependent task stays blocked — *"waiting for `<slug>` to be pushed"* —
+until this records that the work is actually on the shared remote. Solo repos
+have no remote, so nothing is gated and this is a no-op.
+
+Push is an explicit act, never a side effect of `baton done`: publishing to a
+shared remote is something you should have asked for.
+
+**Refuses to push CI configuration** (`.github/workflows/`, `Jenkinsfile`,
+`.gitlab-ci.yml`, …) unless you pass `--allow-ci`. An agent that can edit a
+workflow and push it has remote code execution on your CI runner, with whatever
+secrets that runner holds. The guard applies to every caller, because agents run
+CLI commands too. It also re-checks state at push time, so a task cancelled
+mid-flight cannot publish.
+
 ### `integrate`
 Land a finished phase's branches on the base, lifting the phase barrier.
 
