@@ -836,23 +836,40 @@ Each one reproduced before it was touched; each guard mutation-tested.
    radius, demo fixtures kept working). Spec:
    `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.
 
-1. **tmux test-environment caveat** (2026-06-12): a daemon launched inside a
+1. **Rename to "Baton Lane" — decided 2026-08-06, not yet done.** `baton-cli` on npm is
+   taken by `quabug/baton` ("Git-backed session handoff for Claude Code"), so the npm
+   name has to change. Checked before deciding: that package is 31 downloads/month, 0
+   stars, 0 forks, 15 versions published in one 4-hour burst on 2026-03-15 and untouched
+   since — a dead weekend project, so the branding collision is theoretical and there is
+   no reason to abandon the Baton identity. Bare `baton` on npm is a 2013 v0.0.0
+   placeholder (disputable via npm policy if ever wanted; `baton-cli` is not).
+
+   The change is deliberately small: **npm name → `batonlane`, and nothing else.** The
+   typed command stays `baton` — `bin` and package name are independent, and at 31
+   downloads/month there is no realistic collision. `.baton/` on disk keeps its name so
+   no existing install breaks. "Lane" was chosen over the alternatives because it is
+   legible to developers without explanation and already matches the product: phase
+   **swimlanes** are in the phase-7 UI spec below.
+
+   To do: `name` in package.json, README/docs/AGENTS.md references, the landing site,
+   and the domain (`batonlane.com` + `.io`, GitHub `batonlane` — all free as of today).
+2. **tmux test-environment caveat** (2026-06-12): a daemon launched inside a
    sandboxed wrapper (e.g. the IDE preview helper) can wedge the shared tmux server
    (orphaned control client stops draining → every tmux command on the machine
    hangs). Hardening added: control clients attach with `-d` (kick stale clients),
    all one-shot tmux calls have a 10s timeout, errors surface as clean 4xx/503.
    Normal usage — `baton serve` run from a real terminal — is unaffected (verified
    end-to-end). If tmux ever wedges: `pkill -f 'tmux -C attach' && rm -rf /tmp/tmux-$UID`.
-2. **Visual pass** — confirmed in-browser 2026-06-12: Launch 3-way start mode (radio
+3. **Visual pass** — confirmed in-browser 2026-06-12: Launch 3-way start mode (radio
    group, Preview badge clears on real modes), real claude TUI rendering in the Live
    Terminal tab via SSE, keystrokes from the browser moving the TUI selector, tmux
    session create/adopt/kill from the UI. Still pending a look when Chrome MCP is up:
    Handoff "suggested" chip (demo-verified earlier).
-3. **Non-Claude token usage** — codex/gemini session formats aren't parsed yet
+4. **Non-Claude token usage** — codex/gemini session formats aren't parsed yet
    (src/usage.ts is Claude-only); their sessions show no token data.
-4. **Fleet broadcast** (Daintree-style: one prompt → N sessions at once) — researched,
+5. **Fleet broadcast** (Daintree-style: one prompt → N sessions at once) — researched,
    deferred by user choice this round.
-5. **Roadmap (MVP.md)** — M3 redaction-first secret stripping for safe export; M4 link
+6. **Roadmap (MVP.md)** — M3 redaction-first secret stripping for safe export; M4 link
    sharing + permissions (hosted phase).
 
 ## Where things live
