@@ -40,8 +40,9 @@ afterEach(async () => {
 async function load() {
   const store = await import('../src/store.js');
   const spawn = await import('../src/spawn.js');
+  const board = await import('../src/board.js');
   const { bus } = await import('../src/events.js');
-  return { ...store, ...spawn, bus };
+  return { ...store, ...spawn, ...board, bus };
 }
 
 /** Ask the OS directly, rather than trusting anything under test. */
@@ -56,6 +57,9 @@ async function taskAt(root: string, slug: string) {
   await addTask(root, {
     slug, task: 'a task', agent: 'claude', branch: `baton/${slug}`,
     worktreePath: wt, status: 'todo', createdAt: new Date().toISOString(),
+    // Materialized: the status board skips tasks with no baseCommit, so
+    // without this a started run has no row to be missing from.
+    baseCommit: 'abc',
   } as never);
   return wt;
 }
@@ -203,5 +207,34 @@ describe('agent output is redacted before it leaves the process', () => {
 
     // The metacharacters arrived as part of the string, not as a second command.
     expect(seen.join('\n')).toContain('safe; touch /tmp/baton-pwned-marker');
+  }, 20_000);
+});
+
+describe('the status board and the runs Baton itself started', () => {
+  /**
+   * `baton start` spawns a one-shot print-mode child (`claude -p …`). It is too
+   * short-lived and too generic to be caught by the ps scan behind the board's
+   * agent column, so a task with an agent actively working in it drew as
+   * nobody's — while the Agents screen, which merges `runningHeadless()`,
+   * showed the same run correctly. One fact, two surfaces, two answers, and the
+   * board is the one people read to decide whether a task is being worked on.
+   */
+  it('names the agent of a headless run the process scan has not seen yet', async () => {
+    const { startAgent, stopAgent, collectStatus } = await load();
+    await taskAt(root, 'boarded');
+
+    // The mechanism, made explicit: `detectAgents` memoizes a scan for 5s while
+    // the poller ticks every 2s, so this first call caches "nobody is working
+    // here" — and every board render for the next 5s replays that answer.
+    expect((await collectStatus(root)).find((r) => r.slug === 'boarded')?.agent).toBe(null);
+
+    // Outlives the assertion, so this tests visibility rather than a race.
+    await startAgent('boarded', { agent: 'nodex9', prompt: 'setTimeout(() => {}, 600000);' }, root);
+    try {
+      const rows = await collectStatus(root);
+      expect(rows.find((r) => r.slug === 'boarded')?.agent).toBe('nodex9');
+    } finally {
+      stopAgent('boarded');
+    }
   }, 20_000);
 });
