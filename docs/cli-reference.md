@@ -75,6 +75,31 @@ Merge a task's branch into the current branch. Squashes to one commit and archiv
 baton merge <slug> [--no-squash] [--no-archive]
 ```
 
+### `integrate`
+Land a finished phase's branches on the base, lifting the phase barrier.
+
+```bash
+baton integrate [phase] [--dry-run]
+```
+
+A phase is not over when its last task is marked done — it is over when its work
+is **on the base branch**. Until then the branches exist only side by side, never
+combined, so two of them can each be correct and still not compose. Baton checks
+that automatically (writing nothing) and keeps the next phase locked while it
+would fail; this is the command that clears it.
+
+Omit `[phase]` and it picks the one holding the barrier. `--dry-run` reports
+whether the phase would land without merging anything.
+
+The check is **cumulative** — each branch is trialled against the result of the
+previous one, not against the base independently. Two branches can both merge
+into the base cleanly and still conflict with each other, and that is the case
+the barrier exists for. A conflict refuses the whole command: nothing is merged,
+so a phase never ends up half-landed.
+
+Merges are true merges, not squashes, so the individual commits — and their
+`Baton-Task:` trailers — stay on the base for `baton history reindex`.
+
 ### `history`
 Trace which task / agent / commits touched a file (from the local index). Omit `[file]` to list all tasks.
 

@@ -101,16 +101,52 @@ export function phaseOf(t: PipelineTask): number {
 }
 
 /**
- * The lowest phase still holding work, or Infinity when every phased task is
+ * The lowest phase with unfinished work, or Infinity when every phased task is
  * finished. Phase 0 is skipped: it is the ungated bucket, not a real phase.
  */
-export function openPhase(tasks: readonly PipelineTask[]): number {
+function lowestUnfinished(tasks: readonly PipelineTask[]): number {
   let open = Infinity;
   for (const t of tasks) {
     const p = phaseOf(t);
     if (p >= 1 && !TERMINAL.has(stateOf(t)) && p < open) open = p;
   }
   return open;
+}
+
+/**
+ * The phase whose tasks are all finished but whose branches have not landed on
+ * the base — and which is therefore still holding the barrier. Null when
+ * nothing is held.
+ *
+ * A phase is not over when its last task is marked done; it is over when its
+ * work is *on the base branch*. Between those two moments the branches exist
+ * only side by side, never combined, so two of them can each be correct and
+ * still not compose. Opening the next phase there hands every agent in it a
+ * base that is missing the phase before — and the conflict surfaces later, in
+ * someone else's task, as a merge nobody can attribute.
+ *
+ * Only phases below the next unfinished one are checked: with no later phase
+ * waiting there is nothing to lock, and reporting a hold would turn "your plan
+ * is finished" into a false alarm.
+ */
+export function integrationHold(
+  tasks: readonly PipelineTask[],
+  opts: EligibilityOpts = {},
+): number | null {
+  const { integrated } = opts;
+  if (!integrated) return null;                 // solo default: no barrier to hold
+  const next = lowestUnfinished(tasks);
+  if (next === Infinity) return null;
+  for (let p = 1; p < next; p++) if (phaseComplete(tasks, p) && !integrated(p)) return p;
+  return null;
+}
+
+/**
+ * The highest phase an agent may start work in. Held at an unintegrated phase
+ * when one exists, otherwise the lowest phase with work left.
+ */
+export function openPhase(tasks: readonly PipelineTask[], opts: EligibilityOpts = {}): number {
+  return integrationHold(tasks, opts) ?? lowestUnfinished(tasks);
 }
 
 /** Why one dependency is not satisfied, or null when it is. */
@@ -136,6 +172,12 @@ export interface EligibilityOpts {
    * fetch it? Omit entirely in solo mode, where `done` already implies local.
    */
   isFetchable?: (sha: string | undefined) => boolean;
+  /**
+   * Have phase N's branches landed on the base? Injected because answering it
+   * means asking git, and this module stays pure. Omit and the barrier behaves
+   * as it always has — a phase lifts the moment its last task is marked done.
+   */
+  integrated?: (phase: number) => boolean;
 }
 
 /**
@@ -154,7 +196,7 @@ export function eligibleFor(
   tasks: readonly PipelineTask[],
   opts: EligibilityOpts = {},
 ): PipelineTask[] {
-  const open = openPhase(tasks);
+  const open = openPhase(tasks, opts);
   const bySlug = new Map(tasks.map((t) => [t.slug, t]));
   return tasks.filter((t) => {
     if (stateOf(t) !== 'queued') return false;
@@ -227,7 +269,8 @@ export function blockers(
   tasks: readonly PipelineTask[],
   opts: EligibilityOpts = {},
 ): Blocker[] {
-  const open = openPhase(tasks);
+  const held = integrationHold(tasks, opts);
+  const open = held ?? openPhase(tasks, opts);
   const bySlug = new Map(tasks.map((t) => [t.slug, t]));
   const out: Blocker[] = [];
   for (const t of tasks) {
@@ -248,7 +291,16 @@ export function blockers(
       continue;
     }
     if (phaseOf(t) > open) {
-      out.push({ slug: t.slug, reason: `phase ${phaseOf(t)} locked behind phase ${open}` });
+      // "locked behind phase 1" reads as "phase 1 is still being worked on",
+      // which sends someone looking for an agent who finished hours ago. When
+      // the hold is integration, the work is done and the branches are the
+      // thing outstanding — say that, and name the command that clears it.
+      out.push({
+        slug: t.slug,
+        reason: held !== null
+          ? `phase ${phaseOf(t)} locked — phase ${held} is finished but not integrated (baton integrate)`
+          : `phase ${phaseOf(t)} locked behind phase ${open}`,
+      });
       continue;
     }
     for (const d of t.dependsOn ?? []) {

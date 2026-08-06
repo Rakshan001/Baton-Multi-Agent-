@@ -7,7 +7,8 @@
  * a pipeline that genuinely cannot advance says so in those words.
  */
 import { activeBatonRoot, loadTasks, type Task } from '../store.js';
-import { blockers, isDeadlocked, isStalled, openPhase, phaseOf, reviewableBy, stateOf, STALL_GRACE_MS } from '../pipeline.js';
+import { blockers, integrationHold, isDeadlocked, isStalled, openPhase, phaseOf, reviewableBy, stateOf, STALL_GRACE_MS } from '../pipeline.js';
+import { integratedPhases } from '../integrate.js';
 import { nextFor } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
 import { resolveAgentId } from '../identity.js';
@@ -29,6 +30,12 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
   const root = await activeBatonRoot();
   const tasks = await loadTasks(root);
   const agent = opts.agent ?? (await resolveAgentId());
+  // The barrier's git half, resolved once: a phase whose tasks are all done but
+  // whose branches have not landed still holds, so the next phase must not be
+  // offered to anyone. Asked here rather than inside the pure layer, which has
+  // no business talking to git.
+  const landed = await integratedPhases(root, tasks);
+  const gate = { integrated: (p: number) => landed.has(p) };
 
   if (!tasks.length) {
     console.log('No tasks yet. Apply a plan (baton plan apply <name>) or add one (baton task add "<what>").');
@@ -69,7 +76,7 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
     console.log('');
   }
 
-  const pick = nextFor(agent, tasks);
+  const pick = nextFor(agent, tasks, gate);
   if (pick) {
     console.log(`Next for ${agent}:\n`);
     for (const line of describeTask(pick)) console.log(line);
@@ -86,7 +93,7 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
 
   console.log(`Nothing eligible for ${agent}.\n`);
 
-  const open = openPhase(tasks);
+  const open = openPhase(tasks, gate);
   if (open === Infinity) {
     console.log('  ✓ every phase is complete.');
     return;
@@ -94,8 +101,18 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
 
   const inOpen = tasks.filter((t) => phaseOf(t) === open);
   const remaining = inOpen.filter((t) => stateOf(t) !== 'done' && stateOf(t) !== 'cancelled');
+  // A phase held by integration has 0 of N remaining, and printing that under
+  // "holds the barrier" reads as a bug in Baton rather than a step for you.
+  // The work really is finished; the branches are what is outstanding.
+  if (integrationHold(tasks, gate) === open) {
+    console.log(`  phase ${open} is finished but not integrated — its branches are not on the base yet.`);
+    console.log(`    land it:  baton integrate ${open}      (check first: baton integrate ${open} --dry-run)`);
+    const lockedByIt = tasks.filter((t) => phaseOf(t) > open && stateOf(t) === 'queued');
+    if (lockedByIt.length) console.log(`    ${lockedByIt.length} task${lockedByIt.length === 1 ? ' in a later phase waits' : 's in later phases wait'} on it`);
+    return;
+  }
   console.log(`  phase ${open} holds the barrier: ${remaining.length} of ${inOpen.length} remaining`);
-  for (const b of blockers(tasks).filter((x) => remaining.some((t) => t.slug === x.slug))) {
+  for (const b of blockers(tasks, gate).filter((x) => remaining.some((t) => t.slug === x.slug))) {
     console.log(`    ${b.slug}  ${b.reason}`);
   }
 
@@ -113,8 +130,8 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
     return;
   }
 
-  if (isDeadlocked(tasks)) {
-    const waiting = blockers(tasks).filter((b) => b.reason.startsWith('blocked'));
+  if (isDeadlocked(tasks, gate)) {
+    const waiting = blockers(tasks, gate).filter((b) => b.reason.startsWith('blocked'));
     console.log('\n  PIPELINE STALLED: no agent can proceed.');
     for (const b of waiting) console.log(`    ${b.slug}: ${b.reason}`);
     console.log('  This needs a person — resolve a blocker, or cancel a task to let the phase close.');

@@ -16,6 +16,7 @@ import { briefStalenessWarning, readBrief, setBriefStatus } from '../handoff/bri
 import { resolveTask } from './pass.js';
 import { isTerminal, stateOf } from '../pipeline.js';
 import { nextFor } from '../lifecycle.js';
+import { integratedPhases } from '../integrate.js';
 import { claimTask, ClaimRefused } from './claim.js';
 import { describeTask } from './next.js';
 import { finishTask, reportFinish } from './finish.js';
@@ -30,7 +31,12 @@ async function tryPipeline(root: string, slug: string | undefined, resume: boole
   if (!target) {
     // No slug: only take over the pipeline when it actually has work for us.
     // Otherwise this is a brief pickup and we must not interfere.
-    const pick = nextFor(agent, await loadTasks(root));
+    // Gated on integration too: an unlanded phase locks the next one, and
+    // `take` with no slug is the one path that starts work without a human
+    // naming it — so it must not hand out work `baton next` refuses to offer.
+    const all = await loadTasks(root);
+    const landed = await integratedPhases(root, all);
+    const pick = nextFor(agent, all, { integrated: (p) => landed.has(p) });
     if (!pick) return false;
     target = pick.slug;
   } else {

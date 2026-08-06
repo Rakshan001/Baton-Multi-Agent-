@@ -647,9 +647,45 @@ Three bugs found by probing rather than reading:
 1573 tests green (+20). Seven mutations tested, including restoring the exact hooks-path
 bug, which failed four tests.
 
-**Still open in phase 5:** barrier integration — an integration conflict between finished
-but unmerged branches in a phase should hold the barrier and keep the next phase locked
-(§5, "barrier" row). Not started.
+### Session 19j — the integration barrier (phase 5, part 2 — phase 5 complete)
+
+A phase is not over when its last task is marked done; it is over when its work is on the
+base. Between those moments the branches exist only side by side, and two can each be
+correct while still not composing.
+
+Chosen shape (user's call): **detect automatically, integrate on command.** The barrier
+checks and never writes; `baton integrate [phase] [--dry-run]` is the only thing that
+moves the base branch. Auto-merging into someone's base on a 2s poll was the rejected
+alternative.
+
+- `src/pipeline.ts` — `integrationHold()`; `openPhase(tasks, opts)` now holds at a
+  finished-but-unlanded phase. Pure: the git fact arrives as injected `integrated(phase)`,
+  the same shape as `isFetchable`. Omitting it keeps the old behaviour exactly.
+- `src/git.ts` — `trialIntegrate()` on `git merge-tree --write-tree`, **cumulative**: each
+  branch trialled against the previous result. Per-branch-vs-base would miss the spec's own
+  example (two branches clean alone, conflicting together) and open the next phase on a base
+  that never built. Writes nothing — no branch, no index, no working tree.
+- `src/integrate.ts` — `integratedPhases()` precomputes the answer so gating stays sync.
+- Wired into `next`, `take`, `my_tasks` and `take_task` — advisory surfaces AND the two
+  paths that actually start work.
+
+Two bugs, both found by running the flow, neither by the unit tests:
+
+1. **The trial commit carried one parent.** With no ancestry link to the branch just
+   merged, the next step computed its merge base against the original base — so a branch
+   rebased or merged onto an earlier one in the same phase (the ordinary way people resolve
+   this) read as conflicting forever, with nothing the user could do to clear it.
+2. **Integration squashed.** A squash copies content and keeps no link, so the trial passed
+   and the real merge conflicted, leaving the phase HALF-INTEGRATED — the one outcome the
+   command's own comment called worst. Now a true merge, which also keeps the `Baton-Task:`
+   trailers on the base that phase 5 part 1 built `history reindex` around.
+
+1593 tests green (+16). Verified end to end in a real repo: barrier holds, `--dry-run`
+names the conflicting branch and file with `main` untouched, resolution accepted,
+both branches landed, phase 2 offered.
+
+**Deviation from spec §9:** one commit per task, not one per phase. A phase-wide squash
+would land the work and lose which task produced it.
 
 ### Session 19i — three bugs nobody's tests were watching
 
@@ -680,10 +716,14 @@ Each one reproduced before it was touched; each guard mutation-tested.
 
 ## Pending / next 🔜
 
-0. **Task pipeline, remaining phases** — phases 2, 3 and 3.5 are done (plans, apply,
-   board, `task add`, lifecycle, the done gate, the review gate). Next: the MCP surface
-   (`my_tasks`, `take_task`, `complete_task`, `report_blocked`), `Baton-Task:` commit
-   trailers, team mode, and UI swimlanes. Spec:
+0. **Task pipeline — phases 1–5 done.** Plans + apply, board, `task add`, lifecycle,
+   the done gate, the review gate, the MCP surface (`my_tasks`, `take_task`,
+   `complete_task`, `report_blocked`), `Baton-Task:` trailers + `history reindex`, and
+   the integration barrier + `baton integrate`. **Next: phase 6 — team mode** (memory
+   migration to `baton/`, push/fetch gating, `isFetchable` with caching — defined in
+   pipeline.ts but still unwired, operator/member split, claims fail-closed), then
+   **phase 7 — UI** (phase swimlanes, markdown plan view, cancel controls with blast
+   radius, demo fixtures kept working). Spec:
    `docs/superpowers/specs/2026-08-05-task-pipeline-design.md`.
 
 1. **tmux test-environment caveat** (2026-06-12): a daemon launched inside a

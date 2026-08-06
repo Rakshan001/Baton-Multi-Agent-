@@ -26,6 +26,7 @@ import { historyReindexCmd, stampCommitCmd } from './commands/reindex.js';
 import { serveCmd } from './commands/serve.js';
 import { cleanCmd as daemonCleanCmd, psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
 import { mergeCmd } from './commands/merge.js';
+import { integrateCmd } from './commands/integrate.js';
 import { rmCmd } from './commands/rm.js';
 import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
@@ -136,6 +137,15 @@ program
   .description("merge a task's branch into the current branch (squash + archive)")
   .action((slug: string, opts: { squash?: boolean; archive?: boolean }) =>
     run(() => mergeCmd(slug, opts)),
+  );
+
+program
+  .command('integrate')
+  .argument('[phase]', 'phase number (default: the one holding the barrier)')
+  .option('--dry-run', 'check whether the phase would land, write nothing')
+  .description("land a finished phase's branches on the base, lifting the barrier")
+  .action((phase: string | undefined, opts: { dryRun?: boolean }) =>
+    run(() => integrateCmd(phase, opts)),
   );
 
 program

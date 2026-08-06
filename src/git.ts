@@ -451,6 +451,87 @@ export async function mergeBranch(
   throw new Error(r.stderr || `git merge ${branch} failed`);
 }
 
+/**
+ * Conflicted paths from `git merge-tree --write-tree` output.
+ *
+ * On conflict the command prints the tree OID, then one `<mode> <oid> <stage>\t<path>`
+ * line per conflicting stage, then human-readable messages. The stage lines are
+ * what we read: they are machine format and cover every conflict kind, whereas
+ * the "CONFLICT (content): …" prose varies by type (add/add, modify/delete,
+ * rename/rename) and would need a parser per phrasing.
+ */
+export function parseMergeTreeConflicts(raw: string): string[] {
+  const paths = new Set<string>();
+  for (const line of raw.split('\n')) {
+    const m = /^\d{6} [0-9a-f]{40,} [123]\t(.+)$/.exec(line);
+    if (m) paths.add(m[1]!);
+  }
+  return [...paths];
+}
+
+/** Is every commit of `maybeAncestor` already reachable from `tip`? */
+export async function isAncestor(maybeAncestor: string, tip: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['merge-base', '--is-ancestor', maybeAncestor, tip], cwd);
+  return r.ok;
+}
+
+export interface IntegrationTrial {
+  /** Branches that combined cleanly, in the order they were tried. */
+  ok: string[];
+  /** The first branch that would not combine, and the paths that clashed. */
+  conflict: { branch: string; files: string[] } | null;
+}
+
+/**
+ * Would these branches all land on `base` together? Answers without touching
+ * the working tree, the index, or any branch.
+ *
+ * Each branch is merged onto the RESULT of the previous one, not onto `base`
+ * independently — because that is the question the barrier is asking, and the
+ * two are not the same. Two branches can each merge into base cleanly and still
+ * conflict with each other; the spec's own example is exactly that (auth-schema
+ * and config both fine alone, `src/db.ts` clashing once combined). Checking
+ * them separately reports all-clear and opens the next phase on a base that
+ * cannot actually be built.
+ *
+ * `commit-tree` writes throwaway commits so the next step has something to
+ * merge onto. They are never referenced by any ref, so they are unreachable the
+ * moment this returns and `git gc` reclaims them; nothing here is visible in
+ * log, status, or branch.
+ */
+export async function trialIntegrate(
+  base: string,
+  branches: readonly string[],
+  cwd?: string,
+): Promise<IntegrationTrial> {
+  let head = base;
+  const ok: string[] = [];
+  for (const branch of branches) {
+    const r = await gitTry(['merge-tree', '--write-tree', head, branch], cwd);
+    if (!r.ok) {
+      const files = parseMergeTreeConflicts(`${r.stdout}\n${r.stderr}`);
+      // A merge-tree that failed for a reason other than a conflict (a bad ref,
+      // an unrelated history) has no stage lines. Reporting that as a conflict
+      // with zero files would read as "something clashed but we can't say what"
+      // — name the branch and let the caller surface git's own words.
+      if (files.length === 0) throw new Error(r.stderr || `git merge-tree ${head} ${branch} failed`);
+      return { ok, conflict: { branch, files } };
+    }
+    const tree = r.stdout.split('\n')[0]!.trim();
+    // BOTH parents, and this is load-bearing. With only `head` the trial commit
+    // has no ancestry link to the branch just merged, so the NEXT step computes
+    // its merge base against the original base instead — and a branch that was
+    // rebased or merged onto an earlier one in the same phase (the ordinary way
+    // people resolve exactly this conflict) reads as conflicting forever, with
+    // no way to clear it. A real merge commit has two parents; so must this one.
+    const c = await gitTry(['commit-tree', tree, '-p', head, '-p', branch, '-m', 'baton: integration trial'], cwd);
+    if (!c.ok) throw new Error(c.stderr || 'git commit-tree failed');
+    head = c.stdout.trim();
+    ok.push(branch);
+  }
+  return { ok, conflict: null };
+}
+
 /** Archive a branch tip to a hidden ref (refs/baton/archive/<slug>) — invisible
  *  to log/branch, never pushed, but preserved & bisectable. Best-effort. */
 export async function archiveBranch(

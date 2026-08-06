@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  blockers, eligibleFor, isDeadlocked, isStalled, openPhase, phaseComplete, phaseOf,
-  stateOf, STALL_GRACE_MS, takeable, type PipelineTask,
+  blockers, eligibleFor, integrationHold, isDeadlocked, isStalled, openPhase, phaseComplete,
+  phaseOf, stateOf, STALL_GRACE_MS, takeable, type PipelineTask,
 } from '../src/pipeline.js';
 
 /** Terse task builder — `t('a', { phase: 1, state: 'done' })`. */
@@ -260,5 +260,67 @@ describe('phaseComplete — when the barrier may lift', () => {
 
   it('an empty phase is not "complete" — there is nothing to integrate', () => {
     expect(phaseComplete([t('a', { phase: 2 })], 1)).toBe(false);
+  });
+});
+
+describe('integrationHold — a phase is over when it lands, not when it is marked done', () => {
+  // Phase 1 finished; phase 2 waiting. `integrated` is the injected git fact.
+  const plan = [
+    t('schema', { phase: 1, state: 'done' }),
+    t('seed', { phase: 1, state: 'done' }),
+    t('api', { phase: 2 }),
+  ];
+
+  it('holds the barrier at a finished phase whose branches have not landed', () => {
+    expect(integrationHold(plan, { integrated: () => false })).toBe(1);
+    expect(openPhase(plan, { integrated: () => false })).toBe(1);
+  });
+
+  it('lifts the moment that phase is integrated', () => {
+    expect(integrationHold(plan, { integrated: () => true })).toBe(null);
+    expect(openPhase(plan, { integrated: () => true })).toBe(2);
+  });
+
+  it('keeps the old behaviour when nobody injects the fact', () => {
+    // Solo mode never asks git, and must not start reporting a hold it cannot
+    // check — omitting `integrated` has to mean exactly what it meant before.
+    expect(integrationHold(plan)).toBe(null);
+    expect(openPhase(plan)).toBe(2);
+  });
+
+  it('withholds phase-2 work from every agent while phase 1 is unlanded', () => {
+    expect(eligibleFor('claude', plan, { integrated: () => false })).toEqual([]);
+    expect(eligibleFor('claude', plan, { integrated: () => true }).map((x) => x.slug)).toEqual(['api']);
+  });
+
+  it('says the phase is finished-but-unintegrated, not that it is still running', () => {
+    // "locked behind phase 1" would send someone hunting for an agent that
+    // finished hours ago. The outstanding thing is the branches.
+    const [b] = blockers(plan, { integrated: () => false });
+    expect(b?.reason).toContain('phase 1 is finished but not integrated');
+    expect(b?.reason).toContain('baton integrate');
+  });
+
+  it('holds at the LOWEST unintegrated phase, not the most recent one', () => {
+    const two = [
+      t('a', { phase: 1, state: 'done' }),
+      t('b', { phase: 2, state: 'done' }),
+      t('c', { phase: 3 }),
+    ];
+    expect(integrationHold(two, { integrated: (p) => p !== 1 })).toBe(1);
+  });
+
+  it('reports no hold once the plan is finished — nothing is waiting on it', () => {
+    // Every task terminal: there is no next phase to lock, so a hold here would
+    // turn "your plan is done" into a false alarm about branches.
+    const finished = [t('a', { phase: 1, state: 'done' }), t('b', { phase: 2, state: 'done' })];
+    expect(integrationHold(finished, { integrated: () => false })).toBe(null);
+  });
+
+  it('does not hold on a phase that never had any tasks', () => {
+    // phaseComplete is false for an empty phase, so a plan numbered 1 then 3
+    // must not wedge on the gap between them.
+    const gap = [t('a', { phase: 1, state: 'done' }), t('c', { phase: 3 })];
+    expect(integrationHold(gap, { integrated: (p) => p !== 2 })).toBe(null);
   });
 });
