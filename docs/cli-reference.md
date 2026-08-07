@@ -303,6 +303,22 @@ baton route "<task description>"
 
 ## Shared memory — `memory`
 
+Facts default to tracked `baton/memory/facts/`, so what one agent learns reaches
+every clone. `--local-only` keeps one in gitignored `.baton/memory/facts/`, and
+that choice is sticky — `baton memory migrate` will not later publish it. Both
+areas are always read.
+
+```bash
+baton memory add "…" --local-only   # stays on this machine
+baton memory migrate --dry-run      # move existing facts into git
+baton memory migrate
+```
+
+`migrate` re-scans every fact on the way through and refuses to publish anything
+key-shaped: locally a stored credential is a file on one disk, tracked it is a
+push, and a leak found after a push is a key rotation rather than a deletion.
+Those facts stay local and are named in the report — refused, not destroyed.
+
 Evidence-anchored facts agents learned. See [Project memory](./memory.md).
 
 ```bash

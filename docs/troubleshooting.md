@@ -151,7 +151,8 @@ Everything is local to your repo and machine:
 
 - **Tasks / worktrees** — branches `baton/<slug>` with worktrees under
   `.baton/wt/<slug>`.
-- **Memory** — evidence-anchored facts at `.baton/memory/facts/` (always the
+- **Memory** — evidence-anchored facts at `baton/memory/facts/` (tracked) and
+  `.baton/memory/facts/` (local-only); both are read (always the
   **main** repo, even when written from a worktree).
 - **Reports** — completion reports at `.baton/reports/<slug>.md`.
 - **History** — a local SQLite file-touch index.

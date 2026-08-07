@@ -15,7 +15,7 @@
 import { rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { batonDir } from './store.js';
-import { memoryDir, mainRepoRoot } from './memory.js';
+import { memoryAreas, mainRepoRoot } from './memory.js';
 import { loadKb } from './kb/state.js';
 import { storageUsage, dirSize } from './storage.js';
 import { closeHistoryDb } from './history.js';
@@ -173,7 +173,9 @@ export async function purgeStorage(root: string, categories: PurgeCategory[]): P
   }
 
   if (set.has('memory')) {
-    await rm(memoryDir(mainRoot), { recursive: true, force: true });
+    // Both areas. Purging only the local one would leave the tracked facts
+    // in the working tree, reported as deleted and still recalled.
+    for (const { dir } of memoryAreas(mainRoot)) await rm(dir, { recursive: true, force: true });
     deleted.push({ category: 'memory', count: 1 });
   }
 

@@ -360,14 +360,18 @@ export async function startMcpServer(): Promise<void> {
         files: z.array(z.string()).optional().describe('Repo-relative files this fact is about (evidence anchors, max 8)'),
         agent: z.string().optional().describe('Your agent name, e.g. "claude"'),
         task: z.string().optional().describe('Task slug you are working on'),
+        local_only: z.boolean().optional().describe('Keep this fact out of git — for something private to this machine, not for secrets (those are refused outright)'),
       },
     },
-    async ({ fact, type, files, agent, task }) => {
+    async ({ fact, type, files, agent, task, local_only }) => {
       try {
         // memory.ts resolves the MAIN repo root internally (worktree-safe).
-        const saved = await saveMemory(memRoot, { fact, type, files, agent, task });
+        const saved = await saveMemory(memRoot, { fact, type, files, agent, task, localOnly: local_only });
         return asText({
           saved: saved.id,
+          // Where it went, always — an agent that cannot see this cannot tell
+          // whether it just wrote something the whole team will read.
+          shared: saved.area !== 'local',
           supersedes: saved.supersedes,
           anchoredFiles: saved.anchors.files.map((f) => f.path),
           // Write-time reconciliation (M8): you are the judge — merge or ignore.

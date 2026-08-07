@@ -17,7 +17,8 @@ machine state, safe to delete and regenerate.
 | `.baton/tasks.json` | The task registry (slug, branch, worktree path, base commit) | [src/store.ts](../src/store.ts) |
 | `.baton/kb.json` | Knowledge-base state: sub-projects, graph paths, merged graph, share flag | [src/kb/state.ts](../src/kb/state.ts) |
 | `.baton/kb/merged-graph.json` | Cross-project merged graph (only when more than one project) | [src/kb/state.ts](../src/kb/state.ts) |
-| `.baton/memory/facts/` | One markdown file per evidence-anchored memory fact | [src/memory.ts](../src/memory.ts) |
+| `baton/memory/facts/` | One markdown file per evidence-anchored memory fact — **tracked**, the default | [src/memory.ts](../src/memory.ts) |
+| `.baton/memory/facts/` | The same, for facts kept out of git (`--local-only`) | [src/memory.ts](../src/memory.ts) |
 | `.baton/memory/retention.json` | Persisted memory retention policy | [src/memory.ts](../src/memory.ts) |
 | `.baton/reports/<slug>.md` | One report per merged task (human/agent readable mirror) | [src/reports.ts](../src/reports.ts) |
 | `.baton/history.db` | Append-only SQLite index of which task/agent/commits touched each file | [src/history.ts](../src/history.ts) |
@@ -47,11 +48,13 @@ or corrupt file is treated as an empty list — Baton starts fresh.
 
 ### Memory facts
 
-Memory always lives at `.baton/memory/facts/` in the **main repo**, even when an
-agent is working from a worktree. Each fact is a markdown file storing the commit
-and content-hashes of the files it describes. When those anchors change, the fact
-is marked STALE on read and withheld from agents. See
-[memory.md](./memory.md).
+Memory always lives in the **main repo**, even when an agent is working from a
+worktree. New facts go to tracked `baton/memory/facts/`; `--local-only` keeps one
+in gitignored `.baton/memory/facts/`. Both are always read, so a part-migrated
+repo recalls exactly what it did before. Each fact is a markdown file storing the
+commit and content-hashes of the files it describes. When those anchors change,
+the fact is marked STALE on read and withheld from agents. Move existing facts
+with `baton memory migrate`. See [memory.md](./memory.md).
 
 ### Storage buckets
 
@@ -174,5 +177,5 @@ From the repo [.gitignore](../.gitignore):
 
 - [routing.md](./agent-routing.md) — how `baton.config.json` rules and tiers resolve.
 - [knowledge-base.md](./knowledge-graph.md) — graphify, `CODEBASE.md`, and the `kb/` share dir.
-- [memory.md](./memory.md) — evidence-anchored facts under `.baton/memory/facts/`.
+- [memory.md](./memory.md) — evidence-anchored facts under `baton/memory/facts/` (tracked) or `.baton/memory/facts/` (local-only).
 - [../README.md](../README.md) — project overview and quickstart.

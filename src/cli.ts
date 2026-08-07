@@ -44,7 +44,7 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
-import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
+import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
@@ -313,9 +313,16 @@ memory
   .option('--type <type>', 'decision | gotcha | convention | reference | preference')
   .option('--files <paths>', 'comma-separated repo-relative files (evidence anchors)')
   .option('--task <slug>', 'task slug for attribution')
+  .option('--local-only', 'keep it out of git — stored in .baton/, reaches nobody else')
   .description('save a fact from the terminal')
-  .action((fact: string[], opts: { type?: string; files?: string; task?: string }) =>
+  .action((fact: string[], opts: { type?: string; files?: string; task?: string; localOnly?: boolean }) =>
     run(() => memoryAddCmd(fact.join(' '), opts)));
+
+memory
+  .command('migrate')
+  .option('--dry-run', 'show what would move, write nothing')
+  .description('move existing facts into tracked baton/memory/facts so they reach other clones')
+  .action((opts: { dryRun?: boolean }) => run(() => memoryMigrateCmd(opts)));
 
 memory
   .command('rm')

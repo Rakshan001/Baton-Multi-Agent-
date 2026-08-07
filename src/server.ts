@@ -66,7 +66,7 @@ import {
   HeadlessConflictError, TerminalRunningError, TerminalUnavailableError,
 } from './terminals.js';
 import {
-  bulkRemoveMemory, gcMemories, listMemories, loadRetention, mainRepoRoot, memoryDir,
+  bulkRemoveMemory, gcMemories, listMemories, loadRetention, mainRepoRoot, memoryAreas,
   MemoryValidationError, pruneMemories, removeMemory, repairMemories, retentionActive, saveMemory, saveRetention,
   type ProjectRel, type RetentionPolicy,
 } from './memory.js';
@@ -2289,16 +2289,21 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // Memory facts are written by separate MCP processes (one per agent session);
   // watch the store so the dashboard updates live. Debounced — saves touch 2 paths.
   try {
-    const memDirPath = memoryDir(await mainRepoRoot(root));
-    await mkdir(memDirPath, { recursive: true });
+    const mainRoot = await mainRepoRoot(root);
     let memTimer: ReturnType<typeof setTimeout> | null = null;
-    const memWatcher = watch(memDirPath, () => {
-      if (memTimer) clearTimeout(memTimer);
-      memTimer = setTimeout(() => bus.publish({ type: 'memory.updated' }), 300);
-    });
-    // FSWatcher emits 'error' asynchronously (dir removed/recreated, EMFILE); an
-    // unhandled one crashes the daemon. Swallow it, matching watch.ts's idiom.
-    memWatcher.on('error', () => undefined);
+    // BOTH areas (§12). Watching only one would leave the dashboard stale for
+    // every save on the other half — silently, and differently depending on how
+    // far through the migration the repo happens to be.
+    for (const { dir } of memoryAreas(mainRoot)) {
+      await mkdir(dir, { recursive: true });
+      const memWatcher = watch(dir, () => {
+        if (memTimer) clearTimeout(memTimer);
+        memTimer = setTimeout(() => bus.publish({ type: 'memory.updated' }), 300);
+      });
+      // FSWatcher emits 'error' asynchronously (dir removed/recreated, EMFILE); an
+      // unhandled one crashes the daemon. Swallow it, matching watch.ts's idiom.
+      memWatcher.on('error', () => undefined);
+    }
   } catch { /* memory watching is best-effort */ }
   // Keep CODEBASE.md in step with graph rebuilds. A multi-project rebuild
   // fires several kb.rebuilt events — debounce so we regenerate once.

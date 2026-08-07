@@ -6,7 +6,35 @@ Source: [`src/memory.ts`](../src/memory.ts), CLI in [`src/commands/memory.ts`](.
 
 ## What gets stored
 
-Each fact is one markdown file (with gray-matter frontmatter) under `.baton/memory/facts/` in the **main repo** — never per-worktree. Writes are atomic (tmp + rename) so multiple parallel sessions can write without clobbering each other.
+Each fact is one markdown file (with gray-matter frontmatter) in the **main repo** — never per-worktree. Writes are atomic (tmp + rename) so multiple parallel sessions can write without clobbering each other.
+
+Facts live in one of two places, and **both are always read**:
+
+| Area | Path | In git? |
+| --- | --- | --- |
+| tracked (default) | `baton/memory/facts/` | yes — reaches every clone |
+| local-only | `.baton/memory/facts/` | no — stays on this machine |
+
+Tracked is the default: a fact one agent learns should reach the next clone
+rather than dying with one laptop. `--local-only` (CLI) / `local_only` (the
+`save_memory` MCP tool) keeps a fact out of git, and that choice is **sticky** —
+it is recorded in the file, so a later `baton memory migrate` will not publish it.
+
+### Moving existing facts into git
+
+```bash
+baton memory migrate --dry-run   # what would move, and what would not
+baton memory migrate             # move them
+```
+
+Explicit, never automatic: moving files into git's view changes what a following
+`git commit -a` publishes, which should be a decision rather than a side effect
+of an unrelated save. Nothing is urgent — reads merge both areas from day one, so
+a repo that never runs this loses nothing. Facts are re-scanned on the way
+through and **anything key-shaped stays local**: locally a stored credential is a
+file on one disk, but tracked it is a push, and a leak found after a push is a
+key rotation rather than a deletion. Such a fact is neither published nor
+destroyed, and the report names it.
 
 A fact records:
 

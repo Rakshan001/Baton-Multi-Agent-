@@ -747,7 +747,53 @@ An earlier 0.7s reading was machine load, not the gate.
 1610 tests green (+5), 136 files, 57s on a quiet machine — the same suite that had just run
 red twice under load, which is what settled the flakiness question below.
 
-**Phase 6 remaining:** memory migration to `baton/`.
+**Phase 6 is complete.** Next: phase 7 (UI — phase swimlanes, markdown plan view, cancel
+controls with blast radius, demo fixtures kept working).
+
+### Session 19p — memory moves into git (§12), behind the §7.1 scan
+
+Facts now default to tracked `baton/memory/facts/`, beside `baton/plans/`. What one agent
+learns reaches the next clone instead of dying with one laptop.
+
+The §7.1 prerequisite was already met — `detectSecret` has been enforced in `saveMemory`
+for a while — so this is the move itself, plus the edges tracking creates.
+
+- **Two areas, both always read.** `baton/memory/facts` (tracked) and
+  `.baton/memory/facts` (local-only). Reading both unconditionally is what makes a
+  part-migrated repo safe: it recalls exactly what it did before, and no fact is invisible
+  pending a command. A tracked fact shadows a local one of the same id.
+- **`baton memory migrate [--dry-run]`** — explicit, never automatic. Moving files into
+  git's view changes what a following `git commit -a` publishes; that is a decision, not a
+  side effect of an unrelated save.
+- **Re-scanned on the way through.** The gate has grown patterns and facts predate it, so
+  the store genuinely holds key-shaped text no live save would accept. Locally that is a
+  file on one disk; tracked it is a push, and a leak found after a push is a key rotation,
+  not a deletion. Those facts stay local — refused, not destroyed — and are named
+  individually in the report, because "2 kept local" reads as a rounding note when one of
+  them means a credential is sitting in the store.
+- **`--local-only` / `local_only`** — §7.1's pressure valve, so a FALSE positive costs a
+  flag rather than the fact. It is *not* an override: a real credential is still refused
+  outright, which has its own test.
+- Area is respected by every lifecycle path — removal takes a tracked fact out of the
+  working tree (a removal that left the file behind would keep serving it to every clone),
+  supersede works across areas, and re-anchoring writes back where it found the fact
+  rather than promoting a private note into git on a repair pass.
+- `storageUsage`, `purge`, and the daemon's live-update watcher all cover both areas.
+
+**Found by live-probing, again, after all 13 tests were green:** `migrate --dry-run`
+cheerfully listed a `--local-only` fact as one it would move into git. The flag said "keep
+this out of git" and the migration was about to override it — discoverable only from
+`git log`. Fixed by persisting the intent (`local_only: true` in the frontmatter) rather
+than inferring it from location: `area` is where a fact *is*, `localOnly` is what its
+author *asked for*, and intent has to outlive location or any later move revokes it.
+
+`test/memory-tracked.test.ts` (14 tests). Seven mutations, seven clean kills — including
+both halves of the local-only fix (drop the check; stop persisting the flag).
+
+No `.gitignore` change needed: the managed block ignores `.baton/*`, and `baton/` was
+already tracked for plans.
+
+1644 tests green (+14), 139 files.
 
 ### Session 19o — claims fail closed: the hub is the arbiter (§1.1, §7.6)
 

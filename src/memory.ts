@@ -48,6 +48,21 @@ export interface MemoryFact {
   anchors: { commit: string | null; files: FileAnchor[] };
   supersedes: string | null;
   fingerprint: string;
+  /**
+   * Which area this was read from. DERIVED at read time, never written into the
+   * file — a fact that is moved between areas must not carry a stale claim
+   * about where it lives, and the directory it sits in is the only honest
+   * answer. Absent on a fact that was parsed rather than listed.
+   */
+  area?: MemoryArea;
+  /**
+   * "Never put this in git", as stated by whoever saved it. PERSISTED, unlike
+   * `area` — and the distinction is the point. `area` is where the fact is now;
+   * this is what its author asked for, and a migration that ignored it would
+   * publish the one fact someone explicitly said not to publish. Intent has to
+   * outlive the location, so it lives in the file.
+   */
+  localOnly?: boolean;
 }
 
 export type Freshness = 'fresh' | 'aging' | 'stale';
@@ -247,6 +262,9 @@ export function renderFactFile(f: MemoryFact): string {
     files: f.anchors.files.map((a) => `${a.path}@${a.hash}`),
     supersedes: f.supersedes,
     fingerprint: f.fingerprint,
+    // Only when set: `local_only: false` on every other fact would be noise in
+    // every diff, and js-yaml throws outright on an undefined value.
+    ...(f.localOnly ? { local_only: true } : {}),
   });
 }
 
@@ -288,6 +306,7 @@ export function parseFactFile(raw: string): MemoryFact | null {
       anchors: { commit: typeof data.commit === 'string' ? data.commit : null, files },
       supersedes: typeof data.supersedes === 'string' ? data.supersedes : null,
       fingerprint: typeof data.fingerprint === 'string' ? data.fingerprint : fingerprintOf(content),
+      ...(data.local_only === true ? { localOnly: true } : {}),
     };
   } catch {
     return null;
@@ -324,8 +343,45 @@ async function resolveRoot(root: string): Promise<string> {
   return main;
 }
 
-export function memoryDir(mainRoot: string): string {
+/**
+ * Where a fact lives, and the whole of §12's memory migration.
+ *
+ * - `tracked` → `baton/memory/facts`, in git. The default, and the point of the
+ *   exercise: a fact one agent learns should reach the next clone, not die with
+ *   one laptop.
+ * - `local` → `.baton/memory/facts`, gitignored. Where memory has always lived,
+ *   and where anything that must not be pushed stays.
+ *
+ * Both are READ, always and from day one. Nothing is invisible while a repo is
+ * part-migrated, and a fact never has to be found before it can be recalled.
+ * Only the write target moved.
+ *
+ * §7.1 is why the local area survives the migration rather than being retired:
+ * tracking turns a stored credential from a file on one disk into a push, and a
+ * leak discovered after a push is a key rotation, not a file deletion. The
+ * secret scan in `saveMemory` refuses key-shaped facts outright; `--local-only`
+ * is the pressure valve, so a FALSE positive costs a flag rather than the fact.
+ */
+export type MemoryArea = 'tracked' | 'local';
+
+export function trackedMemoryDir(mainRoot: string): string {
+  return join(mainRoot, 'baton', 'memory', 'facts');
+}
+
+export function localMemoryDir(mainRoot: string): string {
   return join(mainRoot, '.baton', 'memory', 'facts');
+}
+
+/** Both areas, in READ precedence order: tracked shadows local on a clashing id. */
+export function memoryAreas(mainRoot: string): Array<{ area: MemoryArea; dir: string }> {
+  return [
+    { area: 'tracked', dir: trackedMemoryDir(mainRoot) },
+    { area: 'local', dir: localMemoryDir(mainRoot) },
+  ];
+}
+
+export function memoryDirFor(mainRoot: string, area: MemoryArea): string {
+  return area === 'tracked' ? trackedMemoryDir(mainRoot) : localMemoryDir(mainRoot);
 }
 
 /**
@@ -372,8 +428,15 @@ async function archiveFact(
   supersededBy: string | null = null,
 ): Promise<boolean> {
   const safeId = id.replace(/[^a-z0-9-]/gi, '');
-  const src = join(memoryDir(mainRoot), `${safeId}.md`);
-  if (!existsSync(src)) return false;
+  // Whichever area holds it. Retiring a TRACKED fact deletes it from the
+  // working tree, which is what removal has to mean once memory is in git —
+  // leaving the file behind would keep serving it to every other clone.
+  const from = areaOf(mainRoot, safeId);
+  if (!from) return false;
+  const src = join(memoryDirFor(mainRoot, from), `${safeId}.md`);
+  // The archive stays under gitignored `.baton/` for both areas. It is an
+  // on-disk audit substrate, not history to replicate across clones — and a
+  // retired fact that travelled in git would be a fact removal did not remove.
   const dir = archiveDir(mainRoot);
   await mkdir(dir, { recursive: true });
   await rename(src, join(dir, `${safeId}.md`));
@@ -427,6 +490,16 @@ export interface SaveMemoryInput {
   files?: string[]; // repo-relative paths the fact is about (evidence anchors)
   agent?: string;
   task?: string;
+  /**
+   * Keep this fact out of git — store it in the gitignored area instead.
+   *
+   * The escape hatch §7.1 asks for. The secret scan refuses key-shaped facts
+   * outright and has no override, which is right when the cost of being wrong
+   * is a pushed credential; this is the other side of that trade, for the fact
+   * that is genuinely private rather than genuinely a secret — a note about one
+   * machine's setup, a hunch not worth publishing to the team.
+   */
+  localOnly?: boolean;
 }
 
 export type SaveMemoryResult = MemoryStatus & {
@@ -465,7 +538,10 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   }
   const type: MemoryType = MEMORY_TYPES.includes(input.type as MemoryType) ? (input.type as MemoryType) : 'reference';
 
-  const dir = memoryDir(mainRoot);
+  // Tracked by default (§12) — a fact one agent learns should reach the next
+  // clone rather than dying with one laptop.
+  const area: MemoryArea = input.localOnly ? 'local' : 'tracked';
+  const dir = memoryDirFor(mainRoot, area);
   await mkdir(dir, { recursive: true });
   const existing = await listMemoryFacts(mainRoot);
   if (existing.length >= FACT_CAP) {
@@ -504,6 +580,8 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
     anchors: { commit, files },
     supersedes: dup?.id ?? null,
     fingerprint,
+    area,
+    ...(input.localOnly ? { localOnly: true } : {}),
   };
 
   // Atomic write; remove the superseded fact after the new one lands.
@@ -531,37 +609,140 @@ export async function saveMemory(root: string, input: SaveMemoryInput): Promise<
   };
 }
 
+export interface MigrationEntry {
+  id: string;
+  /** Why it is staying put, when it is. */
+  keptLocal?: string;
+}
+
+export interface MigrationReport {
+  moved: MigrationEntry[];
+  kept: MigrationEntry[];
+  /** True when nothing was written (a dry run, or nothing left to move). */
+  dryRun: boolean;
+}
+
+/**
+ * §12: move existing facts out of the gitignored area into the tracked one.
+ *
+ * Explicit, never automatic. Moving files into git's view changes what a
+ * following `git commit -a` publishes, and that is a decision to make on
+ * purpose rather than to inherit from an unrelated `memory save`. Reads already
+ * merge both areas, so a repo that never runs this loses nothing — the only
+ * thing waiting is whether the facts travel.
+ *
+ * Every fact is re-scanned on the way through, and this is not belt-and-braces:
+ * the gate has grown patterns over time and facts predate it, so the store can
+ * hold key-shaped text that no live code path would accept today. Locally that
+ * was a file on one disk. Tracked it is a push, and a leak found after a push
+ * is a key rotation rather than a deletion — so a fact that trips the scan
+ * STAYS local. It is neither published nor destroyed, and the report names it.
+ */
+export async function migrateMemory(
+  root: string,
+  opts: { dryRun?: boolean } = {},
+): Promise<MigrationReport> {
+  const mainRoot = await resolveRoot(root);
+  const from = localMemoryDir(mainRoot);
+  const to = trackedMemoryDir(mainRoot);
+  const report: MigrationReport = { moved: [], kept: [], dryRun: Boolean(opts.dryRun) };
+  if (!existsSync(from)) return report;
+
+  for (const name of (await readdir(from)).filter((n) => n.endsWith('.md'))) {
+    const src = join(from, name);
+    const id = name.slice(0, -3);
+    let raw: string;
+    try {
+      raw = await readFile(src, 'utf-8');
+    } catch {
+      continue; // raced with a delete — nothing to move
+    }
+    const parsed = parseFactFile(raw);
+    if (!parsed) {
+      report.kept.push({ id, keptLocal: 'unreadable — not a fact file' });
+      continue;
+    }
+    // Asked for, not inferred. Migrating this would publish the one fact
+    // somebody explicitly said to keep off the remote — and they would find out
+    // from `git log`.
+    if (parsed.localOnly) {
+      report.kept.push({ id, keptLocal: 'saved with --local-only' });
+      continue;
+    }
+    const secret = detectSecret(parsed.fact);
+    if (secret) {
+      report.kept.push({ id, keptLocal: `looks like a ${secret} — publishing it would be a key rotation, not a deletion` });
+      continue;
+    }
+    // An id already tracked is left alone rather than overwritten: the tracked
+    // copy is the one every other clone has, and clobbering it from one machine
+    // would be a silent, unreviewable edit to shared knowledge.
+    if (existsSync(join(to, name))) {
+      report.kept.push({ id, keptLocal: 'a tracked fact already has this id' });
+      continue;
+    }
+    if (!opts.dryRun) {
+      await mkdir(to, { recursive: true });
+      await rename(src, join(to, name));
+      factCache.delete(src);
+    }
+    report.moved.push({ id });
+  }
+  return report;
+}
+
 /** Parsed facts cached by file mtime — repeated polls re-parse only changes. */
 const factCache = new Map<string, { mtimeMs: number; fact: MemoryFact | null }>();
 
+/**
+ * Every fact, from BOTH areas.
+ *
+ * Reading both unconditionally is what makes the migration safe to leave
+ * half-done: a repo mid-move recalls exactly what it recalled before, and no
+ * fact is hidden because nobody has run a command yet. A tracked fact shadows a
+ * local one of the same id — after a move the two can coexist for one moment,
+ * and the tracked copy is the one that was moved TO.
+ */
 async function listMemoryFacts(mainRoot: string): Promise<MemoryFact[]> {
-  const dir = memoryDir(mainRoot);
-  if (!existsSync(dir)) return [];
   const out: MemoryFact[] = [];
-  const seen = new Set<string>();
-  for (const name of await readdir(dir)) {
-    if (!name.endsWith('.md')) continue;
-    const file = join(dir, name);
-    seen.add(file);
-    try {
-      const st = await stat(file);
-      const hit = factCache.get(file);
-      if (hit && hit.mtimeMs === st.mtimeMs) {
-        if (hit.fact) out.push(hit.fact);
-        continue;
+  const byId = new Set<string>();
+  for (const { area, dir } of memoryAreas(mainRoot)) {
+    if (!existsSync(dir)) continue;
+    const seen = new Set<string>();
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith('.md')) continue;
+      const file = join(dir, name);
+      seen.add(file);
+      try {
+        const st = await stat(file);
+        const hit = factCache.get(file);
+        let fact = hit && hit.mtimeMs === st.mtimeMs ? hit.fact : undefined;
+        if (fact === undefined) {
+          fact = parseFactFile(await readFile(file, 'utf-8'));
+          factCache.set(file, { mtimeMs: st.mtimeMs, fact });
+        }
+        if (fact && !byId.has(fact.id)) {
+          byId.add(fact.id);
+          out.push({ ...fact, area });
+        }
+      } catch {
+        factCache.delete(file); // raced with a delete — skip
       }
-      const parsed = parseFactFile(await readFile(file, 'utf-8'));
-      factCache.set(file, { mtimeMs: st.mtimeMs, fact: parsed });
-      if (parsed) out.push(parsed);
-    } catch {
-      factCache.delete(file); // raced with a delete — skip
+    }
+    // Drop cache entries for deleted files so memory stays bounded.
+    for (const key of factCache.keys()) {
+      if (key.startsWith(dir) && !seen.has(key)) factCache.delete(key);
     }
   }
-  // Drop cache entries for deleted files so memory stays bounded.
-  for (const key of factCache.keys()) {
-    if (key.startsWith(dir) && !seen.has(key)) factCache.delete(key);
-  }
   return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Which area holds `id` right now, or null if nothing does. */
+function areaOf(mainRoot: string, id: string): MemoryArea | null {
+  for (const { area, dir } of memoryAreas(mainRoot)) {
+    if (existsSync(join(dir, `${id}.md`))) return area;
+  }
+  return null;
 }
 
 /**
@@ -735,9 +916,12 @@ const RECALL_REPAIR_DEBOUNCE_MS = 10 * 60_000;
 
 /** The shared "last repair pass" clock, beside facts/ (not inside it, so the
  *  `.md`-only fact reader never sees it). Every repair — daemon, CLI, or the
- *  recall-time pass below — stamps it, so all three share one debounce window. */
+ *  recall-time pass below — stamps it, so all three share one debounce window.
+ *  Deliberately under gitignored `.baton/` even though facts are tracked: it is
+ *  one machine's timer, and committing it would make every clone's debounce
+ *  window a merge conflict. */
 function repairMarker(mainRoot: string): string {
-  return join(dirname(memoryDir(mainRoot)), '.repair-check');
+  return join(dirname(localMemoryDir(mainRoot)), '.repair-check');
 }
 async function stampRepair(mainRoot: string): Promise<void> {
   const marker = repairMarker(mainRoot);
@@ -925,8 +1109,12 @@ export async function repairMemories(root: string): Promise<RepairResult> {
       createdAt: f.createdAt, anchors: { commit: head ?? f.anchors.commit, files },
       supersedes: f.supersedes, fingerprint: f.fingerprint,
     };
-    const target = join(memoryDir(mainRoot), `${f.id}.md`);
-    await writeFactFile(memoryDir(mainRoot), f.id, renderFactFile(updated));
+    // Back into the area it came from. Re-anchoring is a mechanical refresh of
+    // evidence, and a repair pass must not be how a local-only fact silently
+    // becomes a tracked one.
+    const dir = memoryDirFor(mainRoot, f.area ?? areaOf(mainRoot, f.id) ?? 'local');
+    const target = join(dir, `${f.id}.md`);
+    await writeFactFile(dir, f.id, renderFactFile(updated));
     factCache.delete(target);
     await appendJournal(mainRoot, {
       op: 'reanchor', id: f.id, supersededBy: null,
