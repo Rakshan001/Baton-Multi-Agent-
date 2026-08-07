@@ -7,6 +7,49 @@
    ============================================================ */
 import type { SkillStatus } from "../types";
 
+const BASIC_SETUP_BODY = `# Basic Setup — a project an experienced developer can read
+
+Two problems, one skill: a beginner's project has no structure, so nobody else can work in it —
+and it leaks secrets, because nothing stops it.
+
+\`\`\`
+DETECT MODE   empty dir → INITIAL     existing code → MID-PHASE (audit, never rewrite)
+PREFLIGHT     git / runtime / package manager / gitleaks
+INTERVIEW     ~5 PLAIN-LANGUAGE questions, RECOMMENDED option always #1
+DERIVE        answers → stack + structure pattern + security level
+⛔ APPROVE ⛔  nothing is written before the user confirms
+SCAFFOLD      official CLI where one exists; documented layout where none does
+SECURITY      .gitignore → .env.example → gitleaks hook → push protection → CI
+STRUCTURE     folders + STRUCTURE.md (humans) + AGENTS.md (agents)
+VERIFY        it builds, AND a planted fake secret is provably blocked
+⛔ ASK BEFORE COMMIT ⛔   ⛔ ASK BEFORE PUSH ⛔
+\`\`\`
+
+**Golden rules (excerpt)**
+1. Every question carries a recommendation, and the recommendation is option 1 — a user who
+   answers "1" every time must land a correct, professional project.
+2. Never ask a question the user cannot answer. Ask about the *project*, derive the *tech*.
+3. The hook fails closed: if gitleaks is missing, the commit is blocked. A hook that exits 0
+   when the scanner is absent protects nothing and lies about it.
+4. Recommend the lowest rung of the structure ladder that fits. Microservices needs an
+   explicit, informed override.
+5. State what is NOT protected — \`--no-verify\` defeats local hooks, and push protection is
+   free only on public GitHub repos.
+6. Never overwrite. Never commit or push without permission.
+
+**The structure ladder** — flat · layered-MVC · feature-modular (default) · feature-sliced ·
+clean/hexagonal · modular-monolith · microservices (gated).
+
+> Four independent standards — Feature-Sliced Design, bulletproof-react, FastAPI best practices
+> and Node.js Best Practices — converge on the same two laws: a folder is a BUSINESS thing, not
+> a technical one, and imports flow one direction. \`controllers/ services/ models/\` is the
+> named anti-pattern.
+
+_Ships 8 reference files: the interview script, the pattern ladder, the four security layers,
+per-stack verified commands, the mid-phase audit, the verification drill, copyable templates,
+and the edge-case table._
+`;
+
 const BUG_FIX_BODY = `# Bug Fix Skill (portable)
 
 Fix bugs systematically. The order is non-negotiable:
@@ -179,6 +222,24 @@ Spec-wrong → systematic-debugging (it's a bug) · Security → bug-fix.
 
 export const DEMO_SKILLS: SkillStatus[] = [
   {
+    id: "basic-setup",
+    name: "basic-setup",
+    description: "Set up a NEW project correctly from the first commit, or audit one that already drifted — folder structure, secret-leak protection, and the rules that keep both from rotting. Interviews in PLAIN LANGUAGE with a RECOMMENDED option on every question, so someone who has never coded can answer \"1\" every time and still land an industry-standard project. Installs defence-in-depth against leaked secrets — .gitignore, a committed gitleaks pre-commit hook with a custom rule for database URLs, GitHub push protection, and a CI backstop — then PROVES the hook works by planting a fake key.",
+    tags: ["setup", "scaffold", "new project", "folder structure", "project structure", "architecture", "mvc", "feature-sliced", "clean architecture", "modular monolith", "microservices", "best practice", "gitleaks", "secrets", "api key", ".env", "leak", "pre-commit", "push protection", "security", "devsecops", "beginner", "next.js", "react", "django", "fastapi", "agents.md"],
+    produces: ["plain-language interview", "structure pattern choice", "scaffolded project", ".gitleaks.toml + pre-commit hook", "push protection + CI backstop", ".env.example", "STRUCTURE.md (humans)", "AGENTS.md (agents)", "planted-secret drill proof", "ranked repair plan (mid-phase)"],
+    body: BASIC_SETUP_BODY,
+    source: "bundled",
+    references: [
+      "references/interview.md", "references/patterns.md", "references/security.md",
+      "references/stacks.md", "references/audit.md", "references/verification.md",
+      "references/templates.md", "references/edge-cases.md",
+    ],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/basic-setup/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/basic-setup.mdc", installed: false },
+    ],
+  },
+  {
     id: "bug-fix",
     name: "bug-fix",
     description: "Systematically fix bugs in ANY codebase WITHOUT regressions: reproduce first, audit every file the fix could touch, classify blast radius, find the true root cause, require ≥95% skeptic-corroborated confidence AND an approved plan before editing, re-verify the symptom is gone, then commit automatically but never push without asking.",
@@ -296,6 +357,11 @@ export const DEMO_SKILLS: SkillStatus[] = [
    each card shows (what / how / win). Kept in sync by hand; the real daemon
    serves these from the catalog. */
 const DEMO_EXPLAIN: Record<string, SkillStatus["explain"]> = {
+  "basic-setup": {
+    what: "Starts a project an experienced dev can read — and that can’t leak your keys.",
+    how: "Plain-language interview → pattern ladder → gitleaks hook + push protection + CI → STRUCTURE.md/AGENTS.md → proof drill.",
+    win: "Answer “1” to every question and still get an industry-standard, leak-proof project.",
+  },
   "bug-fix": {
     what: "A gated pipeline for fixing bugs without creating new ones.",
     how: "Reproduce → audit blast radius → hypothesis-driven root cause → 95% skeptic-checked plan → fix → re-verify.",
