@@ -36,7 +36,7 @@ baton serve → dashboard http://localhost:7077
 The shell is a top bar, a left sidebar (a bottom tab bar on mobile), and the
 active screen. The top bar holds the project switcher, live counters (Active /
 Tasks / Conflicts), a **New session** button, search (`⌘K`), the connection
-status dot, and the theme toggle. The sidebar lists the nine screens defined in
+status dot, and the theme toggle. The sidebar lists the ten screens defined in
 [`web/src/App.tsx`](../web/src/App.tsx).
 
 ## Screens
@@ -45,6 +45,7 @@ status dot, and the theme toggle. The sidebar lists the nine screens defined in
 | --- | --- |
 | Command Center | Home. The sessions board — every task with its agent, status, and git state — switchable to a canvas view. Start here. |
 | Activity | A live feed of session activity, with quick access to a task's diff, handoff, and live terminal. |
+| Pipeline | Phase swimlanes for an applied plan — which phase is open, which is locked, and **why** each waiting task cannot start. Read the plan document, and cancel a task, a phase or a whole plan with a blast-radius confirmation. See below. |
 | Conflicts | Tasks currently flagged `conflict` (overlapping edits), plus the live **who's-editing panel**: each busy file grouped with every session holding it — the agent, its live intent note ("what I'm doing right now"), and freshness. The sidebar shows a badge with the count. |
 | Knowledge Graph | The force-directed code graph built by graphify — nodes and edges for the indexed repo. |
 | Memory | Shared project facts. Evidence-anchored facts with stale detection; add/prune when `--write` is on. |
@@ -55,6 +56,48 @@ status dot, and the theme toggle. The sidebar lists the nine screens defined in
 
 Each screen reads from the daemon's `/api` endpoints. See the
 [HTTP API reference](./architecture.md) for the exact routes behind each screen.
+
+## Pipeline: swimlanes, the plan, and cancelling
+
+The Pipeline screen answers the one question the sessions board cannot: **why is
+work not starting?**
+
+Each phase is a lane, labelled `open`, `locked`, `complete`, `holding` or
+`ungated`. Every waiting task carries the pipeline's own explanation — "phase 3
+locked behind phase 2", "depends on 'x', which was cancelled", "blocked — needs
+the Stripe test key". Those strings are computed by the daemon and rendered
+verbatim, so what you read here is exactly what `baton next` prints. The screen
+decides no eligibility of its own; a second implementation of the phase barrier
+in the browser would disagree with the agents precisely when it mattered.
+
+Two banners sit above the lanes when they apply:
+
+- **Nothing can start** — work remains, but every remaining task is waiting on a
+  human. Distinct from "the plan is finished", which is why it is said out loud.
+- **Phase N is finished but has not landed** — its branches exist side by side
+  and have never been combined, so the next phase is held. Run `baton integrate`.
+
+Click a plan in the header to read its markdown source (`baton/plans/<id>.md`).
+It is rendered as text, never as HTML: a plan is a file anyone can commit, and
+turning it into markup would make "who can open a PR" into "who can run script
+in the operator's dashboard".
+
+### Cancelling
+
+Cancel a task, a phase, or a plan. The confirmation is a **real dry run against
+the live board** — not a preview assembled from the last poll — and it leads with
+what nobody predicts: which tasks will be **stranded**. A cancelled task never
+reaches `done`, so anything depending on it, directly or through a chain, can
+never start.
+
+Nothing is deleted. Branches, worktrees and checkpoints all survive, and an
+agent still running learns on its next tool call and stops there — the stop is
+cooperative, not instant.
+
+Cancelling is the operator's (§7.6). The daemon refuses it when the dashboard
+viewer is not the owner, when the daemon is read-only, and when *this machine* is
+a member of someone else's hub — in that last case the plan lives at the hub, and
+cancelling locally would fork it silently.
 
 ## Read-only vs. write
 

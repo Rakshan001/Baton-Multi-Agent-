@@ -16,12 +16,13 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
 import { DEMO_FLEET } from "./fleet";
 import { DEMO_SKILLS } from "./demoSkills";
+import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
@@ -1009,6 +1010,123 @@ class BatonClient {
     } catch {
       return []; // older daemons don't serve this — the inbox just stays hidden
     }
+  }
+
+  /* ---- pipeline: phase swimlanes, plan view, cancellation ----
+     Every judgement on this screen (which lane is open, why a task cannot
+     start, what a cancellation would touch) is made by the daemon and read
+     here. Deciding any of it in the browser would be a second implementation
+     of the phase barrier, and the two would disagree exactly when it mattered:
+     the board saying "startable" while every agent is refused the task. */
+  private demoPipeline: PipelineView | null = null;
+
+  async getPipeline(): Promise<PipelineView> {
+    if (this.demo) {
+      await this.demoGate(60);
+      this.demoPipeline ??= JSON.parse(JSON.stringify(DEMO_PIPELINE)) as PipelineView;
+      return this.demoPipeline;
+    }
+    return this.request<PipelineView>("/api/pipeline");
+  }
+
+  async getPlan(id: string): Promise<{ id: string; markdown: string; path: string }> {
+    if (this.demo) {
+      await this.demoGate(90);
+      return { id, markdown: DEMO_PLAN_MD, path: `baton/plans/${id}.md` };
+    }
+    return this.request<{ id: string; markdown: string; path: string }>(
+      `/api/pipeline/plans/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /**
+   * Preview or perform a cancellation.
+   *
+   * `dryRun` still asserts write, because the daemon gates the whole endpoint
+   * on it — a read-only dashboard offering a preview it could never act on
+   * would be a button that lies. The screen hides the control instead.
+   */
+  async cancelPipeline(
+    scope: CancelScopeInput,
+    opts: { reason?: string; dryRun?: boolean } = {},
+  ): Promise<CancelResult> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(opts.dryRun ? 120 : 260);
+      return this.demoCancel(scope, opts);
+    }
+    return this.request<CancelResult>("/api/pipeline/cancel", {
+      method: "POST",
+      body: JSON.stringify({ ...scope, ...opts }),
+    });
+  }
+
+  /**
+   * The demo shim — a fixture, not a second copy of the rule.
+   *
+   * In real mode the radius comes from the daemon and the browser computes
+   * nothing. Here there is no daemon and no write, so the showcase fabricates
+   * both from the demo board; the preview and the "write" go through this one
+   * function so the demo at least stays consistent with itself.
+   */
+  private demoCancel(
+    scope: CancelScopeInput,
+    opts: { reason?: string; dryRun?: boolean },
+  ): CancelResult {
+    this.demoPipeline ??= JSON.parse(JSON.stringify(DEMO_PIPELINE)) as PipelineView;
+    const view = this.demoPipeline;
+    const rows = view.lanes.flatMap((l) => l.tasks);
+    const inScope = (t: LaneTask) =>
+      "slug" in scope ? t.slug === scope.slug
+        : "phase" in scope ? t.phase === scope.phase
+          : t.planId === scope.plan;
+    const finished = (s: string) => s === "done" || s === "cancelled";
+
+    const matched = rows.filter(inScope);
+    const stopping = matched.filter((t) => !finished(t.state))
+      .map((t) => ({ slug: t.slug, state: t.state, holder: t.holder?.agent ?? null }));
+    const doomed = new Set(stopping.map((s) => s.slug));
+    // Transitive, mirroring src/pipeline.ts. A one-hop count here would have
+    // the showcase quietly contradicting the product on the one number the
+    // dialog puts under the word STRANDED.
+    const alive = rows.filter((t) => !doomed.has(t.slug) && !finished(t.state));
+    const strandedBy = new Map<string, string[]>();
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const t of alive) {
+        if (strandedBy.has(t.slug)) continue;
+        const cause = t.dependsOn.filter((d) => doomed.has(d) || strandedBy.has(d));
+        if (cause.length) { strandedBy.set(t.slug, cause); changed = true; }
+      }
+    }
+    const stranding = alive
+      .filter((t) => strandedBy.has(t.slug))
+      .map((t) => ({ slug: t.slug, dependsOn: strandedBy.get(t.slug)! }));
+    const radius = {
+      stopping,
+      alreadyFinished: matched.filter((t) => finished(t.state)).map((t) => t.slug),
+      stranding,
+    };
+    const label = "slug" in scope ? `'${scope.slug}'` : "phase" in scope ? `phase ${scope.phase}` : `plan '${scope.plan}'`;
+    const agentsStopped = stopping.filter((s) => s.holder && (s.state === "active" || s.state === "claimed")).length;
+    if (opts.dryRun || !stopping.length) {
+      return { ok: true, dryRun: !!opts.dryRun, scope: label, radius, agentsStopped, cancelled: [] };
+    }
+    // Mutate the fixture so the board visibly changes — nothing is destroyed,
+    // exactly as the real thing behaves: the branch stays on the row.
+    for (const lane of view.lanes) {
+      for (const t of lane.tasks) {
+        if (!doomed.has(t.slug)) continue;
+        t.state = "cancelled";
+        t.holder = null;
+        t.blocker = null;
+        t.cancelledBy = { actor: "you", at: new Date().toISOString(), ...(opts.reason ? { reason: opts.reason } : {}) };
+      }
+      lane.done = lane.tasks.filter((x) => finished(x.state)).length;
+    }
+    view.totals.cancelled += stopping.length;
+    view.totals.active = view.lanes.flatMap((l) => l.tasks).filter((x) => x.state === "active").length;
+    return { ok: true, dryRun: false, scope: label, radius, agentsStopped, cancelled: [...doomed] };
   }
 
   /* ---- coordination: signals / reports / blame ---- */

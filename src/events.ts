@@ -58,6 +58,13 @@ export type BatonEvent =
      caller said about itself. */
   | { type: 'task.claimed'; slug: string; agent: string; by: string }
   | { type: 'task.unclaimed'; slug: string; by: string }
+  /* Cancellation (§8). Carries the whole set rather than one event per slug:
+     cancelling a phase is ONE decision, and fanning it out as N events would
+     let a client render half a cancellation if the stream dropped mid-burst.
+     `stranded` rides along because it is the consequence nobody predicts — a
+     dashboard that learns about the cancel but not the stranding shows a board
+     with tasks that will never start and no reason why. */
+  | { type: 'task.cancelled'; slugs: string[]; stranded: string[]; scope: string; by: string; reason?: string }
   /* --- owner controls (Phase 6) ---
      Every one of these is an owner acting ON someone, so every one carries who
      did it. They exist as events precisely so the action lands in the same

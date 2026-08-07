@@ -393,11 +393,37 @@ export function blastRadius(tasks: readonly PipelineTask[], scope: CancelScope):
     stopping.push({ slug: t.slug, state, holder: t.claimedBy?.agent ?? null });
   }
 
+  /*
+   * Stranding is TRANSITIVE, and computing only the direct dependents
+   * undercounts it.
+   *
+   * If A is cancelled, B (which needs A) can never start — and C, which needs
+   * B, can never start either, because B will never reach `done`. A one-hop
+   * answer reports "2 tasks stranded" for a chain that actually kills 3, and
+   * this number sits in a confirmation dialog under the word STRANDED. Of the
+   * two directions to be wrong in, understating the damage is the bad one.
+   *
+   * A fixpoint rather than a recursive walk: a plan's dependency graph is
+   * acyclic by validation, but this must terminate even if one ever is not.
+   */
   const doomed = new Set(stopping.map((s) => s.slug));
-  const stranding = tasks
-    .filter((t) => !doomed.has(t.slug) && !TERMINAL.has(stateOf(t)))
-    .map((t) => ({ slug: t.slug, dependsOn: (t.dependsOn ?? []).filter((d) => doomed.has(d)) }))
-    .filter((x) => x.dependsOn.length > 0);
+  const alive = tasks.filter((t) => !doomed.has(t.slug) && !TERMINAL.has(stateOf(t)));
+  const strandedBy = new Map<string, string[]>();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const t of alive) {
+      if (strandedBy.has(t.slug)) continue;
+      // Named by the dependency that actually strands it — the one the reader
+      // has to do something about, not the whole `dependsOn` list.
+      const cause = (t.dependsOn ?? []).filter((d) => doomed.has(d) || strandedBy.has(d));
+      if (cause.length) { strandedBy.set(t.slug, cause); changed = true; }
+    }
+  }
+  // Rebuilt in board order so the dialog lists tasks the way the board does,
+  // not in the order a fixpoint happened to settle them.
+  const stranding = alive
+    .filter((t) => strandedBy.has(t.slug))
+    .map((t) => ({ slug: t.slug, dependsOn: strandedBy.get(t.slug)! }));
 
   return { stopping, alreadyFinished, stranding };
 }

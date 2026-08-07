@@ -747,8 +747,86 @@ An earlier 0.7s reading was machine load, not the gate.
 1610 tests green (+5), 136 files, 57s on a quiet machine — the same suite that had just run
 red twice under load, which is what settled the flakiness question below.
 
-**Phase 7 remaining:** phase swimlanes, markdown plan view, the cancel control in the UI
-(its backend landed in 19r), demo fixtures kept working.
+**Phase 7 is complete** (session 19s): swimlanes, the plan view, the cancel control and
+its demo fixtures all shipped. The spec's §13 open questions remain, and the UI has no
+"cancel the stranded ones too" shortcut yet — the dialog names them, you cancel them.
+
+### Session 19s — phase 7: the pipeline on screen
+
+The whole of §10 phase 7 — phase swimlanes, the markdown plan view, cancel controls with a
+blast radius, demo fixtures kept working — plus a real defect the UI work uncovered in the
+backend that shipped one commit earlier.
+
+**A projection, never a second opinion.** `src/pipeline-view.ts` groups the board into
+lanes and labels them (`open` / `locked` / `complete` / `holding` / `ungated`), and it
+decides *nothing*. Every judgement comes from `pipeline.ts` — `openPhase`,
+`integrationHold`, `blockers`, `phaseComplete`, `isDeadlocked` — and the blocker strings
+are carried through verbatim, so what the dashboard shows is the string `baton next`
+prints. A dashboard that re-derived the phase barrier in the browser would be a second
+implementation of it, and the two would disagree exactly when it mattered: the board
+saying a task is startable while every agent is refused it. A test asserts the view's
+blocker for every row equals `blockers()`'s, which is what keeps that honest.
+
+**The Infinity trap.** `openPhase` answers `Infinity` for a finished plan, and
+`JSON.stringify` turns `Infinity` into `null` with no error anywhere — so a finished plan
+and a serialization accident would reach the browser looking identical. The view converts
+it once, deliberately, and the test pins both the conversion and the round trip.
+
+**Three routes** (`src/server.ts`): `GET /api/pipeline` (the view, with the REAL gate
+resolved — a test asserts the integration hold is reported, because serving it without the
+gate would show phase 2 open while every `baton take` is refused), `GET
+/api/pipeline/plans/:id` (the plan as source markdown), and `POST /api/pipeline/cancel`
+(dry run + write). `task.cancelled` was added to `src/events.ts` first, per convention, and
+carries the whole set plus the stranded list rather than one event per slug — cancelling a
+phase is one decision, and a dropped stream must not render half of it.
+
+**Three gates on the cancel route, each closing a different door:** owner (§7.6 makes
+cancellation the operator's), write (a read-only daemon must not mutate), and *member* —
+if this machine answers to a hub, its own dashboard must not cancel either, because the
+plan lives elsewhere and cancelling here would fork it silently. That last one reuses the
+same pure `decideOperator` the CLI's `requireOperator` uses. Scope parsing delegates to
+the CLI's own `resolveScope`, so "exactly one scope, never a guess" is one rule rather
+than two.
+
+**The traversal guard, and what mutation testing changed about it.** Two guards on the
+plan id — a charset and a containment check — and deleting each one showed they stop
+*different* attacks: the charset is the only thing stopping `.env.md` (a dotfile *inside*
+the plans dir, which containment has no objection to), and containment is the only thing
+stopping an escape if the pattern is ever loosened. More usefully, the first version of
+the traversal test aimed at `/etc/passwd` and **passed with both guards deleted** — the
+traversal worked fine and the request 404'd only because `/etc/passwd.md` does not exist.
+It was asserting the absence of a file, not the presence of a guard. It now aims at a
+planted `LEAKME.md` two levels up, and fails when either guard is weakened.
+
+**The bug the live probe found: stranding was undercounted.** Driving a real four-task
+plan through a real daemon, cancelling phase 1 reported *2* stranded tasks. The true
+number is 3: `end-to-end-tests` depends on `wire-the-auth-api`, which is itself stranded
+and will never reach `done`, so it can never start either. `blastRadius` only walked one
+hop. It now computes a fixpoint, and each task is named by the dependency that actually
+strands it. This number sits in a confirmation dialog under the word STRANDED, and of the
+two directions to be wrong in, understating the damage is the bad one. In-process tests
+could not have caught it — the fixtures were all one hop deep.
+
+**The screen** (`web/src/features/Pipeline.tsx`): lanes with progress and a plain-language
+blurb, task cards carrying state / holder / dependencies / the verbatim blocker, banners
+for deadlock and for an integration hold, a plan sheet, and cancel controls per task and
+per phase. The plan markdown is rendered by building React elements and never touching
+`innerHTML` — a plan is a file anyone can commit to `baton/plans`, and turning it into
+markup would make "who can open a PR" into "who can run script in the operator's
+dashboard". The cancel confirmation is a **real dry run against the live board**, not a
+radius assembled from the last poll, and it leads with the stranding warning.
+
+**The demo fixture had to be made honest twice.** Its plan document invented a `- [ ] slug`
+checkbox syntax that `src/plan.ts` does not parse — a showcase that teaches a format the
+tool rejects is worse than none, since the demo is where someone learns it. And the
+fixture board disagreed with its own plan document about dependencies. Both are now pinned
+by tests that hand the demo plan to the **real parser** and diff the two fixtures against
+each other, and that run the real projection over the fixture's own rows to check its
+hard-coded lane statuses.
+
+Suite **1694 pass across 142 files**; both workspaces build; nine mutations run against the
+new guards with the intended tests failing each time (and two informative survivals, both
+written up above).
 
 ### Session 19r — cancellation, and the blast radius (§8)
 

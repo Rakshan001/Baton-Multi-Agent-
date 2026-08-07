@@ -22,13 +22,18 @@ import { currentBranch, headCommit, isGitRepo } from './git.js';
 import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding, reviewHeads } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
 import { batonDir, loadTasks, mutateTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
-import { claim, releaseClaim } from './lifecycle.js';
+import { cancelTasks, claim, releaseClaim } from './lifecycle.js';
+import { agentsStopped, blastRadius, type CancelScope, type PipelineTask } from './pipeline.js';
+import { pipelineView } from './pipeline-view.js';
+import { describeScope as scopeLabel, resolveScope } from './commands/cancel.js';
+import { PLANS_DIR } from './commands/plan.js';
+import { decideOperator } from './operator.js';
 import { resolveGate } from './gate.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
 import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './commands/rm.js';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
 import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, graphPathFor, kbStatus, loadKb, saveKb } from './kb/state.js';
@@ -550,6 +555,24 @@ function isOperator(access: AccessDecision, opts: ServeOptions): boolean {
 
 function denyReadOnly(res: ServerResponse, origin: string): void {
   send(res, 403, { error: 'read-only', hint: 'start: baton serve --write' }, origin);
+}
+
+/**
+ * A cancel scope from a JSON body, or the message saying why the body does not
+ * describe one.
+ *
+ * Delegates to the CLI's `resolveScope` rather than re-reading the flags here.
+ * "Exactly one scope, never a guess" is a rule about what a cancellation MEANS,
+ * not about argv — and a browser that could send `{ slug, phase }` and have the
+ * daemon quietly pick one would stop work nobody confirmed, on the surface
+ * where the confirmation is the entire safety mechanism.
+ */
+function scopeFromBody(body: { slug?: unknown; phase?: unknown; plan?: unknown } | null): CancelScope | string {
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  // Numbers arrive as numbers over JSON and as strings on argv; normalising
+  // here keeps the shared rule the only thing that decides validity.
+  const phase = body?.phase === undefined || body?.phase === null ? undefined : String(body.phase);
+  return resolveScope(str(body?.slug), { phase, plan: str(body?.plan) });
 }
 
 /**
@@ -1417,6 +1440,136 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!outcome.ok) return send(res, 409, { ok: false, code: outcome.refusal.code, error: outcome.refusal.message }, origin);
     bus.publish({ type: 'task.unclaimed', slug, by: actorLabel(access) });
     return send(res, 200, { ok: true, task: outcome.task }, origin);
+  }
+
+  /*
+   * GET /api/pipeline — the board as swimlanes (phase 7).
+   *
+   * The gate is resolved here, exactly as the CLI resolves it, so the dashboard
+   * reports the same open phase agents are actually held at. Serving the view
+   * without it would show phase 2 open while every `baton take` is refused
+   * because phase 1 has not landed on the base — the dashboard contradicting
+   * the tool, with the dashboard being the one that is wrong.
+   */
+  if (method === 'GET' && path === '/api/pipeline') {
+    const tasks = await loadTasks(root);
+    return send(res, 200, pipelineView(tasks, await resolveGate(root, tasks)), origin);
+  }
+
+  /*
+   * GET /api/pipeline/plans/:id — the plan document, as markdown.
+   *
+   * Served as source text, never as HTML. The dashboard renders it, and a plan
+   * is a file any contributor can put in the repo; turning it into markup on
+   * the server would make "who may edit baton/plans" into "who may run script
+   * in the operator's dashboard".
+   */
+  const planM = path.match(/^\/api\/pipeline\/plans\/([^/]+)$/);
+  if (method === 'GET' && planM) {
+    let id: string;
+    try {
+      id = decodeURIComponent(planM[1]);
+    } catch {
+      return send(res, 400, { error: 'bad plan id' }, origin);
+    }
+    /*
+     * Two guards, and they stop different attacks — verified by deleting each
+     * one and watching which test fails.
+     *
+     * The charset is the only thing that stops a dotfile INSIDE the directory:
+     * `baton/plans/.env.md` never leaves `baton/plans`, so containment has
+     * nothing to object to. Remove the charset and that case is wide open.
+     *
+     * Containment is the only thing that stops an ESCAPE if the pattern is ever
+     * loosened to admit a character someone did not think through. Remove the
+     * charset and it still catches `..%2f..%2f` — which is what it is for.
+     *
+     * Neither is redundant, and with both gone the traversal test leaks a
+     * planted file. This endpoint reads bytes off the operator's disk and hands
+     * them to a browser; an escape here is not a plan render, it is
+     * `GET /api/pipeline/plans/..%2f..%2f.baton%2fhost` reading a live token.
+     */
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) || id.includes('..')) {
+      return send(res, 400, { error: 'bad plan id', hint: 'letters, digits, dot, dash and underscore only' }, origin);
+    }
+    const dir = join(root, PLANS_DIR);
+    const file = normalize(join(dir, `${id}.md`));
+    if (!file.startsWith(dir + sep)) return send(res, 403, { error: 'forbidden' }, origin);
+    const markdown = await readFile(file, 'utf-8').catch(() => null);
+    if (markdown === null) {
+      return send(res, 404, { error: `no plan '${id}'`, hint: `plans live in ${PLANS_DIR}/` }, origin);
+    }
+    return send(res, 200, { id, markdown, path: `${PLANS_DIR}/${id}.md` }, origin);
+  }
+
+  /*
+   * POST /api/pipeline/cancel — stop work from the dashboard (§8, phase 7).
+   *
+   * Three gates, and each closes a different door:
+   *
+   *   write   — a read-only daemon must not mutate, same as every other write.
+   *   owner   — §7.6 makes cancellation the operator's. A member who could
+   *             cancel could knock the whole team off its work from a browser
+   *             tab, which is precisely what `release` was scoped away from.
+   *   member  — and if THIS machine answers to a hub, its own dashboard must
+   *             not cancel either. The refusal is not about who is asking; it
+   *             is that the plan lives elsewhere, and cancelling here would
+   *             fork it silently. Same rule `requireOperator` applies on the
+   *             CLI, through the same pure `decideOperator`.
+   *
+   * `dryRun` returns the blast radius and writes nothing — and it is the SAME
+   * code path, with the write suppressed, so the confirmation a person reads is
+   * produced by the thing that would act on it.
+   */
+  if (method === 'POST' && path === '/api/pipeline/cancel') {
+    if (requiresOwner(access)) return denyNotOwner(res, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const asMember = decideOperator(await loadHostLink(root));
+    if (!asMember.allowed) {
+      return send(res, 403, {
+        error: 'cancelling is the operator\'s — this machine is a member of ' + asMember.hostUrl,
+        hint: 'Ask the operator to cancel there. To stop being a member: baton host clear',
+        code: 'not-operator',
+      }, origin);
+    }
+    const body = await readJsonBody<{ slug?: string; phase?: number; plan?: string; reason?: string; dryRun?: boolean }>(req);
+    const scope = scopeFromBody(body);
+    // 400, not a guess. `{ slug, phase }` could mean either, and picking one
+    // stops work nobody asked to stop — the same refusal `resolveScope` makes
+    // on the CLI, for the same reason.
+    if (typeof scope === 'string') return send(res, 400, { error: scope }, origin);
+
+    const reason = typeof body?.reason === 'string' ? body.reason.trim().slice(0, 500) : undefined;
+    const actor = actorLabel(access);
+    const now = new Date().toISOString();
+    const outcome = await mutateTasks(root, (tasks) => {
+      // Inside the lock, against the list about to be written: a radius
+      // measured against the board the browser last polled would stop work the
+      // person confirming never saw.
+      const radius = blastRadius(tasks as PipelineTask[], scope);
+      if (body?.dryRun || !radius.stopping.length) return { tasks: null, result: { radius, cancelled: [] as string[] } };
+      const r = cancelTasks(tasks, radius.stopping.map((s) => s.slug), actor, now, reason);
+      return { tasks: r.tasks, result: { radius, cancelled: r.cancelled } };
+    });
+
+    if (outcome.cancelled.length) {
+      bus.publish({
+        type: 'task.cancelled',
+        slugs: outcome.cancelled,
+        stranded: outcome.radius.stranding.map((s) => s.slug),
+        scope: scopeLabel(scope),
+        by: actor,
+        ...(reason ? { reason } : {}),
+      });
+    }
+    return send(res, 200, {
+      ok: true,
+      dryRun: !!body?.dryRun,
+      scope: scopeLabel(scope),
+      radius: outcome.radius,
+      agentsStopped: agentsStopped(outcome.radius),
+      cancelled: outcome.cancelled,
+    }, origin);
   }
 
   if (method === 'GET' && path === '/api/signals') {

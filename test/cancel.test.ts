@@ -66,6 +66,43 @@ describe('blastRadius — what a cancellation would touch', () => {
     expect(r.stranding).toEqual([{ slug: 'e2e', dependsOn: ['api', 'ui'] }]);
   });
 
+  it('follows the chain — stranding is transitive, and a one-hop count lies', () => {
+    /*
+     * Found by driving a real plan through the daemon, not by unit test: this
+     * reported "2 stranded" for a graph that kills 3. Cancel A, and B can never
+     * start; B never reaches `done`, so C can never start either. The number
+     * appears in a confirmation under the word STRANDED, so undercounting it is
+     * the one direction that matters.
+     */
+    const chain: PipelineTask[] = [
+      t({ slug: 'a', phase: 1, state: 'active' }),
+      t({ slug: 'b', phase: 2, dependsOn: ['a'] }),
+      t({ slug: 'c', phase: 3, dependsOn: ['b'] }),
+      t({ slug: 'd', phase: 3, dependsOn: ['c'] }),
+      t({ slug: 'unrelated', phase: 2 }),
+    ];
+    const r = blastRadius(chain, { kind: 'task', slug: 'a' });
+    expect(r.stranding).toEqual([
+      { slug: 'b', dependsOn: ['a'] },
+      { slug: 'c', dependsOn: ['b'] },
+      { slug: 'd', dependsOn: ['c'] },
+    ]);
+    // Each is named by what strands IT, so the reader can act on the right one.
+    expect(r.stranding.map((s) => s.slug)).not.toContain('unrelated');
+  });
+
+  it('does not strand through a dependency that is already finished', () => {
+    // `b` depends on `done-already` as well as on `a`. Only `a` strands it —
+    // listing a finished task as a cause would send someone to fix nothing.
+    const g: PipelineTask[] = [
+      t({ slug: 'a', phase: 1, state: 'active' }),
+      t({ slug: 'done-already', phase: 1, state: 'done' }),
+      t({ slug: 'b', phase: 2, dependsOn: ['a', 'done-already'] }),
+    ];
+    expect(blastRadius(g, { kind: 'task', slug: 'a' }).stranding)
+      .toEqual([{ slug: 'b', dependsOn: ['a'] }]);
+  });
+
   it('and stranding is REAL — the dependent can never start afterwards', () => {
     /*
      * The assertion behind the warning, checked against the eligibility rule

@@ -44,7 +44,9 @@ export function resolveScope(slug: string | undefined, opts: CancelOpts): Cancel
   return { kind: 'phase', phase };
 }
 
-function describeScope(scope: CancelScope): string {
+/** How a scope reads in a sentence. Exported so the daemon labels a cancel the
+ *  same way the CLI does — one wording for one action, on both surfaces. */
+export function describeScope(scope: CancelScope): string {
   if (scope.kind === 'task') return `'${scope.slug}'`;
   if (scope.kind === 'phase') return `phase ${scope.phase}`;
   return `plan '${scope.planId}'`;

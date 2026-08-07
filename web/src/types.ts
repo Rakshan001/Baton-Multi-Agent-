@@ -746,3 +746,69 @@ export interface Reachability {
   blockers: string[];
   notes: string[];
 }
+
+/* ---- pipeline swimlanes — GET /api/pipeline (src/pipeline-view.ts) ---- */
+
+export type TaskState =
+  | "queued" | "claimed" | "active" | "paused" | "review" | "blocked" | "done" | "cancelled";
+
+/** What a lane header says about its phase. `holding` means every task in it is
+ *  finished but its branches have not landed — which is WHY the next lane is
+ *  locked, so it is a distinct state rather than a flavour of `complete`. */
+export type LaneStatus = "ungated" | "complete" | "holding" | "open" | "locked";
+
+export interface LaneTask {
+  slug: string;
+  title: string;
+  phase: number;
+  state: TaskState;
+  assignee: string | null;
+  holder: { agent: string; sessionSlug: string; at: string } | null;
+  dependsOn: string[];
+  planId: string | null;
+  /** The pipeline's own wording for why this cannot start, or null.
+   *  Rendered verbatim — the dashboard must not invent a second vocabulary for
+   *  a refusal the CLI answers to. */
+  blocker: string | null;
+  branch: string;
+  cancelledBy?: { actor: string; at: string; reason?: string };
+  stoppedReason?: string;
+}
+
+export interface Lane {
+  phase: number;
+  status: LaneStatus;
+  tasks: LaneTask[];
+  done: number;
+  total: number;
+}
+
+export interface PipelineView {
+  /** null means nothing is open — a finished plan, not a missing number. */
+  openPhase: number | null;
+  integrationHold: number | null;
+  deadlocked: boolean;
+  lanes: Lane[];
+  plans: Array<{ id: string; total: number; done: number; cancelled: number }>;
+  totals: { total: number; done: number; active: number; blocked: number; cancelled: number };
+}
+
+/** What a cancellation would touch — computed by the daemon, never by the UI. */
+export interface BlastRadius {
+  stopping: Array<{ slug: string; state: TaskState; holder: string | null }>;
+  alreadyFinished: string[];
+  /** Tasks that depend on something being cancelled and can then NEVER start. */
+  stranding: Array<{ slug: string; dependsOn: string[] }>;
+}
+
+export interface CancelResult {
+  ok: boolean;
+  dryRun: boolean;
+  scope: string;
+  radius: BlastRadius;
+  agentsStopped: number;
+  cancelled: string[];
+}
+
+export type CancelScopeInput =
+  | { slug: string } | { phase: number } | { plan: string };

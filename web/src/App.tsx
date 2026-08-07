@@ -37,6 +37,7 @@ import { HandoffDialog } from "./features/Handoff";
 import { LaunchSession } from "./features/Launch";
 import { LiveSession } from "./features/Live";
 import { MemoryScreen } from "./features/Memory";
+import { PipelineScreen } from "./features/Pipeline";
 import { ReviewsScreen } from "./features/Reviews";
 import { TeamScreen } from "./features/Team";
 import type { Meta, AgentId, Project, AgentRosterEntry } from "./types";
@@ -45,6 +46,7 @@ interface NavItem { id: string; label: string; icon: IconName }
 const NAV: NavItem[] = [
   { id: "home", label: "Command Center", icon: "grid" },
   { id: "activity", label: "Activity", icon: "zap" },
+  { id: "pipeline", label: "Pipeline", icon: "layers" },
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
   { id: "graph", label: "Knowledge Graph", icon: "network" },
   { id: "memory", label: "Memory", icon: "sparkle" },
@@ -560,6 +562,7 @@ export default function App() {
   const screen = (() => {
     switch (route) {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
+      case "pipeline": return <PipelineScreen writeEnabled={prefs.writeEnabled} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
