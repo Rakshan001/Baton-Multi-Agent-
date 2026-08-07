@@ -44,6 +44,7 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
+import { cancelCmd } from './commands/cancel.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
@@ -297,6 +298,17 @@ program
       await cleanCmd(opts); // baton-artifact junk: stale tasks, tmux, temp files
       await worktreeGcCmd({ apply: opts.fix, json: opts.json }); // merged-branch worktree GC (W1)
     }));
+
+program
+  .command('cancel')
+  .argument('[slug]', 'task to cancel')
+  .option('--phase <n>', 'cancel every unfinished task in a phase')
+  .option('--plan <id>', 'cancel every unfinished task in a plan')
+  .option('--reason <text>', 'why — shown to the agent on its next tool call')
+  .option('--dry-run', 'show the blast radius, cancel nothing')
+  .description('stop work without deleting it: branches, worktrees and checkpoints all survive')
+  .action((slug: string | undefined, opts: { phase?: string; plan?: string; reason?: string; dryRun?: boolean }) =>
+    run(() => cancelCmd(slug, opts)));
 
 const memory = program
   .command('memory')

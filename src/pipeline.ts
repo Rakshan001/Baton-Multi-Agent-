@@ -333,3 +333,76 @@ export function phaseComplete(tasks: readonly PipelineTask[], phase: number): bo
   const inPhase = tasks.filter((t) => phaseOf(t) === phase);
   return inPhase.length > 0 && inPhase.every((t) => TERMINAL.has(stateOf(t)));
 }
+
+/* ------------------------------------------------------------------ */
+/* Cancellation (§8)                                                   */
+/* ------------------------------------------------------------------ */
+
+/** What to stop. One task, a whole phase, or an entire plan. */
+export type CancelScope =
+  | { kind: 'task'; slug: string }
+  | { kind: 'phase'; phase: number }
+  | { kind: 'plan'; planId: string };
+
+export interface BlastRadius {
+  /** Tasks that would move to `cancelled`, with who is on each right now. */
+  stopping: Array<{ slug: string; state: TaskState; holder: string | null }>;
+  /**
+   * Matched the scope but is already `done` or `cancelled`. Named rather than
+   * silently dropped: "cancel phase 2" on a phase that is mostly finished
+   * should say so, not report a number the user cannot reconcile.
+   */
+  alreadyFinished: string[];
+  /**
+   * Tasks OUTSIDE the scope that depend on something inside it — and are
+   * therefore about to become permanently unstartable.
+   *
+   * The consequence nobody predicts, and the reason this is computed rather
+   * than eyeballed. `depBlocker` refuses a dependency that was cancelled
+   * ("depends on 'x', which was cancelled"), and nothing ever clears that: the
+   * dependency will never reach `done`. So these tasks are not merely delayed,
+   * they are STRANDED, and the only exits are cancelling them too or editing
+   * the plan. Cancelling one task can quietly kill a phase downstream of it,
+   * which a confirmation prompt has to say out loud.
+   */
+  stranding: Array<{ slug: string; dependsOn: string[] }>;
+}
+
+function inScope(t: PipelineTask, scope: CancelScope): boolean {
+  if (scope.kind === 'task') return t.slug === scope.slug;
+  if (scope.kind === 'phase') return phaseOf(t) === scope.phase;
+  return t.planId === scope.planId;
+}
+
+/**
+ * Everything a cancellation would touch, before any of it happens.
+ *
+ * Pure, and separate from the write on purpose: this is the number a human is
+ * shown before they confirm ("cancelling phase 2 stops 3 active agents"), and a
+ * preview computed by different code from the write is a preview that can lie.
+ * `cancelTasks` consumes exactly this.
+ */
+export function blastRadius(tasks: readonly PipelineTask[], scope: CancelScope): BlastRadius {
+  const stopping: BlastRadius['stopping'] = [];
+  const alreadyFinished: string[] = [];
+
+  for (const t of tasks) {
+    if (!inScope(t, scope)) continue;
+    const state = stateOf(t);
+    if (TERMINAL.has(state)) { alreadyFinished.push(t.slug); continue; }
+    stopping.push({ slug: t.slug, state, holder: t.claimedBy?.agent ?? null });
+  }
+
+  const doomed = new Set(stopping.map((s) => s.slug));
+  const stranding = tasks
+    .filter((t) => !doomed.has(t.slug) && !TERMINAL.has(stateOf(t)))
+    .map((t) => ({ slug: t.slug, dependsOn: (t.dependsOn ?? []).filter((d) => doomed.has(d)) }))
+    .filter((x) => x.dependsOn.length > 0);
+
+  return { stopping, alreadyFinished, stranding };
+}
+
+/** How many live agents a cancellation would stop — the headline number. */
+export function agentsStopped(radius: BlastRadius): number {
+  return radius.stopping.filter((s) => s.holder && (s.state === 'active' || s.state === 'claimed')).length;
+}

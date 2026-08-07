@@ -13,7 +13,7 @@
  * leaves the task exactly where it was — owned, with its worktree and its
  * contributor record intact. Only `done` writes done.
  */
-import { blockers, eligibleFor, isContributor, isStalled, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
+import { blockers, eligibleFor, isContributor, isStalled, isTerminal, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
 import type { Task } from './store.js';
 
 export interface Who {
@@ -188,6 +188,49 @@ export function pause(tasks: readonly Task[], slug: string, who: Who, now: strin
     contributors: (t.contributors ?? []).map((c) => (c.to ? c : { ...c, to: now })),
   };
   return { ok: true, tasks: replace(tasks, next), task: next };
+}
+
+/**
+ * Stop work (§8). Cooperative, and destructive of nothing.
+ *
+ * Baton cannot halt an agent mid-thought. Cancellation writes state the agent
+ * observes on its very next tool call (`groundMovedNotice` in mcp-pipeline.ts
+ * already reads it); between the click and that call it keeps writing, and that
+ * window is real and cannot be engineered away.
+ *
+ * What it must NOT do is delete anything. The branch, the worktree and every
+ * checkpoint stay exactly where they are: cancelling is the reversal of a
+ * decision, not a wastebasket, and the commits are frequently the most valuable
+ * output of an approach that turned out to be wrong. Contributor stretches are
+ * closed, because that work genuinely ended.
+ *
+ * Takes the slugs `blastRadius` resolved rather than a scope of its own — one
+ * definition of "what this touches", so the preview a human confirmed and the
+ * write that follows cannot disagree.
+ */
+export function cancelTasks(
+  tasks: readonly Task[],
+  slugs: readonly string[],
+  actor: string,
+  now: string,
+  reason?: string,
+): { tasks: Task[]; cancelled: string[] } {
+  const target = new Set(slugs);
+  const cancelled: string[] = [];
+  const next = tasks.map((t) => {
+    if (!target.has(t.slug) || isTerminal(stateOf(t as PipelineTask))) return t;
+    cancelled.push(t.slug);
+    return {
+      ...t,
+      state: 'cancelled' as const,
+      // Dropped, so the board stops showing a live holder for work that
+      // stopped. The contributor record below is what preserves who did it.
+      claimedBy: undefined,
+      cancelledBy: { actor, at: now, ...(reason ? { reason } : {}) },
+      contributors: (t.contributors ?? []).map((c) => (c.to ? c : { ...c, to: now })),
+    };
+  });
+  return { tasks: next, cancelled };
 }
 
 /**

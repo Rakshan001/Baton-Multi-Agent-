@@ -122,6 +122,33 @@ so a phase never ends up half-landed.
 Merges are true merges, not squashes, so the individual commits — and their
 `Baton-Task:` trailers — stay on the base for `baton history reindex`.
 
+### `cancel`
+Stop work without destroying it.
+
+```bash
+baton cancel <slug>
+baton cancel --phase <n>
+baton cancel --plan <id>
+baton cancel --phase 2 --dry-run --reason "approach abandoned"
+```
+
+Prints the **blast radius** before it writes anything — how many tasks stop, how
+many agents are working on them right now, and which tasks downstream will be
+**stranded**. That last one is the consequence nobody predicts: a cancelled task
+never reaches `done`, and anything depending on it can then never start. The only
+exits are cancelling those too or editing the plan, so it is said before the fact
+rather than discovered after.
+
+Cancelling is **cooperative**. Baton cannot halt an agent mid-thought; it writes
+state the agent reads on its next tool call, and between the two it keeps
+working. That window is real, and the command says so rather than implying an
+immediate stop.
+
+**Nothing is deleted** — branch, worktree and every checkpoint survive. Cancelling
+reverses a decision, and the commits are often the most valuable output of an
+approach that turned out to be wrong. `done` and `push` both refuse on a
+cancelled task. Operator-only (§7.6).
+
 ### `history`
 Trace which task / agent / commits touched a file (from the local index). Omit `[file]` to list all tasks.
 

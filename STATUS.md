@@ -747,8 +747,64 @@ An earlier 0.7s reading was machine load, not the gate.
 1610 tests green (+5), 136 files, 57s on a quiet machine — the same suite that had just run
 red twice under load, which is what settled the flakiness question below.
 
-**Phase 6 is complete.** Next: phase 7 (UI — phase swimlanes, markdown plan view, cancel
-controls with blast radius, demo fixtures kept working).
+**Phase 7 remaining:** phase swimlanes, markdown plan view, the cancel control in the UI
+(its backend landed in 19r), demo fixtures kept working.
+
+### Session 19r — cancellation, and the blast radius (§8)
+
+Phase 7's "cancel controls with blast radius" needed a backend that did not exist. Phase 4
+had already shipped the *notice* half — `groundMovedNotice` reads `cancelled` and
+`cancelledBy`, and `push` refuses on it — but nothing could ever set it except
+`plan-apply` dropping a task from a plan. This is the verb.
+
+- `blastRadius(tasks, scope)` + `agentsStopped()` in `pipeline.ts` — pure, so
+  *"cancelling phase 2 stops 3 active agents"* is a unit test rather than something the UI
+  counts. `cancelCmd` consumes exactly this: a preview computed by different code from the
+  write is a preview that can lie about the write.
+- `cancelTasks()` in `lifecycle.ts` — destroys nothing. Branch, worktree and every
+  checkpoint survive; the contributor stretch closes and the live holder drops. Cancelling
+  reverses a decision, and the commits are frequently the most valuable output of an
+  approach that turned out wrong.
+- `baton cancel <slug> | --phase <n> | --plan <id>` with `--dry-run` and `--reason`.
+  Two scopes at once is refused rather than guessed — guessing stops work nobody asked to
+  stop. Operator-only per §7.6. The radius is computed INSIDE the lock, against the list
+  about to be written.
+- The message states that the stop is not instant. Cancellation is state an agent reads,
+  not a signal that interrupts it, so promising otherwise is a lie the user discovers by
+  watching commits land after the confirmation.
+
+**A doc comment I wrote was wrong, and checking caught it.** I claimed a cancelled
+dependency counts as satisfied, so cancelling would *release* dependents. `depBlocker`
+does the opposite (`pipeline.ts:160`): it refuses a cancelled dependency, and nothing ever
+clears that, because the dependency will never reach `done`. So cancelling one task can
+permanently **strand** work in a later phase. That inverted the field (`unblocking` →
+`stranding`) and turned a footnote into the warning the confirmation leads with. There is
+a test that drives `eligibleFor`/`blockers` after a cancel, so the claim is checked against
+the eligibility rule rather than asserted in prose.
+
+`test/cancel.test.ts` (16 tests). Four mutations, four clean kills. One test initially
+passed for the wrong reason — the "stranded" assertion was satisfied by the *phase
+barrier*, not the dependency; fixed by cancelling all of phase 2 so phase 3 opens and the
+dependency is isolated as the cause.
+
+### Session 19q — a NUL byte was making `src/pipeline.ts` invisible to grep
+
+Found while searching for `dependsOn` and getting silence from a file that visibly
+contains it. `src/pipeline.ts:327` held a literal NUL inside a string sentinel
+(`agents.add(...)`, "a name no agent has"), typed as a control character rather than
+written as ` `. The runtime value was correct, so tsc and 1644 tests were all happy —
+but `file(1)` reported "data" and grep, ripgrep and every other tool that skips binaries
+silently returned nothing for the whole file. Silent wrong answers from search, in the
+module that decides which agent may touch which work.
+
+Same defect in `docs/superpowers/plans/2026-07-05-hardening-bundle.md:530`, where a fenced
+code block quoting `join(...)` held the byte instead of the four characters.
+
+Both replaced with escape sequences — identical values (codepoints `0,97,110,121`), files
+now `UTF-8 text`. The `.DS_Store` files that also matched are gitignored and untracked.
+
+Worth knowing: the byte propagates through copy-paste invisibly. It came back twice while
+I was fixing it, once into a helper script that then refused to parse.
 
 ### Session 19p — memory moves into git (§12), behind the §7.1 scan
 
