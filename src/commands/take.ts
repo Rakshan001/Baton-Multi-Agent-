@@ -18,9 +18,35 @@ import { isTerminal, stateOf } from '../pipeline.js';
 import { nextFor } from '../lifecycle.js';
 import { resolveGate } from '../gate.js';
 import { claimTask, ClaimRefused } from './claim.js';
+import { isTeamMode } from '../pipeline-claims.js';
 import { describeTask } from './next.js';
 import { finishTask, reportFinish } from './finish.js';
 import { resolveAgentId, resolveSessionSlug } from '../identity.js';
+
+/**
+ * Claim and print what the agent needs next. Always returns true: whether the
+ * claim was won or refused, the pipeline has answered and the brief path must
+ * not also run — two answers to one command is worse than either.
+ */
+async function claimAndReport(root: string, target: string, who: { agent: string; sessionSlug: string }, resume: boolean): Promise<boolean> {
+  try {
+    const { task, materialized, adoptedFrom } = await claimTask(root, target, who, { resume });
+    console.log(adoptedFrom ? `✓ adopted ${task.slug} from ${adoptedFrom}` : `✓ claimed ${task.slug}`);
+    for (const line of describeTask(task)) console.log(line);
+    console.log('');
+    if (materialized) console.log(`  worktree: ${task.worktreePath}  (${task.branch})`);
+    else console.log(`  worktree: ${task.worktreePath}  (existing work — read it before adding to it)`);
+    console.log(`    cd ${task.worktreePath}`);
+    console.log(`\n  When you stop for any reason:  baton pause ${task.slug}`);
+    console.log(`  When it is finished:           baton done ${task.slug}`);
+    return true;
+  } catch (e) {
+    if (!(e instanceof ClaimRefused)) throw e;
+    console.error(`✗ ${e.message}`);
+    process.exitCode = 1;
+    return true;
+  }
+}
 
 /** Did this call reach the pipeline? Returns false to fall through to briefs. */
 async function tryPipeline(root: string, slug: string | undefined, resume: boolean): Promise<boolean> {
@@ -39,7 +65,19 @@ async function tryPipeline(root: string, slug: string | undefined, resume: boole
     target = pick.slug;
   } else {
     const t = await getTask(root, target);
-    if (!t) return false;
+    /*
+     * No local row. Solo that means "not a pipeline task" and we fall through
+     * to the brief path, which is how every pre-pipeline use of `take` still
+     * works. In TEAM mode it means nothing of the sort: the plan is applied on
+     * the hub (§7.6) and a member's rows arrive with the grant, so an unknown
+     * slug is the normal state of every task this machine has not started yet.
+     * Falling through here answered "No task 'x'" for every real task on the
+     * hub — the register is over there, so the question goes over there.
+     */
+    if (!t) {
+      if (!(await isTeamMode(root))) return false;
+      return claimAndReport(root, target, who, resume);
+    }
     // A row with no stored state predates the pipeline — a plain `baton new`
     // task. Those keep the original brief behavior untouched.
     if (t.state === undefined) return false;
@@ -63,23 +101,7 @@ async function tryPipeline(root: string, slug: string | undefined, resume: boole
     }
   }
 
-  try {
-    const { task, materialized, adoptedFrom } = await claimTask(root, target, who, { resume });
-    console.log(adoptedFrom ? `✓ adopted ${task.slug} from ${adoptedFrom}` : `✓ claimed ${task.slug}`);
-    for (const line of describeTask(task)) console.log(line);
-    console.log('');
-    if (materialized) console.log(`  worktree: ${task.worktreePath}  (${task.branch})`);
-    else console.log(`  worktree: ${task.worktreePath}  (existing work — read it before adding to it)`);
-    console.log(`    cd ${task.worktreePath}`);
-    console.log(`\n  When you stop for any reason:  baton pause ${task.slug}`);
-    console.log(`  When it is finished:           baton done ${task.slug}`);
-    return true;
-  } catch (e) {
-    if (!(e instanceof ClaimRefused)) throw e;
-    console.error(`✗ ${e.message}`);
-    process.exitCode = 1;
-    return true;   // handled — do not also try the brief path
-  }
+  return claimAndReport(root, target, who, resume);
 }
 
 export async function takeCmd(slug: string | undefined, opts: { resume?: boolean } = {}): Promise<void> {

@@ -747,8 +747,65 @@ An earlier 0.7s reading was machine load, not the gate.
 1610 tests green (+5), 136 files, 57s on a quiet machine — the same suite that had just run
 red twice under load, which is what settled the flakiness question below.
 
-**Phase 6 remaining:** memory migration to `baton/`; operator/member split per §7.6;
-claims fail-closed.
+**Phase 6 remaining:** memory migration to `baton/`.
+
+### Session 19o — claims fail closed: the hub is the arbiter (§1.1, §7.6)
+
+The last enforcement gap of the same family as 19m, and the one that does not show up on
+one machine. `.baton/tasks.lock` makes a claim a compare-and-swap and settles every race
+between agents on one laptop — and settles *nothing* between two, because each holds its
+own lock over its own tasks.json and each concludes it won. §1.1 names one arbiter per
+mode: the lock when solo, **the hub when team**. Only the first half existed.
+
+- `src/pipeline-claims.ts` (new) — the member half. `claimUpstream()` returns
+  `{solo:true}` with **zero network calls** when there is no host link, and otherwise
+  either the hub's granted row or a throw. There is no third answer: "we are not sure"
+  is the outcome that must not become a worktree.
+- `POST /api/pipeline/claim` — the hub half, running the *same* pure `claim()` under the
+  hub's own lock. Not a second copy of eligibility; a divergent one would be worse than
+  none, because both sides would report success. Deliberately not owner-gated — §7.6 puts
+  `take` under "any authenticated member", and gating it would leave team mode with
+  nothing to take. The claim is written but never materialized: the worktree belongs on
+  the member's disk.
+- `POST /api/pipeline/release` — the rollback path, so a grant the member could not act
+  on does not take the task out of circulation for everyone. `releaseClaim` already
+  refuses unless the caller's session holds it, so it cannot knock a teammate off.
+- `recordGrant()` in `claim.ts` — the hub's row names the *operator's* filesystem, so
+  `worktreePath`/`repoRoot` are re-derived locally. Adopting them verbatim would run
+  `git worktree add` into a directory on someone else's machine.
+- Idempotent re-grant to the same session. The hub never sees activate/pause/done, so its
+  row stays `claimed` for the life of the task; without this a member re-taking its own
+  paused task is locked out by the record of its own claim.
+- `--resume` refused in team mode. Stall detection reads the holder's worktree mtimes,
+  which are on their disk; probing ours would answer a question about the wrong machine,
+  confidently. Refusing is honest until the hub can judge staleness from heartbeats.
+
+**Found by live-probing, after the in-process tests were all green:** `takeCmd` looks the
+slug up locally and falls through to the handoff-brief path when there is no row. Correct
+solo; exactly wrong in team mode, where a member's rows arrive *with* the grant, so every
+real task answered `No task '<slug>'`. The tests called `claimTask` directly and never
+touched the lookup that was swallowing the command. Fixed and now covered.
+
+`test/claim-arbiter.test.ts` (12 tests): solo untouched, two members racing one task
+(exactly one wins, the loser writes nothing), fail-closed on unreachable / 401 / 500, and
+the CLI wiring. Seven guards mutation-tested, each a clean kill. One mutation **survived**
+and exposed a bad fixture: queued rows were built with an empty `worktreePath`, but
+`task add` stamps one at queue time (`isMaterialized` keys off `baseCommit`, not the
+path) — so the "don't adopt the hub's path" test could not have failed. Fixture corrected,
+mutation then killed 3.
+
+Live-probed end to end with two member repos against a real daemon: second member refused
+with the hub's own wording and zero local writes; free task refused with the hub down;
+the hub's own machine unaffected with the daemon stopped.
+
+**Not built, and this is the honest limit of it:** state does not propagate *back* to the
+hub. A member's activate/pause/done stay local, so the hub's row reads `claimed` for the
+life of the task. That is conservative — it over-holds rather than double-granting — but
+it means the hub's board is not a live picture of member progress, and a member cannot
+discover work it has not been told about (bare `baton take` / `baton next` still read only
+local rows). Both want a hub-side read endpoint; that is the next piece, not this one.
+
+1630 tests green (+12), 138 files.
 
 ### Session 19n — §7.6: the operator/member split on the CLI
 

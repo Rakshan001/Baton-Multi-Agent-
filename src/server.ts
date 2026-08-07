@@ -21,7 +21,9 @@ import { collectDiff } from './diff.js';
 import { currentBranch, headCommit, isGitRepo } from './git.js';
 import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding, reviewHeads } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
-import { batonDir, loadTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
+import { batonDir, loadTasks, mutateTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
+import { claim, releaseClaim } from './lifecycle.js';
+import { resolveGate } from './gate.js';
 import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError } from './commands/new.js';
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
 import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './commands/rm.js';
@@ -1327,6 +1329,94 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       ok: true, cleared,
       note: 'Cleared from the shared view. If their agent is still editing it, their next heartbeat re-states it.',
     }, origin);
+  }
+
+  /*
+   * POST /api/pipeline/claim — the hub as the single writer of a task claim.
+   *
+   * §1.1 names one arbiter per mode: the tasks lock when solo, the hub when
+   * team. This is the hub half. Two members each hold their own lock over their
+   * own tasks.json, so a local compare-and-swap settles nothing between them —
+   * only a single writer does, and this route is it.
+   *
+   * It runs the SAME pure `claim()` every local caller runs, against the hub's
+   * own tasks under the hub's own lock. Not a second implementation of
+   * eligibility: a divergent copy of the barrier would be worse than none,
+   * because both sides would report success.
+   *
+   * Deliberately NOT owner-gated. §7.6 puts `take` under "any authenticated
+   * member" — arbitrating a claim is the service the hub provides to members,
+   * and gating it to the owner would leave team mode with nothing to take.
+   *
+   * The claim is written but NOT materialized here. The worktree belongs on the
+   * member's disk, and the hub creating one would build the work in the wrong
+   * place, on the wrong machine, for an agent that cannot reach it.
+   */
+  if (method === 'POST' && path === '/api/pipeline/claim') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ slug?: string; agent?: string; sessionSlug?: string }>(req);
+    const slug = typeof body?.slug === 'string' ? body.slug.trim() : '';
+    const agent = typeof body?.agent === 'string' ? body.agent.trim() : '';
+    const sessionSlug = typeof body?.sessionSlug === 'string' ? body.sessionSlug.trim() : '';
+    if (!slug || !agent || !sessionSlug) {
+      return send(res, 400, { error: 'pass slug, agent and sessionSlug' }, origin);
+    }
+    const who = { agent, sessionSlug };
+    // Resolved before the lock, exactly as `claimTask` does it: the gate talks
+    // to git, and nothing slow may run inside a mutation. Keyed by phase and
+    // sha, so it stays true against the fresh read under the lock.
+    const gate = await resolveGate(root, await loadTasks(root));
+    const outcome = await mutateTasks(root, (tasks) => {
+      /*
+       * Already ours — grant it again rather than refusing.
+       *
+       * The hub writes the claim and never sees what follows: the member
+       * activates, pauses and finishes on its own disk, so the hub's row stays
+       * `claimed` for the life of the task. Without this branch a member
+       * re-taking a task it paused an hour ago is refused by the record of its
+       * own claim, and the only exit is the operator. Keyed on the session, so
+       * it re-grants to the same holder and nobody else.
+       */
+      const held = tasks.find((t) => t.slug === slug);
+      if (held?.claimedBy?.sessionSlug === sessionSlug) {
+        return { tasks: null, result: { ok: true as const, tasks, task: held } };
+      }
+      const out = claim(tasks, slug, who, new Date().toISOString(), gate);
+      return { tasks: out.ok ? out.tasks : null, result: out };
+    });
+    if (!outcome.ok) {
+      // 409, not 400: the request was well-formed and the state said no. The
+      // member passes this message through verbatim, so it is the pipeline's
+      // own wording that reaches whoever typed the command.
+      return send(res, 409, { ok: false, code: outcome.refusal.code, error: outcome.refusal.message }, origin);
+    }
+    bus.publish({ type: 'task.claimed', slug, agent, by: actorLabel(access) });
+    return send(res, 200, { ok: true, task: outcome.task }, origin);
+  }
+
+  /*
+   * POST /api/pipeline/release — hand a granted claim back.
+   *
+   * The member's rollback path: the hub granted a claim, the worktree then
+   * failed to build, and a task left `claimed` with nothing running behind it is
+   * out of circulation for the whole team. `releaseClaim` refuses unless the
+   * caller's own session holds it, so this cannot be used to knock a teammate
+   * off their task — that is cancellation, which is the operator's (§7.6) and
+   * lives in phase 8.
+   */
+  if (method === 'POST' && path === '/api/pipeline/release') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ slug?: string; sessionSlug?: string }>(req);
+    const slug = typeof body?.slug === 'string' ? body.slug.trim() : '';
+    const sessionSlug = typeof body?.sessionSlug === 'string' ? body.sessionSlug.trim() : '';
+    if (!slug || !sessionSlug) return send(res, 400, { error: 'pass slug and sessionSlug' }, origin);
+    const outcome = await mutateTasks(root, (tasks) => {
+      const out = releaseClaim(tasks, slug, { agent: '', sessionSlug });
+      return { tasks: out.ok ? out.tasks : null, result: out };
+    });
+    if (!outcome.ok) return send(res, 409, { ok: false, code: outcome.refusal.code, error: outcome.refusal.message }, origin);
+    bus.publish({ type: 'task.unclaimed', slug, by: actorLabel(access) });
+    return send(res, 200, { ok: true, task: outcome.task }, origin);
   }
 
   if (method === 'GET' && path === '/api/signals') {

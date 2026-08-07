@@ -48,6 +48,16 @@ export type BatonEvent =
    *  divergent branches meet at merge, not in a working tree. Advisory either
    *  way — nothing is blocked, which is why this is an event and not an error. */
   | { type: 'claim.conflict'; relPath: string; projectId: string | null; sameBranch: boolean; memberIds: string[] }
+  /* --- pipeline claims, arbitrated by the hub (§1.1, §7.6) ---
+     Not to be confused with `claim.opened` above. That is a FILE claim: advisory,
+     live-plane only, TTL'd, and two members holding one path is a warning. This
+     is a TASK claim: persisted in tasks.json, exclusive, and two members holding
+     one task is the failure the pipeline exists to prevent — so it is decided by
+     one writer (the hub) rather than pooled from whoever reports in.
+     `by` is the member the hub resolved from the token, never anything the
+     caller said about itself. */
+  | { type: 'task.claimed'; slug: string; agent: string; by: string }
+  | { type: 'task.unclaimed'; slug: string; by: string }
   /* --- owner controls (Phase 6) ---
      Every one of these is an owner acting ON someone, so every one carries who
      did it. They exist as events precisely so the action lands in the same

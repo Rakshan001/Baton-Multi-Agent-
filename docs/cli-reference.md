@@ -270,6 +270,30 @@ baton done [slug]   # mark the brief done
 
 See [Session handoff](./session-handoff.md).
 
+#### `take` in team mode — the hub decides
+
+On a machine joined to a hub, `baton take <slug>` asks the hub before it writes
+anything, and the hub is the only thing that grants the claim. The local
+`.baton/tasks.lock` settles races between agents on *your* machine and nothing
+at all between two — each laptop holds its own lock over its own `tasks.json`
+and each concludes it won.
+
+You do not need the task locally first. The plan is applied on the hub, so a
+member's rows arrive **with** the grant; `take` on a slug this machine has never
+seen is the normal case.
+
+**If the hub cannot be reached, the claim is refused** — Baton will not fall
+back to the local lock. A refused claim costs you a retry; an unarbitrated one
+costs two agents the same worktree, and a network partition is exactly when two
+people are most likely to reach for the same task with no way to see each other.
+Reads behave the opposite way and degrade open: an unreachable hub makes
+`check_files` say *"could not ask"*, never *"nobody is there"*.
+
+To work without the hub, leave it deliberately: `baton host clear`.
+
+`--resume` is refused in team mode. Stall detection reads the holder's worktree
+mtimes, which are on their disk; a stuck task is the operator's to release.
+
 ### `route`
 Which agent should take a task — rules from `baton.config.json`, no LLM. See [Agent routing](./agent-routing.md).
 
