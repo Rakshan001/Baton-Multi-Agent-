@@ -324,7 +324,7 @@ export function isDeadlocked(tasks: readonly PipelineTask[], opts: EligibilityOp
   // could possibly qualify, plus one unassigned probe for the open pool.
   const agents = new Set<string>();
   for (const t of remaining) if (t.assignee) agents.add(t.assignee);
-  agents.add(' any'); // a name no agent has — exercises the open-pool path
+  agents.add('\u0000any'); // a name no agent has — exercises the open-pool path
   return [...agents].every((a) => eligibleFor(a, tasks, opts).length === 0);
 }
 
