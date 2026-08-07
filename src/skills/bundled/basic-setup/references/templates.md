@@ -28,7 +28,7 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! gitleaks git --pre-commit --redact --staged --verbose; then
+if ! gitleaks git --staged --verbose --redact=100 --no-banner; then
   echo ""
   echo "  ✗ COMMIT BLOCKED — a secret was found in your staged changes."
   echo ""

@@ -97,10 +97,21 @@ repos:
 Full file in `references/templates.md`. The command is:
 
 ```bash
-gitleaks git --pre-commit --redact --staged --verbose
+gitleaks git --staged --verbose --redact=100 --no-banner
 ```
 
-This is taken from gitleaks' own `.pre-commit-hooks.yaml` — the authoritative source.
+**Verified by execution against gitleaks 8.30.1.** Two traps, both confirmed by running them:
+
+- **`--staged` is the flag that scans the index. `--pre-commit` is not.** `--pre-commit` is
+  documented as "scan using git diff" and exits **0** on a staged secret — a hook built on it
+  passes everything. gitleaks' own `.pre-commit-hooks.yaml` combines both, which works under the
+  pre-commit framework but is not a safe basis for a standalone hook.
+- **`--redact` takes an *optional* numeric value** (`--redact uint[=100]`). Written bare before
+  another short flag it can consume it and abort with exit **126** (unknown flag). Always write
+  `--redact=100`, never a bare `--redact` mid-command.
+
+Confirmed behaviour: clean commit → allowed · staged AWS key → blocked · staged database URL →
+blocked (with the config below) · `.env.example` with a placeholder → allowed, no false positive.
 
 **Fail closed.** If gitleaks is not installed the hook must exit non-zero and block the commit.
 `command -v gitleaks || exit 0` is the single most common bug in hand-written hooks: it passes

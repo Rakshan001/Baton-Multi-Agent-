@@ -46,9 +46,15 @@ Installing a hook does not fix an already-leaked credential.
 This is the only check that proves the hook actually fires. "gitleaks is installed" can be true
 while the hook never runs — that is exactly the failure that leaks a key.
 
+**Pick the canary carefully — most obvious choices are silently allowlisted.** Verified against
+gitleaks 8.30.1: `AKIAIOSFODNN7EXAMPLE` (AWS's own published example) is **not** flagged, and
+neither is a low-entropy hex-looking key like `AKIA2E0A8F3B244C9986`. Both would make the drill
+pass while proving nothing. `AKIAZQ3QW7RTYUIOPLKJ` **is** flagged — use it, or re-verify any
+substitute with `gitleaks dir <file>` before trusting the drill.
+
 ```bash
-# Use a canary that matches a real detector but is not a real credential.
-printf 'AWS_ACCESS_KEY_ID=AKIA2E0A8F3B244C9986\n' > .baton-hook-canary.tmp
+# Canary verified to trip the default ruleset — not a real credential.
+printf 'aws_access_key_id = "AKIAZQ3QW7RTYUIOPLKJ"\n' > .baton-hook-canary.tmp
 git add .baton-hook-canary.tmp
 
 if git commit -m "canary: this commit MUST be blocked" >/dev/null 2>&1; then
