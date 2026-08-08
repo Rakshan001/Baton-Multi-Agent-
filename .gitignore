@@ -41,7 +41,6 @@ graphify-out/
 # Test coverage
 coverage/
 .refs/
-
 # Local working plans — in-progress feature plans with live checkboxes. Kept out
 # of git: they track one machine's progress and would read as project docs.
 docs/plans-local/

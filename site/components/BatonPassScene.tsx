@@ -46,7 +46,7 @@ export default function BatonPassScene() {
       <div
         aria-hidden="true"
         className="pointer-events-none absolute left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-        style={{ background: "radial-gradient(circle, #ff9d2e55, transparent 70%)" }}
+        style={{ background: "radial-gradient(circle, color-mix(in oklab, var(--color-amber) 33%, transparent), transparent 70%)" }}
       />
 
       <svg
@@ -57,12 +57,12 @@ export default function BatonPassScene() {
       >
         <defs>
           <linearGradient id="baton-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#ffb454" />
-            <stop offset="100%" stopColor="#f97316" />
+            <stop offset="0%" stopColor="var(--color-amber-bright)" />
+            <stop offset="100%" stopColor="var(--color-amber-deep)" />
           </linearGradient>
           <radialGradient id="node-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#ff9d2e" stopOpacity="0.5" />
-            <stop offset="100%" stopColor="#ff9d2e" stopOpacity="0" />
+            <stop offset="0%" stopColor="var(--color-amber)" stopOpacity="0.5" />
+            <stop offset="100%" stopColor="var(--color-amber)" stopOpacity="0" />
           </radialGradient>
           <filter id="soft-glow" x="-60%" y="-60%" width="220%" height="220%">
             <feGaussianBlur stdDeviation="4" result="b" />
@@ -77,13 +77,13 @@ export default function BatonPassScene() {
         <path
           d={FULL_PATH}
           fill="none"
-          stroke="#ffffff14"
+          stroke="var(--color-line)"
           strokeWidth="1.5"
         />
         <path
           d={FULL_PATH}
           fill="none"
-          stroke="#ff9d2e"
+          stroke="var(--color-amber)"
           strokeWidth="1.5"
           strokeDasharray="3 9"
           strokeLinecap="round"
@@ -130,7 +130,7 @@ export default function BatonPassScene() {
                 width="26"
                 height="8"
                 rx="4"
-                fill="#fff"
+                fill="var(--color-fg)"
                 opacity="0.35"
               />
             </motion.g>
@@ -188,11 +188,11 @@ function AgentNode({
         cx={node.x}
         cy={node.y}
         r="26"
-        fill="#121214"
-        stroke="#ffffff26"
+        fill="var(--color-panel)"
+        stroke="var(--color-line-strong)"
         strokeWidth="1"
       />
-      <circle cx={node.x} cy={node.y} r="6" fill="#ff9d2e" />
+      <circle cx={node.x} cy={node.y} r="6" fill="var(--color-amber)" />
 
       {/* HANDOFF.md glyph that materializes on arrival */}
       {!reduce && (
@@ -212,8 +212,8 @@ function AgentNode({
             width="58"
             height="20"
             rx="4"
-            fill="#0e0e10"
-            stroke="#ff9d2e"
+            fill="var(--color-ink-2)"
+            stroke="var(--color-amber)"
             strokeWidth="1"
           />
           <text
@@ -222,7 +222,7 @@ function AgentNode({
             textAnchor="middle"
             fontSize="9"
             fontFamily="var(--font-mono)"
-            fill="#ffb454"
+            fill="var(--color-amber-bright)"
           >
             HANDOFF.md
           </text>
@@ -236,7 +236,7 @@ function AgentNode({
         textAnchor="middle"
         fontSize="11"
         fontFamily="var(--font-mono)"
-        fill="#a1a1aa"
+        fill="var(--color-muted)"
         letterSpacing="0.04em"
       >
         {node.label}

@@ -69,7 +69,7 @@ export default function Hero() {
             href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="glow-amber rounded-full bg-amber px-6 py-3 text-sm font-semibold text-black transition-transform hover:scale-[1.02]"
+            className="glow-amber rounded-full bg-amber px-6 py-3 text-sm font-semibold text-ink transition-transform hover:scale-[1.02]"
           >
             Star on GitHub
           </a>
@@ -77,7 +77,7 @@ export default function Hero() {
             href={DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded-full border border-line-strong px-6 py-3 text-sm font-medium text-fg transition-colors hover:bg-white/5"
+            className="rounded-full border border-line-strong px-6 py-3 text-sm font-medium text-fg transition-colors hover:bg-fg/5"
           >
             Read the docs
           </a>

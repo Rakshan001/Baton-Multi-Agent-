@@ -248,7 +248,10 @@ function killTree(run: RunningAgent, signal: NodeJS.Signals): void {
   // may have handed that pid to somebody else, and we would be killing a
   // stranger's whole process group. `running.delete` happens a microtask after
   // exit, so this window is real, not theoretical.
-  if (run.child.exitCode !== null) return;
+  // execa 10 moved the process fields off the returned promise; the underlying
+  // ChildProcess still carries them, so this reads exactly what it read before
+  // (null while alive, and null too when a signal took it — unchanged either way).
+  if (run.child.nodeChildProcess.exitCode !== null) return;
   const pid = run.child.pid;
   if (pid && process.platform !== 'win32') {
     try {

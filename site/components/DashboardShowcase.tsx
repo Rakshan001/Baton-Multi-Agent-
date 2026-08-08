@@ -35,7 +35,7 @@ export default function DashboardShowcase() {
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-10 bottom-0 h-40 translate-y-1/2 rounded-full blur-3xl"
-            style={{ background: "radial-gradient(ellipse, #ff9d2e55, transparent 70%)" }}
+            style={{ background: "radial-gradient(ellipse, color-mix(in oklab, var(--color-amber) 33%, transparent), transparent 70%)" }}
           />
           <BrowserFrame />
         </motion.div>
@@ -49,9 +49,9 @@ function BrowserFrame() {
     <div className="panel relative overflow-hidden">
       {/* chrome bar */}
       <div className="flex items-center gap-2 border-b border-line bg-ink-2/80 px-4 py-3">
-        <span className="h-3 w-3 rounded-full bg-white/15" />
-        <span className="h-3 w-3 rounded-full bg-white/15" />
-        <span className="h-3 w-3 rounded-full bg-white/15" />
+        <span className="h-3 w-3 rounded-full bg-fg/15" />
+        <span className="h-3 w-3 rounded-full bg-fg/15" />
+        <span className="h-3 w-3 rounded-full bg-fg/15" />
         <div className="ml-3 flex-1 rounded-md border border-line bg-ink px-3 py-1 font-mono text-xs text-faint">
           localhost:7077
         </div>
@@ -86,12 +86,12 @@ function BrowserFrame() {
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {[
-              { t: "my-task", a: "Claude Code", c: "#ff9d2e" },
-              { t: "fix-auth", a: "Cursor", c: "#36d1dc" },
-              { t: "refactor-kb", a: "Codex", c: "#a1a1aa" },
-              { t: "docs-pass", a: "Gemini", c: "#36d1dc" },
-              { t: "graphify", a: "Claude Code", c: "#ff9d2e" },
-              { t: "merge-pr", a: "Cursor", c: "#36d1dc" },
+              { t: "my-task", a: "Claude Code", c: "var(--color-amber)" },
+              { t: "fix-auth", a: "Cursor", c: "var(--color-cyan)" },
+              { t: "refactor-kb", a: "Codex", c: "var(--color-muted)" },
+              { t: "docs-pass", a: "Gemini", c: "var(--color-cyan)" },
+              { t: "graphify", a: "Claude Code", c: "var(--color-amber)" },
+              { t: "merge-pr", a: "Cursor", c: "var(--color-cyan)" },
             ].map((card) => (
               <div key={card.t} className="rounded-lg border border-line bg-panel/60 p-3">
                 <div className="mb-2 flex items-center gap-2">
@@ -99,7 +99,7 @@ function BrowserFrame() {
                   <span className="font-mono text-xs text-fg">{card.t}</span>
                 </div>
                 <p className="font-mono text-[11px] text-faint">{card.a}</p>
-                <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/5">
+                <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-fg/5">
                   <div className="h-full rounded-full" style={{ width: "62%", background: card.c }} />
                 </div>
               </div>

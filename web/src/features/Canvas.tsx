@@ -247,7 +247,7 @@ export function CanvasView({
   );
 }
 
-function Minimap({ sessions, positions, view, wrapRef }: { sessions: StatusRow[] | null; positions: Layout; view: ViewState; wrapRef: React.RefObject<HTMLDivElement> }) {
+function Minimap({ sessions, positions, view, wrapRef }: { sessions: StatusRow[] | null; positions: Layout; view: ViewState; wrapRef: React.RefObject<HTMLDivElement | null> }) {
   if (!sessions?.length) return null;
   const xs = sessions.map((s) => positions[s.slug].x), ys = sessions.map((s) => positions[s.slug].y);
   const minX = Math.min(...xs) - 40, maxX = Math.max(...xs) + NODE_W + 40;
