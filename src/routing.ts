@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Task → agent/model routing: "plan on Claude/Opus, UI work to Gemini, bug
  * fixes to Codex, trivial fixes on a local model" as a committable,

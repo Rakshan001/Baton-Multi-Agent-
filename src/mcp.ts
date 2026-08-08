@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton mcp` — stdio MCP server exposing Baton's coordination state to
  * agents (Claude Code, Cursor, Codex, Gemini CLI). The graph itself is served

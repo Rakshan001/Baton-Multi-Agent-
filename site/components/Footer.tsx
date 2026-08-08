@@ -25,7 +25,7 @@ export default function Footer() {
       </div>
       <div className="border-t border-line py-5">
         <p className="text-center font-mono text-xs text-faint">
-          MIT © Rakshan Shetty · Built for developers running more than one agent.
+          AGPL-3.0 © Rakshan Shetty · Built for developers running more than one agent.
         </p>
       </div>
     </footer>

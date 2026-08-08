@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton plan check <file>`  — parse and validate, write nothing.
  * `baton plan apply <file>`  — turn a plan into queued tasks.

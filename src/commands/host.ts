@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton host set|status|clear` — point this machine's daemon at a hub host, so
  * its agents' file claims join the shared picture.

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Single source of truth for every agent CLI Baton knows how to talk to:
  * how to detect it in the process table, which binary to probe, and how to

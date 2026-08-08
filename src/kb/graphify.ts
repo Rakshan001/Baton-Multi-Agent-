@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Thin wrapper around the external `graphify` CLI (PyPI package `graphifyy`,
  * MIT — vendored as reference under .refs/graphify, never bundled). Baton

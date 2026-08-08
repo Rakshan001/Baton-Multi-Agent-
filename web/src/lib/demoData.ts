@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Demo dataset (UI-preview shim, NOT part of the contract)
    Ported from the design prototype's data.js. Mirrors the local API

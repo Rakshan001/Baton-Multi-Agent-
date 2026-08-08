@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Skill catalog — the curated, searchable set of reusable agent workflows Baton
  * ships with. A "skill" is a named markdown playbook (objective + steps) that an

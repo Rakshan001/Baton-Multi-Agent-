@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton doctor` — audit junk (orphaned worktrees, branches, tmux sessions,
  * leaked temp files). `baton clean [--fix]` — reclaim it (dry-run by default).

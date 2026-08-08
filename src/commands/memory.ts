@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton memory` — inspect/curate the shared project memory from the terminal.
  * Facts are written by agents via the `save_memory` MCP tool (or the

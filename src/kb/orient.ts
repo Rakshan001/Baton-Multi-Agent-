@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `orient` — a small, budgeted onboarding brief a fresh agent session gets so it
  * understands the project without re-exploring the repo. DURABLE content only

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The pure half of the Daemons card (features/Settings.tsx) — ordering and
  * formatting, with no React in it — plus the demo fixtures, kept here rather

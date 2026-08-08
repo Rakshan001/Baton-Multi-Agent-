@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Live edit-signals: which files are being edited right now, by which
  * task/agent — and where two sessions are touching the same path. This is the

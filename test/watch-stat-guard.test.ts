@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `isDirectory` runs inside the fs-watch debounce timer — a bare setTimeout
  * callback, in a process with no `uncaughtException` handler. A throw there is

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Workspace manifest — the description of a hub's folder layout, so a second
  * machine can reproduce it exactly.

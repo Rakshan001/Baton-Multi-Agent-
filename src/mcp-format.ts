@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Output contracts for the coordination MCP server. Every agent pays tokens for
  * each response, so responses are compact (no pretty-print) and unbounded lists

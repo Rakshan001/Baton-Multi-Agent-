@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Handoff flow
    POST /api/tasks/:slug/handoff generates a HANDOFF.md brief in the

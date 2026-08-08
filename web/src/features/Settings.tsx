@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Settings screen (ported from admin.jsx)
    Appearance · Connection · Agent registry
@@ -503,7 +505,48 @@ function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
   );
 }
 
-export function SettingsScreen({ prefs, repo, viewer }: { prefs: Prefs; repo: string | null; viewer?: Meta["viewer"] }) {
+/** Upstream, used only until the daemon answers with its own. A fork that edits
+ *  package.json is offered here instead — see SOURCE_URL in src/version.ts. */
+const UPSTREAM_SOURCE = "https://github.com/Rakshan001/Baton-Multi-Agent-";
+
+/**
+ * Version, licence, and a link to the source of the build being served.
+ *
+ * Not an "About" flourish — AGPL-3.0 §13 requires a network-interactive
+ * program to offer its users the source of the running version, and the
+ * dashboard is exactly that. The URL comes from the daemon rather than this
+ * bundle so that a modified deployment points at its own code; the constant
+ * above is only the fallback for a daemon too old to send one.
+ */
+function AboutSettings({ meta }: { meta?: Meta | null }) {
+  const source = meta?.source || UPSTREAM_SOURCE;
+
+  return (
+    <SettingsBlock title="About Baton" desc="What this daemon is running, and where its source lives.">
+      <SettingRow label="Version" hint="The daemon serving this dashboard.">
+        <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
+          {meta?.version ? `v${meta.version}` : "—"}
+        </span>
+      </SettingRow>
+      <SettingRow
+        label="License"
+        hint="Free to use, change, and run commercially. If you distribute Baton or host a modified version for others, they get the source under the same terms."
+      >
+        <a className="mono fr" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
+          {meta?.license || "AGPL-3.0-or-later"}
+        </a>
+      </SettingRow>
+      <SettingRow label="Source code" hint="The complete source of this build, as the license requires it be offered to you.">
+        <a className="btn btn-sm fr" href={source} target="_blank" rel="noopener noreferrer">
+          <Icon name="gitBranch" size={13} /> Get the source
+        </a>
+      </SettingRow>
+    </SettingsBlock>
+  );
+}
+
+export function SettingsScreen({ prefs, repo, viewer, meta }: { prefs: Prefs; repo: string | null; viewer?: Meta["viewer"]; meta?: Meta | null }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="Settings" subtitle="Appearance, connection, and the agent registry" />
@@ -560,6 +603,8 @@ export function SettingsScreen({ prefs, repo, viewer }: { prefs: Prefs; repo: st
               <button className="btn btn-sm fr" disabled style={{ opacity: 0.7 }} data-tip="Editing the registry from the UI is planned."><Icon name="plus" size={13} /> Customize registry <ComingSoon /></button>
             </div>
           </SettingsBlock>
+
+          <AboutSettings meta={meta} />
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", padding: "8px 0 16px", color: "var(--text-quaternary)", fontSize: "var(--fs-12)" }}>
             <BatonMark size={14} /> Baton{repo ? ` · ${repo}` : ""}

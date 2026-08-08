@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Shared tmux primitives. Lives in util/ so every module that must see tmux
  * state (terminals.ts, spawn.ts, commands/rm.ts) gets the SAME session naming

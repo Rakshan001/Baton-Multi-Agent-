@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Knowledge-base state: which sub-projects have graphs, where they live, and
  * an in-process build queue so two graphify runs never race on one project.

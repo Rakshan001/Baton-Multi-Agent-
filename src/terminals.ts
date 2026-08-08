@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Interactive agent terminals: each session is a tmux session (named
  * `baton-<repoHash>-<slug>`) running the agent's interactive CLI inside the

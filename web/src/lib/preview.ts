@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — PREVIEW data (NOT part of the API contract)
    Token usage + git diffs aren't reported by `baton serve` yet.

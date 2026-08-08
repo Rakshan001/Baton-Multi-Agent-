@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The web demo-mode routing mirror (web/src/lib/routing.ts) must stay in
  * lockstep with the backend (src/routing.ts) — this is the test that makes

@@ -131,12 +131,12 @@ No server. State = the `HANDOFF.md` file in the repo (+ optional `.baton/history
 ## Tech choices
 - **Node 20 + TypeScript**, `commander` (CLI), `gray-matter` (HANDOFF.md frontmatter),
   `execa` (git diff/branch), a tiny tokenizer (`gpt-tokenizer` or char/4 heuristic) for
-  estimates. Ship via `npx baton`. MIT license.
+  estimates. Ship via `npx baton`. AGPL-3.0 license.
 
 ## Repo layout
 ```
 baton/
-  package.json  tsconfig.json  README.md  BUILD.md  LICENSE(MIT)
+  package.json  tsconfig.json  README.md  BUILD.md  LICENSE(AGPL-3.0)
   src/
     cli.ts          # commander entry: pass | take | done | status | estimate
     handoff.ts      # read/write/validate HANDOFF.md (gray-matter)

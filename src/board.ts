@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Shared status collection — the structured data behind `baton status` and the
  * `baton serve` /api/status endpoint. One source of truth for both.

@@ -69,7 +69,7 @@ const jsonLd = {
   url: SITE_URL,
   downloadUrl: REPO,
   softwareVersion: "0.0.1",
-  license: "https://opensource.org/licenses/MIT",
+  license: "https://www.gnu.org/licenses/agpl-3.0.html",
   author: { "@type": "Person", name: "Rakshan Shetty" },
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
 };

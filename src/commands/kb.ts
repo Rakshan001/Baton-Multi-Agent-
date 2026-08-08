@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton kb <init|status|rebuild|mcp>` — set up and maintain the knowledge
  * base: one graphify graph per sub-project + a merged cross-project graph,

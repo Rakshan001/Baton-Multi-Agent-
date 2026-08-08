@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Baton — tiny personal worktree orchestration for running several AI agents
  * on one repo without hand-juggling `git worktree`.

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton connect [--agents claude,cursor,codex,gemini] [--yes]` — wire the
  * `baton` coordination MCP server into every agent's config in one command, so

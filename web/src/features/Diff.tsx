@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Git diff viewer (ported from diff.jsx)
    Real mode streams GET /api/tasks/:slug/diff (commits + working

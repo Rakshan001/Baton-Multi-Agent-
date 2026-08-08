@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton usage` — real token usage per Claude Code session, mapped to tasks.
  * Costs are estimates from a static price table (always labelled est).

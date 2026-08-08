@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Tweaks panel (self-contained dev / demo affordance)
    A floating, draggable control panel echoing the design prototype's

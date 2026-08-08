@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Completion reports: when a task merges, capture WHAT shipped (summary,
  * files, commits) and WHO overlapped with it, persist it, and push it on the

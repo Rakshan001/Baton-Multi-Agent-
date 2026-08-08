@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Detect which AI coding agents are running locally and map each to a Baton
  * worktree (by the process's working directory).

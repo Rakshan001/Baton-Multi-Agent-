@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Junk detection + reclaim: orphaned worktrees, branches, tmux sessions, and
  * leaked temp files. One read-only audit (`auditJunk`), one fix (`cleanJunk`).

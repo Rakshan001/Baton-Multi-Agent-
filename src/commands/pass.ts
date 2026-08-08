@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton pass [slug] --to <agent>` — package the current session into a
  * HANDOFF.md brief so another agent (Cursor/Codex/Gemini…) can continue.

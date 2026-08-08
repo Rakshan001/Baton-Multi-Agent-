@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Activity dashboard (ported from activity.jsx)
    Real mode: everything is derived from /api/status + /api/signals.

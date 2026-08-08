@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton resume [slug]` — the pickup side of the manual relay (H4).
  * No slug: list every open handoff brief (task + session) in one place.

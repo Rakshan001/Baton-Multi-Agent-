@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Knowledge Graph (graphify)
    Force-directed view of the code graph(s) built by `baton kb init`:

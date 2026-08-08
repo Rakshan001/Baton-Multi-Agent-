@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * On-disk footprint of a Baton workspace, for the dashboard's storage view.
  * Breaks `.baton/` + the graphify graphs into the buckets that actually grow:

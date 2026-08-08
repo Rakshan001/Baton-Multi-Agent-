@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — routing mirror (demo mode)
    Mirrors src/routing.ts (BUILTIN_ROUTING, suggestAgent, scoreSeverity,

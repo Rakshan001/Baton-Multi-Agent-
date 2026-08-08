@@ -22,12 +22,13 @@ export default function OpenSourceCTA() {
           Baton is <span className="amber-gradient">open source.</span>
         </h2>
         <p className="mx-auto mt-6 max-w-xl text-pretty text-lg leading-relaxed text-muted">
-          MIT licensed, zero-dependency daemon, runs entirely on your machine.
-          Clone it, read every line, and pass it on.
+          AGPL-3.0 licensed, zero-dependency daemon, runs entirely on your machine.
+          Clone it, read every line, and pass it on — and it stays open: anyone who
+          ships or hosts a modified Baton owes their users the source too.
         </p>
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3 font-mono text-xs">
-          <Stat label="license" value="MIT" />
+          <Stat label="license" value="AGPL-3.0" />
           <Stat label="daemon" value="zero-dep" />
           <Stat label="node" value="≥ 20" />
         </div>
@@ -79,7 +80,7 @@ export default function OpenSourceCTA() {
         <p className="mt-10 font-mono text-xs text-faint">
           License:{" "}
           <a href={LICENSE_URL} target="_blank" rel="noopener noreferrer" className="text-muted underline-offset-4 hover:text-amber hover:underline">
-            MIT © Rakshan Shetty
+            AGPL-3.0 © Rakshan Shetty
           </a>
         </p>
       </Reveal>

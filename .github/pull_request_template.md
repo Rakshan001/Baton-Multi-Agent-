@@ -26,3 +26,14 @@
 - [ ] I updated docs (`README.md`, `docs/`, `STATUS.md`) where relevant
 - [ ] I did not break the conventions in [CONTRIBUTING.md](../CONTRIBUTING.md)
       (zero-dependency daemon, SSE-only realtime, demo mode intact, git via `src/util/exec.ts`)
+- [ ] New source files carry the two-line copyright + `SPDX-License-Identifier` header
+      (a test enforces this — copy the header from any neighbouring file)
+
+## License
+
+Baton is **AGPL-3.0-or-later**. By opening this PR you agree to the contribution
+terms in [CONTRIBUTING.md](../CONTRIBUTING.md#license): your work is licensed
+under AGPL, and the maintainer may also license it under other terms. **You keep
+your copyright.** The reasoning is written out in that section — and if you would
+rather not grant the second part, say so here and the PR can be taken under plain
+AGPL instead.

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton handoff export` / `baton handoff import` — move a half-finished task
  * to another machine, another device, or another person's agent.

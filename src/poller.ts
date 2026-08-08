@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Server-side change detector: the daemon polls its own status collector and
  * publishes diffs to the bus, so N dashboard clients get push updates from

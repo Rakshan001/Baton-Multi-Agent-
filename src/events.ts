@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Transport-agnostic event bus for everything "live" in Baton: the SSE
  * endpoint subscribes to it today, and a socket.io (or anything else)

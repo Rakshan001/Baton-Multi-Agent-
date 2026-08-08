@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton guard` — the PreToolUse edit-guard for Claude Code hooks. Reads the
  * hook payload on stdin; if the file the agent is about to Edit/Write is under

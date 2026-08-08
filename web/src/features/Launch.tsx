@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Launch session (animated) (ported from launch.jsx)
    Creating the worktree + branch is REAL (POST /api/tasks); the

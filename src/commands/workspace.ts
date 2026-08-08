@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton workspace show` + `baton join` — reproduce one hub's folder layout on
  * another machine.

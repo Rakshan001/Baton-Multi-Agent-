@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The git hook that stamps `Baton-Task:` onto commits made in a task worktree.
  *

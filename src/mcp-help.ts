@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * MCP tool descriptions — the fixed context tax every agent session pays (T1).
  * Before this round: 2,799 chars (~700 tokens); now budgeted and invariant-

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — domain types
    Mirrors the CLI's HTTP contract (src/board.ts, src/history.ts,
@@ -99,6 +101,10 @@ export interface Meta {
   branch: string | null;
   writeEnabled: boolean;
   version: string;
+  /** SPDX id and a source URL for THIS build — AGPL-3.0 §13 owes both to
+   *  anyone the dashboard is served to. Optional: an older daemon predates it. */
+  license?: string;
+  source?: string;
   /** True when the root is a multi-repo hub (not a git repo) — new tasks must
    *  target one of `projects`. False/undefined for a plain single repo. */
   hub?: boolean;

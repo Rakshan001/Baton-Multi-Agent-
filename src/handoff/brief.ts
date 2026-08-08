@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Handoff brief generation — the knowledge pack a cheaper agent picks up with
  * `baton take`. Not a raw history dump: a curated HANDOFF.md with objective,

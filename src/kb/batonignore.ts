@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `.gitignore` seeding for a single-repo `baton kb init`. The init writes
  * several artifacts (.baton/, graphify-out/, .graphifyignore, .mcp.json,

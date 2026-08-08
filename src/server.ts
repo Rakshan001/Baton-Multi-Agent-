@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Local JSON API for the Baton web dashboard. Binds to 127.0.0.1 only and
  * allows CORS from localhost origins — it exposes your repo's task data, so it
@@ -62,7 +64,7 @@ import { loadRouting, suggestRoute } from './routing.js';
 import { agentActiveLoads, pickHandoffTarget } from './handoff/workload.js';
 import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from './kb/contextpack.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
-import { BATON_VERSION } from './version.js';
+import { BATON_VERSION, SOURCE_URL } from './version.js';
 import { usageForRepo } from './usage.js';
 import { AgentRunningError, runningHeadless, startAgent, stopAgent, stopAllAgents, TerminalConflictError } from './spawn.js';
 import {
@@ -1842,6 +1844,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, {
       repo: root, branch: rootIsRepo ? await currentBranch(root) : null,
       writeEnabled: !!opts.writeEnabled, version: VERSION,
+      // AGPL-3.0 §13: the dashboard is network-interactive, so every viewer is
+      // owed the source of the build they are looking at. Served from
+      // package.json so a fork's own repo is what its users are offered.
+      license: 'AGPL-3.0-or-later', source: SOURCE_URL,
       // The fleet's identity check: a daemon record names a (pid, port) pair,
       // and root alone can't distinguish "that daemon" from "a new daemon in
       // the same repo on the same port" (verifyDaemon, src/daemons.ts).

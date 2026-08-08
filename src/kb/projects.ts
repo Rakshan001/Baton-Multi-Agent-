@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Sub-project detection for `baton kb init`. A folder holding several servers
  * (api/, web/, worker/ ...) gets one graph per sub-project plus a merged view;

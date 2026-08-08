@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Headless agent launch: start an agent CLI in a task's worktree with a
  * prompt (the HANDOFF.md brief when one exists), stream its output onto the

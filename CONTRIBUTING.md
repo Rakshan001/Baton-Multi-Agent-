@@ -87,7 +87,31 @@ worktrees`.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the
-[MIT License](LICENSE) that covers this project. Third-party attribution is
-tracked in [NOTICE](NOTICE) — if your change adapts an external project, add it
-there.
+Baton is **AGPL-3.0-or-later** (see [LICENSE](LICENSE)). By opening a pull
+request you agree to two things:
+
+1. **Your contribution is licensed under AGPL-3.0-or-later**, the same terms as
+   the rest of the project.
+2. **You grant Rakshan Shetty a perpetual, worldwide, irrevocable, royalty-free
+   right to also license your contribution under other terms**, including a
+   commercial license — while keeping every right to your own work yourself. You
+   are not assigning copyright; you keep it.
+
+Point 2 is unusual enough to deserve the reason. AGPL asks a company to open
+its own source before it can build on Baton, and some cannot. The intent is to
+be able to sell those companies an exemption without the project ever going
+closed — Baton stays AGPL for everyone, permanently. That only works if one
+person can license the whole codebase, which stops being true the moment a
+contribution lands that they cannot relicense. Asking afterwards means tracking
+down every past contributor and getting a yes from all of them; a single no, or
+one unanswered email, and the option is gone forever. So it is asked up front,
+or not at all.
+
+If you would rather not grant point 2, say so in the PR — the contribution can
+still be taken under plain AGPL, it just has to be a deliberate decision rather
+than a surprise later.
+
+Third-party attribution is tracked in [NOTICE](NOTICE) — if your change adapts
+an external project, add it there. Note that AGPL-3.0 constrains what can be
+adapted: MIT, BSD, ISC and Apache-2.0 sources are fine, but code under a
+proprietary or non-commercial license is not, and neither is GPL-2.0-only.

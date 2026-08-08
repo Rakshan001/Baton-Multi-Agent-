@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Bounded counter for concurrent SSE connections. The event bus intentionally
  * has no listener cap (each stream cleans up on disconnect); this gate bounds

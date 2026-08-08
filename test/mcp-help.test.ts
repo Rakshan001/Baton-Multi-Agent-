@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
 import { TOOL_HELP, TOOL_HELP_BUDGET } from '../src/mcp-help.js';
 

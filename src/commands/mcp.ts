@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton mcp` — run the coordination MCP server over stdio. Agents register
  * it via `baton kb mcp` config snippets (server entry "baton").

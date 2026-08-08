@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Session handoff briefs (H1) — the manual relay flow. ANY session can write
  * one on request: a root terminal with no worktree, Cursor at 99% of its usage

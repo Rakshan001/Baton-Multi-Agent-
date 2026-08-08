@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Continuation head — the tiny, must-read "resume this task" block injected into
  * a freshly-launched agent session so it can pick up where a limited-out session

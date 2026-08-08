@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Multi-repo hub support: the git repos are sub-projects listed in kb.json,
  * while the hub root may be plain or git-initialized for coordination metadata.

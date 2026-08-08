@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
 import { hardenedArgs, gitEnv } from '../src/util/exec.js';
 import { parseConflicts, CONFLICT_LABELS } from '../src/git.js';

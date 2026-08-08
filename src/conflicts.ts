@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Advisory conflict detection between task branches — "these two tasks both
  * touch Nav.tsx, so a merge conflict is likely." Plain git file-overlap; no

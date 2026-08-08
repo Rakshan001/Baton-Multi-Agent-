@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton signals` — live edit signals table.
  * `baton blame <file>` — merged attribution + live editors for one file.

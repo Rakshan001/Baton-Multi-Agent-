@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * §1.1 + §7.6: in team mode the HUB decides a claim, and a hub that cannot be
  * reached is a refusal.

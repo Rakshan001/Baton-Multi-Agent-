@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton progress "<note>"` — report what this session is working on, for
  * shell-driven / interactive agents that aren't calling the MCP tool. Surfaced

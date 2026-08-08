@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton bugs <symptom>` — has this bug been fixed before, and did something
  * since re-break it? Reads the bug-fix facts the memory holds and traces their

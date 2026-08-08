@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The agent roster behind GET /api/agents: for every agent Baton knows, is it
  * installed on this machine, can Baton drive it (headless/interactive), is its

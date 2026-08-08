@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The pipeline as the dashboard draws it — phase 7's swimlanes (§10).
  *

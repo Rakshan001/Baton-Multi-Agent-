@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
 import { activate, block, claim, nextFor, pause, releaseClaim, takeover } from '../src/lifecycle.js';
 import { STALL_GRACE_MS } from '../src/pipeline.js';

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Project memory: facts agents learn while working (decisions, gotchas,
  * conventions, references) persisted across sessions so the next agent does

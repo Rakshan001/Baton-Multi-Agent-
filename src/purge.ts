@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Permanent storage purge — the "actually free my disk" operation behind the
  * dashboard's Danger Zone. Unlike `baton clean` (which only reclaims *orphans*),

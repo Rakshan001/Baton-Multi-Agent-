@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Live coding session (ported from live.jsx)
    Demo mode: scripted activity stream (showcase). Real mode: the

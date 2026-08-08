@@ -751,6 +751,82 @@ red twice under load, which is what settled the flakiness question below.
 its demo fixtures all shipped. The spec's §13 open questions remain, and the UI has no
 "cancel the stranded ones too" shortcut yet — the dialog names them, you cancel them.
 
+### Session 19t — MIT → AGPL-3.0
+
+Relicensed, on 2026-08-07, from MIT to **AGPL-3.0-or-later**. The goal was
+"nobody can take this closed and sell it", and the correction worth recording is
+that copyleft does not stop anyone *selling* Baton — GPL and AGPL both permit
+that explicitly. What it stops is selling it **closed**. Wanting to block
+commercial use outright would have meant PolyForm or BUSL, which are not open
+source; that trade was declined.
+
+**Affero and not plain GPL** because of what Baton is. It is a daemon with a web
+dashboard, so the obvious route to a proprietary Baton is to host it as a service
+and never distribute a binary — which GPL does not reach and §13 does.
+
+**The relicense does not reach backwards, and NOTICE says so.** The repo had been
+public and MIT since 2026-06-08 with two forks; every copy taken at or before
+`0a734e1` keeps its MIT grant permanently. Pretending otherwise in the history
+would mislead anyone auditing a fork's provenance.
+
+**§13 is an obligation, so the dashboard now honours it.** `/api/meta` serves
+`license` and `source`, and Settings has an About block offering the source of
+the running build. The URL is derived from package.json's `repository` rather
+than hardcoded (`normalizeSourceUrl`, `src/version.ts`) — a fork that edits that
+field automatically offers *its own* code, which is what §13 actually asks for.
+npm's shorthands (`git+ssh://…`, `owner/repo`, `gitlab:o/r`) are all normalized,
+because an offer a browser cannot open satisfies the letter and none of the
+point.
+
+**A CLA came with it** (CONTRIBUTING.md): contributions are AGPL, plus a
+relicensing grant to the author — contributors keep their copyright. This is the
+one piece that cannot be retrofitted: asking later means finding every past
+contributor, and one unanswered email closes the option permanently. A
+contributor who would rather not grant it can say so in the PR.
+
+`test/license.test.ts` (new, 7) guards it: the SPDX id, LICENSE being the Affero
+text with §13 present, the NOTICE history, no stale "MIT ©" in README or
+CONTRIBUTING, and the URL normalizer including its fallbacks. A regenerated
+package.json putting `"MIT"` back would fail no other test in the suite.
+
+Also updated: the landing site (footer, CTA, JSON-LD `license`), BUILD.md, the
+README badge and License section. 1701 tests green across 143 files; both
+workspaces build; `/api/meta` verified against a live daemon.
+
+Not done: `batonlane` rename (pending item 1), still decided and still deferred.
+
+**Provenance, because a licence you cannot prove is worth little.** AGPL gives a
+right to attribution; it does not create the evidence. Two gaps were found and
+closed:
+
+- **352 source files carried no copyright line at all** (`src/`, `web/src/`,
+  `test/`, `scripts/`). A file lifted out of this repo arrived carrying no trace
+  of its author — nothing to strip, and so nothing to point at later. Every one
+  now opens with `Copyright (C) 2026 Rakshan Shetty` +
+  `SPDX-License-Identifier: AGPL-3.0-or-later`: machine-readable to licence
+  scanners (REUSE/SPDX), and it makes removal a deliberate act rather than an
+  oversight. `src/cli.ts` keeps its shebang on line 1 — a header above it stops
+  the CLI being executable, and a test asserts that ordering.
+- **No commit had ever been signed** (`git log --format=%G?` was `N` throughout).
+  `user.name` is a string anyone can type, so unsigned history proves nothing —
+  and cuts both ways, since commits can be forged *as* you. SSH signing is now
+  configured repo-local against `~/.ssh/id_ed25519`, with an `allowed_signers`
+  entry so `--show-signature` verifies locally. Only future commits are covered;
+  signing old ones means rewriting all history, which is not worth it.
+
+Four more tests in `test/license.test.ts` guard the headers, including one that
+asserts the file walker actually found >300 files — a walker silently returning
+`[]` would make every other assertion in that block vacuous, which is the
+characteristic failure of exactly this shape of test. Mutation-checked: stripping
+one file's header fails precisely the two intended tests.
+
+Declined: Software Heritage archival (offered, not taken).
+
+A note on the suite. Two full runs in a row came back 6 failed / 5 failed with
+*different* tests each time, all timeouts around spawned daemons; a third quiet
+run was 1705/1705. Same load flakiness recorded in session 19q — worth
+remembering before chasing a failure that moved.
+
 ### Session 19s — phase 7: the pipeline on screen
 
 The whole of §10 phase 7 — phase swimlanes, the markdown plan view, cancel controls with a

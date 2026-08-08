@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Side-effect module: suppress the harmless `node:sqlite` experimental warning.
  * Must be imported FIRST (before anything that loads node:sqlite) — ES import

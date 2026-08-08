@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton snapshot [slug]` — refresh a task worktree's HANDOFF.md from git +
  * transcript ground truth, WITHOUT committing and WITHOUT re-routing, so a

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Knowledge-base export / import / git-sharing. One artifact layout feeds all
  * three paths (tarball download, tarball import, committed kb/ directory), so
