@@ -32,19 +32,30 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      # --- Backend (root workspace) ---
+      # Both workspaces are installed and built BEFORE the suite runs, because
+      # the root suite reaches into web/ in two ways that a root-only job cannot
+      # satisfy:
+      #   · test/poll-backoff.test.ts imports web/src/hooks/usePoll, which
+      #     imports react — absent until web is installed (ERR_MODULE_NOT_FOUND).
+      #   · test/proxied-member.test.ts asserts the daemon serves the dashboard,
+      #     which is web/dist — absent until web is built (404, not 200).
+      # Both tests are correct; the old ordering ran them before their inputs
+      # existed. Neither ever failed on main only because both are newer than it.
+
+      # --- Install ---
       - name: Install (root)
         run: npm ci
 
-      - name: Build (root)
-        run: npm run build
-
-      - name: Test (root)
-        run: npm test
-
-      # --- Dashboard (web workspace) ---
       - name: Install (web)
         run: npm ci --prefix web
 
+      # --- Build ---
+      - name: Build (root)
+        run: npm run build
+
       - name: Build (web)
         run: npm run build --prefix web
+
+      # --- Test (needs both builds above) ---
+      - name: Test (root)
+        run: npm test
