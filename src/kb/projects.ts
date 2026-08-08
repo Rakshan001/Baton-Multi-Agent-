@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Sub-project detection for `baton kb init`. A folder holding several servers
  * (api/, web/, worker/ ...) gets one graph per sub-project plus a merged view;
@@ -84,14 +86,26 @@ async function walk(dir: string, depth: number, found: string[], isStop: (d: str
  */
 const ID_SAFE = /[^a-z0-9._-]+/g;
 
+/**
+ * Collapse runs of unsafe chars to one dash, then trim dashes/dots from the
+ * ends: a leading dot would hide the id, and `.`/`..` must never be one.
+ *
+ * Exported and used by EVERY path that mints an id. It used to live inline in
+ * `toSubProjects`, which the two single-project returns in `detectProjects`
+ * bypass — so the most ordinary layout of all (one repo, a root package.json,
+ * a directory called `My App`) minted the raw basename and walked straight into
+ * both failures this docblock describes.
+ */
+export function safeProjectId(raw: string): string {
+  return raw.toLowerCase().replace(ID_SAFE, '-').replace(/^[-.]+|[-.]+$/g, '') || 'project';
+}
+
 /** Assign stable, unique slug ids to discovered project paths (relative to `root`). */
 function toSubProjects(root: string, paths: string[]): SubProject[] {
   const taken = new Set<string>();
   return paths.map((p) => {
-    const raw = relative(root, p).replace(/[\\/]+/g, '-').toLowerCase() || basename(p);
-    // Collapse runs of unsafe chars to one dash, then trim dashes/dots from the
-    // ends: a leading dot would hide the id, and `.`/`..` must never be one.
-    let id = raw.replace(ID_SAFE, '-').replace(/^[-.]+|[-.]+$/g, '') || 'project';
+    const raw = relative(root, p).replace(/[\\/]+/g, '-') || basename(p);
+    let id = safeProjectId(raw);
     while (taken.has(id)) id = `${id}-2`;
     taken.add(id);
     return { id, name: basename(p), path: p };
@@ -128,12 +142,12 @@ export async function detectProjects(root: string): Promise<SubProject[]> {
   // index it as one graph. Per-sub-project splitting is for plain container
   // folders holding several independent servers/repos side by side.
   if (PROJECT_MARKERS.some((m) => existsSync(join(root, m)))) {
-    return [{ id: basename(root), name: basename(root), path: root }];
+    return [{ id: safeProjectId(basename(root)), name: basename(root), path: root }];
   }
   const found: string[] = [];
   await walk(root, 1, found, isProjectDir);
   if (found.length === 0) {
-    return [{ id: basename(root), name: basename(root), path: root }];
+    return [{ id: safeProjectId(basename(root)), name: basename(root), path: root }];
   }
   return toSubProjects(root, found);
 }

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — GraphCanvas
    Imperative wrapper around `force-graph` (canvas 2D force layout).

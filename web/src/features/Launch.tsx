@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Launch session (animated) (ported from launch.jsx)
    Creating the worktree + branch is REAL (POST /api/tasks); the
@@ -11,7 +13,7 @@ import { AGENT_REGISTRY, AgentGlyph, getAgent } from "../lib/registry";
 import { BatonAPI } from "../lib/api";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { showToast } from "../lib/toast";
-import type { AgentId, RouteSuggestion } from "../types";
+import type { AgentId, Meta, RouteSuggestion } from "../types";
 
 type Phase = "form" | "provisioning" | "done";
 
@@ -29,12 +31,17 @@ export function LaunchSession({
   const [step, setStep] = useState(-1);
   const [suggestion, setSuggestion] = useState<RouteSuggestion | null>(null);
   const [startMode, setStartMode] = useState<"none" | "headless" | "terminal">("none");
-  const [terminals, setTerminals] = useState<{ available: boolean; hint?: string } | null>(null);
+  const [terminals, setTerminals] = useState<Meta["terminals"] | null>(null);
   // Multi-repo hub: a task must target one sub-project (its own git repo). null = single repo.
   const [hubProjects, setHubProjects] = useState<{ id: string; name: string }[] | null>(null);
   const [project, setProject] = useState<string | null>(null);
   const [headlessAgents, setHeadlessAgents] = useState<string[]>(["claude", "codex", "gemini"]); // fallback until meta loads
   const [interactiveAgents, setInteractiveAgents] = useState<string[] | null>(null); // null = any agent
+  // Ids the REPO defined, not this machine's owner. This dialog is what
+  // actually starts an agent, so it has to say which ones arrived with the
+  // code — the Agents card tags them, and a launcher that didn't would be the
+  // one place the provenance goes missing.
+  const [projectAgents, setProjectAgents] = useState<string[]>([]);
   const userPickedAgent = useRef(initialAgent !== null);
   const acceptedModel = useRef<string | undefined>(undefined); // set when the user takes the routing suggestion
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -49,6 +56,7 @@ export function LaunchSession({
       setTerminals(m.terminals ?? { available: false });
       if (m.agents?.headless) setHeadlessAgents(m.agents.headless);
       if (m.agents?.interactive) setInteractiveAgents(m.agents.interactive);
+      if (m.agents?.fromProject) setProjectAgents(m.agents.fromProject);
       if (m.hub && m.projects?.length) {
         setHubProjects(m.projects);
         setProject((p) => p ?? m.projects![0].id); // default to the first sub-project
@@ -76,6 +84,15 @@ export function LaunchSession({
 
   const canHeadless = writeEnabled && headlessAgents.includes(agent);
   const canTerminal = writeEnabled && !!terminals?.available && (interactiveAgents === null || interactiveAgents.includes(agent));
+  // The picker is meta-driven, not registry-locked: `.baton/agents.json`
+  // agents arrive only through meta.agents, and the daemon can genuinely
+  // launch them — hiding them here would make the feature invisible.
+  const inRegistry = new Set<string>(AGENT_REGISTRY.map((x) => x.id!));
+  const fromRepo = (id?: string | null): boolean => !!id && projectAgents.includes(id);
+  const agentGrid = [
+    ...AGENT_REGISTRY,
+    ...[...new Set([...headlessAgents, ...(interactiveAgents ?? [])])].filter((id) => !inRegistry.has(id)).sort().map((id) => getAgent(id)),
+  ];
   const mode = startMode === "headless" && !canHeadless ? "none"
     : startMode === "terminal" && !canTerminal ? "none"
     : startMode;
@@ -173,17 +190,32 @@ export function LaunchSession({
             <div>
               <div className="tag" style={{ marginBottom: 8 }}>Agent</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
-                {AGENT_REGISTRY.map((ag) => {
+                {agentGrid.map((ag) => {
                   const on = agent === ag.id;
                   return (
                     <button key={ag.id} className="fr" onClick={() => { userPickedAgent.current = true; acceptedModel.current = undefined; setAgent(ag.id as AgentId); }} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: "var(--r-md)", cursor: "pointer", textAlign: "left", background: on ? `color-mix(in srgb, ${ag.color} 14%, transparent)` : "var(--bg-surface)", border: `1px solid ${on ? `color-mix(in srgb, ${ag.color} 45%, transparent)` : "var(--border-subtle)"}`, boxShadow: on ? `0 0 0 1px color-mix(in srgb, ${ag.color} 30%, transparent) inset` : "none", transition: "border-color var(--dur-1), background var(--dur-1)" }}>
                       <AgentBadge id={ag.id} size="sm" showLabel={false} />
                       <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ag.short}</span>
+                      {/* A dot, not a word: the tile is 132px and the sentence
+                          that matters is spelled out below for the agent you
+                          actually picked. */}
+                      {fromRepo(ag.id) && !on && (
+                        <span aria-label="defined by this repo" data-tip="Defined by this repo's .baton/agents.json"
+                          style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--warn, #b58900)" }} />
+                      )}
                       {on && <Icon name="check" size={14} style={{ color: ag.color, flex: "none" }} />}
                     </button>
                   );
                 })}
               </div>
+              {/* Said in full exactly where it costs something: you are about
+                  to START this one, and the repo — not you — chose the binary
+                  behind it. The Agents card carries the same tag. */}
+              {fromRepo(agent) && (
+                <p style={{ margin: "7px 0 0", fontSize: "var(--fs-11)", color: "var(--warn, #b58900)" }}>
+                  {a.short} is defined by this repo's <span className="mono">.baton/agents.json</span> — it arrived with the code, like any other committed config you review.
+                </p>
+              )}
             </div>
 
             <div>
@@ -213,9 +245,17 @@ export function LaunchSession({
                     ))}
                   </div>
                   {terminals && !terminals.available && (
-                    <div style={{ marginTop: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
-                      <Icon name="terminal" size={12} />
-                      Interactive terminals need tmux{terminals.hint ? <> — <span className="mono" style={{ color: "var(--accent-text)" }}>{terminals.hint}</span></> : null}
+                    <div style={{ marginTop: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)", display: "flex", alignItems: "flex-start", gap: 6 }}>
+                      <Icon name="terminal" size={12} style={{ flex: "none", marginTop: 2 }} />
+                      {/* Two different reasons, and only one of them is fixable
+                          from here. A remote viewer installing tmux would learn
+                          nothing — the daemon refuses terminals over the network
+                          at any tmux version. */}
+                      {terminals.reason === "remote" ? (
+                        <span>Terminals stay on the host machine — they're never served over the network. Use SSH port-forwarding to reach one.</span>
+                      ) : (
+                        <span>Interactive terminals need tmux{terminals.hint ? <> — <span className="mono" style={{ color: "var(--accent-text)" }}>{terminals.hint}</span></> : null}</span>
+                      )}
                     </div>
                   )}
                 </div>

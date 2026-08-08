@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton mcp` — stdio MCP server exposing Baton's coordination state to
  * agents (Claude Code, Cursor, Codex, Gemini CLI). The graph itself is served
@@ -17,10 +19,12 @@ import { z } from 'zod';
 import { collectStatus } from './board.js';
 import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
-import { resolveMcpRoot } from './store.js';
+import { activeBatonRoot, loadTasks, projectOf } from './store.js';
+import { diffStampFor, groundMovedNotice, registerPipelineTools, type RegisterTool } from './mcp-pipeline.js';
 import { queryFile, searchHistory } from './history.js';
 import { checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
+import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
 import { createSessionHandoff } from './handoff/session-brief.js';
 import { saveProgress } from './handoff/progress-ledger.js';
@@ -39,12 +43,15 @@ const SIGNALS_CAP = 30;
  * reads as live, without a DB write on every single tool invocation.
  */
 const PRESENCE_TOUCH_MS = 30_000;
+/** How often a task-bound session re-reads its own row to notice a cancellation
+ *  or a takeover. Cheap (one small JSON read) but not free, so debounced. */
+const STATE_CHECK_MS = 15_000;
 
 export async function startMcpServer(): Promise<void> {
   // Coordination store: an agent runs `baton mcp` from inside its worktree, so
-  // gitRoot() would point at an empty per-worktree shadow store. resolveMcpRoot
+  // gitRoot() would point at an empty per-worktree shadow store. activeBatonRoot
   // finds the real hub/repo .baton (and honors BATON_ROOT for spawned agents).
-  const root = await resolveMcpRoot();
+  const root = await activeBatonRoot();
   // Memory tools resolve the shared main repo themselves (worktree-safe) from a
   // git path, so give them the git root — unchanged in hub mode.
   const memRoot = await gitRoot();
@@ -57,7 +64,7 @@ export async function startMcpServer(): Promise<void> {
   const selfSlug = taskSlug ?? sessionSlug(`p${process.pid}`);
   if (!taskSlug) {
     try {
-      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent());
+      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent(6, root));
       registerHookSession(root, selfSlug, agent, memRoot);
     } catch { /* identity is best-effort — tools still work anonymously */ }
   }
@@ -82,10 +89,36 @@ export async function startMcpServer(): Promise<void> {
     lastPresenceTouch = now;
     try { touchHookSession(root, selfSlug); } catch { /* presence is best-effort */ }
   };
+  // Cancellation notice. An agent working in a worktree has no reason to look
+  // at the board again, so a task cancelled (or taken over) under it would be
+  // discovered at `complete_task` — after the work. Every tool answer carries
+  // the notice instead, because whatever the agent called next is the soonest
+  // moment it can hear. Debounced, and only for a session that holds a task.
+  const noticeState = { at: 0, sent: '' };
+  const cancellationNotice = async (): Promise<string | null> => {
+    if (!taskSlug) return null;                           // no task, no ground to move
+    const now = Date.now();
+    if (now - noticeState.at < STATE_CHECK_MS) return null;
+    noticeState.at = now;
+    try {
+      const notice = groundMovedNotice(
+        (await loadTasks(root)).find((x) => x.slug === taskSlug), taskSlug, selfSlug,
+      );
+      if (!notice || notice === noticeState.sent) return null;   // say it once, not every call
+      noticeState.sent = notice;
+      return notice;
+    } catch { return null; }                              // never break a tool call over this
+  };
+
   const reg = ((name: string, config: unknown, cb: (...a: unknown[]) => unknown) =>
-    (server.registerTool as (...x: unknown[]) => unknown)(name, config, (...a: unknown[]) => {
+    (server.registerTool as (...x: unknown[]) => unknown)(name, config, async (...a: unknown[]) => {
       presenceTouch();
-      return cb(...a);
+      const res = await cb(...a) as { content?: { type: string; text: string }[] };
+      const notice = await cancellationNotice();
+      if (notice && Array.isArray(res?.content)) {
+        return { ...res, content: [{ type: 'text' as const, text: JSON.stringify({ batonNotice: notice }) }, ...res.content] };
+      }
+      return res;
     })) as unknown as typeof server.registerTool;
 
   reg(
@@ -103,7 +136,48 @@ export async function startMcpServer(): Promise<void> {
       description: TOOL_HELP.check_files,
       inputSchema: { paths: z.array(z.string()).describe('Repo-relative file paths to check') },
     },
-    async ({ paths }) => asText({ watcherActive: isWatcherActive(root), files: await checkFiles(root, paths, selfSlug) }),
+    async ({ paths }) => {
+      /*
+       * Local signals AND the host's federated claims. Without the second half
+       * a teammate's claim is visible to a human on the dashboard and invisible
+       * to the agent about to overwrite their work.
+       *
+       * `remote` is always present when a host is linked, including when it
+       * could not be reached — an agent must be able to tell "nobody else is on
+       * this file" from "I could not find out", and only the first is a reason
+       * to proceed confidently.
+       */
+      const [files, view, project] = await Promise.all([
+        checkFiles(root, paths, selfSlug),
+        remoteClaims(root),
+        projectOf(root, selfSlug),
+      ]);
+      const elsewhere = remoteHoldersFor(view, paths, undefined, project);
+      for (const [p, holders] of Object.entries(elsewhere)) {
+        if (files[p]) files[p] = { ...files[p], busy: true, elsewhere: holders };
+      }
+      const note = remoteNote(view);
+      /*
+       * The remote semantics are taught HERE, in the answer, and only when they
+       * apply — never in TOOL_HELP. Same reasoning as recall_memory's `ids`
+       * (see the comment in mcp-help.ts): a description is a tax every session
+       * pays before doing any work, whereas a tip costs nothing until the day
+       * there is actually a teammate on the other end of the file.
+       */
+      const tip = Object.keys(elsewhere).length
+        ? 'A path with `elsewhere` is held by a teammate on another machine. Claims are advisory, not locks — prefer other work, or agree with them first.'
+        : note
+          ? 'Remote claims could not be fetched, so "not busy" covers THIS machine only.'
+          : null;
+      return asText({
+        watcherActive: isWatcherActive(root),
+        files,
+        ...(view.linked
+          ? { remote: { reachable: view.reachable, ...(note ? { note } : {}) } }
+          : {}),
+        ...(tip ? { tip } : {}),
+      });
+    },
   );
 
   reg(
@@ -135,9 +209,24 @@ export async function startMcpServer(): Promise<void> {
       inputSchema: { file: z.string().describe('Repo-relative file path') },
     },
     async ({ file }) => {
-      const [hits, live] = [queryFile(root, file), await checkFiles(root, [file], selfSlug)];
+      // Scope blame to the asker's sub-project: paths are worktree-relative, so
+      // an unscoped `src/index.ts` in a hub returned every project's history and
+      // named agents that never opened this file. projectOf yields null outside
+      // a hub, which queryFile reads as "don't scope".
+      const [hits, live] = [queryFile(root, file, await projectOf(root, selfSlug)), await checkFiles(root, [file], selfSlug)];
       const capped = capList(hits, WHO_TOUCHED_CAP);
-      return asText({ merged: capped.items, moreMerged: capped.more, live: live[file] });
+      // Landed vs still on a branch. `history reindex` walks task branches, so
+      // the index now carries real commits that are NOT on main — and reporting
+      // those under `merged` would tell an agent to build against code that is
+      // nowhere it can see.
+      const landed = capped.items.filter((h) => h.merged);
+      const inFlight = capped.items.filter((h) => !h.merged);
+      return asText({
+        merged: landed,
+        moreMerged: capped.more,
+        ...(inFlight.length ? { onBranchNotYetMerged: inFlight } : {}),
+        live: live[file],
+      });
     },
   );
 
@@ -179,8 +268,18 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ plan, notes, next, files }) => {
       try {
-        const led = await saveProgress(root, selfSlug, { plan, notes, next, filesEdited: files });
-        return asText({ saved: selfSlug, plan: led.plan.length, notes: led.notes.length, files: led.filesEdited.length });
+        // Stamp the checkpoint with the diff at this moment. A ledger is what
+        // everyone downstream reads INSTEAD of the diff, so a ticked-off item
+        // with nothing behind it is invisible unless the two are compared here.
+        const stamp = taskSlug ? await diffStampFor(root, taskSlug) : undefined;
+        const led = await saveProgress(root, selfSlug, { plan, notes, next, filesEdited: files, stamp });
+        return asText({
+          saved: selfSlug, plan: led.plan.length, notes: led.notes.length, files: led.filesEdited.length,
+          ...(led.stamp ? { stamp: led.stamp } : {}),
+          // Returned to the agent that wrote it, not just recorded: the moment
+          // it can still correct the claim is right now.
+          ...(led.flagged ? { flagged: led.flagged } : {}),
+        });
       } catch (e) {
         return asText({ rejected: e instanceof Error ? e.message : String(e) });
       }
@@ -234,7 +333,7 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ title, done, pending, next, decisions, suggested_skills, to }) => {
       try {
-        const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent().catch(() => undefined)) || undefined;
+        const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent(6, root).catch(() => undefined)) || undefined;
         const brief = await createSessionHandoff(root, {
           slug: selfSlug, agent, title, done, pending, next, decisions, suggestedSkills: suggested_skills, to, cwd: process.cwd(),
         });
@@ -242,6 +341,9 @@ export async function startMcpServer(): Promise<void> {
           brief: brief.path,
           pickup: brief.resume,
           ...(brief.capturedFacts.length ? { memorized: brief.capturedFacts } : {}),
+          // A decision the memory gate refused is worth one line back: you are
+          // the only one who can restate it durably, and the brief still has it.
+          ...(brief.skippedFacts.length ? { notMemorized: brief.skippedFacts } : {}),
           tip: 'Tell the user the pickup command — the next agent runs it to continue.',
         });
       } catch (e) {
@@ -260,14 +362,18 @@ export async function startMcpServer(): Promise<void> {
         files: z.array(z.string()).optional().describe('Repo-relative files this fact is about (evidence anchors, max 8)'),
         agent: z.string().optional().describe('Your agent name, e.g. "claude"'),
         task: z.string().optional().describe('Task slug you are working on'),
+        local_only: z.boolean().optional().describe('Keep this fact out of git — for something private to this machine, not for secrets (those are refused outright)'),
       },
     },
-    async ({ fact, type, files, agent, task }) => {
+    async ({ fact, type, files, agent, task, local_only }) => {
       try {
         // memory.ts resolves the MAIN repo root internally (worktree-safe).
-        const saved = await saveMemory(memRoot, { fact, type, files, agent, task });
+        const saved = await saveMemory(memRoot, { fact, type, files, agent, task, localOnly: local_only });
         return asText({
           saved: saved.id,
+          // Where it went, always — an agent that cannot see this cannot tell
+          // whether it just wrote something the whole team will read.
+          shared: saved.area !== 'local',
           supersedes: saved.supersedes,
           anchoredFiles: saved.anchors.files.map((f) => f.path),
           // Write-time reconciliation (M8): you are the judge — merge or ignore.
@@ -296,8 +402,13 @@ export async function startMcpServer(): Promise<void> {
       const r = await recallMemories(memRoot, { topic, limit, ids });
       // Hydration mode: full bodies for the requested ids, failures named.
       if (ids?.length) {
+        // `author` rides the HYDRATION path only, never `recallRows` below.
+        // Rows are served on every recall in every session, so a field there is
+        // a permanent context tax; asking for a fact by id is the moment you are
+        // actually scrutinizing it, and "whose claim is this" is what you need
+        // to challenge it.
         return asText({
-          facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, freshness: f.freshness, commitsBehind: f.commitsBehind })),
+          facts: r.facts.map((f) => ({ id: f.id, type: f.type, fact: f.fact, task: f.task, author: f.author, freshness: f.freshness, commitsBehind: f.commitsBehind })),
           ...(r.withheld?.length ? { withheld: r.withheld } : {}),
         });
       }
@@ -321,6 +432,8 @@ export async function startMcpServer(): Promise<void> {
       });
     },
   );
+
+  registerPipelineTools(reg as unknown as RegisterTool, root);
 
   await server.connect(new StdioServerTransport());
 }

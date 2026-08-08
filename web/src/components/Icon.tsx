@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Icon set (lucide-style, 24px, stroke=currentColor)
    Ported from icons.jsx.
@@ -54,6 +56,8 @@ export const ICON_PATHS = {
   trash: "M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6",
   play: "M7 5l12 7-12 7V5Z",
   pause: "M8 5v14M16 5v14",
+  // The transport-control stop glyph: an agent run ends, it does not pause.
+  square: "M6 6h12v12H6z",
   link: "M9 15l6-6M10.5 6.5l1.8-1.8a4 4 0 0 1 5.7 5.7l-1.8 1.8M13.5 17.5l-1.8 1.8a4 4 0 0 1-5.7-5.7l1.8-1.8",
   sparkle: "M12 3c.7 4.5 3.5 7.3 8 8-4.5.7-7.3 3.5-8 8-.7-4.5-3.5-7.3-8-8 4.5-.7 7.3-3.5 8-8Z",
   inbox: "M3 13l3-8a1 1 0 0 1 1-.7h10a1 1 0 0 1 1 .7l3 8M3 13v5a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-5M3 13h5l1.5 2.5h5L16 13h5",

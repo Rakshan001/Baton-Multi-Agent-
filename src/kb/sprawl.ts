@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `.md`-sprawl scan (P12, piece 1) — detect the scattered agent files Baton
  * exists to replace, and PROPOSE where they belong. Propose-only by design:
@@ -103,10 +105,18 @@ export function scanDocSprawl(files: string[]): SprawlFinding[] {
   return findings;
 }
 
-/** Tracked + untracked-not-ignored files, repo-relative (git already drops .gitignore’d paths). */
-export async function listRepoFiles(root: string): Promise<string[]> {
+/**
+ * Tracked + untracked-not-ignored files, repo-relative (git already drops
+ * .gitignore'd paths). **null when this root is not a git repo at all.**
+ *
+ * Returning `[]` there conflated "scanned, found nothing" with "never
+ * scanned" — and a hub container is not a git repo, so `baton doctor --docs`
+ * printed "✓ no doc sprawl found" at exactly the setup with the worst sprawl
+ * (every sub-repo carrying its own .cursorrules, GEMINI.md, memory-bank/).
+ */
+export async function listRepoFiles(root: string): Promise<string[] | null> {
   const res = await gitTry(['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard']);
-  if (!res.ok) return [];
+  if (!res.ok) return null;
   return res.stdout.split('\n').filter(Boolean);
 }
 

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Primitive component library (ported from primitives.jsx,
    card.jsx ConfirmDialog, admin.jsx Switch, detail.jsx ComingSoon)
@@ -10,6 +12,7 @@ import { Icon, type IconName } from "./Icon";
 import { getAgent, AgentGlyph } from "../lib/registry";
 import { progressEstimate, timeAgo, timeAgoShort, copyText } from "../lib/format";
 import { showToast } from "../lib/toast";
+import { BatonAPI } from "../lib/api";
 import type { AgentId, Status } from "../types";
 
 type Size = "sm" | "md" | "lg";
@@ -46,6 +49,9 @@ export const STATUS_META: Record<Status, { label: string; color: string; soft: s
   clean: { label: "Clean", color: "var(--clean-text)", soft: "var(--clean-soft)", border: "var(--clean-border)", dot: "var(--clean)" },
   dirty: { label: "Dirty", color: "var(--dirty-text)", soft: "var(--dirty-soft)", border: "var(--dirty-border)", dot: "var(--dirty)" },
   conflict: { label: "Conflict", color: "var(--conflict-text)", soft: "var(--conflict-soft)", border: "var(--conflict-border)", dot: "var(--conflict)" },
+  // Grey, not green: nothing is wrong with the code, there is simply no
+  // checkout to report on. The fallback below would have drawn this as "Clean".
+  missing: { label: "No worktree", color: "var(--text-tertiary)", soft: "var(--idle-soft)", border: "var(--idle-border)", dot: "var(--idle)" },
 };
 export function StatusPill({ status, pulse = false }: { status: Status; pulse?: boolean }) {
   const m = STATUS_META[status] || STATUS_META.clean;
@@ -174,7 +180,11 @@ export function ApiDot({ state, lastUpdated, onRefresh, live = false, reconnecti
     : ({ online: { c: "var(--clean)", t: live ? "Live (push)" : "Connected (polling)" }, fetching: { c: "var(--accent)", t: "Syncing…" }, offline: { c: "var(--conflict)", t: "Offline" } } as const)[state] || { c: "var(--idle)", t: "—" };
   const ago = lastUpdated ? timeAgo(lastUpdated) : "—";
   return (
-    <button className="fr" onClick={onRefresh} data-tip={`${meta.t} · localhost:7077\nUpdated ${ago} — click to refresh`} data-tip-side="bottom"
+    /* The daemon's real address, not a hardcoded `localhost:7077`. Over
+       `--host` that label named a machine the viewer is not on — the one
+       readout someone checks when they are trying to work out WHICH daemon
+       they are looking at. */
+    <button className="fr" onClick={onRefresh} data-tip={`${meta.t} · ${BatonAPI.baseUrl || window.location.host}\nUpdated ${ago} — click to refresh`} data-tip-side="bottom"
       aria-label={`API ${meta.t}, updated ${ago}. Refresh`} style={{
         display: "inline-flex", alignItems: "center", gap: 7, height: 32, padding: compact ? 0 : "0 10px", width: compact ? 32 : "auto",
         justifyContent: "center", borderRadius: "var(--r-sm)", border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", cursor: "pointer", flex: "none",
@@ -298,7 +308,12 @@ export function SegmentedControl<T extends string>({
 /* ---------- Switch ---------- */
 export function Switch({ checked, onChange, label, id }: { checked: boolean; onChange: (v: boolean) => void; label?: string; id?: string }) {
   return (
-    <button role="switch" aria-checked={checked} aria-label={label} id={id} className="fr" onClick={() => onChange(!checked)}
+    /* type="button" is load-bearing: a bare <button> defaults to submit, and
+       inside a <form> the browser's implicit submission (Enter in a text field)
+       CLICKS the first submit button. A switch that silently flips when you
+       press Enter is a setting nobody chose — found on the sign-in screen,
+       where the flipped setting was how long a credential is kept. */
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} id={id} className="fr" onClick={() => onChange(!checked)}
       style={{ width: 38, height: 22, borderRadius: 99, border: "1px solid", flex: "none", cursor: "pointer", padding: 0, position: "relative", background: checked ? "var(--accent)" : "var(--bg-active)", borderColor: checked ? "transparent" : "var(--border-default)", transition: "background var(--dur-2)" }}>
       <span style={{ position: "absolute", top: 2, left: checked ? 18 : 2, width: 16, height: 16, borderRadius: 99, background: "#fff", boxShadow: "var(--shadow-sm)", transition: "left var(--dur-2) var(--ease-out)" }} />
     </button>

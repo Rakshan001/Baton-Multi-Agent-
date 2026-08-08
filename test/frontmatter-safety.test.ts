@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * gray-matter picks its parser from the language suffix on the opening
  * delimiter, and ships a `javascript` engine whose parse is a literal `eval`

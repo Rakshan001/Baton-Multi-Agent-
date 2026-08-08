@@ -1,6 +1,21 @@
 Baton
-Copyright (c) 2026 Rakshan Shetty
-Licensed under the MIT License (see LICENSE).
+Copyright (C) 2026 Rakshan Shetty
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+Baton was released under the MIT License from 2026-06-08 to 2026-08-07, and is
+AGPL-3.0-or-later from the commit after 0a734e1 onward — that commit is the last
+one published under MIT. Copies obtained at or before it keep the MIT terms they
+were received under; relicensing does not reach backwards.
+
+Source for the version you are running: https://github.com/Rakshan001/Baton-Multi-Agent-
 
 This product adapts logic from the following open-source projects. No source
 files were copied verbatim; their approaches were reimplemented for Baton's

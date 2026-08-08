@@ -41,8 +41,19 @@ graphify-out/
 # Test coverage
 coverage/
 .refs/
+# Local working plans — in-progress feature plans with live checkboxes. Kept out
+# of git: they track one machine's progress and would read as project docs.
+docs/plans-local/
 
 # Local research notes — audits of reference code in .refs/. Not shipped:
 # they cite file:line into repos we do not control, so they rot silently and
 # would read as project docs to anyone who found them in git.
 docs/notes/
+
+# >>> baton (generated coordination + KB files — managed block, do not edit)
+.baton/
+graphify-out/
+.graphifyignore
+.mcp.json
+CODEBASE.md
+# <<< baton

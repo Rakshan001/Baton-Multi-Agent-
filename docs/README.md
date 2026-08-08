@@ -8,7 +8,7 @@ Everything you need to run multiple AI coding agents on one repo with Baton. New
 
 | Page | What it covers |
 |---|---|
-| [Installation](./installation.md) | Prerequisites (Node ≥ 20, git, uv, tmux) and a from-scratch install. |
+| [Installation](./installation.md) | Prerequisites (Node ≥ 24, git, uv, tmux) and a from-scratch install. |
 | [Quickstart](./quickstart.md) | From clone to the running dashboard and your first handoff, in ~10 minutes. |
 | [CLI reference](./cli-reference.md) | Every `baton` command, argument, and flag. |
 

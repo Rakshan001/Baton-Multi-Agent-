@@ -1,13 +1,15 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton signals` — live edit signals table.
  * `baton blame <file>` — merged attribution + live editors for one file.
  */
-import { gitRoot } from '../git.js';
 import { queryFile } from '../history.js';
+import { activeBatonRoot } from '../store.js';
 import { checkFiles, getSignals } from '../signals.js';
 
 export async function signalsCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const signals = await getSignals(root);
   if (!signals.length) {
     console.log('no live edit signals (nothing edited in the last 30 min, or daemon not running)');
@@ -24,7 +26,7 @@ export async function signalsCmd(): Promise<void> {
 }
 
 export async function blameCmd(file: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const [merged, live] = [queryFile(root, file), await checkFiles(root, [file])];
   const editors = live[file]?.by ?? [];
   if (editors.length) {

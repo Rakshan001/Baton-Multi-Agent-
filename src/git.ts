@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Local git worktree helpers for Baton's tiny v0.
  *
@@ -27,13 +29,30 @@ export interface ConflictEntry {
 }
 
 export interface WorktreeStatus {
-  state: 'clean' | 'dirty' | 'conflict';
+  /**
+   * `missing` is the one that has to exist separately from `clean`: git failing
+   * to answer and git answering "nothing changed" are opposite facts, and
+   * collapsing them made a deleted worktree read as a pristine checkout on
+   * every surface that shows one.
+   */
+  state: 'clean' | 'dirty' | 'conflict' | 'missing';
   repoState: RepoState;
   changedFiles: string[];
   conflictFiles: string[];
   conflictDetails: ConflictEntry[];
   insertions: number;
   deletions: number;
+}
+
+/**
+ * Is there work here that deleting the worktree would destroy?
+ *
+ * The question every removal guard actually asks. They asked `state !== 'clean'`
+ * instead, which was the same thing until `missing` existed — and would now
+ * refuse to clean up a worktree precisely because it is already gone.
+ */
+export function hasUnsavedWork(st: WorktreeStatus): boolean {
+  return st.state === 'dirty' || st.state === 'conflict';
 }
 
 export interface WorktreeEntry {
@@ -242,13 +261,20 @@ export async function repoState(path: string): Promise<RepoState> {
   return 'clean';
 }
 
-/** Working-tree status of a worktree: clean / dirty / conflict, with churn. */
+/** Working-tree status of a worktree: missing / clean / dirty / conflict, with churn. */
 export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   const repo = await repoState(path);
   const r = await gitTry(['-C', path, 'status', '--porcelain=v2']);
   if (!r.ok || r.stdout === '') {
+    // `!r.ok` means git could not answer at all — the directory was deleted, or
+    // it is no longer a worktree. Reporting that as `clean` (which is what this
+    // did) drew a checkout that is not there as a tidy one, and let the done
+    // gate print "working tree clean" about a path it never read.
+    //
+    // Empty stdout is the opposite fact — git looked and found nothing changed.
+    const state = r.ok ? 'clean' : 'missing';
     return {
-      state: 'clean',
+      state,
       repoState: repo,
       changedFiles: [],
       conflictFiles: [],
@@ -321,9 +347,13 @@ export async function aheadBehind(
 
 export interface CommitInfo {
   sha: string;
+  /** Subject line only — what every existing caller means by "message". */
   message: string;
   at: string; // ISO
   files: string[];
+  /** The FULL message, including the trailer block. Only `branchCommits` fills
+   *  this in; lineage is the only reader that needs more than the subject. */
+  body?: string;
 }
 
 /** Commits on `branch` that aren't on `base`, newest-first, with their files. */
@@ -333,22 +363,26 @@ export async function branchCommits(
   cwd?: string,
 ): Promise<CommitInfo[]> {
   // %x1f = unit separator between fields, %x1e = record separator between commits.
+  // %B (the full message) comes LAST because it is the only field that may
+  // contain newlines — everything before it keeps a fixed position, and the
+  // record still ends at %x1e. Trailers live in the body, so a reader that only
+  // has %s cannot see them at all.
   const r = await gitTry(
-    ['log', `${base}..${branch}`, '--no-merges', '--pretty=format:%H%x1f%s%x1f%cI%x1e'],
+    ['log', `${base}..${branch}`, '--no-merges', '--pretty=format:%H%x1f%s%x1f%cI%x1f%B%x1e'],
     cwd,
   );
   if (!r.ok || !r.stdout) return [];
 
   const commits: CommitInfo[] = [];
   for (const rec of r.stdout.split('\x1e').map((s) => s.trim()).filter(Boolean)) {
-    const [sha, message, at] = rec.split('\x1f');
+    const [sha, message, at, body] = rec.split('\x1f');
     if (!sha) continue;
     const nameR = await gitTry(
       ['show', '--name-only', '--pretty=format:', sha],
       cwd,
     );
     const files = nameR.ok ? nameR.stdout.split('\n').filter(Boolean) : [];
-    commits.push({ sha, message: message ?? '', at: at ?? '', files });
+    commits.push({ sha, message: message ?? '', at: at ?? '', files, body: body ?? message ?? '' });
   }
   return commits;
 }
@@ -417,6 +451,132 @@ export async function mergeBranch(
     return { success: false, conflicts };
   }
   throw new Error(r.stderr || `git merge ${branch} failed`);
+}
+
+/**
+ * Conflicted paths from `git merge-tree --write-tree` output.
+ *
+ * On conflict the command prints the tree OID, then one `<mode> <oid> <stage>\t<path>`
+ * line per conflicting stage, then human-readable messages. The stage lines are
+ * what we read: they are machine format and cover every conflict kind, whereas
+ * the "CONFLICT (content): …" prose varies by type (add/add, modify/delete,
+ * rename/rename) and would need a parser per phrasing.
+ */
+export function parseMergeTreeConflicts(raw: string): string[] {
+  const paths = new Set<string>();
+  for (const line of raw.split('\n')) {
+    const m = /^\d{6} [0-9a-f]{40,} [123]\t(.+)$/.exec(line);
+    if (m) paths.add(m[1]!);
+  }
+  return [...paths];
+}
+
+/** The remote to treat as shared — `origin` when present, else the first one, else null. */
+export async function defaultRemote(cwd?: string): Promise<string | null> {
+  const r = await gitTry(['remote'], cwd);
+  if (!r.ok || !r.stdout.trim()) return null;
+  const names = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  return names.includes('origin') ? 'origin' : (names[0] ?? null);
+}
+
+/** The commit a ref points at, or null. Asked of the repo, so it works with no worktree. */
+export async function refSha(ref: string, cwd?: string): Promise<string | null> {
+  const r = await gitTry(['rev-parse', '--verify', `${ref}^{commit}`], cwd);
+  return r.ok ? r.stdout.trim() : null;
+}
+
+/** Push a branch to a remote. Returns git's own words on failure — they are better than ours. */
+export async function pushBranch(
+  remote: string,
+  branch: string,
+  cwd?: string,
+): Promise<{ ok: boolean; error: string }> {
+  // No --force, ever. A force-push from an automated path can destroy a
+  // teammate's commits, and nothing in the pipeline needs one.
+  const r = await gitTry(['push', '--set-upstream', remote, `${branch}:${branch}`], cwd);
+  return { ok: r.ok, error: r.ok ? '' : (r.stderr || r.stdout) };
+}
+
+/** Update remote-tracking refs. Best-effort: offline is a normal state, not an error. */
+export async function fetchRemote(remote: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['fetch', '--quiet', '--prune', remote], cwd);
+  return r.ok;
+}
+
+/**
+ * Is this commit on the remote — reachable from some remote-tracking ref?
+ *
+ * Deliberately not "does the object exist locally". After a fetch our own
+ * unpushed commits are present too, and answering yes for one of those is
+ * exactly the mistake that would let a teammate start against work that exists
+ * on nobody else's machine.
+ */
+export async function remoteContains(sha: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['branch', '-r', '--contains', sha], cwd);
+  return r.ok && r.stdout.trim().length > 0;
+}
+
+/** Is every commit of `maybeAncestor` already reachable from `tip`? */
+export async function isAncestor(maybeAncestor: string, tip: string, cwd?: string): Promise<boolean> {
+  const r = await gitTry(['merge-base', '--is-ancestor', maybeAncestor, tip], cwd);
+  return r.ok;
+}
+
+export interface IntegrationTrial {
+  /** Branches that combined cleanly, in the order they were tried. */
+  ok: string[];
+  /** The first branch that would not combine, and the paths that clashed. */
+  conflict: { branch: string; files: string[] } | null;
+}
+
+/**
+ * Would these branches all land on `base` together? Answers without touching
+ * the working tree, the index, or any branch.
+ *
+ * Each branch is merged onto the RESULT of the previous one, not onto `base`
+ * independently — because that is the question the barrier is asking, and the
+ * two are not the same. Two branches can each merge into base cleanly and still
+ * conflict with each other; the spec's own example is exactly that (auth-schema
+ * and config both fine alone, `src/db.ts` clashing once combined). Checking
+ * them separately reports all-clear and opens the next phase on a base that
+ * cannot actually be built.
+ *
+ * `commit-tree` writes throwaway commits so the next step has something to
+ * merge onto. They are never referenced by any ref, so they are unreachable the
+ * moment this returns and `git gc` reclaims them; nothing here is visible in
+ * log, status, or branch.
+ */
+export async function trialIntegrate(
+  base: string,
+  branches: readonly string[],
+  cwd?: string,
+): Promise<IntegrationTrial> {
+  let head = base;
+  const ok: string[] = [];
+  for (const branch of branches) {
+    const r = await gitTry(['merge-tree', '--write-tree', head, branch], cwd);
+    if (!r.ok) {
+      const files = parseMergeTreeConflicts(`${r.stdout}\n${r.stderr}`);
+      // A merge-tree that failed for a reason other than a conflict (a bad ref,
+      // an unrelated history) has no stage lines. Reporting that as a conflict
+      // with zero files would read as "something clashed but we can't say what"
+      // — name the branch and let the caller surface git's own words.
+      if (files.length === 0) throw new Error(r.stderr || `git merge-tree ${head} ${branch} failed`);
+      return { ok, conflict: { branch, files } };
+    }
+    const tree = r.stdout.split('\n')[0]!.trim();
+    // BOTH parents, and this is load-bearing. With only `head` the trial commit
+    // has no ancestry link to the branch just merged, so the NEXT step computes
+    // its merge base against the original base instead — and a branch that was
+    // rebased or merged onto an earlier one in the same phase (the ordinary way
+    // people resolve exactly this conflict) reads as conflicting forever, with
+    // no way to clear it. A real merge commit has two parents; so must this one.
+    const c = await gitTry(['commit-tree', tree, '-p', head, '-p', branch, '-m', 'baton: integration trial'], cwd);
+    if (!c.ok) throw new Error(c.stderr || 'git commit-tree failed');
+    head = c.stdout.trim();
+    ok.push(branch);
+  }
+  return { ok, conflict: null };
 }
 
 /** Archive a branch tip to a hidden ref (refs/baton/archive/<slug>) — invisible

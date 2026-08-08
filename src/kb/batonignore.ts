@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `.gitignore` seeding for a single-repo `baton kb init`. The init writes
  * several artifacts (.baton/, graphify-out/, .graphifyignore, .mcp.json,
@@ -17,7 +19,11 @@ import { join } from 'node:path';
 
 export const BATON_GITIGNORE_START = '# >>> baton (generated coordination + KB files — managed block, do not edit)';
 const BATON_GITIGNORE_END = '# <<< baton';
-const BASE_ENTRIES = ['.baton/', 'graphify-out/', '.graphifyignore', '.mcp.json'];
+// `.baton/*` + a negation, NOT `.baton/`: git never descends into an ignored
+// DIRECTORY, so `!.baton/agents.json` would be dead under `.baton/` — and that
+// file is the one .baton artifact meant to be committed (the per-project agent
+// registry the docs tell teams to share).
+const BASE_ENTRIES = ['.baton/*', '!.baton/agents.json', 'graphify-out/', '.graphifyignore', '.mcp.json'];
 
 function managedBlock(share: boolean): string {
   const entries = share ? BASE_ENTRIES : [...BASE_ENTRIES, 'CODEBASE.md'];

@@ -1,10 +1,26 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder } from '../src/commands/guard.js';
+import { git } from '../src/util/exec.js';
+import { checkoutForEdit, guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder } from '../src/commands/guard.js';
 import { GUARDRAIL_REINJECT_MS } from '../src/handoff/guardrails.js';
 import type { FileCheck } from '../src/signals.js';
+
+async function initRepo(dir: string): Promise<void> {
+  await git(['init', '-q'], dir);
+  await git(['config', 'user.email', 'test@baton.dev'], dir);
+  await git(['config', 'user.name', 'Baton Test'], dir);
+  await git(['config', 'core.hooksPath', '/dev/null'], dir);
+  await git(['checkout', '-q', '-b', 'main'], dir);
+  await writeFile(join(dir, 'README.md'), '# r\n', 'utf-8');
+  await git(['add', '.'], dir);
+  await git(['commit', '-q', '-m', 'initial'], dir);
+}
 
 describe('guardTarget — extract the repo-relative file a PreToolUse edit targets', () => {
   const wt = '/repo/.baton/wt/fix-auth';
@@ -23,6 +39,50 @@ describe('guardTarget — extract the repo-relative file a PreToolUse edit targe
 
   it('ignores files outside the worktree', () => {
     expect(guardTarget({ tool_name: 'Edit', tool_input: { file_path: '/etc/hosts' } }, wt)).toBeNull();
+  });
+});
+
+/**
+ * A session at the root of a multi-repo hub is not inside a git repo, so the
+ * guard's `gitRoot(cwd)` threw and its fail-open swallowed the whole call:
+ * every edit made from a hub root recorded NOTHING, leaving those sessions
+ * invisible to each other and to every task. Verified before the fix — the
+ * probe recorded a signal in a plain repo and none from a hub root.
+ */
+describe('checkoutForEdit — which checkout an edit is filed under', () => {
+  let hub = '', projA = '', outside = '';
+
+  beforeEach(async () => {
+    hub = realpathSync(await mkdtemp(join(tmpdir(), 'baton-guardhub-')));
+    projA = join(hub, 'proj-a');
+    await mkdir(join(projA, 'src'), { recursive: true });
+    await initRepo(projA);
+    await mkdir(join(hub, '.baton'), { recursive: true });
+    outside = realpathSync(await mkdtemp(join(tmpdir(), 'baton-guardout-')));
+    await initRepo(outside);
+  }, 60_000);
+  afterEach(async () => {
+    await rm(hub, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('uses the session cwd when that IS a git checkout', async () => {
+    expect(await checkoutForEdit(projA, join(projA, 'src', 'x.ts'), hub)).toBe(projA);
+  });
+
+  it("falls back to the FILE's repo from a non-git hub root", async () => {
+    // The path is then relative to proj-a — the same repo proj-a's own tasks
+    // record against, which is what makes the two comparable at all.
+    expect(await checkoutForEdit(hub, join(projA, 'src', 'x.ts'), hub)).toBe(projA);
+  });
+
+  it('refuses a file in an unrelated repo outside the baton root', async () => {
+    expect(await checkoutForEdit(hub, join(outside, 'f.ts'), hub)).toBeNull();
+  });
+
+  it('refuses when there is no usable path at all', async () => {
+    expect(await checkoutForEdit(hub, undefined, hub)).toBeNull();
+    expect(await checkoutForEdit(hub, 'relative/f.ts', hub)).toBeNull();
   });
 });
 
@@ -134,4 +194,33 @@ describe('maybeGuardrailReminder — debounced mid-session re-injection (ISS-07)
     await utimes(marker, old, old);
     expect(await maybeGuardrailReminder(root, 'fix-auth')).toContain('Stay inside this worktree');
   });
+});
+
+/**
+ * The guard runs on PreToolUse, before EVERY edit, so its wall-clock cost is the
+ * cost of editing anything. GUARD_BUDGET_MS bounds the ADVISORY but not the
+ * process: a pending `for await (…process.stdin)` keeps the event loop alive, so
+ * before the stdin fix `process.exitCode = 0` was set and then never reached —
+ * a host that opened the pipe without writing hung the edit forever.
+ *
+ * Spawns the real CLI because that is the only way to observe process exit;
+ * gated on dist/cli.js (run `npm run build` first).
+ */
+describe('baton guard — stdin can never outlive the edit it gates', () => {
+  const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
+  const TIMED_OUT = Symbol('timed out');
+
+  it.runIf(existsSync(DIST_CLI))('exits when the hook host opens a pipe and never writes to it', async () => {
+    // stdin is piped and deliberately never written to and never closed.
+    const child = spawn('node', [DIST_CLI, 'guard'], { stdio: ['pipe', 'ignore', 'ignore'] });
+    const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)));
+    const outcome = await Promise.race([
+      exited,
+      new Promise<typeof TIMED_OUT>((res) => setTimeout(() => res(TIMED_OUT), 5_000)),
+    ]);
+    if (outcome === TIMED_OUT) child.kill('SIGKILL');
+
+    expect(outcome).not.toBe(TIMED_OUT);
+    expect(outcome).toBe(0); // fail open: no payload is not an error
+  }, 15_000);
 });

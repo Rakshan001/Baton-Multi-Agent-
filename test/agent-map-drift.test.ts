@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The dashboard hand-mirrors mcpTargetFor in web/src/lib/api.ts (two separate
  * tsconfigs, no monorepo tool, so it cannot import from src/). Adding an agent

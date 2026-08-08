@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * E2E test for GET /api/kb/context. Spawns `node dist/cli.js serve` against a
  * temp root with a .baton dir (no KB, no git — exercises the degraded path).

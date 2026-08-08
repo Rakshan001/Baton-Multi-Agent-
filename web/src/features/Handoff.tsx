@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Handoff flow
    POST /api/tasks/:slug/handoff generates a HANDOFF.md brief in the
@@ -112,39 +114,65 @@ export function HandoffDialog({
   const userPicked = useRef(false);
   const ref = useRef<HTMLDivElement>(null);
   const hasPending = (task?.filesChanged || 0) > 0;
-  const options = AGENT_REGISTRY.filter((a) => a.id !== task?.agent);
+  // Custom agents from meta.agents join the registry list: the server's
+  // routing can legitimately suggest a `.baton/agents.json` id, and a
+  // registry-only list would silently reject its own daemon's suggestion.
+  //
+  // `known` rather than the launcher lists, because a handoff is a BRIEF, not
+  // a launch: a detection-only custom agent is a perfectly good target (you
+  // start it yourself and it reads HANDOFF.md), and the launcher lists cannot
+  // name it. The union fallback keeps older daemons working, minus exactly
+  // those agents — which is what this whole picker used to do.
+  const [customIds, setCustomIds] = useState<string[]>([]);
+  useEffect(() => {
+    let on = true;
+    const inRegistry = new Set<string>(AGENT_REGISTRY.map((a) => a.id!));
+    BatonAPI.getMeta().then((m) => {
+      if (!on) return;
+      const ids = m.agents?.known
+        ?? [...new Set([...(m.agents?.headless ?? []), ...(m.agents?.interactive ?? [])])];
+      setCustomIds(ids.filter((id) => !inRegistry.has(id)).sort());
+    }).catch(() => undefined);
+    return () => { on = false; };
+  }, []);
+  const options = [...AGENT_REGISTRY, ...customIds.map((id) => getAgent(id))].filter((a) => a.id !== task?.agent);
 
   const pick = (id: AgentId) => { userPicked.current = true; setTarget(id); };
 
-  // Routing suggestion: preselect only while the user hasn't picked anything.
+  // Both suggestions are FETCHED here and VALIDATED below, deliberately split:
+  // validating inside these callbacks read an `options` captured at mount,
+  // when customIds was still empty — so a suggestion naming a custom agent
+  // was rejected by the very list added to accept it.
   useEffect(() => {
     if (!task?.task) return;
     let on = true;
     BatonAPI.getRouting(task.task).then((r) => {
-      if (!on || !r.suggestion) return;
-      setSuggestion(r.suggestion);
-      // Manual mode = advisory only — show the chip, never preselect.
-      if (r.suggestion.mode === "manual") return;
-      const valid = options.some((a) => a.id === r.suggestion!.agent);
-      if (valid && !userPicked.current) setTarget((cur) => cur ?? (r.suggestion!.agent as AgentId));
+      if (on && r.suggestion) setSuggestion(r.suggestion);
     }).catch(() => undefined);
     return () => { on = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task?.task]);
 
-  // Load-aware recommendation: prefer a free agent. Overrides the routing-only
-  // preselect (it already folds routing in as a tie-break) unless the user chose.
   useEffect(() => {
     let on = true;
-    BatonAPI.suggestHandoff(slug).then((s) => {
-      if (!on) return;
-      setLoad(s);
-      const valid = s.recommended && options.some((a) => a.id === s.recommended);
-      if (valid && !userPicked.current) setTarget(s.recommended as AgentId);
-    }).catch(() => undefined);
+    BatonAPI.suggestHandoff(slug).then((s) => { if (on) setLoad(s); }).catch(() => undefined);
     return () => { on = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
+
+  // Preselect, re-run whenever the option list or either suggestion changes —
+  // including when meta.agents finally lands. Load-aware wins over routing
+  // (it already folds routing in as a tie-break); a manual-mode routing
+  // suggestion is advisory only, shown as a chip and never preselected.
+  useEffect(() => {
+    if (userPicked.current) return;
+    const valid = (id?: string | null): boolean => !!id && options.some((a) => a.id === id);
+    if (valid(load?.recommended)) { setTarget(load!.recommended as AgentId); return; }
+    if (suggestion && suggestion.mode !== "manual" && valid(suggestion.agent)) {
+      setTarget((cur) => cur ?? (suggestion.agent as AgentId));
+    }
+    // `options` is rebuilt every render; customIds + the excluded agent are
+    // what actually change it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestion, load, customIds, task?.agent]);
 
   useFocusTrap(ref, onClose, { autoFocus: false });
   useEffect(() => { const t = setTimeout(() => ref.current?.focus(), 40); return () => clearTimeout(t); }, []);

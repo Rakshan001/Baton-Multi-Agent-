@@ -117,7 +117,7 @@ compact:
 
 ```bash
 baton hooks install claude            # user-wide (~/.claude/settings.json)
-baton hooks install claude --project  # this repo (.claude/settings.json)
+baton hooks install claude --project  # this workspace (.claude/settings.json at the baton root)
 ```
 
 This wires Claude Code's **Stop** and **PreCompact** hooks to run
@@ -126,9 +126,39 @@ This wires Claude Code's **Stop** and **PreCompact** hooks to run
 "rate-limited" hook event, so Stop + PreCompact are the closest proxies for "this
 session is winding down." `baton pass` is always available manually.
 
-`--auto` is safe to install user-wide: it no-ops outside a baton worktree, never
-fails the host agent, and debounces — if a `ready` brief was written less than 10
-minutes ago, it won't churn it. Only `claude` hooks are supported.
+`--auto` is safe to install user-wide: it never fails the host agent, and
+debounces — if a brief was written less than 10 minutes ago, it won't churn it.
+Only `claude` hooks are supported.
+
+### Sessions with no task
+
+Most sessions run at the repo root rather than inside `.baton/wt/<slug>`, and
+those have no task to write a `HANDOFF.md` for. They get a **derived session
+brief** instead, at `.baton/handoffs/<session>.md` — the same place
+[`baton resume`](#6-resume) and the dashboard already read from
+([`src/handoff/auto-session.ts`](../src/handoff/auto-session.ts)):
+
+| Section | Derived from |
+| --- | --- |
+| Done | commits that landed since the previous brief — or, on a session's **first** brief, only those from the last 12 hours, since there is no previous brief to diff against and an unbounded log would claim commits that predate the session |
+| Pending | the dirty tree (Baton's own `.baton/` artifacts excluded) |
+| Next step | the obvious continuation, stated plainly |
+
+Two things it deliberately does **not** do. It records no **decisions or
+gotchas** — that field is the "why", which lives only in the agent's head, and a
+hook that invented one would put fabricated reasoning into the brief. And
+because decisions are what feed memory, an automatic brief **writes no memory
+facts**; to record those, use the `create_handoff` MCP tool, where an agent
+authors the text and vouches for it.
+
+It stays silent whenever there is nothing honest to say: a clean tree with no
+new commits, a hub root that is not a git repo, or a state identical to the last
+brief. Two agents working in one root get separate briefs, keyed by the session
+id from the hook payload, so neither can clobber the other.
+
+Derived briefs carry `derived: true` in their frontmatter, and **only those are
+pruned** (to the newest 20). A brief you wrote through `create_handoff` carries
+decisions that exist nowhere else and is never deleted automatically.
 
 ## 5. Take the brief
 

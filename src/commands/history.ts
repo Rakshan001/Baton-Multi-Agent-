@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton history [<file>]` — cheap bug-tracing/attribution from the local index.
  *
@@ -5,23 +7,27 @@
  * Without: lists tasks and their commit counts. Designed for low token cost —
  * an agent reads a few rows instead of scanning the whole git log.
  */
-import { gitRoot } from '../git.js';
 import { listHistory, queryFile } from '../history.js';
+import { activeBatonRoot } from '../store.js';
 
 export async function historyCmd(file?: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
 
   if (file) {
     const hits = queryFile(root, file);
     if (hits.length === 0) {
-      console.log(`No recorded changes to '${file}'. (Only merged tasks are indexed.)`);
+      console.log(`No recorded changes to '${file}'.`);
+      console.log('  Merged work is indexed automatically; for work still on a branch: baton history reindex');
       return;
     }
     console.log(`Changes to ${file}:`);
     for (const h of hits) {
       const when = h.at ? h.at.slice(0, 10) : '';
+      // Marked, not filtered out: knowing a change exists but has NOT landed is
+      // the useful half — it is why your file looks unchanged on main.
+      const where = h.merged ? '' : '  (on a branch, not merged)';
       console.log(
-        `  ${h.sha.slice(0, 8)}  ${when}  [${h.agent ?? '?'} · ${h.slug}]  ${h.message}`,
+        `  ${h.sha.slice(0, 8)}  ${when}  [${h.agent ?? '?'} · ${h.slug}]  ${h.message}${where}`,
       );
     }
     return;

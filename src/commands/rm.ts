@@ -1,8 +1,10 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton rm <slug>` — remove a task's worktree + branch and drop it from the store.
  */
 import { resolve } from 'node:path';
-import { removeWorktree, worktreeStatus } from '../git.js';
+import { hasUnsavedWork, removeWorktree, worktreeStatus } from '../git.js';
 import { getTask, removeTask, resolveBatonRoot, TaskNotFoundError } from '../store.js';
 import { killSessionFor } from '../util/tmux.js';
 import { bus } from '../events.js';
@@ -45,7 +47,9 @@ export async function removeTaskWorktree(
 
   if (!opts.force) {
     const status = await worktreeStatus(task.worktreePath);
-    if (status.state !== 'clean') throw new DirtyWorktreeError(slug, status.state);
+    // Deliberately not `state !== 'clean'`: a worktree that is already gone has
+    // nothing to lose, and refusing to remove its task would strand the row.
+    if (hasUnsavedWork(status)) throw new DirtyWorktreeError(slug, status.state);
   }
 
   // Kill any interactive agent session BEFORE deleting its working directory —

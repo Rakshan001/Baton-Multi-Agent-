@@ -14,23 +14,42 @@ process or website on your machine reaching that API, and (2) untrusted input
 (KB packs, skill URLs, task text, memory facts) abusing a code path. Baton is
 **not** built to be exposed on a network or shared between untrusted users.
 
-## Network surface: loopback only
+## Network surface: loopback by default
 
-The daemon binds to `127.0.0.1` only — it is never reachable from another host on
-your network. Its CORS policy echoes back only loopback origins, so a third-party
-website can never *read* a response:
+The daemon binds to `127.0.0.1` unless you pass `--host`, so by default it is not
+reachable from another host on your network. Its CORS policy echoes back only
+loopback origins plus any name the operator declared, so a third-party website
+can never *read* a response. This lets the Vite dev server (any `localhost` port)
+and the daemon-served dashboard work, while denying everyone else.
 
-```ts
-// src/server.ts — corsOrigin()
-function corsOrigin(req: IncomingMessage): string {
-  const origin = req.headers.origin;
-  if (origin && isLoopbackOrigin(origin)) return origin;
-  return 'null';
-}
+`--host` moves the daemon onto a network: every `/api` request then needs a
+member token, terminals and agent launches stay refused for non-loopback
+callers, and the daemon refuses to start with no members registered.
+
+### If a proxy or tunnel sits in front, you must say so
+
+A reverse proxy — a Cloudflare tunnel, nginx, `ssh -R` — runs on *your* machine
+and connects to the daemon over **loopback**. So without being told, the daemon
+sees every request that walked in off the public internet as if you had typed it
+at the keyboard: no member token required, plus terminals (an interactive shell)
+and agent launches (arbitrary processes), which are meant to be unreachable from
+anywhere else. The member registry is not consulted at all, so revoking a token
+changes nothing.
+
+`--behind-proxy` withdraws that trust — a loopback caller then authenticates like
+any other:
+
+```bash
+baton serve --write --behind-proxy --allowed-host baton.example.com
 ```
 
-This lets the Vite dev server (any `localhost` port) and the daemon-served
-dashboard work, while denying everyone else.
+The cost is that **you need a member token yourself**: no daemon can tell its own
+proxy apart from its owner over a single socket. `baton serve` warns at startup
+if it sees the risky shape (a public `--allowed-host` while bound to loopback,
+without this flag).
+
+`ssh -L` port-forwarding needs none of this: SSH authenticated the user before
+anything reached the port, which is why it stays the recommended way in.
 
 ## Anti-CSRF: loopback Origin on every mutating request
 

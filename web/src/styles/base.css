@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Rakshan Shetty
+   SPDX-License-Identifier: AGPL-3.0-or-later */
 /* ============================================================
    BATON — Base + globals (shared component classes, keyframes)
    ============================================================ */
@@ -276,3 +278,9 @@ button.bar-seg:hover { background: var(--bg-hover); }
 /* Responsive helpers (Activity / Live rows) */
 @media (max-width: 600px) { .ar-hide-sm, .lv-hide-sm { display: none !important; } }
 @media (max-width: 760px) { .ar-hide-md { display: none !important; } }
+
+/* Review axes: three side-by-side columns so Standards / Spec / Security are
+   read as separate, never as one ranked list. Stacks below 900px — but each
+   column keeps its own header and count, so the separation survives stacking. */
+.review-axes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .review-axes { grid-template-columns: minmax(0, 1fr); } }

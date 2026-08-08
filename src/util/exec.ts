@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Safe + hardened git execution. Runs `git` with an argv array via execa — no
  * shell, so no parsing/expansion/injection regardless of user-controlled task text.
@@ -65,6 +67,31 @@ export function hardenedArgs(args: string[]): string[] {
   const flags: string[] = [];
   for (const cfg of HARDENED_GIT_CONFIG) flags.push('-c', cfg);
   return [...flags, ...args];
+}
+
+/**
+ * Read one git config value WITHOUT our own hardening shadowing it.
+ *
+ * `core.hooksPath=` above means our git calls never run repo hooks — correct,
+ * and it also makes the repo's real `core.hooksPath` unreadable through any
+ * normal call: `config --get` returns our empty override, and `rev-parse
+ * --git-path hooks` resolves to `./`. That is how a hook meant for `.git/hooks`
+ * ends up written to the repository root, where it silently never runs — which
+ * looks exactly like success.
+ *
+ * So this drops the override for the key being read, and nothing else. Returns
+ * null when unset, which is the common case.
+ */
+export async function gitConfigValue(key: string, cwd?: string): Promise<string | null> {
+  const flags = HARDENED_GIT_CONFIG
+    .filter((c) => c.toLowerCase() !== `${key.toLowerCase()}=`)
+    .flatMap((c) => ['-c', c]);
+  try {
+    const { stdout } = await execa('git', [...flags, 'config', '--get', key], execOpts(cwd));
+    return stdout.trim() || null;
+  } catch {
+    return null;   // exit 1 means "not set", which is not an error here
+  }
 }
 
 let cachedEnv: NodeJS.ProcessEnv | undefined;

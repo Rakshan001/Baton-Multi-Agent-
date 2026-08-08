@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Skill catalog — the curated, searchable set of reusable agent workflows Baton
  * ships with. A "skill" is a named markdown playbook (objective + steps) that an
@@ -73,6 +75,10 @@ const BUNDLED_DIR = fileURLToPath(new URL('./bundled', import.meta.url));
  * `tags:` / `produces:` arrays, if present, take precedence over these.
  */
 const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
+  'basic-setup': {
+    tags: ['setup', 'scaffold', 'new project', 'boilerplate', 'starter', 'folder structure', 'project structure', 'architecture', 'mvc', 'feature-sliced', 'clean architecture', 'hexagonal', 'modular monolith', 'microservices', 'best practice', 'convention', 'gitleaks', 'secrets', 'api key', 'env', '.env', 'leak', 'pre-commit', 'hook', 'push protection', 'security', 'devsecops', 'beginner', 'onboarding', 'next.js', 'react', 'vite', 'nuxt', 'nestjs', 'express', 'django', 'fastapi', 'agents.md', 'structure.md', 'audit', 'cleanup'],
+    produces: ['plain-language interview', 'structure pattern choice', 'scaffolded project', '.gitleaks.toml + pre-commit hook', 'push protection + CI backstop', '.env.example', 'STRUCTURE.md (humans)', 'AGENTS.md (agents)', 'planted-secret drill proof', 'ranked repair plan (mid-phase)'],
+  },
   'bug-fix': {
     tags: ['bug', 'fix', 'debug', 'error', 'crash', 'regression', 'root cause', 'reproduce', 'blast radius', 'skeptic', 'review', 'worktree', 'commit'],
     produces: ['reproduction', 'blast-radius audit', 'root-cause analysis', 'approved plan', 'regression re-verify', 'bugfix report', 'auto-commit (never pushes)'],
@@ -115,6 +121,11 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
  *  Skills screen so a human (or an agent browsing the catalog) understands each
  *  skill without reading its playbook. Keep every line under ~90 chars. */
 const SKILL_EXPLAIN: Record<string, SkillExplain> = {
+  'basic-setup': {
+    what: 'Starts a project an experienced dev can read — and that can’t leak your keys.',
+    how: 'Plain-language interview → pattern ladder → gitleaks hook + push protection + CI → STRUCTURE.md/AGENTS.md → proof drill.',
+    win: 'Answer “1” to every question and still get an industry-standard, leak-proof project.',
+  },
   'bug-fix': {
     what: 'A gated pipeline for fixing bugs without creating new ones.',
     how: 'Reproduce → audit blast radius → hypothesis-driven root cause → 95% skeptic-checked plan → fix → re-verify.',

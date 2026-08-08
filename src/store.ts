@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Tiny JSON store for Baton tasks, kept at <repo>/.baton/tasks.json (gitignored).
  * One file, no database — sufficient at this scale.
@@ -5,8 +7,19 @@
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitRoot, mainRepoRoot } from './git.js';
+import type { PipelineFields } from './pipeline.js';
 
-export interface Task {
+/**
+ * A recorded task.
+ *
+ * The `branch`/`worktreePath`/`baseCommit` trio is what a task HAS ONCE CLAIMED.
+ * A planned-but-unstarted task is a row and nothing else — no branch, no
+ * checkout, no disk — so twenty planned tasks cost twenty JSON objects, and the
+ * base commit is read when work actually starts rather than when it was
+ * imagined. They stay non-optional here because every task that exists today
+ * has them; `baton take` is what will begin writing rows without them.
+ */
+export interface Task extends PipelineFields {
   slug: string;
   task: string;
   branch: string;
@@ -22,6 +35,21 @@ export interface Task {
   /** Declared file scope (path globs) this task owns — used to warn on overlap at
    *  creation and to steer the agent's launch prompt. Advisory, not enforced. */
   scope?: string[];
+}
+
+/**
+ * Has this task's worktree actually been created?
+ *
+ * A queued plan row carries the branch and path it INTENDS to use — naming them
+ * early is what makes collisions visible at plan time — but no git object and no
+ * directory exists until it is claimed. Only a recorded baseCommit proves git
+ * ran. Asking git about the rest is both wrong and expensive: `worktreeStatus`
+ * reports a failed call as `clean`, so a task with no worktree renders exactly
+ * like a tidy one, and a 40-task plan would spawn 80 subprocesses per poll to
+ * produce that.
+ */
+export function isMaterialized(t: Task): boolean {
+  return Boolean(t.baseCommit);
 }
 
 /** Thrown when a slug doesn't resolve to a recorded task. */
@@ -121,21 +149,31 @@ export async function resolveBatonRoot(cwd: string = process.cwd()): Promise<str
 }
 
 /**
- * The Baton root as seen by `baton mcp`, which an agent almost always spawns
- * from INSIDE its task worktree (`.baton/wt/<slug>`). Two traps to avoid:
+ * The Baton root for a process running ANYWHERE in the tree — the answer every
+ * command that touches `.baton` state needs. Built for `baton mcp`, whose
+ * agent almost always starts INSIDE its task worktree (`.baton/wt/<slug>`),
+ * but the traps it avoids are not MCP's alone:
  *
- *  1. `gitRoot()` would return the worktree, whose `.baton` is an empty shadow
- *     store — so coordination tools would report no signals and no tasks.
- *  2. `resolveBatonRoot(worktreeCwd)` alone is also defeated once a worktree has
- *     been polluted with a shadow `.baton` (older buggy builds created one on
- *     the first tool call): its upward walk stops at that shadow.
+ *  1. `gitRoot()` returns the WORKTREE, whose `.baton` is an empty shadow
+ *     store — so tasks, signals and reviews all come back empty. This is why
+ *     `baton take` used to report "no task" in the very worktree the task owns.
+ *  2. `gitRoot()` THROWS on a multi-repo hub, whose root is often not a git
+ *     repo at all — so the same commands died outright there.
+ *  3. `resolveBatonRoot(worktreeCwd)` alone is also defeated once a worktree
+ *     has been polluted with a shadow `.baton` (older buggy builds created one
+ *     on the first tool call): its upward walk stops at that shadow.
  *
  * So: trust an explicit `BATON_ROOT` when a baton-spawned agent carries one;
  * otherwise escape the worktree via the git common dir FIRST, then walk up from
  * the main repo root to the owning `.baton` (past sub-repo git boundaries, so
  * hub mode still resolves to the hub, never a sub-repo).
+ *
+ * Use this, not `gitRoot()`, for anything reading or writing `.baton`. Reach
+ * for `gitRoot()` only when you genuinely want the git checkout you are
+ * standing in (deriving a slug from a worktree path, reading that worktree's
+ * HANDOFF.md).
  */
-export async function resolveMcpRoot(
+export async function activeBatonRoot(
   cwd: string = process.cwd(),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
@@ -184,6 +222,17 @@ export async function getTask(gitRoot: string, slug: string): Promise<Task | und
   return (await loadTasks(gitRoot)).find((t) => t.slug === slug);
 }
 
+/**
+ * The sub-project a slug belongs to, or null when there is none to know: a
+ * single repo, an unrecorded slug, or a session that is not a task. Callers use
+ * it to scope path comparisons, so null must mean "don't scope", never "no
+ * project".
+ */
+export async function projectOf(gitRoot: string, slug?: string): Promise<string | null> {
+  if (!slug) return null;
+  return (await getTask(gitRoot, slug))?.projectId ?? null;
+}
+
 // Cross-process advisory lock: `serialized()` covers concurrent writes inside
 // ONE process, but the CLI (`baton new`) and a running daemon are separate
 // processes writing the same tasks.json — without a lock, simultaneous
@@ -204,15 +253,19 @@ async function withTasksLock<T>(gitRoot: string, fn: () => Promise<T>): Promise<
       await mkdir(lock); // atomic: only one process can create it
       acquired = true;
     } catch {
+      // Why mkdir failed does not change what we do — wait and retry — but it
+      // MUST NOT skip the deadline and the sleep. It used to: `continue` here
+      // bypassed both, so any failure that was not EEXIST while the lock also
+      // could not be stat'ed (.baton read-only or removed mid-run by `baton
+      // clean`, EROFS, ENOSPC) spun at 100% CPU forever, blocking the
+      // `serialized()` queue behind it. Measured before the fix: 2,000,001
+      // iterations in 8.5s without once reaching the deadline check.
       try {
         const st = await stat(lock);
         if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
           await rm(lock, { recursive: true, force: true }); // crashed holder — break it
-          continue;
         }
-      } catch {
-        continue; // lock vanished between mkdir and stat — retry immediately
-      }
+      } catch { /* gone or unreadable — same answer: fall through and retry */ }
       if (Date.now() >= deadline) {
         // Availability over strictness: a wedged lock must not brick task writes.
         console.warn(`[baton] tasks.lock busy for ${LOCK_TIMEOUT_MS}ms — proceeding without it`);
@@ -234,6 +287,31 @@ export async function addTask(gitRoot: string, task: Task): Promise<void> {
       const tasks = await loadTasks(gitRoot);
       tasks.push(task);
       await saveTasks(gitRoot, tasks);
+    }),
+  );
+}
+
+/**
+ * Read-modify-write the whole task list under the lock.
+ *
+ * `loadTasks` then `saveTasks` from a command is a lost update waiting to
+ * happen: a running daemon writes the same file, and applying a plan rewrites
+ * every row rather than one. The decision has to be made against the list that
+ * is about to be overwritten, not against one read a second earlier — so the
+ * caller's `fn` runs INSIDE the lock and receives the current tasks.
+ *
+ * Returning `tasks: null` writes nothing, which is how a dry run and a refused
+ * apply share exactly one code path with a real one.
+ */
+export async function mutateTasks<T>(
+  gitRoot: string,
+  fn: (tasks: Task[]) => Promise<{ tasks: Task[] | null; result: T }> | { tasks: Task[] | null; result: T },
+): Promise<T> {
+  return serialized(() =>
+    withTasksLock(gitRoot, async () => {
+      const { tasks, result } = await fn(await loadTasks(gitRoot));
+      if (tasks) await saveTasks(gitRoot, tasks);
+      return result;
     }),
   );
 }

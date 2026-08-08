@@ -1,8 +1,10 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — App shell + root (ported from app.jsx)
    TopBar · Sidebar · BottomTabBar · routing · overlays
    ============================================================ */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { BatonMark } from "./components/BatonMark";
 import { CommandBar } from "./components/CommandBar";
@@ -30,23 +32,30 @@ import { AgentsScreen } from "./features/Agents";
 import { SkillsScreen } from "./features/Skills";
 import { SettingsScreen } from "./features/Settings";
 import { Connect } from "./features/Connect";
+import { SignIn } from "./features/SignIn";
 import { DetailSheet } from "./features/Detail";
 import { DiffViewer } from "./features/Diff";
 import { HandoffDialog } from "./features/Handoff";
 import { LaunchSession } from "./features/Launch";
 import { LiveSession } from "./features/Live";
 import { MemoryScreen } from "./features/Memory";
+import { PipelineScreen } from "./features/Pipeline";
+import { ReviewsScreen } from "./features/Reviews";
+import { TeamScreen } from "./features/Team";
 import type { Meta, AgentId, Project, AgentRosterEntry } from "./types";
 
 interface NavItem { id: string; label: string; icon: IconName }
 const NAV: NavItem[] = [
   { id: "home", label: "Command Center", icon: "grid" },
   { id: "activity", label: "Activity", icon: "zap" },
+  { id: "pipeline", label: "Pipeline", icon: "layers" },
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
   { id: "graph", label: "Knowledge Graph", icon: "network" },
   { id: "memory", label: "Memory", icon: "sparkle" },
+  { id: "reviews", label: "Code review", icon: "fileWarning" },
   { id: "history", label: "History", icon: "history" },
   { id: "agents", label: "Agents", icon: "bot" },
+  { id: "team", label: "Team", icon: "share" },
   { id: "skills", label: "Skills", icon: "command" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
@@ -242,6 +251,48 @@ function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string
   );
 }
 
+/**
+ * "The daemon stopped answering, and everything below is the last thing we
+ * knew" — said once, across the full width, above everything.
+ *
+ * Deliberately not a toast: a toast is for something that just happened and
+ * then stops mattering. This matters for exactly as long as it is true, and it
+ * has to still be there when someone opens the laptop an hour later.
+ */
+function StaleBanner({ since, onRetry, retrying }: {
+  since: number | null; onRetry: () => void; retrying: boolean;
+}) {
+  const [, force] = useState(0);
+  // Re-render on a timer so "1m ago" does not sit frozen at "1s ago" — the age
+  // IS the message here, and a stale staleness notice would be its own joke.
+  useEffect(() => {
+    const id = setInterval(() => force((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+  const age = since === null ? null : Math.max(0, Math.round((Date.now() - since) / 1000));
+  const ago = age === null ? "before the first load"
+    : age < 60 ? `${age}s ago`
+      : age < 3600 ? `${Math.floor(age / 60)}m ago`
+        : `${Math.floor(age / 3600)}h ago`;
+  return (
+    <div role="status" style={{
+      display: "flex", alignItems: "center", gap: 10, flex: "none",
+      padding: "8px 16px", fontSize: "var(--fs-12)",
+      color: "var(--conflict-text)", background: "var(--conflict-soft)",
+      borderBottom: "1px solid var(--conflict-border)",
+    }}>
+      <Icon name="wifiOff" size={13} style={{ flex: "none" }} />
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <strong style={{ fontWeight: "var(--fw-semibold)" }}>Not connected to the daemon.</strong>{" "}
+        Everything below is the last data received, {ago} — sessions may have started or stopped since.
+      </span>
+      <button className="btn fr" style={{ height: 26, flex: "none" }} onClick={onRetry} disabled={retrying}>
+        {retrying ? "Retrying…" : "Retry"}
+      </button>
+    </div>
+  );
+}
+
 function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo, live, reconnecting, connections, onConnectionsChange }: {
   counts: Counts; apiState: "online" | "fetching" | "offline"; lastUpdated: number | null;
   onRefresh: () => void; onMenu: () => void; onSearch: () => void; onLaunch: (agent: AgentId | null) => void;
@@ -369,6 +420,10 @@ function MobileNavDrawer({ open, onClose, route, navigate }: { open: boolean; on
   );
 }
 
+/** Module-level so the identity is stable — a new function each render would
+ *  resubscribe on every render. */
+const subscribeApi = (fn: () => void) => BatonAPI.subscribe(fn);
+
 export default function App() {
   const prefs = usePrefs();
   const [route, setRoute] = useState<string>(() => ls.get("baton:route", "home"));
@@ -388,6 +443,10 @@ export default function App() {
   const [connections, setConnections] = useState<Connection[]>(loadConnections);
   const [connectionId, setConnectionId] = useState(() => BatonAPI.connectionId);
   const activeConn = connections.find((c) => c.id === connectionId) ?? DEFAULT_CONNECTION;
+  // The daemon has refused this browser's credential (or we never had one).
+  // Subscribed rather than polled so the gate appears the instant any request
+  // or the event stream is turned away.
+  const needsAuth = useSyncExternalStore(subscribeApi, () => BatonAPI.needsAuth);
 
   const events = useEvents({ enabled: !prefs.offline && !demo, baseUrl: activeConn.baseUrl });
   const status = useStatus(events.live);
@@ -475,6 +534,21 @@ export default function App() {
   useEffect(() => { if (retrying && !status.isFetching) setRetrying(false); }, [retrying, status.isFetching]);
   const retry = () => { setRetrying(true); status.refetch(); history.refetch(); meta.refetch(); };
 
+  // The credential gate stands in FRONT of the offline screen, and the order
+  // matters: a 401 means the daemon is up and does not know us. Showing
+  // "Baton isn't running" there would send a member off to debug the one
+  // machine that is working fine.
+  if (needsAuth && !demo) {
+    return (
+      <div style={{ height: "100%" }}>
+        <SignIn baseUrl={activeConn.baseUrl} refused={!!BatonAPI.token}
+          onSignedIn={() => { status.refetch(); history.refetch(); meta.refetch(); agents.refetch(); }} />
+        <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
+        <ToastViewport />
+      </div>
+    );
+  }
+
   if (phase !== "connected") {
     return (
       <div style={{ height: "100%" }}>
@@ -490,21 +564,40 @@ export default function App() {
   const screen = (() => {
     switch (route) {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
+      case "pipeline": return <PipelineScreen writeEnabled={prefs.writeEnabled} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
+      case "reviews": return <ReviewsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "reviews" ? searchSeed : undefined} />;
       case "history": return <HistoryScreen history={history} onOpen={onOpen} searchSeed={searchSeed.route === "history" ? searchSeed : undefined} />;
       case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
+      case "team": return <TeamScreen writeEnabled={prefs.writeEnabled} subscribe={events.subscribe} knownProjects={(meta.data?.projects ?? []).map((p) => p.id)} />;
       case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "skills" ? searchSeed : undefined} />;
-      case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} />;
+      case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} viewer={meta.data?.viewer} meta={meta.data} />;
       default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
     }
   })();
 
   const selectedRow = (slug: string | null) => sessions.find((s) => s.slug === slug);
 
+  /*
+   * Connected once, unreachable now.
+   *
+   * `phase` only reports "offline" when there is NO data, so a link that dies
+   * after the first load leaves the whole board rendering its last snapshot —
+   * counters, session cards, "N Active" — with nothing but a 12 px dot in the
+   * header to say otherwise. Over a tunnel that is the failure this dashboard
+   * exists to prevent: you glance at it after the laptop woke up, read
+   * "2 Active sessions", and believe it.
+   *
+   * The data stays (blanking it would throw away the last thing we truthfully
+   * knew). What changes is that it stops claiming to be current.
+   */
+  const stale = !demo && !prefs.offline && apiState === "offline" && status.data !== null;
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {stale && <StaleBanner since={status.lastUpdated} onRetry={retry} retrying={retrying} />}
       <TopBar counts={counts} apiState={apiState} lastUpdated={status.lastUpdated}
         onRefresh={() => { status.refetch(); history.refetch(); }}
         onMenu={() => setNavOpen(true)} onSearch={() => setCmdOpen(true)} onLaunch={onLaunch} navigate={navigate}

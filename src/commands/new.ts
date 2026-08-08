@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton new "<task>"` — scaffold a branch + worktree for a task, record it,
  * and print the path to cd into and launch your own agent.
@@ -7,6 +9,7 @@
  */
 import { join } from 'node:path';
 import { branchExists, createWorktree, currentBranch, headCommit, isGitRepo } from '../git.js';
+import { installCommitHook } from '../hooks-git.js';
 import { recordTask } from '../history.js';
 import { addTask, batonDir, loadTasks, resolveBatonRoot, slugify, type Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
@@ -90,6 +93,7 @@ export async function createTask(taskText: string, root?: string, projectId?: st
   const baseBranch = await currentBranch(gitRepo);
 
   await createWorktree(worktreePath, branch, 'HEAD', gitRepo);
+  await installCommitHook(gitRepo, process.argv[1] ?? '');   // best-effort: lineage, not correctness
   const baseCommit = await headCommit(worktreePath);
 
   const task: Task = {
@@ -142,7 +146,13 @@ export async function newCmd(taskText: string, opts: { project?: string; scope?:
     console.log(`  scope: ${scope.join(', ')}`);
     // Advisory overlap warning at creation — the earliest point to catch two
     // tasks aimed at the same code (before either has edited anything).
-    const others = (await loadTasks(await resolveBatonRoot())).filter((t) => t.slug !== task.slug);
+    // Same-repo tasks only: `src/**` in proj-a and `src/**` in proj-b aim at
+    // different code, and a clash warning that fires on every hub task teaches
+    // people to ignore the one that matters.
+    const root = await resolveBatonRoot();
+    const others = (await loadTasks(root)).filter(
+      (t) => t.slug !== task.slug && (t.repoRoot ?? root) === (task.repoRoot ?? root),
+    );
     const clashes = overlappingScopes(scope, others);
     for (const c of clashes) {
       console.log(`  ⚠ scope overlaps '${c.slug}' (${c.scope.join(', ')}) — coordinate or narrow the scope.`);

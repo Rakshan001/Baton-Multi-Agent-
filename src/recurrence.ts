@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Bug-recurrence lookup (S6). "This symptom was fixed before — has something
  * since re-broken it?" Composes what Baton already records: memory facts left by

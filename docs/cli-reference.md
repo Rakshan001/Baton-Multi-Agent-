@@ -75,12 +75,95 @@ Merge a task's branch into the current branch. Squashes to one commit and archiv
 baton merge <slug> [--no-squash] [--no-archive]
 ```
 
+### `push`
+Publish a task's branch and record it as reachable for tasks that depend on it.
+
+```bash
+baton push [slug] [--allow-ci]
+```
+
+In team mode, `done` on a teammate's machine does not mean the commits are on
+yours. A dependent task stays blocked — *"waiting for `<slug>` to be pushed"* —
+until this records that the work is actually on the shared remote. Solo repos
+have no remote, so nothing is gated and this is a no-op.
+
+Push is an explicit act, never a side effect of `baton done`: publishing to a
+shared remote is something you should have asked for.
+
+**Refuses to push CI configuration** (`.github/workflows/`, `Jenkinsfile`,
+`.gitlab-ci.yml`, …) unless you pass `--allow-ci`. An agent that can edit a
+workflow and push it has remote code execution on your CI runner, with whatever
+secrets that runner holds. The guard applies to every caller, because agents run
+CLI commands too. It also re-checks state at push time, so a task cancelled
+mid-flight cannot publish.
+
+### `integrate`
+Land a finished phase's branches on the base, lifting the phase barrier.
+
+```bash
+baton integrate [phase] [--dry-run]
+```
+
+A phase is not over when its last task is marked done — it is over when its work
+is **on the base branch**. Until then the branches exist only side by side, never
+combined, so two of them can each be correct and still not compose. Baton checks
+that automatically (writing nothing) and keeps the next phase locked while it
+would fail; this is the command that clears it.
+
+Omit `[phase]` and it picks the one holding the barrier. `--dry-run` reports
+whether the phase would land without merging anything.
+
+The check is **cumulative** — each branch is trialled against the result of the
+previous one, not against the base independently. Two branches can both merge
+into the base cleanly and still conflict with each other, and that is the case
+the barrier exists for. A conflict refuses the whole command: nothing is merged,
+so a phase never ends up half-landed.
+
+Merges are true merges, not squashes, so the individual commits — and their
+`Baton-Task:` trailers — stay on the base for `baton history reindex`.
+
+### `cancel`
+Stop work without destroying it.
+
+```bash
+baton cancel <slug>
+baton cancel --phase <n>
+baton cancel --plan <id>
+baton cancel --phase 2 --dry-run --reason "approach abandoned"
+```
+
+Prints the **blast radius** before it writes anything — how many tasks stop, how
+many agents are working on them right now, and which tasks downstream will be
+**stranded**. That last one is the consequence nobody predicts: a cancelled task
+never reaches `done`, and anything depending on it can then never start. The only
+exits are cancelling those too or editing the plan, so it is said before the fact
+rather than discovered after.
+
+Cancelling is **cooperative**. Baton cannot halt an agent mid-thought; it writes
+state the agent reads on its next tool call, and between the two it keeps
+working. That window is real, and the command says so rather than implying an
+immediate stop.
+
+**Nothing is deleted** — branch, worktree and every checkpoint survive. Cancelling
+reverses a decision, and the commits are often the most valuable output of an
+approach that turned out to be wrong. `done` and `push` both refuse on a
+cancelled task. Operator-only (§7.6).
+
 ### `history`
 Trace which task / agent / commits touched a file (from the local index). Omit `[file]` to list all tasks.
 
 ```bash
 baton history [file]
+baton history reindex
 ```
+
+`reindex` rebuilds the index from `Baton-Task:` trailers in git log. `.baton/` is
+disposable by design — delete `history.db` and this puts the lineage back, because
+every commit made inside a task worktree carries the task that produced it.
+
+A trailer is evidence, never authority: anyone who can push can write one, so a
+trailer is honored only when its slug names a task this repository actually
+created. The rest are reported and not indexed.
 
 ### `blame`
 Who touched a file — live editors + merged history.
@@ -103,10 +186,41 @@ baton serve [-p|--port <port>] [--write]
 
 | Flag | Effect |
 |---|---|
-| `-p, --port <port>` | Port to bind (default **7077**). Binds `127.0.0.1` only. |
+| `-p, --port <port>` | Port to bind (default **7077**). Binds `127.0.0.1` unless `--host` says otherwise. |
 | `--write` | Enable mutating actions (merge / remove / rebuild / install …) from the dashboard. |
+| `--host <addr>` | Expose on a network address. Every `/api` request then needs a member token; refuses to start with no members registered. |
+| `--allowed-host <name>` | Extra `Host` header to accept (repeatable) — needed when the daemon is reached by a DNS name. |
+| `--behind-proxy` | A tunnel or reverse proxy **on this machine** forwards to this port. |
+
+**When you need `--behind-proxy`:** a proxy (Cloudflare tunnel, nginx, `ssh -R`)
+connects to the daemon over loopback, so without this flag every request that
+arrived from the public internet looks identical to you sitting at the keyboard
+— no member token, and terminals and agent launches reachable, both of which are
+supposed to be local-only. The flag withdraws that trust: loopback callers
+authenticate like everyone else. The cost is that **you need a member token too**,
+because no daemon can tell its own proxy apart from its owner over one socket.
 
 See [Dashboard](./dashboard.md) and [Security](./security.md).
+
+### `ps` / `daemon` — the fleet
+Every `baton serve` on this machine, across all projects. Each daemon writes one
+record file to `~/.baton/daemons/`; a record is a **claim**, verified before it
+is shown live (pid alive + the port answers `/api/meta` as the same repo + the
+answering process *is* that pid) — and a stale record is only ever deleted,
+never signalled.
+
+```bash
+baton ps                          # PORT · PID · UPTIME · MODE (rw/ro, +host) · STATUS · PATH
+baton daemon stop <port|path> [pid]   # stop a live daemon (graceful, SIGTERM fallback)
+                                      # pid narrows to one record when a corpse shares the port
+baton daemon clean                # bury every record whose process is provably gone
+```
+
+`daemon clean` decides on pid-death alone — no port is probed, so a busy daemon
+missing one probe can never lose its record to it. The same sweep runs
+automatically when any daemon starts, so crash leftovers heal on their own. The
+dashboard's Settings → *Daemons on this machine* card is the same surface with
+buttons (loopback-only; a `--host` member can neither see nor stop anything).
 
 ### `doctor` / `clean`
 Audit and reclaim junk — orphaned worktrees, `baton/*` branches, ghost tmux sessions, leaked temp files.
@@ -183,6 +297,30 @@ baton done [slug]   # mark the brief done
 
 See [Session handoff](./session-handoff.md).
 
+#### `take` in team mode — the hub decides
+
+On a machine joined to a hub, `baton take <slug>` asks the hub before it writes
+anything, and the hub is the only thing that grants the claim. The local
+`.baton/tasks.lock` settles races between agents on *your* machine and nothing
+at all between two — each laptop holds its own lock over its own `tasks.json`
+and each concludes it won.
+
+You do not need the task locally first. The plan is applied on the hub, so a
+member's rows arrive **with** the grant; `take` on a slug this machine has never
+seen is the normal case.
+
+**If the hub cannot be reached, the claim is refused** — Baton will not fall
+back to the local lock. A refused claim costs you a retry; an unarbitrated one
+costs two agents the same worktree, and a network partition is exactly when two
+people are most likely to reach for the same task with no way to see each other.
+Reads behave the opposite way and degrade open: an unreachable hub makes
+`check_files` say *"could not ask"*, never *"nobody is there"*.
+
+To work without the hub, leave it deliberately: `baton host clear`.
+
+`--resume` is refused in team mode. Stall detection reads the holder's worktree
+mtimes, which are on their disk; a stuck task is the operator's to release.
+
 ### `route`
 Which agent should take a task — rules from `baton.config.json`, no LLM. See [Agent routing](./agent-routing.md).
 
@@ -191,6 +329,22 @@ baton route "<task description>"
 ```
 
 ## Shared memory — `memory`
+
+Facts default to tracked `baton/memory/facts/`, so what one agent learns reaches
+every clone. `--local-only` keeps one in gitignored `.baton/memory/facts/`, and
+that choice is sticky — `baton memory migrate` will not later publish it. Both
+areas are always read.
+
+```bash
+baton memory add "…" --local-only   # stays on this machine
+baton memory migrate --dry-run      # move existing facts into git
+baton memory migrate
+```
+
+`migrate` re-scans every fact on the way through and refuses to publish anything
+key-shaped: locally a stored credential is a file on one disk, tracked it is a
+push, and a leak found after a push is a key rotation rather than a deletion.
+Those facts stay local and are named in the report — refused, not destroyed.
 
 Evidence-anchored facts agents learned. See [Project memory](./memory.md).
 
@@ -227,8 +381,13 @@ baton skills import <path|url>          # add your own, then install it
 Auto-generate a handoff brief when a Claude Code session ends (Stop / PreCompact hooks).
 
 ```bash
-baton hooks install claude [--project]   # --project: write into this repo's .claude/settings.json
+baton hooks install claude [--project]   # --project: write into this workspace's .claude/settings.json
 ```
+
+`--project` writes to the **baton root** — the directory that owns `.baton/`,
+the same root `baton skills install` uses. Run from inside a task worktree it
+still installs at that root, never into the worktree (which merge deletes); in a
+multi-repo hub it installs at the hub, which need not be a git repo at all.
 
 ### `mcp`
 Run the Baton coordination MCP server over stdio (`check_files`, `get_report`, `who_touched`, `save_memory`, `recall_memory`, …). Usually invoked by an agent via the config from `baton kb mcp`, not by hand. See [MCP tools](./mcp-tools.md).

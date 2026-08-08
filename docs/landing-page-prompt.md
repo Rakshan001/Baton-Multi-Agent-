@@ -130,7 +130,7 @@ conflicts, terminals, memory, skills, the graph."
 
 ### 8. Open source CTA
 Big centered section: "Baton is open source." Live-ish GitHub stat chips (stars, license
-MIT), contributor avatars row placeholder, primary CTA "Star on GitHub", secondary
+AGPL-3.0), contributor avatars row placeholder, primary CTA "Star on GitHub", secondary
 "Good first issues". A one-line quickstart in a copyable code block:
 ```
 git clone … && npm run build && node dist/cli.js serve --write

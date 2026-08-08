@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * PATH augmentation for binaries Baton shells out to (tmux, graphify, agent
  * CLIs). When the daemon is launched from a GUI / non-login shell, PATH often

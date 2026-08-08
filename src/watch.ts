@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Per-worktree file watcher → `file.edited` events on the bus. This is what
  * powers live edit-signals ("agent X is editing auth.ts right now") without

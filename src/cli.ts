@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Baton — tiny personal worktree orchestration for running several AI agents
  * on one repo without hand-juggling `git worktree`.
@@ -13,12 +15,21 @@ import './util/quiet.js'; // FIRST: suppress node:sqlite experimental warning be
 import { Command } from 'commander';
 import { ensureBinPath } from './util/path-env.js';
 import { setupCmd } from './commands/setup.js';
+import { joinCmd, workspaceShowCmd } from './commands/workspace.js';
+import { handoffExportCmd, handoffImportCmd } from './commands/bundle.js';
+import { memberAddCmd, memberListCmd, memberRevokeCmd } from './commands/member.js';
+import { teamAddCmd, teamAssignCmd, teamListCmd, teamRemoveCmd, teamScopeCmd } from './commands/team.js';
+import { hostClearCmd, hostSetCmd, hostStatusCmd } from './commands/host.js';
 import { newCmd } from './commands/new.js';
 import { lsCmd } from './commands/ls.js';
 import { statusCmd } from './commands/status.js';
 import { historyCmd } from './commands/history.js';
+import { historyReindexCmd, stampCommitCmd } from './commands/reindex.js';
 import { serveCmd } from './commands/serve.js';
+import { cleanCmd as daemonCleanCmd, psCmd, stopCmd as daemonStopCmd } from './commands/fleet.js';
 import { mergeCmd } from './commands/merge.js';
+import { integrateCmd } from './commands/integrate.js';
+import { pushCmd } from './commands/push.js';
 import { rmCmd } from './commands/rm.js';
 import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
@@ -26,7 +37,7 @@ import { pathCmd } from './commands/path.js';
 import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
 import { mcpBridgeCmd } from './commands/mcp-bridge.js';
-import { reviewListCmd, reviewResolveCmd, reviewSaveCmd, reviewShowCmd } from './commands/review.js';
+import { reviewApproveCmd, reviewListCmd, reviewRejectCmd, reviewResolveCmd, reviewSaveCmd, reviewShowCmd } from './commands/review.js';
 import { blameCmd, signalsCmd } from './commands/signals.js';
 import { passCmd } from './commands/pass.js';
 import { doneCmd, takeCmd } from './commands/take.js';
@@ -35,7 +46,8 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
-import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
+import { cancelCmd } from './commands/cancel.js';
+import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
@@ -43,6 +55,10 @@ import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
 import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
 import { bugsCmd } from './commands/bugs.js';
+import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
+import { taskAddCmd, taskRmCmd, type TaskAddOpts } from './commands/task.js';
+import { nextCmd } from './commands/next.js';
+import { blockCmd, pauseCmd } from './commands/pause.js';
 
 // Make sure binaries we shell out to (tmux, graphify, agent CLIs) are findable
 // even when launched from a GUI/non-login shell with a thin PATH.
@@ -72,6 +88,26 @@ program
     run(() => setupCmd(path, opts)));
 
 program
+  .command('workspace')
+  .argument('[path]', 'hub folder to describe (default: current directory)')
+  .option('--write', 'also save it to .baton/workspace.json')
+  .description('print this hub\'s layout as a shareable manifest (redirect it: > workspace.json)')
+  .action((path: string | undefined, opts: { write?: boolean }) => run(() => workspaceShowCmd(path, opts)));
+
+program
+  .command('join')
+  .argument('<manifest-or-url>', 'workspace.json from `baton workspace`, or a host URL from your invite')
+  .argument('[dir]', 'folder to build the workspace in (default: current directory)')
+  .option('--token <token>', 'member token, when joining from a host URL')
+  .option('--device <name>', 'label for this machine in the host\'s roster')
+  .option('--no-setup', 'clone only — skip the `baton setup --hub` hand-off')
+  .option('--headless', 'after cloning, set up for MCP-only use (no dashboard)')
+  .option('--serve', 'after cloning, set up for the dashboard (default)')
+  .description('recreate a teammate\'s hub: clone every repo into the same folder layout')
+  .action((source: string, dir: string | undefined, opts: { setup?: boolean; headless?: boolean; serve?: boolean; token?: string; device?: string }) =>
+    run(() => joinCmd(source, dir, opts)));
+
+program
   .command('connect')
   .option('--agents <list>', 'comma-separated: claude,cursor,codex,gemini (default: all four)')
   .option('--yes', 'also write global ($HOME) configs for codex/gemini')
@@ -88,7 +124,7 @@ program
 
 program
   .command('ls')
-  .description('list tasks with git status, ahead/behind, and age')
+  .description('the board: tasks grouped by phase, which phase is open, and what is blocked')
   .action(() => run(lsCmd));
 
 program
@@ -108,17 +144,136 @@ program
   );
 
 program
+  .command('push')
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .option('--allow-ci', 'permit pushing changes to CI configuration')
+  .description("publish a task's branch and record it as reachable for dependent tasks")
+  .action((slug: string | undefined, opts: { allowCi?: boolean }) => run(() => pushCmd(slug, opts)));
+
+program
+  .command('integrate')
+  .argument('[phase]', 'phase number (default: the one holding the barrier)')
+  .option('--dry-run', 'check whether the phase would land, write nothing')
+  .description("land a finished phase's branches on the base, lifting the barrier")
+  .action((phase: string | undefined, opts: { dryRun?: boolean }) =>
+    run(() => integrateCmd(phase, opts)),
+  );
+
+program
+  .command('stamp-commit')
+  .argument('<file>', 'the commit message file git passes to prepare-commit-msg')
+  .description('internal: add a Baton-Task: trailer when committing inside a task worktree')
+  .action((file: string) => run(() => stampCommitCmd(file)));
+
+const history = program
   .command('history')
   .argument('[file]', 'file path to trace (omit to list all tasks)')
   .description('trace which task/agent/commits touched a file (from the local index)')
   .action((file: string | undefined) => run(() => historyCmd(file)));
 
+history
+  .command('reindex')
+  .description('rebuild the commit index from Baton-Task: trailers in git — .baton/ is disposable')
+  .action(() => run(historyReindexCmd));
+
 program
   .command('serve')
   .option('-p, --port <port>', 'port (default 7077)')
   .option('--write', 'enable write actions (merge / remove) from the dashboard')
+  .option('--host <addr>', 'EXPOSE on a network address (default 127.0.0.1). Requires a member token on every /api request; refuses to start with no members')
+  .option('--allowed-host <name>', 'Host header to accept besides loopback (repeatable) — needed when reached by DNS name', (v: string, acc: string[]) => [...acc, v], [] as string[])
+  .option('--behind-proxy', 'a tunnel or reverse proxy on THIS machine forwards to this port: stop treating loopback as the owner, so proxied requests need a member token like any other')
   .description('start the local daemon: JSON API + the built web dashboard')
-  .action((opts: { port?: string; write?: boolean }) => run(() => serveCmd(opts)));
+  .action((opts: { port?: string; write?: boolean; host?: string; allowedHost?: string[]; behindProxy?: boolean }) => run(() => serveCmd(opts)));
+
+// `baton stop <slug>` already stops a headless agent, so the fleet gets its
+// own group — with `baton ps` kept as the short way to ask "what's running".
+program
+  .command('ps')
+  .description('list every Baton daemon on this machine (all projects), verified live or stale')
+  .action(() => run(psCmd));
+
+const daemon = program.command('daemon').description('the Baton daemons running on this machine, across every project');
+daemon
+  .command('list', { isDefault: true })
+  .description('same as `baton ps`')
+  .action(() => run(psCmd));
+daemon
+  .command('stop')
+  .argument('<target>', 'port number, or the path of the repo the daemon serves')
+  .argument('[pid]', 'narrow to one record when several share the target — cleaning a corpse must not stop the live daemon on its port')
+  .description('stop a daemon anywhere on this machine (graceful, SIGTERM fallback); cleans up stale records')
+  .action((target: string, pid?: string) => run(() => daemonStopCmd(target, pid)));
+daemon
+  .command('clean')
+  .description('remove every fleet record whose process is provably gone — deletion only, nothing running is signalled')
+  .action(() => run(daemonCleanCmd));
+
+const host = program.command('host').description('link this machine to a hub host, so its file claims join the shared picture');
+host
+  .command('set')
+  .argument('<url>', 'host daemon base URL, e.g. http://mac-mini.local:7077')
+  .requiredOption('--token <token>', 'member token the hub owner minted with `baton member add`')
+  .option('--device <name>', 'label for this machine in the roster')
+  .description('point this daemon at a host and verify it answers')
+  .action((url: string, opts: { token?: string; device?: string }) => run(() => hostSetCmd(url, opts)));
+host
+  .command('status', { isDefault: true })
+  .description('show the linked host and whether it is reachable right now')
+  .action(() => run(hostStatusCmd));
+host
+  .command('clear')
+  .description('unlink — go back to local-only coordination')
+  .action(() => run(hostClearCmd));
+
+const member = program.command('member').description('who may reach this daemon over a network (--host only)');
+member
+  .command('add')
+  .argument('<name>', 'display name')
+  .option('--role <role>', 'owner | member (the first member is always owner)')
+  .option('--team <id>', 'team to file them under (see `baton team list`) — a grouping, not a permission')
+  .description('register a member and mint their token — printed once, stored only as a hash')
+  .action((name: string, opts: { role?: string; team?: string }) => run(() => memberAddCmd(name, opts)));
+member
+  .command('list', { isDefault: true })
+  .description('list members and whether their token still works')
+  .action(() => run(memberListCmd));
+member
+  .command('revoke')
+  .argument('<id>', 'member id (see `baton member list`)')
+  .description("revoke a member's token — takes effect on their next request")
+  .action((id: string) => run(() => memberRevokeCmd(id)));
+
+const team = program
+  .command('team')
+  .description('group members — changes how the roster reads, never who may reach what');
+team
+  .command('add')
+  .argument('<name>', 'display name')
+  .option('--projects <ids>', 'comma-separated hub project ids this team works on (default: all)')
+  .description('create a team')
+  .action((name: string, opts: { projects?: string }) => run(() => teamAddCmd(name, opts)));
+team
+  .command('list', { isDefault: true })
+  .description('list teams, how many members are in each, and their project scope')
+  .action(() => run(teamListCmd));
+team
+  .command('rm')
+  .argument('<id>', 'team id (see `baton team list`)')
+  .description('delete a team — its members move to no team and keep their access')
+  .action((id: string) => run(() => teamRemoveCmd(id)));
+team
+  .command('assign')
+  .argument('<member>', 'member id (see `baton member list`)')
+  .argument('<team>', 'team id, or `none` to take them out of one')
+  .description('put a member in a team — a member is in at most one')
+  .action((m: string, t: string) => run(() => teamAssignCmd(m, t)));
+team
+  .command('scope')
+  .argument('<id>', 'team id')
+  .argument('[projects]', 'comma-separated project ids; omit to reset to the whole hub')
+  .description("set which hub projects a team sees — a dashboard filter, not a permission")
+  .action((id: string, projects: string | undefined) => run(() => teamScopeCmd(id, projects)));
 
 program
   .command('rm')
@@ -146,6 +301,17 @@ program
       await worktreeGcCmd({ apply: opts.fix, json: opts.json }); // merged-branch worktree GC (W1)
     }));
 
+program
+  .command('cancel')
+  .argument('[slug]', 'task to cancel')
+  .option('--phase <n>', 'cancel every unfinished task in a phase')
+  .option('--plan <id>', 'cancel every unfinished task in a plan')
+  .option('--reason <text>', 'why — shown to the agent on its next tool call')
+  .option('--dry-run', 'show the blast radius, cancel nothing')
+  .description('stop work without deleting it: branches, worktrees and checkpoints all survive')
+  .action((slug: string | undefined, opts: { phase?: string; plan?: string; reason?: string; dryRun?: boolean }) =>
+    run(() => cancelCmd(slug, opts)));
+
 const memory = program
   .command('memory')
   .description('shared project memory: facts agents learned, evidence-anchored');
@@ -161,9 +327,16 @@ memory
   .option('--type <type>', 'decision | gotcha | convention | reference | preference')
   .option('--files <paths>', 'comma-separated repo-relative files (evidence anchors)')
   .option('--task <slug>', 'task slug for attribution')
+  .option('--local-only', 'keep it out of git — stored in .baton/, reaches nobody else')
   .description('save a fact from the terminal')
-  .action((fact: string[], opts: { type?: string; files?: string; task?: string }) =>
+  .action((fact: string[], opts: { type?: string; files?: string; task?: string; localOnly?: boolean }) =>
     run(() => memoryAddCmd(fact.join(' '), opts)));
+
+memory
+  .command('migrate')
+  .option('--dry-run', 'show what would move, write nothing')
+  .description('move existing facts into tracked baton/memory/facts so they reach other clones')
+  .action((opts: { dryRun?: boolean }) => run(() => memoryMigrateCmd(opts)));
 
 memory
   .command('rm')
@@ -319,15 +492,38 @@ program
 
 program
   .command('take')
+  .argument('[slug]', 'task slug (default: the next task for you, else the worktree you are in)')
+  .option('--resume', 'adopt a stalled task another agent is holding')
+  .description('pick up work: claim a queued task (worktree built on the spot), or read a HANDOFF.md brief')
+  .action((slug: string | undefined, opts: { resume?: boolean }) => run(() => takeCmd(slug, opts)));
+
+program
+  .command('next')
+  .option('--agent <id>', 'ask on behalf of another agent id')
+  .description('what may I start right now — and, when nothing, exactly why not')
+  .action((opts: { agent?: string }) => run(() => nextCmd(opts)));
+
+program
+  .command('pause')
   .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .description('pick up a HANDOFF.md brief: prints the execution prompt, marks it in-progress')
-  .action((slug: string | undefined) => run(() => takeCmd(slug)));
+  .option('--reason <why>', 'why you stopped — shown to whoever picks it up')
+  .description('hand a task back unfinished: queued again, worktree and history kept')
+  .action((slug: string | undefined, opts: { reason?: string }) => run(() => pauseCmd(slug, opts)));
+
+program
+  .command('block')
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .argument('<reason>', 'what is in the way')
+  .description('report that a task cannot proceed — stays yours, waits for a person')
+  .action((slug: string | undefined, reason: string) => run(() => blockCmd(slug, reason)));
 
 program
   .command('done')
   .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .description('mark a handoff brief as done')
-  .action((slug: string | undefined) => run(() => doneCmd(slug)));
+  .option('--attest', 'confirm you actually ran what the plan expects')
+  .option('--force', 'proceed without attesting (never past a real refusal)')
+  .description('finish a task: evidence gate, then review — or mark a handoff brief done')
+  .action((slug: string | undefined, opts: { attest?: boolean; force?: boolean }) => run(() => doneCmd(slug, opts)));
 
 program
   .command('resume')
@@ -336,11 +532,30 @@ program
   .description('list open handoff briefs, or print the pickup prompt for one')
   .action((slug: string | undefined, opts: { json?: boolean }) => run(() => resumeCmd(slug, opts)));
 
+const handoff = program.command('handoff').description('move a half-finished task between machines');
+handoff
+  .command('export')
+  .argument('[slug]', 'task slug (default: the worktree you are in)')
+  .option('-o, --out <file>', 'where to write the bundle (default: <slug>.bundle.json)')
+  .option('--allow-secrets', 'export even when the diff looks like it contains a credential')
+  .description('pack brief + ledger + open findings + memory + the UNCOMMITTED diff into one file')
+  .action((slug: string | undefined, opts: { out?: string; allowSecrets?: boolean }) =>
+    run(() => handoffExportCmd(slug, opts)));
+handoff
+  .command('import')
+  .argument('<file>', 'bundle written by `baton handoff export`')
+  .option('--into <dir>', 'checkout to apply it to (default: current directory)')
+  .option('--force', 'apply even though HEAD is not the commit the patch was cut from')
+  .option('--no-context', 'apply the diff only — skip HANDOFF.md and the progress ledger')
+  .description('restore a bundle: applies the diff only when HEAD matches its base commit')
+  .action((file: string, opts: { into?: string; force?: boolean; context?: boolean }) =>
+    run(() => handoffImportCmd(file, opts)));
+
 const hooks = program.command('hooks').description('agent-side hook installation');
 hooks
   .command('install')
   .argument('<agent>', 'claude | cursor')
-  .option('--project', 'install into this repo (.claude/settings.json / .cursor/hooks.json) instead of the home dir')
+  .option('--project', 'install into this workspace (.claude/settings.json / .cursor/hooks.json at the baton root) instead of the home dir')
   .description('claude: handoff brief + edit guard + orient; cursor: afterFileEdit edit-signal guard')
   .action((agent: string, opts: { project?: boolean }) => run(() => hooksInstallCmd(agent, opts)));
 
@@ -383,9 +598,62 @@ program
   .description('stdio↔HTTP bridge so Codex can query the shared graphify pool (requires baton serve)')
   .action((url: string) => run(() => mcpBridgeCmd(url)));
 
+const task = program
+  .command('task')
+  .description('queue work without writing a plan file: add, rm');
+
+task
+  .command('add')
+  .argument('<what>', 'what the task is')
+  .option('--phase <n>', 'phase number; omit for ungated work that starts immediately')
+  .option('--after <slugs>', 'comma-separated tasks this one waits for')
+  .option('--assignee <agent>', 'agent id; omit to leave it in the open pool')
+  .option('--scope <globs>', 'comma-separated path globs this task owns')
+  .option('--expects <list>', 'semicolon-separated evidence required before done')
+  .description('queue one task — a JSON row, no branch and no worktree until it is taken')
+  .action((what: string, opts: TaskAddOpts) => run(() => taskAddCmd(what, opts)));
+
+task
+  .command('rm')
+  .argument('<slug>', 'the queued task to drop')
+  .description('remove a queued task that never started (use `baton rm` once it has a worktree)')
+  .action((slug: string) => run(() => taskRmCmd(slug)));
+
+const plan = program
+  .command('plan')
+  .description(`phased task plans written as markdown in ${PLANS_DIR}/: check, apply`);
+
+plan
+  .command('check')
+  .argument('<file>', `plan name (looked up in ${PLANS_DIR}/) or a path to a .md file`)
+  .description('parse and validate a plan — every problem at once, nothing written')
+  .action((file: string) => run(() => planCheckCmd(file)));
+
+plan
+  .command('apply')
+  .argument('<file>', `plan name (looked up in ${PLANS_DIR}/) or a path to a .md file`)
+  .option('--dry-run', 'show the diff and write nothing')
+  .option('--force', 'proceed even when the change lands under a working agent')
+  .description('turn a plan into queued tasks — shows the diff first, refuses in-flight changes')
+  .action((file: string, opts: { dryRun?: boolean; force?: boolean }) => run(() => planApplyCmd(file, opts)));
+
 const review = program
   .command('review')
-  .description('durable code-review findings (from the code-review skill): save, list, show, resolve');
+  .description('code review: record findings (save/list/show/resolve) and give the verdict (approve/reject)');
+
+review
+  .command('approve')
+  .argument('<slug>', 'the task awaiting a verdict')
+  .option('--force', 'approve even though the recorded review still has open findings')
+  .description('accept a task in review → done (the reviewer must not have contributed to it)')
+  .action((slug: string, opts: { force?: boolean }) => run(() => reviewApproveCmd(slug, opts)));
+
+review
+  .command('reject')
+  .argument('<slug>', 'the task awaiting a verdict')
+  .requiredOption('-n, --notes <what>', 'what has to change — the agent gets this back')
+  .description('send a task in review back to active, branch and history intact')
+  .action((slug: string, opts: { notes?: string }) => run(() => reviewRejectCmd(slug, opts)));
 
 review
   .command('save')

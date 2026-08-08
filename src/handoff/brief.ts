@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Handoff brief generation — the knowledge pack a cheaper agent picks up with
  * `baton take`. Not a raw history dump: a curated HANDOFF.md with objective,
@@ -9,6 +11,7 @@ import { parseFrontmatter } from '../util/frontmatter.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gitTry } from '../util/exec.js';
+import { resolveAuthor } from '../identity.js';
 import type { Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { queryGraph } from '../kb/graphify.js';
@@ -20,8 +23,14 @@ import { guardrailLines } from './guardrails.js';
 
 export interface HandoffMeta {
   baton: number;
+  /** The agent handing off (WHAT). Paired with `author` below (WHO). */
   from: string;
   to: string;
+  /** WHO produced this brief. `from`/`to` name the agent tools, which on a
+   *  shared hub are the same string for everyone — so a brief passed between
+   *  two people records neither of them without this. Pre-author briefs and
+   *  hand-written ones read as `unknown`. */
+  author?: string;
   /** Suggested model for the receiving CLI (advisory — Baton can't enforce it). */
   model?: string;
   status: 'ready' | 'in-progress' | 'done';
@@ -166,6 +175,7 @@ export async function buildBrief(
     baton: 1,
     from: opts.from ?? 'claude',
     to: opts.to,
+    author: await resolveAuthor(opts.root),
     ...(opts.model ? { model: opts.model } : {}),
     status: 'ready',
     created: new Date().toISOString(),

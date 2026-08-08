@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Shared graphify backends: one HTTP graphify.serve process per project,
  * lazily started and idle-reaped, so N agents share 1 process instead of each

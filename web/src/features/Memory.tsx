@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — project memory screen
    Facts agents learned (via save_memory, the CLI, or quick-add),
@@ -61,7 +63,7 @@ export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
       if (fresh && f.freshness !== fresh) return false;
       if (proj !== undefined && f.project !== proj) return false;
       if (agent && f.agent !== agent) return false;
-      if (needle && !`${f.id} ${f.fact} ${f.type} ${f.task ?? ""} ${f.agent ?? ""} ${f.anchors.files.map((a) => a.path).join(" ")}`.toLowerCase().includes(needle)) return false;
+      if (needle && !`${f.id} ${f.fact} ${f.type} ${f.task ?? ""} ${f.agent ?? ""} ${f.author ?? ""} ${f.anchors.files.map((a) => a.path).join(" ")}`.toLowerCase().includes(needle)) return false;
       return true;
     });
   }, [facts, q, fresh, proj, agent]);
@@ -319,7 +321,14 @@ function FactCard({ f, writeEnabled, onDelete, projectLabel, selected, onToggle,
   selected: boolean; onToggle: () => void; selectMode: boolean;
 }) {
   const fr = FRESHNESS[f.freshness];
-  const attribution = [f.agent && `by ${f.agent}`, f.task && `task ${f.task}`].filter(Boolean).join(" · ");
+  /* `agent` is WHAT wrote the fact down; `author` is WHO claimed it. On a shared
+     KB two people both run "claude", so the tool name attributes nothing on its
+     own. Facts written before authorship existed carry "unknown" — rendering
+     that adds no information, so they keep the original agent-only byline
+     instead of gaining a word that says nothing. */
+  const who = f.author && f.author !== "unknown" ? f.author : null;
+  const byline = who ? (f.agent ? `by ${who} via ${f.agent}` : `by ${who}`) : f.agent ? `by ${f.agent}` : null;
+  const attribution = [byline, f.task && `task ${f.task}`].filter(Boolean).join(" · ");
   return (
     <article style={{ background: selected ? "var(--accent-soft)" : "var(--bg-surface)", border: `1px solid ${selected ? "var(--accent-border)" : "var(--border-subtle)"}`, borderLeft: `3px solid ${selected ? "var(--accent)" : fr.color}`, borderRadius: "var(--r-md)", padding: "12px 15px", display: "flex", gap: 11, opacity: f.freshness === "stale" ? 0.85 : 1 }}>
       {writeEnabled && (

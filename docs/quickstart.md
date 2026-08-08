@@ -1,6 +1,6 @@
 # Quickstart
 
-From a clone to the running dashboard and your first agent handoff. Assumes you've finished [Installation](./installation.md) (Node ≥ 20, git, `uv`, and `baton` on your `PATH`).
+From a clone to the running dashboard and your first agent handoff. Assumes you've finished [Installation](./installation.md) (Node ≥ 24, git, `uv`, and `baton` on your `PATH`).
 
 ## 1. Index your repo
 

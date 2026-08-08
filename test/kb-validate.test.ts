@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -72,6 +74,29 @@ describe('loadKb project validation', () => {
     await writeState(root, [link]);
     const kb = await loadKb(root);
     expect(kb?.projects).toHaveLength(0);
+  });
+
+  it('keeps a marker-only sub-project — the shape detectProjects actually mints', async () => {
+    /*
+     * The silent KB wipe. `detectProjects` splits a root on `isProjectDir`,
+     * which is "build marker OR .git" — so the ordinary polyglot layout (one
+     * repo at the root, api/pyproject.toml + web/package.json beneath it,
+     * neither a repo of its own) registered two projects that this validator
+     * then dropped on EVERY read: `/api/kb` reported none, every graphify MCP
+     * query 502'd, and doctor called it healthy because health.ts never checked
+     * `.git`. Then `refreshCodebaseDocs` wrote the filtered array back, turning
+     * a hidden KB into a deleted one.
+     */
+    const root = await makeRoot();
+    const api = join(root, 'api');
+    const web = join(root, 'web');
+    await mkdir(api, { recursive: true });
+    await mkdir(web, { recursive: true });
+    await writeFile(join(api, 'pyproject.toml'), '[project]\nname = "api"\n');
+    await writeFile(join(web, 'package.json'), '{"name":"web"}');
+    await writeState(root, [api, web]);
+    const kb = await loadKb(root);
+    expect(kb?.projects.map((p) => p.path)).toEqual([api, web]);
   });
 
   it('drops a project without .git and a missing path', async () => {

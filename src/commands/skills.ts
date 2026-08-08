@@ -1,16 +1,18 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton skills` — list, install, import, and remove reusable agent skills from
  * the terminal (the same catalog the dashboard Skills screen shows). Install
  * defaults to EVERY writable agent so one command wires a skill into all of them.
  */
-import { gitRoot } from '../git.js';
+import { activeBatonRoot } from '../store.js';
 import {
   listSkillStatus, installSkill, installSkillEverywhere, uninstallSkill, importSkill,
   SKILL_AGENTS, SkillNotFoundError, SkillAgentUnsupportedError, SkillImportError,
 } from '../skills/install.js';
 
 export async function skillsListCmd(): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const skills = await listSkillStatus(root);
   if (!skills.length) {
     console.log('no skills — import one with `baton skills import <path|url>`');
@@ -25,7 +27,7 @@ export async function skillsListCmd(): Promise<void> {
 }
 
 export async function skillsInstallCmd(id: string, opts: { agent?: string; all?: boolean } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   try {
     if (opts.agent) {
       const r = await installSkill(root, id, opts.agent);
@@ -42,7 +44,7 @@ export async function skillsInstallCmd(id: string, opts: { agent?: string; all?:
 }
 
 export async function skillsUninstallCmd(id: string, opts: { agent?: string } = {}): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const agents = opts.agent ? [opts.agent] : [...SKILL_AGENTS];
   try {
     for (const agent of agents) {
@@ -55,7 +57,7 @@ export async function skillsUninstallCmd(id: string, opts: { agent?: string } = 
 }
 
 export async function skillsImportCmd(source: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   try {
     const s = await importSkill(root, source);
     console.log(`✓ imported ${s.id} — ${s.description.slice(0, 80)}\n  install it with: baton skills install ${s.id}`);

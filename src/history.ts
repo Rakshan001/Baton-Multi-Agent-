@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Local, queryable history index (`.baton/history.db`, gitignored) using Node's
  * built-in `node:sqlite` — no external dependency.
@@ -42,11 +44,35 @@ CREATE TABLE IF NOT EXISTS commits (
 CREATE TABLE IF NOT EXISTS commit_files (
   sha TEXT,
   slug TEXT,
-  path TEXT
+  path TEXT,
+  -- Which sub-project the path is relative TO. Every path Baton records is
+  -- worktree-relative, so in a hub src/index.ts in proj-a and proj-b are two
+  -- unrelated files that merely spell the same string. Without this, who_touched
+  -- blended their histories and blamed an agent for a file it never opened.
+  -- NULL means "not known" (a single repo, or a row written before this column):
+  -- those still match every asker, because forgetting history is worse than
+  -- showing a little extra.
+  project TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_commit_files_path ON commit_files(path);
 CREATE INDEX IF NOT EXISTS idx_commits_slug ON commits(slug);
 `;
+
+/**
+ * Add `commit_files.project` to a database created before it existed. SQLite has
+ * no `ADD COLUMN IF NOT EXISTS`, so the column list is checked first.
+ *
+ * The backfill is free and worth doing: B2 git-log buckets are keyed
+ * `git:<projectId>` (server.ts), and those are precisely the hub sub-project
+ * rows the missing column corrupted. Task-owned rows stay NULL — their project
+ * is not recoverable from the row alone, and NULL is the honest answer.
+ */
+function migrateCommitFiles(db: DatabaseSync): void {
+  const cols = db.prepare(`PRAGMA table_info(commit_files)`).all() as unknown as Array<{ name: string }>;
+  if (cols.some((c) => c.name === 'project')) return;
+  db.exec(`ALTER TABLE commit_files ADD COLUMN project TEXT`);
+  db.exec(`UPDATE commit_files SET project = substr(slug, 5) WHERE project IS NULL AND slug LIKE 'git:%'`);
+}
 
 const conns = new Map<string, DatabaseSync>();
 
@@ -57,7 +83,15 @@ function getDb(root: string): DatabaseSync {
   if (!db) {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
+    // FIRST, before any statement that needs a lock. Concurrent writers
+    // (signals.ts, reports.ts, agent MCP/guard processes) share this file, and
+    // the default timeout is 0 — so setting it last left the two statements
+    // MOST likely to contend unprotected: the SCHEMA DDL on a fresh file, and
+    // the journal_mode switch below, which needs an exclusive lock and throws
+    // outright if signals.ts opened the file first (it never sets WAL).
+    db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
+    migrateCommitFiles(db);
     // WAL (persisted in the file header) + NORMAL sync keep merge-time writes from
     // fsync-stalling the daemon's single event loop. synchronous is per-connection,
     // so reports.ts (a separate handle to this same file) sets it too.
@@ -79,6 +113,11 @@ export function closeHistoryDb(root: string): void {
     try { db.close(); } catch { /* already closed */ }
     conns.delete(path);
   }
+  // Forget the FTS probe too. This is called so the FILE can be deleted (purge),
+  // and the daemon outlives that: a remembered `true` sent the next search
+  // straight at a virtual table the new db has never had, which throws into a
+  // silent LIKE fallback for the rest of the process's life.
+  ftsReady.delete(path);
 }
 
 export interface TaskRecord {
@@ -112,6 +151,8 @@ export function recordMerge(
     mergedAt: string;
     archivedRef: string | null;
     commits: CommitInfo[];
+    /** The sub-project these paths are relative to; null in a single repo. */
+    projectId?: string | null;
   },
 ): void {
   const db = getDb(root);
@@ -123,14 +164,19 @@ export function recordMerge(
     `INSERT INTO commits (sha, slug, message, at) VALUES (?, ?, ?, ?)
      ON CONFLICT(sha) DO NOTHING`,
   );
-  const insFile = db.prepare(`INSERT INTO commit_files (sha, slug, path) VALUES (?, ?, ?)`);
+  const insFile = db.prepare(`INSERT INTO commit_files (sha, slug, path, project) VALUES (?, ?, ?, ?)`);
   // One transaction for the whole commit/file batch: a single fsync instead of one
   // per INSERT, so a large merge can't block other in-flight requests for long.
   db.exec('BEGIN');
   try {
     for (const c of args.commits) {
-      insCommit.run(c.sha, args.slug, c.message, c.at);
-      for (const f of c.files) insFile.run(c.sha, args.slug, f);
+      // Files only for genuinely-new shas. At merge time every commit is new, so
+      // this was invisible — until `history reindex` began re-recording the same
+      // commits, and each run added another copy of every file row. The same
+      // guard `ingestGitLog` already uses, for the same reason.
+      const res = insCommit.run(c.sha, args.slug, c.message, c.at);
+      if (res.changes === 0) continue;
+      for (const f of c.files) insFile.run(c.sha, args.slug, f, args.projectId ?? null);
     }
     db.exec('COMMIT');
   } catch (e) {
@@ -149,7 +195,7 @@ export function recordMerge(
  */
 export async function ingestGitLog(
   root: string,
-  opts: { slug: string; task: string; cwd: string; limit?: number },
+  opts: { slug: string; task: string; cwd: string; limit?: number; projectId?: string | null },
 ): Promise<number> {
   const commits = await recentCommits(opts.cwd, opts.limit ?? 100);
   if (commits.length === 0) return 0;
@@ -165,7 +211,7 @@ export async function ingestGitLog(
   const insCommit = db.prepare(
     `INSERT INTO commits (sha, slug, message, at) VALUES (?, ?, ?, ?) ON CONFLICT(sha) DO NOTHING`,
   );
-  const insFile = db.prepare(`INSERT INTO commit_files (sha, slug, path) VALUES (?, ?, ?)`);
+  const insFile = db.prepare(`INSERT INTO commit_files (sha, slug, path, project) VALUES (?, ?, ?, ?)`);
   let added = 0;
   db.exec('BEGIN');
   try {
@@ -175,7 +221,7 @@ export async function ingestGitLog(
         // New to the index — record its files. If a real task already owned this
         // sha, DO NOTHING kept its row and we skip here, so no duplicate files.
         added++;
-        for (const f of c.files) insFile.run(c.sha, opts.slug, f);
+        for (const f of c.files) insFile.run(c.sha, opts.slug, f, opts.projectId ?? null);
       }
     }
     db.exec('COMMIT');
@@ -303,21 +349,49 @@ export interface FileHit {
   sha: string;
   message: string;
   at: string;
+  /**
+   * Has this task's work actually landed?
+   *
+   * `history reindex` walks task branches, so the index now carries commits
+   * that are real but still IN FLIGHT on someone's branch. Presenting those the
+   * same as merged work would be the stale-peer-state failure in its quietest
+   * form: an agent reads "src/db.ts was changed by auth-schema", assumes the
+   * change is on main, and builds against code that is not there.
+   */
+  merged: boolean;
 }
 
-/** Attribution: which task/agent/commits touched a given file path. */
-export function queryFile(root: string, path: string): FileHit[] {
+/**
+ * Attribution: which task/agent/commits touched a given file path.
+ *
+ * `projectId` scopes the answer to one sub-project of a hub. Paths are
+ * worktree-relative, so without it `src/index.ts` returned proj-a's and
+ * proj-b's history as one list and blamed agents for files they never opened.
+ *
+ * Two deliberate escapes from the filter, both erring toward showing more:
+ * an asker with no project (single repo, or a session at the hub root) sees
+ * everything, and rows whose own project is NULL — written before the column
+ * existed, or by a task with no sub-project — match every asker. Forgetting
+ * real history is a worse failure here than showing a little extra.
+ */
+export function queryFile(root: string, path: string, projectId?: string | null): FileHit[] {
+  const scope = projectId ?? null;
   return getDb(root)
     .prepare(
       `SELECT cf.path AS path, c.slug AS slug, t.task AS task, t.agent AS agent,
-              c.sha AS sha, c.message AS message, c.at AS at
+              c.sha AS sha, c.message AS message, c.at AS at,
+              (t.archived_ref IS NOT NULL) AS merged
        FROM commit_files cf
        JOIN commits c ON c.sha = cf.sha
        JOIN tasks t ON t.slug = c.slug
        WHERE cf.path = ?
+         AND (? IS NULL OR cf.project IS NULL OR cf.project = ?)
        ORDER BY c.at DESC`,
     )
-    .all(path) as unknown as FileHit[];
+    .all(path, scope, scope)
+    // SQLite has no boolean: the expression comes back as 0/1, and a raw 0 is
+    // truthy in JSON once it reaches an agent as `"merged": 0`.
+    .map((r) => ({ ...(r as unknown as FileHit), merged: Boolean((r as { merged?: number }).merged) }));
 }
 
 export interface TaskHistory {

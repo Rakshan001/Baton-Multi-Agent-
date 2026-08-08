@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Multi-repo hub support: the git repos are sub-projects listed in kb.json,
  * while the hub root may be plain or git-initialized for coordination metadata.
@@ -16,6 +18,8 @@ import { loadTasks, resolveBatonRoot } from '../src/store.js';
 import { createTask, ProjectRequiredError, UnknownProjectError } from '../src/commands/new.js';
 import { mergeTaskBranch } from '../src/commands/merge.js';
 import { removeTaskWorktree } from '../src/commands/rm.js';
+import { collectStatus } from '../src/board.js';
+import { checkFiles, getSignals, recordHookEdit } from '../src/signals.js';
 
 /** A git sub-repo with one commit on `main`. */
 async function initSubRepo(root: string): Promise<void> {
@@ -116,6 +120,99 @@ describe('createTask on a multi-repo hub', () => {
 
   it('rejects an unknown project id', async () => {
     await expect(createTask('Do something', hub, 'nope')).rejects.toBeInstanceOf(UnknownProjectError);
+  });
+
+  /**
+   * Per-task git questions must be asked of the task's OWN repo. Both of these
+   * used to be asked of the served root, and both failure modes are SILENT:
+   * `aheadBehind` returns {0,0} on any error, and `changedFiles` skips a failed
+   * diff. On a hub the served root is not the branch's repo, so the board drew
+   * every task as having nothing to merge and overlap detection went blind to
+   * everything already committed.
+   */
+  it('reports a sub-project task as ahead of its base — asked of the task\'s repo, not the hub', async () => {
+    const task = await createTask('Add a banner', hub, 'proj-a');
+    await fsWriteFile(join(task.worktreePath, 'banner.txt'), 'hi\n', 'utf-8');
+    await git(['add', '.'], task.worktreePath);
+    await git(['commit', '-q', '-m', 'add banner'], task.worktreePath);
+
+    const rows = await collectStatus(hub);
+    const row = rows.find((r) => r.slug === task.slug)!;
+    expect(row.ahead).toBe(1);
+    expect(row.behind).toBe(0);
+  });
+
+  it('sees a COMMITTED change when detecting overlap between two hub tasks', async () => {
+    // Both tasks touch shared.txt in the same repo, and each COMMITS it — the
+    // uncommitted half of changedFiles finds nothing, so if the committed half
+    // is asked of the wrong repo the overlap vanishes entirely.
+    const a = await createTask('Task one', hub, 'proj-a');
+    const b = await createTask('Task two', hub, 'proj-a');
+    for (const t of [a, b]) {
+      await fsWriteFile(join(t.worktreePath, 'shared.txt'), `${t.slug}\n`, 'utf-8');
+      await git(['add', '.'], t.worktreePath);
+      await git(['commit', '-q', '-m', `touch shared from ${t.slug}`], t.worktreePath);
+    }
+
+    const rows = await collectStatus(hub);
+    expect(rows.find((r) => r.slug === a.slug)!.conflictFiles).toContain('shared.txt');
+    expect(rows.find((r) => r.slug === b.slug)!.conflictFiles).toContain('shared.txt');
+  });
+
+  it('does NOT fabricate a conflict between identical paths in DIFFERENT projects', async () => {
+    // `src/index.ts` in proj-a and `src/index.ts` in proj-b are two unrelated
+    // files that merely spell the same relative path. Warning on them is worse
+    // than saying nothing: a coordination signal that cries wolf on every
+    // conventional filename is one agents learn to scroll past.
+    const a = await createTask('Task in a', hub, 'proj-a');
+    const b = await createTask('Task in b', hub, 'proj-b');
+    for (const t of [a, b]) {
+      await mkdir(join(t.worktreePath, 'src'), { recursive: true });
+      await fsWriteFile(join(t.worktreePath, 'src', 'index.ts'), `// ${t.slug}\n`, 'utf-8');
+      await git(['add', '.'], t.worktreePath);
+      await git(['commit', '-q', '-m', `touch index from ${t.slug}`], t.worktreePath);
+    }
+
+    const rows = await collectStatus(hub);
+    expect(rows.find((r) => r.slug === a.slug)!.conflictFiles).toEqual([]);
+    expect(rows.find((r) => r.slug === b.slug)!.conflictFiles).toEqual([]);
+  });
+
+  it('answers check_files per project — busy in my repo, free across repos', async () => {
+    // The same question the edit guard and the check_files MCP tool ask before
+    // an agent touches a file. Answering "busy" because an unrelated repo has a
+    // file of that name is how a coordination tool gets muted.
+    const a = await createTask('Holder in a', hub, 'proj-a');
+    const sameRepo = await createTask('Asker in a', hub, 'proj-a');
+    const otherRepo = await createTask('Asker in b', hub, 'proj-b');
+    await mkdir(join(a.worktreePath, 'src'), { recursive: true });
+    await fsWriteFile(join(a.worktreePath, 'src', 'index.ts'), '// held\n', 'utf-8');
+    await git(['add', '.'], a.worktreePath);
+    await git(['commit', '-q', '-m', 'hold index'], a.worktreePath);
+
+    const asSameRepo = (await checkFiles(hub, ['src/index.ts'], sameRepo.slug))['src/index.ts'];
+    expect(asSameRepo.busy).toBe(true);
+    expect(asSameRepo.by.map((h) => h.slug)).toContain(a.slug);
+
+    const asOtherRepo = (await checkFiles(hub, ['src/index.ts'], otherRepo.slug))['src/index.ts'];
+    expect(asOtherRepo.busy).toBe(false);
+    expect(asOtherRepo.by).toEqual([]);
+  });
+
+  it('keeps a live cross-project edit at info — both holders shown, no overlap warning', async () => {
+    // Every repo has a README.md. Two agents editing their own one are not in
+    // each other's way, and `warning` is what pushes a signal.overlap event to
+    // both of them.
+    const a = await createTask('Live in a', hub, 'proj-a');
+    const b = await createTask('Live in b', hub, 'proj-b');
+    for (const t of [a, b]) {
+      await fsWriteFile(join(t.worktreePath, 'README.md'), `# ${t.slug}\n`, 'utf-8'); // dirty, so it survives reconcile
+      recordHookEdit(hub, { slug: t.slug, path: 'README.md' });
+    }
+
+    const row = (await getSignals(hub)).find((s) => s.path === 'README.md')!;
+    expect(row.holders.map((h) => h.slug).sort()).toEqual([a.slug, b.slug].sort());
+    expect(row.level).toBe('info');
   });
 
   it('merges a sub-project task back into its own repo, then removes the worktree', async () => {

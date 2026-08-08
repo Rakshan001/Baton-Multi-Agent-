@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Live edit-signals: which files are being edited right now, by which
  * task/agent — and where two sessions are touching the same path. This is the
@@ -13,8 +15,8 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { batonDir, loadTasks, type Task } from './store.js';
-import { detectAgents } from './agents.js';
-import { changedFiles } from './conflicts.js';
+import { detectAgents, detectionRoots } from './agents.js';
+import { canCollide, changedFiles, taskRepos } from './conflicts.js';
 import { gitTry } from './util/exec.js';
 import { bus } from './events.js';
 
@@ -688,6 +690,16 @@ async function reconcileSignals(
   return kept;
 }
 
+/** True if any two of these distinct holders could collide — i.e. share a repo. */
+function overlaps(slugs: string[], repoOf: Map<string, string>): boolean {
+  for (let i = 0; i < slugs.length; i++) {
+    for (let j = i + 1; j < slugs.length; j++) {
+      if (canCollide(repoOf, slugs[i], slugs[j])) return true;
+    }
+  }
+  return false;
+}
+
 export interface SignalOpts {
   /**
    * Include recently-settled signals ("finished editing 2m ago"). OFF by default:
@@ -714,7 +726,7 @@ export async function getSignals(
   // thing that can flip a re-dirtied path back to active. Filter at the output.
   const reconciled = await reconcileSignals(root, liveRows(root, windowMin), tasks, sessions, watched);
   const rows = opts.includeSettled ? reconciled : reconciled.filter((r) => !r.settledAt);
-  const agents = await detectAgents(tasks.map((t) => t.worktreePath));
+  const agents = await detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) });
   // Reverse index: a checkout path → an agent name self-reported by a session
   // registered there, so fs-watch checkout signals (which see *what* changed,
   // not *who*) can borrow the agent name when one is known (ADD-07/A). Finding
@@ -785,15 +797,17 @@ export async function getSignals(
     if (kept.length !== holders.length) byPath.set(path, kept);
   }
   enrichWithNotes(root, [...byPath.values()]);
+  const repoOf = taskRepos(tasks, root);
   return [...byPath.entries()]
     .map(([path, holders]) => ({
       path,
       // Only sessions still HOLDING the path can collide — a settled holder has
-      // let go, so pairing it with an active one is not a conflict (ISS-15).
-      level:
-        new Set(holders.filter((h) => h.state === 'active').map((h) => h.slug)).size >= 2
-          ? ('warning' as const)
-          : ('info' as const),
+      // let go, so pairing it with an active one is not a conflict (ISS-15) —
+      // and only holders in the SAME repo, since two sub-projects of a hub each
+      // have their own `src/index.ts` and warning across them is noise, not news.
+      level: overlaps([...new Set(holders.filter((h) => h.state === 'active').map((h) => h.slug))], repoOf)
+        ? ('warning' as const)
+        : ('info' as const),
       holders,
     }))
     .sort((a, b) => (a.level === b.level ? a.path.localeCompare(b.path) : a.level === 'warning' ? -1 : 1));
@@ -802,6 +816,13 @@ export async function getSignals(
 export interface FileCheck {
   busy: boolean;
   by: SignalHolder[];
+  /**
+   * Holders on OTHER machines, when this daemon is linked to a hub host
+   * (src/remote-claims.ts fills it in; `checkFiles` itself stays local-only and
+   * makes no network call). Absent means "not asked", never "nobody" — the
+   * caller reports reachability separately for exactly that reason.
+   */
+  elsewhere?: Array<{ memberId: string; memberName: string; agent: string | null; branch: string | null; since: string }>;
 }
 
 /**
@@ -816,18 +837,25 @@ export async function checkFiles(
 ): Promise<Record<string, FileCheck>> {
   const signals = await getSignals(root);
   const tasks = await loadTasks(root);
-  const agents = await detectAgents(tasks.map((t) => t.worktreePath));
+  const agents = await detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) });
   const changed = new Map<string, Set<string>>(); // slug → files
   await Promise.all(tasks.map(async (t) => changed.set(t.slug, await changedFiles(t, root))));
   const byPath = new Map(signals.map((s) => [s.path, s.holders]));
+  // In a hub the asker's `src/index.ts` is not the other project's `src/index.ts`
+  // — same string, different file. Scoping needs to know who is asking, so it
+  // applies only when the caller identified itself as a task (the guard and
+  // check_files both do); an anonymous or root-session caller is left unscoped
+  // rather than guessed at.
+  const repoOf = taskRepos(tasks, root);
+  const mine = (slug: string): boolean => !excludeSlug || canCollide(repoOf, excludeSlug, slug);
 
   const result: Record<string, FileCheck> = {};
   for (const p of paths) {
     // Drop the caller's own edits: an agent asking "is this busy?" means "busy
     // by someone ELSE" — its own signals are not a reason to wait.
-    const holders: SignalHolder[] = (byPath.get(p) ?? []).filter((h) => h.slug !== excludeSlug);
+    const holders: SignalHolder[] = (byPath.get(p) ?? []).filter((h) => h.slug !== excludeSlug && mine(h.slug));
     for (const t of tasks) {
-      if (t.slug === excludeSlug) continue;
+      if (t.slug === excludeSlug || !mine(t.slug)) continue;
       if (changed.get(t.slug)?.has(p) && !holders.some((h) => h.slug === t.slug)) {
         holders.push({ slug: t.slug, agent: agents.get(t.worktreePath) ?? null, lastEditAt: '', state: 'active' });
       }

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * On-disk footprint of a Baton workspace, for the dashboard's storage view.
  * Breaks `.baton/` + the graphify graphs into the buckets that actually grow:
@@ -11,7 +13,7 @@
  */
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { memoryDir, mainRepoRoot } from './memory.js';
+import { memoryAreas, mainRepoRoot } from './memory.js';
 import { loadKb } from './kb/state.js';
 
 export interface StorageBucket { id: string; label: string; bytes: number; count?: number }
@@ -57,7 +59,14 @@ export async function storageUsage(root: string): Promise<StorageBreakdown> {
   const mainRoot = await mainRepoRoot(root);
   const baton = join(mainRoot, '.baton');
 
-  const mem = await dirSize(memoryDir(mainRoot));
+  // Both areas: a user asking how much disk memory costs means all of it,
+  // and reporting only the local half would understate a migrated repo.
+  const mem = { bytes: 0, files: 0 };
+  for (const { dir } of memoryAreas(mainRoot)) {
+    const d = await dirSize(dir);
+    mem.bytes += d.bytes;
+    mem.files += d.files;
+  }
   const history = await fileSize(join(baton, 'history.db'));
   const reports = await dirSize(join(baton, 'reports'));
 

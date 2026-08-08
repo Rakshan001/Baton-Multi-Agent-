@@ -7,7 +7,7 @@
 
 **Scripts:**
 
-- `build` → `tsc`
+- `build` → `tsc && node scripts/copy-assets.mjs`
 - `dev` → `tsx src/cli.ts`
 - `test` → `vitest run`
 - `lint` → `tsc --noEmit`
@@ -15,127 +15,151 @@
 ## Structure
 
 ```
-dist/ (86 files)
+dist/ (253 files)
 docs/
+  notes/
+    1mcp-agent.md
+    ruflo-audit.md
+  plans/
+    2026-07-09-multi-agent-coordination.md
+  plans-local/
+    2026-07-30-team-online-mode-plan.md
+  research/
+    2026-07-06-multi-agent-coordination-audit.md
+    2026-07-11-memory-deep-research.md
+    kb-token-and-storage.md
+  superpowers/
+    plans/ (5 files)
+    specs/ (4 files)
   01-coordination-and-locking.md
   02-handoff-market.md
   03-session-export-tools.md
-  README.md
-graphify-out/ (36 files)
+  agent-routing.md
+  architecture.md
+  cli-reference.md
+  configuration.md
+  dashboard.md
+  installation.md
+  knowledge-graph.md
+  landing-page-prompt.md
+  logo-prompt.md
+  … +14 more files
+graphify-out/ (133 files)
 node_modules/ (2003 files)
 report/
   SUMMARY.md
   VERDICT-refined-scope.md
   VERDICT.md
-src/
-  commands/
-    history.ts
-    hooks.ts
-    kb.ts
-    ls.ts
-    mcp.ts
-    merge.ts
-    new.ts
-    pass.ts
-    path.ts
-    rm.ts
-    route.ts
-    serve.ts
-    … +4 more files
-  handoff/
-    brief.ts
-    claude-session.ts
-  kb/
-    codebasemd.ts
-    graphify.ts
-    mcp.ts
-    projects.ts
-    state.ts
-    transfer.ts
-  util/
-    exec.ts
-    quiet.ts
-  agents.ts
-  board.ts
-  cli.ts
-  conflicts.ts
-  events.ts
-  git.ts
-  history.ts
-  mcp.ts
-  poller.ts
-  reports.ts
-  routing.ts
-  server.ts
-  … +5 more files
-test/
-  agents.test.ts
-  codebasemd.test.ts
-  conflicts.test.ts
-  create-task.test.ts
-  git.test.ts
-  hardened.test.ts
-  history.test.ts
-  routing-parity.test.ts
-  routing.test.ts
-  store.test.ts
-web/
-  dist/ (4 files)
-  node_modules/ (2005 files)
-  src/
-    components/ (8 files)
-    features/ (17 files)
-    hooks/ (4 files)
-    lib/ (11 files)
-    styles/ (2 files)
-    App.tsx
-    main.tsx
-    types.ts
-    vite-env.d.ts
-  index.html
+scripts/
+  copy-assets.mjs
+site/
+  app/
+    apple-icon.tsx
+    globals.css
+    icon.svg
+    layout.tsx
+    opengraph-image.tsx
+    page.tsx
+    robots.ts
+    sitemap.ts
+  components/
+    BatonPassScene.tsx
+    BuiltHonest.tsx
+    CopyChip.tsx
+    DashboardShowcase.tsx
+    Features.tsx
+    Footer.tsx
+    Hero.tsx
+    HowItWorks.tsx
+    MobileMenu.tsx
+    Nav.tsx
+    NavShell.tsx
+    OpenSourceCTA.tsx
+    … +5 more files
+  lib/
+    site-url.ts
+  node_modules/ (2002 files)
+  next-env.d.ts
+  next.config.mjs
   package-lock.json
   package.json
+  postcss.config.mjs
   README.md
   tsconfig.json
   tsconfig.tsbuildinfo
-  vite.config.ts
-BUILD.md
-CLAUDE.md
-CODEBASE.md
-LICENSE
-MVP.md
-NOTICE
-package-lock.json
-package.json
-PRIOR_ART.md
-README.md
-SETUP.md
-STATUS.md
-… +2 more files
+src/
+  agents/
+    connect.ts
+    registry.ts
+    roster.ts
+  commands/
+    bugs.ts
+    bundle.ts
+    clean.ts
+    connect.ts
+    doctor.ts
+    guard.ts
+    history.ts
+    hooks.ts
+    host.ts
+    kb.ts
+    ls.ts
+    mcp-bridge.ts
+    … +24 more files
+  handoff/
+    brief.ts
+    bundle.ts
+    claude-session.ts
+    continuation.ts
+    guardrails.ts
+    progress-ledger.ts
+    resume.ts
+    session-brief.ts
+    workload.ts
+  kb/
+    batonignore.ts
+    codebasemd.ts
+    contextpack.ts
+    freshness.ts
+    graphify-server.ts
+    graphify.ts
+    graphifyignore.ts
+    health.ts
+    mcp-token.ts
+    mcp.ts
+    orient.ts
+    projects.ts
+    … +3 more files
+  skills/
+    bundled/ (24 files)
+    catalog.ts
+    install.ts
+  util/
+… (tree truncated)
 ```
 
 ## Key symbols (most connected in the code graph)
 
-- `App.tsx` — web/src/App.tsx:1 (85 connections)
-- `server.ts` — src/server.ts:1 (76 connections)
-- `api.ts` — web/src/lib/api.ts:1 (60 connections)
-- `types.ts` — web/src/types.ts:1 (59 connections)
-- `primitives.tsx` — web/src/components/primitives.tsx:1 (56 connections)
-- `git.ts` — src/git.ts:1 (47 connections)
-- `cli.ts` — src/cli.ts:1 (45 connections)
-- `kb.ts` — src/commands/kb.ts:1 (43 connections)
-- `BatonClient` — web/src/lib/api.ts:59 (42 connections)
-- `gitRoot()` — src/git.ts:45 (42 connections)
-- `handle()` — src/server.ts:185 (40 connections)
-- `preview.ts` — web/src/lib/preview.ts:1 (38 connections)
-- `Live.tsx` — web/src/features/Live.tsx:1 (36 connections)
-- `Board.tsx` — web/src/features/Board.tsx:1 (35 connections)
-- `merge.ts` — src/commands/merge.ts:1 (34 connections)
-- `Activity.tsx` — web/src/features/Activity.tsx:1 (33 connections)
-- `Settings.tsx` — web/src/features/Settings.tsx:1 (33 connections)
-- `pass.ts` — src/commands/pass.ts:1 (32 connections)
-- `Detail.tsx` — web/src/features/Detail.tsx:1 (31 connections)
-- `Diff.tsx` — web/src/features/Diff.tsx:1 (31 connections)
+- `server.ts` — src/server.ts:1 (162 connections)
+- `types.ts` — web/src/types.ts:1 (95 connections)
+- `cli.ts` — src/cli.ts:1 (94 connections)
+- `memory.ts` — src/memory.ts:1 (94 connections)
+- `api.ts` — web/src/lib/api.ts:1 (92 connections)
+- `App.tsx` — web/src/App.tsx:1 (91 connections)
+- `handle()` — src/server.ts:401 (89 connections)
+- `BatonClient` — web/src/lib/api.ts:61 (82 connections)
+- `gitRoot()` — src/git.ts:46 (80 connections)
+- `git.ts` — src/git.ts:1 (76 connections)
+- `signals.ts` — src/signals.ts:1 (73 connections)
+- `store.ts` — src/store.ts:1 (69 connections)
+- `primitives.tsx` — web/src/components/primitives.tsx:1 (60 connections)
+- `terminals.ts` — src/terminals.ts:1 (53 connections)
+- `gitTry()` — src/util/exec.ts:130 (52 connections)
+- `exec.ts` — src/util/exec.ts:1 (49 connections)
+- `git()` — src/util/exec.ts:111 (48 connections)
+- `brief.ts` — src/handoff/brief.ts:1 (47 connections)
+- `.demoGate()` — web/src/lib/api.ts:148 (45 connections)
+- `mcp.ts` — src/mcp.ts:1 (44 connections)
 
 ## Query more
 
@@ -143,4 +167,4 @@ STATUS.md
 - Who is editing what right now: `baton` MCP tool `check_files` / `baton signals`
 - File attribution: `baton blame <file>`
 
-<!-- baton:codebase generated=2026-06-11T11:41:33.033Z commit=597f2623dff0feea05e3a8fa8062359af2f1bc48 -->
+<!-- baton:codebase generated=2026-07-31T07:33:27.352Z commit=7facf1f569f0935d96b328c68436bcba9c2364a6 -->

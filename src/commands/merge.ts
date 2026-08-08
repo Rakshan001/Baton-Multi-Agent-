@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton merge <slug>` — merge a task's branch into the current branch.
  *
@@ -9,7 +11,7 @@
 import { realpath } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { archiveBranch, branchCommits, currentBranch, mergeBranch, type ConflictEntry } from '../git.js';
-import { detectAgents } from '../agents.js';
+import { detectAgents, detectionRoots } from '../agents.js';
 import { recordMerge } from '../history.js';
 import { getTask, loadTasks, resolveBatonRoot, TaskNotFoundError } from '../store.js';
 import { computeConflicts } from '../conflicts.js';
@@ -103,7 +105,7 @@ export async function mergeTaskBranch(
 
   // Capture the branch's commits BEFORE merging (squash would otherwise hide them).
   const commits = await branchCommits(task.branch, task.baseBranch, gitRepo);
-  const agents = await detectAgents([task.worktreePath]);
+  const agents = await detectAgents([task.worktreePath], { root: detectionRoots(repoRoot, [task]) });
   // Overlap snapshot before the merge — who else is touching the same files.
   const allTasks = await loadTasks(repoRoot);
   const overlapMap = await computeConflicts(allTasks, repoRoot).catch(() => new Map<string, string[]>());
@@ -121,6 +123,7 @@ export async function mergeTaskBranch(
     if (ok) archivedRef = `refs/baton/archive/${slug}`;
   }
   recordMerge(repoRoot, {
+    projectId: task.projectId ?? null,
     slug,
     agent: agents.get(task.worktreePath) ?? null,
     mergedAt: new Date().toISOString(),

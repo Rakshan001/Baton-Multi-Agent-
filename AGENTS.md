@@ -20,7 +20,7 @@ dashboard, and leave them a short personalized guide.
 Run these and report anything missing before continuing, rather than failing partway through later:
 
 ```bash
-node --version   # need >= 20
+node --version   # need >= 24 — node:sqlite + FTS5; older silently degrades search
 git --version
 uv --version || pipx --version || pip --version   # any one, for graphify
 tmux -V          # optional — interactive terminals in the dashboard; headless runs work without it

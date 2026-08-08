@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Completion reports: when a task merges, capture WHAT shipped (summary,
  * files, commits) and WHO overlapped with it, persist it, and push it on the
@@ -34,6 +36,10 @@ function getDb(root: string): DatabaseSync {
   if (!db) {
     mkdirSync(dir, { recursive: true });
     db = new (sqlite().DatabaseSync)(path);
+    // FIRST, before anything that takes a lock — same ordering as history.ts and
+    // signals.ts. Concurrent writers share this file, and the DDL and the
+    // journal_mode switch below are exactly where a 0-timeout write throws.
+    db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
     // Match history.ts: WAL persists in the file header; synchronous is per-handle,
     // and this is a separate connection to the same .baton/history.db.

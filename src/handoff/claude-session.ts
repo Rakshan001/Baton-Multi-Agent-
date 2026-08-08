@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Claude Code session extraction for handoff briefs. Reads the JSONL
  * transcript Claude Code keeps under ~/.claude/projects/<encoded-cwd>/ and

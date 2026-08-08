@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
 import { scopesOverlap, overlappingScopes } from '../src/conflicts.js';
 import type { Task } from '../src/store.js';

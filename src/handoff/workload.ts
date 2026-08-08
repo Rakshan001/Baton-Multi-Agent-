@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Workload-aware handoff (S5). Routing (src/routing.ts) picks a target agent by
  * task *type*; this layer adds the missing *availability* dimension so a busy

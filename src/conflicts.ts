@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Advisory conflict detection between task branches — "these two tasks both
  * touch Nav.tsx, so a merge conflict is likely." Plain git file-overlap; no
@@ -10,10 +12,14 @@ import type { Task } from './store.js';
 export async function changedFiles(task: Task, root: string): Promise<Set<string>> {
   const files = new Set<string>();
 
-  // Committed divergence: what's on the branch but not on its base.
+  // Committed divergence: what's on the branch but not on its base. Asked of
+  // the task's OWN repo — in a hub the branch does not exist in the served
+  // root, and a failed diff is SKIPPED rather than raised, so overlap
+  // detection silently saw only uncommitted work: two agents editing one file
+  // stopped conflicting the moment either of them committed.
   const committed = await gitTry(
     ['diff', '--name-only', `${task.baseBranch}...${task.branch}`],
-    root,
+    task.repoRoot ?? root,
   );
   if (committed.ok) {
     for (const f of committed.stdout.split('\n').filter(Boolean)) files.add(f);
@@ -29,17 +35,86 @@ export async function changedFiles(task: Task, root: string): Promise<Set<string
 }
 
 /**
+ * slug → the repo its paths are relative to. Tasks recorded before `repoRoot`
+ * existed fall back to the served root, which is right for a single repo.
+ */
+export function taskRepos(tasks: Array<{ slug: string; repoRoot?: string }>, root: string): Map<string, string> {
+  return new Map(tasks.map((t) => [t.slug, t.repoRoot ?? root]));
+}
+
+/** Trailing-separator-insensitive compare for two absolute checkout paths. */
+const samePath = (a: string, b: string): boolean =>
+  a.replace(/[/\\]+$/, '') === b.replace(/[/\\]+$/, '');
+
+/**
+ * slug → sub-project id, for EVERY kind of holder rather than tasks alone.
+ *
+ * Only tasks carry `projectId`, but three kinds of holder appear in signals:
+ *   task       `projectId` is recorded on the task
+ *   checkout   the fs-watcher registers projects as `co-<projectId>`, so the
+ *              id is in the slug itself (watch.ts probeCheckouts)
+ *   session    a root session records the checkout it connected from; that
+ *              path identifies the project when it IS one
+ *
+ * A holder this cannot place is simply absent from the map, and callers must
+ * read that as "don't scope" — never as "no project". A session sitting at the
+ * hub root genuinely belongs to no single sub-project, and guessing one there
+ * would hide a real collision, which costs data rather than noise.
+ */
+export function holderProjects(
+  tasks: Array<{ slug: string; projectId?: string }>,
+  projects: Array<{ id: string; path: string }>,
+  sessions: Array<{ slug: string; root: string | null }> = [],
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const t of tasks) if (t.projectId) out.set(t.slug, t.projectId);
+  for (const p of projects) out.set(`co-${p.id}`, p.id);
+  for (const s of sessions) {
+    if (!s.root || out.has(s.slug)) continue;
+    const hit = projects.find((p) => samePath(p.path, s.root!));
+    if (hit) out.set(s.slug, hit.id);
+  }
+  return out;
+}
+
+/**
+ * Can two holders of the SAME path string actually collide? Every path Baton
+ * compares is worktree-relative, so in a multi-repo hub `src/index.ts` in
+ * proj-a and `src/index.ts` in proj-b are two unrelated files that merely spell
+ * the same string. A merge conflict needs a shared repo, so only same-repo
+ * holders can collide — without this, every conventional filename (index.ts,
+ * README.md, package.json) cross-warned between projects, and a signal that
+ * cries wolf is one agents learn to scroll past.
+ *
+ * A holder with no known repo — a session at a checkout root, a watched
+ * checkout; neither belongs to a task — pairs with anything, erring toward the
+ * warning as `scopesOverlap` does. Suppressing on a guess is the one mistake
+ * that loses data.
+ */
+export function canCollide(repoOf: Map<string, string> | undefined, a: string, b: string): boolean {
+  if (!repoOf) return true;
+  const ra = repoOf.get(a);
+  const rb = repoOf.get(b);
+  if (!ra || !rb) return true;
+  return ra === rb;
+}
+
+/**
  * For each task, the files it shares with at least one other task (sorted).
  * Pure given the per-task file sets — see `computeConflictsFromSets` for tests.
+ * Pass `repoOf` (from `taskRepos`) so same-named files in different sub-projects
+ * of a hub are not reported as overlapping.
  */
 export function computeConflictsFromSets(
   sets: Map<string, Set<string>>,
+  repoOf?: Map<string, string>,
 ): Map<string, string[]> {
   const result = new Map<string, string[]>();
   for (const [slug, mine] of sets) {
     const overlap = new Set<string>();
     for (const [other, theirs] of sets) {
       if (other === slug) continue;
+      if (!canCollide(repoOf, slug, other)) continue;
       for (const f of mine) if (theirs.has(f)) overlap.add(f);
     }
     result.set(slug, [...overlap].sort());
@@ -103,5 +178,5 @@ export async function computeConflicts(
       sets.set(t.slug, await changedFiles(t, root));
     }),
   );
-  return computeConflictsFromSets(sets);
+  return computeConflictsFromSets(sets, taskRepos(tasks, root));
 }

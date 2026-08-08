@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Session handoff briefs (H1) — the manual relay flow. ANY session can write
  * one on request: a root terminal with no worktree, Cursor at 99% of its usage
@@ -18,7 +20,7 @@ import { batonDir, getTask } from '../store.js';
 import { handoffPath } from './brief.js';
 import { recordHandoff } from '../commands/pass.js';
 import { getSignals } from '../signals.js';
-import { saveMemory } from '../memory.js';
+import { UndurableFactError, saveMemory } from '../memory.js';
 import { bus } from '../events.js';
 
 /** A brief must stay a brief — cap every agent-supplied list. */
@@ -46,6 +48,12 @@ export interface SessionHandoffInput {
   note?: string;
   /** Where the session works (worktree or repo root); defaults sensibly. */
   cwd?: string;
+  /**
+   * Derived by a hook from git state, with no agent behind it. Recorded in the
+   * frontmatter because the two kinds share one directory and only the AUTHORED
+   * kind is irreplaceable — automatic pruning must be able to tell them apart.
+   */
+  derived?: boolean;
 }
 
 export interface SessionHandoffResult {
@@ -56,6 +64,10 @@ export interface SessionHandoffResult {
   /** Memory fact ids harvested from `decisions` (M4) — the agent already wrote
    *  that text, so capturing it costs zero extra tokens. */
   capturedFacts: string[];
+  /** Decisions the memory gate refused, with why. A silently dropped decision
+   *  is indistinguishable from a captured one, and the agent that wrote it is
+   *  the only party who can restate it durably — so say so instead. */
+  skippedFacts: Array<{ decision: string; reason: string }>;
 }
 
 function cleanList(items: string[] | undefined): { items: string[]; more: number } {
@@ -71,10 +83,21 @@ function safeSlug(slug: string): string {
 /** `git status --porcelain` line → repo-relative path ('R  old -> new' → new).
  *  Parsed by token, not position — exec output trimming can eat the leading
  *  status space, so slicing a fixed column count would corrupt the path. */
-function porcelainPath(line: string): string {
+export function porcelainPath(line: string): string {
   const p = line.trim().replace(/^\S{1,2}\s+/, '');
   const renamed = p.includes(' -> ') ? p.slice(p.indexOf(' -> ') + 4) : p;
   return renamed.replace(/^"|"$/g, '').trim();
+}
+
+/**
+ * Baton's own coordination state, which is never the session's work.
+ *
+ * Writing a brief dirties `.baton/`, so a brief that reports the tree verbatim
+ * reports ITSELF as pending — and then anchors memory facts to it. Invisible in
+ * a repo whose .gitignore Baton manages; plainly wrong in one where it doesn't.
+ */
+export function isBatonArtifact(path: string): boolean {
+  return path === '.baton' || path === '.baton/' || path.startsWith('.baton/');
 }
 
 /** Decisions shorter than this carry no reusable knowledge ("use jwt"). */
@@ -83,9 +106,15 @@ const CAPTURE_MIN_CHARS = 20;
 /**
  * M4 — zero-LLM auto-capture: the decisions the agent wrote for the brief are
  * exactly the "things git cannot show", so persist each as an anchored memory
- * fact. Strictly best-effort: validation rejects (secrets, too short), the
- * fact cap, or a non-git cwd skip the item — a handoff must never fail
- * because capture did.
+ * fact. Strictly best-effort: validation rejects (secrets, undurable phrasing,
+ * too short), the fact cap, or a non-git cwd skip the item — a handoff must
+ * never fail because capture did.
+ *
+ * This is Baton's only autonomous memory writer, which makes it the place the
+ * anti-capture gate earns its keep: a decisions list is where "in this session
+ * we…" is most likely to be written down and outlive the session it describes.
+ * A gate rejection is reported back (`skipped`); everything else stays quiet,
+ * since a non-git cwd is not something the agent can act on.
  */
 async function captureDecisions(
   cwd: string,
@@ -93,8 +122,9 @@ async function captureDecisions(
   anchors: string[],
   agent: string | undefined,
   slug: string,
-): Promise<string[]> {
+): Promise<{ captured: string[]; skipped: Array<{ decision: string; reason: string }> }> {
   const captured: string[] = [];
+  const skipped: Array<{ decision: string; reason: string }> = [];
   for (const d of decisions) {
     if (d.length < CAPTURE_MIN_CHARS) continue;
     // Precision over coverage: anchor to the files the decision actually
@@ -106,9 +136,15 @@ async function captureDecisions(
       captured.push((await saveMemory(cwd, {
         fact: d, type: 'decision', files: mentioned.length ? mentioned : anchors, agent, task: slug,
       })).id);
-    } catch { /* capture is a bonus, never a blocker */ }
+    } catch (e) {
+      // Only the durability gate — it is the sole rejection the agent can act
+      // on by restating. Quoting the text back is safe here precisely because
+      // this class excludes the credential rejection, which must not be echoed.
+      if (e instanceof UndurableFactError) skipped.push({ decision: d.slice(0, 120), reason: e.message });
+      /* anything else (secret, cap, non-git cwd): capture is a bonus, never a blocker */
+    }
   }
-  return captured;
+  return { captured, skipped };
 }
 
 export async function createSessionHandoff(root: string, input: SessionHandoffInput): Promise<SessionHandoffResult> {
@@ -128,7 +164,9 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
   // Git ground truth — fail-safe: outside a git repo these sections are skipped.
   const branch = await gitTry(['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD']);
   const dirty = await gitTry(['-C', cwd, 'status', '--porcelain']);
-  const dirtyFiles = dirty.ok && dirty.stdout ? dirty.stdout.split('\n').filter(Boolean) : [];
+  const dirtyFiles = dirty.ok && dirty.stdout
+    ? dirty.stdout.split('\n').filter(Boolean).filter((l) => !isBatonArtifact(porcelainPath(l)))
+    : [];
 
   // Files this session declared it is editing (live signals).
   let inFlight: string[] = [];
@@ -149,6 +187,7 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
     created: new Date().toISOString(),
     repo: root,
     ...(branch.ok && branch.stdout ? { branch: branch.stdout.trim() } : {}),
+    ...(input.derived ? { derived: true } : {}),
   };
 
   const body: string[] = [`# Handoff: ${title}`];
@@ -208,7 +247,7 @@ export async function createSessionHandoff(root: string, input: SessionHandoffIn
   // Anchor harvested decisions to where the work actually happened: files this
   // session declared (signals) + the tree's dirty files at handoff time.
   const anchors = [...new Set([...inFlight, ...dirtyFiles.map(porcelainPath)])].slice(0, 8);
-  const capturedFacts = await captureDecisions(cwd, decisions.items, anchors, input.agent, slug);
+  const capture = await captureDecisions(cwd, decisions.items, anchors, input.agent, slug);
 
-  return { path, markdown, resume, capturedFacts };
+  return { path, markdown, resume, capturedFacts: capture.captured, skippedFacts: capture.skipped };
 }

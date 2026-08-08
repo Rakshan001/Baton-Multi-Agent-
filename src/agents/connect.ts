@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * One-by-one MCP wiring for each agent CLI: detect whether an agent's MCP
  * config already points at Baton, and (on request) write it.

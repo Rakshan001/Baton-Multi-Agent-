@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
 import { composeBatonGitignore, BATON_GITIGNORE_START } from '../src/kb/batonignore.js';
 
@@ -5,14 +7,22 @@ describe('composeBatonGitignore — gitignore the footprint `kb init` writes', (
   it('creates the managed block on a fresh repo (local mode ignores CODEBASE.md)', () => {
     const out = composeBatonGitignore('', false)!;
     expect(out).toContain(BATON_GITIGNORE_START);
-    for (const e of ['.baton/', 'graphify-out/', '.graphifyignore', '.mcp.json', 'CODEBASE.md']) {
+    for (const e of ['.baton/*', 'graphify-out/', '.graphifyignore', '.mcp.json', 'CODEBASE.md']) {
       expect(out).toContain(e);
     }
   });
 
+  it('leaves .baton/agents.json committable — the docs tell teams to share it', () => {
+    const out = composeBatonGitignore('', false)!;
+    // `.baton/*` with a negation, never `.baton/`: git does not descend into
+    // an ignored directory, so a dir-ignore would make the negation dead.
+    expect(out).toContain('!.baton/agents.json');
+    expect(out).not.toMatch(/^\.baton\/$/m);
+  });
+
   it('keeps CODEBASE.md tracked in share mode (teammates get the map)', () => {
     const out = composeBatonGitignore('', true)!;
-    expect(out).toContain('.baton/');
+    expect(out).toContain('.baton/*');
     expect(out).not.toContain('CODEBASE.md');
   });
 

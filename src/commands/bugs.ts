@@ -1,10 +1,12 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton bugs <symptom>` — has this bug been fixed before, and did something
  * since re-break it? Reads the bug-fix facts the memory holds and traces their
  * files through commit history for suspect commits. Zero new storage (S6).
  */
-import { gitRoot } from '../git.js';
 import { findRecurrence, type PriorFix } from '../recurrence.js';
+import { activeBatonRoot } from '../store.js';
 
 const FRESH_MARK: Record<string, string> = { fresh: '●', aging: '◐', stale: '○' };
 
@@ -46,7 +48,7 @@ export async function bugsCmd(symptom: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const fixes = await findRecurrence(root, q);
   if (!fixes.length) {
     console.log(`No prior fix recorded for "${q}".`);

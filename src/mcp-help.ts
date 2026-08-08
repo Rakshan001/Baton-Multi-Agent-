@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * MCP tool descriptions — the fixed context tax every agent session pays (T1).
  * Before this round: 2,799 chars (~700 tokens); now budgeted and invariant-
@@ -26,6 +28,11 @@ export const TOOL_HELP = {
     'Declare files YOU are editing (live signals). Call when you start editing shared files — especially at the repo root where no watcher covers you. Self-cleans once committed.',
   save_memory:
     'Persist a LEARNED fact (decision, gotcha, convention): 1-3 sentences, why + how to apply. Pass the repo-relative files it is about — evidence anchors; if they change it is flagged stale. Never store secrets or code-derivable facts.',
+  // The anti-capture gate (memory-durability.ts) is deliberately NOT described
+  // here either: T1 leaves 4 chars of budget (2096/2100), and a rule that fires on a
+  // minority of saves does not deserve a permanent tax on every session. The
+  // rejection message names the class AND the rewrite, which teaches it at the
+  // one moment the agent is able to act on it.
   // Progressive disclosure (M2) is deliberately NOT described here: the `ids`
   // schema field + the in-answer tip teach it exactly when a preview row
   // appears — cheaper than a permanent description tax in every session.
@@ -35,10 +42,24 @@ export const TOOL_HELP = {
     'Write a handoff brief (done / pending / next step / decisions) so another agent can resume this work. Call when near your usage or context limit, blocked, or asked to hand off. Returns the brief path + pickup command.',
   search_history:
     'Search merged commit history by keywords (messages + touched file paths). Cheaper and more precise than git-log spelunking: "when/where was X changed and by which task?" in one call.',
+  // The four pipeline tools. Their bodies carry the next command in every
+  // answer, so nothing situational is paid for here — only the trigger.
+  my_tasks:
+    'Do you have a pending task? What you hold now, what you may start, what awaits your verdict. Call at session start and after finishing anything.',
+  take_task:
+    'Claim a task and get the worktree to work in. Work ONLY inside the path it returns — that isolation is what lets other agents run at the same time.',
+  complete_task:
+    'Finish a task you hold. Commit everything first: uncommitted work is refused, and a task with no commits is never accepted as done. Stopping early is not finishing — use report_blocked or `baton pause`.',
+  report_blocked:
+    'You cannot proceed. Records the reason and keeps the task yours. Reach for this instead of guessing at the blocker, and instead of reporting work you did not do.',
 } as const;
 
 /** Hard total budget (chars) across all descriptions — the T1 regression lock.
  *  Raised 1900 → 2100 when save_progress (ISS-06) joined as the 13th tool: the
  *  agent-agnostic progress channel is always-on context, so it is budgeted like
- *  the rest. Keep new tools lean; a further raise needs a deliberate edit. */
-export const TOOL_HELP_BUDGET = 2100;
+ *  the rest. Raised 2100 → 2800 for the four pipeline tools, deliberately and
+ *  once: "do you have a pending task?" is the product, and an agent that cannot
+ *  see the pipeline from inside its own session has to be driven by hand. The
+ *  situational detail still costs nothing — every answer carries its own next
+ *  command. Keep new tools lean; a further raise needs a deliberate edit. */
+export const TOOL_HELP_BUDGET = 2800;

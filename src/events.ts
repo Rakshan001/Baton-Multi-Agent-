@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Transport-agnostic event bus for everything "live" in Baton: the SSE
  * endpoint subscribes to it today, and a socket.io (or anything else)
@@ -28,10 +30,74 @@ export type BatonEvent =
   /** A code review was recorded. Per-axis counts only — the axes are separate
    *  by design, so no combined total rides on the event. */
   | { type: 'review.completed'; slug: string; standards: number; spec: number; security: number }
+  /** A verdict on a task, not a set of findings — the moment a task leaves
+   *  `review` for `done` or goes back to `active`. */
+  | { type: 'task.reviewed'; slug: string; verdict: 'approve' | 'reject'; actor: string }
   | { type: 'terminal.started'; slug: string; agent: string }
   | { type: 'terminal.exited'; slug: string; agent: string }
   | { type: 'terminal.output'; slug: string; data: string /* base64 */ }
-  | { type: 'memory.updated' };
+  | { type: 'memory.updated' }
+  /* --- presence + federated claims (src/federation.ts) ---
+     Live-plane only: these are never persisted and never reach git. A member
+     that vanishes leaves via TTL, not via a message, so `member.left` is emitted
+     by the host's sweep rather than by the departing member. */
+  | { type: 'member.joined'; memberId: string; memberName: string }
+  | { type: 'member.left'; memberId: string; memberName: string }
+  | { type: 'member.presence'; online: number }
+  | { type: 'claim.opened'; memberId: string; relPath: string; projectId: string | null }
+  | { type: 'claim.released'; memberId: string; relPath: string; projectId: string | null }
+  /** Two members on one path. `sameBranch` false = information, not a warning:
+   *  divergent branches meet at merge, not in a working tree. Advisory either
+   *  way — nothing is blocked, which is why this is an event and not an error. */
+  | { type: 'claim.conflict'; relPath: string; projectId: string | null; sameBranch: boolean; memberIds: string[] }
+  /* --- pipeline claims, arbitrated by the hub (§1.1, §7.6) ---
+     Not to be confused with `claim.opened` above. That is a FILE claim: advisory,
+     live-plane only, TTL'd, and two members holding one path is a warning. This
+     is a TASK claim: persisted in tasks.json, exclusive, and two members holding
+     one task is the failure the pipeline exists to prevent — so it is decided by
+     one writer (the hub) rather than pooled from whoever reports in.
+     `by` is the member the hub resolved from the token, never anything the
+     caller said about itself. */
+  | { type: 'task.claimed'; slug: string; agent: string; by: string }
+  | { type: 'task.unclaimed'; slug: string; by: string }
+  /* Cancellation (§8). Carries the whole set rather than one event per slug:
+     cancelling a phase is ONE decision, and fanning it out as N events would
+     let a client render half a cancellation if the stream dropped mid-burst.
+     `stranded` rides along because it is the consequence nobody predicts — a
+     dashboard that learns about the cancel but not the stranding shows a board
+     with tasks that will never start and no reason why. */
+  | { type: 'task.cancelled'; slugs: string[]; stranded: string[]; scope: string; by: string; reason?: string }
+  /* --- owner controls (Phase 6) ---
+     Every one of these is an owner acting ON someone, so every one carries who
+     did it. They exist as events precisely so the action lands in the same
+     stream everything else does — an owner cannot warn, disconnect or remove a
+     member without it being visible to the room.
+
+     `member.warned` deliberately carries NO message text: the bus fans every
+     event to every subscriber, so the payload here is readable by the whole
+     hub — and the warning text is private owner↔member correspondence. The
+     fact of the warning is public; the words reach the target through their
+     own heartbeat response (federation.warningsFor). */
+  | { type: 'member.warned'; memberId: string; memberName: string; by: string }
+  | { type: 'member.disconnected'; memberId: string; memberName: string; by: string }
+  | { type: 'member.revoked'; memberId: string; memberName: string; by: string }
+  | { type: 'claim.cleared'; memberId: string; relPath: string; projectId: string | null; by: string }
+  /* --- teams (Phase 8, src/teams.ts) ---
+     ONE event type with an `action`, not four. Every consumer of these does the
+     same thing — refetch the roster and note who did it — so four types would
+     be four subscriptions that can each be forgotten separately. The federated
+     claim plane emits nothing here: teams group and filter, they never move a
+     claim, and an event suggesting otherwise would be the first step toward
+     believing they do. */
+  | {
+      type: 'team.changed';
+      action: 'created' | 'updated' | 'removed' | 'assigned';
+      teamId: string;
+      teamName: string;
+      /** Set for `assigned` only — who was moved. */
+      memberId?: string;
+      by: string;
+    };
 
 export type BatonEventType = BatonEvent['type'];
 

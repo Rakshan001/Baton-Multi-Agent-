@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * ISS-07 — the critical continuation guardrails, in ONE place, phrased as
  * POSITIVE requirements ("do this") rather than prohibitions ("do NOT that").

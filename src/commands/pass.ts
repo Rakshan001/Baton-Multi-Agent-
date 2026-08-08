@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton pass [slug] --to <agent>` — package the current session into a
  * HANDOFF.md brief so another agent (Cursor/Codex/Gemini…) can continue.
@@ -9,10 +11,10 @@ import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { gitRoot } from '../git.js';
 import { gitTry } from '../util/exec.js';
-import { batonDir, getTask, loadTasks, type Task } from '../store.js';
+import { batonDir, getTask, loadTasks, type Task , activeBatonRoot } from '../store.js';
 import { buildBrief, readBrief, writeBrief, type HandoffBrief } from '../handoff/brief.js';
+import { runAutoSessionHandoff } from '../handoff/auto-session.js';
 import { loadRouting, resolveChain, suggestRoute, type RouteSuggestion } from '../routing.js';
 import { agentInstalled } from '../agents/roster.js';
 import { bus } from '../events.js';
@@ -72,6 +74,9 @@ export interface PassOptions {
   auto?: boolean;
   commitPending?: boolean;
   from?: string;
+  /** Host agent session id from the hook payload — distinguishes two sessions
+   *  sharing one repo root, which would otherwise clobber one another's brief. */
+  sessionId?: string;
 }
 
 export interface PassResult {
@@ -83,10 +88,17 @@ export interface PassResult {
 
 /** Core pass pipeline, shared by CLI and POST /api/tasks/:slug/handoff. */
 export async function passTask(slug: string | undefined, opts: PassOptions, root?: string): Promise<PassResult | null> {
-  const repoRoot = root ?? (await gitRoot());
+  const repoRoot = root ?? (await activeBatonRoot());
   const task = await resolveTask(repoRoot, slug);
   if (!task) {
-    if (opts.auto) return null; // hook fired outside a baton worktree — fine
+    if (opts.auto) {
+      // No task — the common case, since most sessions run at the repo root.
+      // This used to return null, so Stop/PreCompact fired forever and wrote
+      // nothing. Derive a brief from git state instead (auto-session.ts); it
+      // returns null itself whenever there is nothing honest to say.
+      await runAutoSessionHandoff(repoRoot, { sessionId: opts.sessionId, agent: opts.from });
+      return null; // --auto is silent either way; the brief is the output
+    }
     throw new Error(slug ? `No task '${slug}'` : 'Not inside a baton worktree — pass a slug: baton pass <slug>');
   }
 
@@ -112,7 +124,7 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
   if (!to || to === 'auto') {
     const { config } = await loadRouting(repoRoot);
     routed = suggestRoute(task.task, config);
-    const resolved = await resolveChain(routed.chain, (agent) => agentInstalled(agent));
+    const resolved = await resolveChain(routed.chain, (agent) => agentInstalled(agent, repoRoot));
     const pick = resolved?.entry ?? routed.chain[0];
     skipped = resolved?.skipped ?? [];
     to = pick.agent;
@@ -135,9 +147,41 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
   return { brief, routed, skipped };
 }
 
+/** How long to wait for a hook payload before giving up and writing a
+ *  branch-keyed brief instead. A hook's stdin is already buffered; this only
+ *  bounds the pathological case of a writer that never closes the pipe. */
+const HOOK_STDIN_BUDGET_MS = 300;
+
+/**
+ * The host agent's session id, if this run is a hook.
+ *
+ * Read stdin ONLY when it is actually piped: `for await (…process.stdin)` on a
+ * TTY blocks until EOF, so an unguarded read would hang `baton pass --auto`
+ * typed by hand — a hook helper that freezes an interactive terminal is worse
+ * than one that misses an id. Every failure yields undefined, which falls back
+ * to a branch-keyed brief.
+ */
+async function readHookSessionId(): Promise<string | undefined> {
+  if (process.stdin.isTTY) return undefined;
+  const read = (async (): Promise<string | undefined> => {
+    let data = '';
+    process.stdin.setEncoding('utf-8');
+    for await (const chunk of process.stdin) {
+      data += chunk;
+      if (data.length > 64_000) break; // a hook payload is small; don't buffer a firehose
+    }
+    const raw = JSON.parse(data) as { session_id?: string; conversation_id?: string };
+    return raw.session_id ?? raw.conversation_id ?? undefined;
+  })().catch(() => undefined);
+  const timeout = new Promise<undefined>((res) => setTimeout(res, HOOK_STDIN_BUDGET_MS, undefined).unref?.());
+  return Promise.race([read, timeout]);
+}
+
 export async function passCmd(slug: string | undefined, opts: PassOptions): Promise<void> {
   try {
-    const result = await passTask(slug, opts);
+    // Only --auto is hook-driven; an interactive `baton pass` never reads stdin.
+    const sessionId = opts.auto ? await readHookSessionId() : undefined;
+    const result = await passTask(slug, { ...opts, sessionId });
     if (!result) return; // silent no-op (--auto)
     const { brief, routed, skipped } = result;
     console.log(`✓ handoff brief ready → ${brief.path}`);

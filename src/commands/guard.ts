@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton guard` — the PreToolUse edit-guard for Claude Code hooks. Reads the
  * hook payload on stdin; if the file the agent is about to Edit/Write is under
@@ -10,10 +12,10 @@
  * editing is never stalled by coordination plumbing.
  */
 import { spawn } from 'node:child_process';
-import { relative, isAbsolute, dirname, basename, join } from 'node:path';
+import { relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
-import { resolveMcpRoot, batonDir } from '../store.js';
+import { activeBatonRoot, batonDir } from '../store.js';
 import { checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
 import { snapshotDue } from './snapshot.js';
 import { guardrailReminderDue, formatGuardrailReminder } from '../handoff/guardrails.js';
@@ -139,11 +141,40 @@ export async function maybeGuardrailReminder(root: string, slug: string, now: nu
   return formatGuardrailReminder(`\`baton done ${slug}\``);
 }
 
+/** A PreToolUse payload is small and the host has already buffered it; this only
+ *  bounds the pathological case of a writer that never closes the pipe. */
+const HOOK_STDIN_BUDGET_MS = 300;
+const HOOK_STDIN_MAX = 64_000;
+
+/**
+ * The hook payload on stdin, or '' when there is none.
+ *
+ * Read stdin ONLY when it is actually piped, and never unboundedly. An
+ * unguarded `for await (…process.stdin)` stalls the guard two different ways,
+ * and the guard runs before EVERY edit:
+ *   - on a TTY it blocks until EOF, so `baton guard` typed by hand freezes;
+ *   - a pending read keeps the event loop alive, so it outlives the
+ *     GUARD_BUDGET_MS race and `process.exitCode = 0` never exits — the host
+ *     waits forever and the edit is never released.
+ * The second is why the timeout DESTROYS stdin instead of merely winning the
+ * race: resolving first ends the await, not the process.
+ * pass.ts::readHookSessionId is the same guard against the first half.
+ */
 async function readStdin(): Promise<string> {
-  let data = '';
-  process.stdin.setEncoding('utf-8');
-  for await (const chunk of process.stdin) data += chunk;
-  return data;
+  if (process.stdin.isTTY) return '';
+  const read = (async (): Promise<string> => {
+    let data = '';
+    process.stdin.setEncoding('utf-8');
+    for await (const chunk of process.stdin) {
+      data += chunk;
+      if (data.length > HOOK_STDIN_MAX) break; // a hook payload is small; don't buffer a firehose
+    }
+    return data;
+  })().catch(() => '');
+  const timeout = new Promise<string>((res) => {
+    setTimeout(() => { process.stdin.destroy(); res(''); }, HOOK_STDIN_BUDGET_MS).unref?.();
+  });
+  return Promise.race([read, timeout]);
 }
 
 /**
@@ -162,13 +193,46 @@ async function canonicalTarget(payload: GuardPayload): Promise<GuardPayload> {
   }
 }
 
+/**
+ * The checkout an edit belongs to — normally the session's own cwd.
+ *
+ * A session at the root of a multi-repo HUB is not inside a git repo at all,
+ * so `gitRoot(cwd)` threw and the guard's fail-open swallowed it whole: every
+ * edit made from a hub root recorded nothing, so those sessions were invisible
+ * to each other and to every task — the exact blindness G2 exists to remove.
+ * Fall back to the repo the FILE lives in, which is also the only answer that
+ * keeps the recorded path relative to the same repo the tasks in it record
+ * against, so the two actually compare.
+ *
+ * Only inside the baton root: an edit in an unrelated repo elsewhere on disk is
+ * not this root's business, and recording it would file a foreign path in the
+ * store under a path string that could collide with a real one.
+ *
+ * (A session that roams between sub-projects re-registers its root on each
+ * edit, so its earlier signals may settle a little early. Recording the repo
+ * per signal would fix that properly; today's alternative is recording nothing
+ * at all, which is strictly worse.)
+ */
+export async function checkoutForEdit(cwd: string, file: string | undefined, root: string): Promise<string | null> {
+  const fromCwd = await gitRoot(cwd).catch(() => null);
+  if (fromCwd) return fromCwd;
+  if (!file || !isAbsolute(file)) return null;
+  const fromFile = await gitRoot(dirname(file)).catch(() => null);
+  if (!fromFile) return null;
+  const canonRoot = await realpath(root).catch(() => root);
+  return fromFile === canonRoot || fromFile.startsWith(canonRoot + sep) ? fromFile : null;
+}
+
 async function runGuard(agent: string): Promise<string | null> {
-  const payload = normalizeGuardPayload(JSON.parse(await readStdin()) as GuardPayload);
+  const raw = await readStdin();
+  if (!raw.trim()) return null; // no payload: a TTY, or a writer that never sent one
+  const payload = await canonicalTarget(normalizeGuardPayload(JSON.parse(raw) as GuardPayload));
   const cwd = payload.cwd ?? process.cwd();
-  const worktreeRoot = await gitRoot(cwd);
-  const rel = guardTarget(await canonicalTarget(payload), worktreeRoot);
+  const root = await activeBatonRoot(cwd);
+  const worktreeRoot = await checkoutForEdit(cwd, payload.tool_input?.file_path, root);
+  if (!worktreeRoot) return null;
+  const rel = guardTarget(payload, worktreeRoot);
   if (!rel) return null;
-  const root = await resolveMcpRoot(cwd);
   const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG, agent);
   // G2: the guard WRITES the signal too — the daemon-less path that makes
   // sessions at the repo root (and worktree sessions with no daemon) visible

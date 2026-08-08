@@ -1,10 +1,12 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Settings screen (ported from admin.jsx)
    Appearance · Connection · Agent registry
    ============================================================ */
 import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../components/Icon";
-import { AgentBadge, SegmentedControl, Switch, ComingSoon } from "../components/primitives";
+import { AgentBadge, SegmentedControl, Switch, ComingSoon, ConfirmDialog } from "../components/primitives";
 import { BatonMark } from "../components/BatonMark";
 import { ScreenHeader } from "./shared";
 import { AGENT_REGISTRY, ACCENTS } from "../lib/registry";
@@ -12,7 +14,10 @@ import { showToast } from "../lib/toast";
 import { BatonAPI } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
-import type { AgentId, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import type { AgentId, FleetDaemon, Meta, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import { auth } from "../lib/auth";
+import { usePoll } from "../hooks/usePoll";
+import { fleetOrder, folderName, middleTruncate, uptimeLabel } from "../lib/fleet";
 
 const MODE_HINTS: Record<RoutingMode, string> = {
   auto: "Rules first, then severity picks a tier automatically.",
@@ -264,7 +269,284 @@ function ConnectionSettings({ prefs }: { prefs: Prefs }) {
   );
 }
 
-export function SettingsScreen({ prefs, repo }: { prefs: Prefs; repo: string | null }) {
+
+/**
+ * Who this browser is to the daemon, and the only way out.
+ *
+ * A member who signed in over `--host` otherwise has no way to sign out short
+ * of clearing site data — and on a shared or borrowed machine that is the
+ * difference between a credential that ends with the session and one that does
+ * not. Local viewers see the same block saying why they were never asked.
+ */
+function SessionSettings({ viewer }: { viewer?: Meta["viewer"] }) {
+  const [confirm, setConfirm] = useState(false);
+  const hasToken = !!BatonAPI.token;
+  const remembered = auth.remembered(BatonAPI.baseUrl);
+  const local = viewer ? viewer.local : !hasToken;
+
+  return (
+    <>
+      <SettingsBlock title="Your session" desc="How this browser identifies itself to the daemon.">
+        {local ? (
+          <SettingRow
+            label="Local connection"
+            hint="This browser is on the same machine as the daemon, so Baton asks for no credential — the same rule that lets the CLI work without one."
+          >
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+              <Icon name="monitor" size={13} /> No sign-in needed
+            </span>
+          </SettingRow>
+        ) : (
+          <SettingRow
+            label={`Signed in as ${viewer?.name || "a member"}`}
+            hint={
+              remembered
+                ? "Stored in this browser until you sign out."
+                : "Kept for this tab only — closing it signs you out."
+            }
+          >
+            <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+              {viewer?.memberId}
+              {viewer?.role === "owner" && (
+                <span style={{ padding: "1px 6px", borderRadius: 99, background: "var(--accent-soft)", border: "1px solid var(--accent-border)", color: "var(--accent-text)", fontSize: "var(--fs-11)", fontWeight: "var(--fw-semibold)" }}>owner</span>
+              )}
+            </span>
+          </SettingRow>
+        )}
+        {hasToken && (
+          <SettingRow
+            label="Sign out"
+            hint="Removes the token from this browser. It stays valid on the hub — ask the owner to revoke it if it has leaked."
+          >
+            <button className="btn btn-sm btn-danger fr" onClick={() => setConfirm(true)}>
+              <Icon name="lock" size={13} /> Sign out
+            </button>
+          </SettingRow>
+        )}
+      </SettingsBlock>
+
+      <ConfirmDialog
+        open={confirm}
+        title="Sign out of this hub?"
+        /* The honest warning: for most members the pasted token was the only
+           copy, and Baton cannot show it again — only the owner can reissue. */
+        body="You'll need your member token to sign back in. If you don't still have it, the hub owner has to reissue one from the Team screen."
+        confirmLabel="Sign out"
+        tone="danger"
+        icon="lock"
+        onClose={() => setConfirm(false)}
+        onConfirm={() => { setConfirm(false); BatonAPI.signOut(); }}
+      />
+    </>
+  );
+}
+
+/**
+ * Every Baton daemon on this machine — and the button that stops the one you
+ * started by mistake. Loopback-only: `getDaemons` returns null for a remote
+ * viewer (or an older daemon), and null unmounts the card rather than drawing
+ * a panel that can only error. The server is the authority on live vs stale;
+ * this card only decides how to draw it — a stale row gets *Clean up*, never
+ * Stop, because the pid behind it is one nobody can vouch for.
+ */
+function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
+  const fleet = usePoll<FleetDaemon[] | null>(() => BatonAPI.getDaemons(), { interval: 5000 });
+  const [confirm, setConfirm] = useState<FleetDaemon | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState<string[]>([]);
+  const rows = fleetOrder(fleet.data ?? []);
+  const staleCount = rows.filter((d) => d.status === "stale").length;
+  // A "stopping…" row un-greys the moment the poll stops listing it — and if
+  // its record SURVIVES a stop attempt (refused/failed), the key must not pin
+  // the row at half-opacity with a dead button forever.
+  useEffect(() => {
+    setStopping((s) => s.filter((k) => (fleet.data ?? []).some((d) => `${d.pid}-${d.port}` === k)));
+  }, [fleet.data]);
+  if (!fleet.data || rows.length === 0) return null;
+
+  const act = async (d: FleetDaemon) => {
+    setBusy(true);
+    try {
+      if (d.self) {
+        await BatonAPI.shutdownSelf();
+        // No toast for success: the staleness banner is about to own the
+        // screen, and that banner is the honest report.
+      } else {
+        // pid + port, not port alone — a crash leftover and a live daemon can
+        // share a port, and this row is exactly one of them. `expect` carries
+        // what this screen SHOWED, so a record that flipped live since the
+        // last poll gets a 409 instead of a surprise stop behind a dialog
+        // that promised only a file deletion.
+        const r = await BatonAPI.stopFleetDaemon(d.port, d.pid, d.status);
+        if (r.outcome === "refused-stale") {
+          // Nothing was stopped: the daemon went away on its own (or another
+          // daemon owns the port now). Saying "stopped" would be a lie.
+          showToast({ kind: "ok", title: "Already gone", desc: `${folderName(d.root)} — that daemon was no longer running; nothing needed stopping.` });
+        } else {
+          setStopping((s) => [...s, `${d.pid}-${d.port}`]);
+          showToast(r.outcome === "cleaned"
+            ? { kind: "ok", title: "Cleaned up", desc: `${folderName(d.root)} — the daemon was already gone; only its record remained.` }
+            : { kind: "ok", title: `Stopped ${folderName(d.root)}`, desc: r.outcome === "signal" ? "Stopped by signal — that daemon predates graceful shutdown." : `Port ${d.port} is free again.` });
+        }
+      }
+      setConfirm(null);
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not stop it", desc: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cleanAll = async () => {
+    setBusy(true);
+    try {
+      // The server buries only records whose pid is provably dead, so the
+      // count it reports can be smaller than the stale rows on screen — the
+      // toast repeats what actually happened, not what the screen promised.
+      const r = await BatonAPI.cleanFleet();
+      // Grey the rows we asked to remove, same as a per-row clean-up: the
+      // poll is up to 5s away, and leaving them at full opacity reads as
+      // "nothing happened". The effect above un-greys any that survive.
+      if (r.removed > 0) setStopping((s) => [...s, ...rows.filter((d) => d.status === "stale").map((d) => `${d.pid}-${d.port}`)]);
+      showToast(r.removed > 0
+        ? { kind: "ok", title: "Cleaned up", desc: `${r.removed} stale record${r.removed === 1 ? "" : "s"} removed — the daemons behind them were already gone.` }
+        : { kind: "ok", title: "Nothing to clean", desc: "Every remaining record names a process that is still alive." });
+      setConfirmAll(false);
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not clean up", desc: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsBlock title="Daemons on this machine" desc="Every project running `baton serve`, across all folders. Stopping one never touches its code or its git state.">
+      {rows.map((d) => {
+        const live = d.status === "live";
+        const pending = stopping.includes(`${d.pid}-${d.port}`);
+        const color = live ? "var(--clean)" : "var(--text-quaternary)";
+        return (
+          <div key={`${d.pid}-${d.port}`} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)", opacity: pending ? 0.5 : 1 }}>
+            <span data-tip={live ? "Verified: the process is alive and answering as this repo" : "Crash leftover — the daemon behind this record is gone"}
+              style={{ width: 8, height: 8, borderRadius: 99, flex: "none", background: color, boxShadow: live ? `0 0 0 3px color-mix(in srgb, ${color} 22%, transparent)` : "none" }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", whiteSpace: "nowrap" }}>{folderName(d.root)}</span>
+                {d.self && <span className="tag" style={{ flex: "none" }}>this dashboard</span>}
+                {!live && <span className="tag" style={{ flex: "none", color: "var(--text-tertiary)" }}>stale record</span>}
+                {d.host && live && <span className="tag" style={{ flex: "none", color: "var(--warn, #b58900)" }} data-tip="Exposed beyond this machine with --host">shared</span>}
+              </div>
+              <div className="mono" data-tip={d.root} style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {middleTruncate(d.root, 58)}
+              </div>
+            </div>
+            <span className="mono" style={{ flex: "none", fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>:{d.port}</span>
+            <span style={{ flex: "none", fontSize: "var(--fs-12)", color: "var(--text-tertiary)", width: 74, textAlign: "right" }}>{live ? uptimeLabel(d.startedAt) : "—"}</span>
+            <div style={{ flex: "none", display: "flex", gap: 6 }}>
+              {live && !d.self && (
+                <a className="btn btn-sm btn-ghost fr" href={`http://127.0.0.1:${d.port}`} target="_blank" rel="noreferrer" data-tip="Open that project's dashboard">
+                  <Icon name="externalLink" size={13} />
+                </a>
+              )}
+              {/* Same contract as every other mutating control: greyed out in
+                  read-only mode, never a danger dialog that ends in an error. */}
+              <span data-tip={writeEnabled ? undefined : "Read-only — enable Write actions (the daemon needs baton serve --write)"}>
+                <button className={`btn btn-sm fr ${live ? "btn-danger" : "btn-ghost"}`} disabled={pending || !writeEnabled} onClick={() => setConfirm(d)}>
+                  {live ? "Stop" : "Clean up"}
+                </button>
+              </span>
+            </div>
+          </div>
+        );
+      })}
+      {/* One click for a pile of corpses — but only when there IS a pile;
+          a single stale row's own button is already one click. */}
+      {staleCount > 1 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "9px 16px" }}>
+          <span data-tip={writeEnabled ? undefined : "Read-only — enable Write actions (the daemon needs baton serve --write)"}>
+            <button className="btn btn-sm btn-ghost fr" disabled={busy || !writeEnabled} onClick={() => setConfirmAll(true)}>
+              Clean up all {staleCount} stale records
+            </button>
+          </span>
+        </div>
+      )}
+      <ConfirmDialog
+        open={confirmAll}
+        onClose={() => setConfirmAll(false)}
+        onConfirm={() => void cleanAll()}
+        busy={busy}
+        icon="trash"
+        title="Clean up all stale records?"
+        confirmLabel="Clean up all"
+        body={<span>Removes every record whose daemon is provably gone. Only leftover files are deleted — nothing running is touched, and a record whose process turns out to be alive is kept.</span>}
+      />
+      <ConfirmDialog
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => { if (confirm) void act(confirm); }}
+        busy={busy}
+        tone={confirm?.status === "live" ? "danger" : "default"}
+        icon={confirm?.status === "live" ? "wifiOff" : "trash"}
+        title={confirm?.status !== "live" ? "Clean up stale record?" : confirm?.self ? "Stop this dashboard's daemon?" : `Stop ${confirm ? folderName(confirm.root) : ""}?`}
+        confirmLabel={confirm?.status !== "live" ? "Clean up" : confirm?.self ? "Stop it anyway" : "Stop daemon"}
+        body={confirm && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", wordBreak: "break-all" }}>{confirm.root} · port {confirm.port}</span>
+            {confirm.status !== "live"
+              ? <span>The daemon behind this record is already gone — this only deletes the leftover file.</span>
+              : confirm.self
+                ? <span><b>This stops the daemon serving the dashboard you are looking at.</b> The screen will go stale until you run <span className="mono">baton serve</span> in that folder again.</span>
+                : <span>Agents, worktrees and git state in that project are untouched — only the daemon and its dashboard stop.</span>}
+          </div>
+        )}
+      />
+    </SettingsBlock>
+  );
+}
+
+/** Upstream, used only until the daemon answers with its own. A fork that edits
+ *  package.json is offered here instead — see SOURCE_URL in src/version.ts. */
+const UPSTREAM_SOURCE = "https://github.com/Rakshan001/Baton-Multi-Agent-";
+
+/**
+ * Version, licence, and a link to the source of the build being served.
+ *
+ * Not an "About" flourish — AGPL-3.0 §13 requires a network-interactive
+ * program to offer its users the source of the running version, and the
+ * dashboard is exactly that. The URL comes from the daemon rather than this
+ * bundle so that a modified deployment points at its own code; the constant
+ * above is only the fallback for a daemon too old to send one.
+ */
+function AboutSettings({ meta }: { meta?: Meta | null }) {
+  const source = meta?.source || UPSTREAM_SOURCE;
+
+  return (
+    <SettingsBlock title="About Baton" desc="What this daemon is running, and where its source lives.">
+      <SettingRow label="Version" hint="The daemon serving this dashboard.">
+        <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
+          {meta?.version ? `v${meta.version}` : "—"}
+        </span>
+      </SettingRow>
+      <SettingRow
+        label="License"
+        hint="Free to use, change, and run commercially. If you distribute Baton or host a modified version for others, they get the source under the same terms."
+      >
+        <a className="mono fr" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
+          {meta?.license || "AGPL-3.0-or-later"}
+        </a>
+      </SettingRow>
+      <SettingRow label="Source code" hint="The complete source of this build, as the license requires it be offered to you.">
+        <a className="btn btn-sm fr" href={source} target="_blank" rel="noopener noreferrer">
+          <Icon name="gitBranch" size={13} /> Get the source
+        </a>
+      </SettingRow>
+    </SettingsBlock>
+  );
+}
+
+export function SettingsScreen({ prefs, repo, viewer, meta }: { prefs: Prefs; repo: string | null; viewer?: Meta["viewer"]; meta?: Meta | null }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <ScreenHeader title="Settings" subtitle="Appearance, connection, and the agent registry" />
@@ -293,6 +575,15 @@ export function SettingsScreen({ prefs, repo }: { prefs: Prefs; repo: string | n
 
           <ConnectionSettings prefs={prefs} />
 
+          {/* Loopback-only twice over: the endpoint refuses a remote viewer,
+              and a viewer the daemon has TOLD us is remote never mounts the
+              card at all. Demo mode shows the fixture fleet — the showcase
+              includes the stale-record path, because Clean up is half the
+              feature. */}
+          {(BatonAPI.demo || viewer?.local !== false) && <DaemonsCard writeEnabled={prefs.writeEnabled} />}
+
+          <SessionSettings viewer={viewer} />
+
           <RoutingSettings />
 
           <SettingsBlock title="Agent registry" desc="Color, label, and glyph for each agent. Drives badges across the app.">
@@ -312,6 +603,8 @@ export function SettingsScreen({ prefs, repo }: { prefs: Prefs; repo: string | n
               <button className="btn btn-sm fr" disabled style={{ opacity: 0.7 }} data-tip="Editing the registry from the UI is planned."><Icon name="plus" size={13} /> Customize registry <ComingSoon /></button>
             </div>
           </SettingsBlock>
+
+          <AboutSettings meta={meta} />
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", padding: "8px 0 16px", color: "var(--text-quaternary)", fontSize: "var(--fs-12)" }}>
             <BatonMark size={14} /> Baton{repo ? ` · ${repo}` : ""}

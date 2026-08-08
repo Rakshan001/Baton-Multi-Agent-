@@ -527,7 +527,7 @@ export async function detectAgents(
   if (worktreePaths.length === 0) return new Map();
   const now = opts.now ?? Date.now;
   const scan = opts.scan ?? scanAgents;
-  const key = [...worktreePaths].sort().join(' ');
+  const key = [...worktreePaths].sort().join('\x00');
   const t = now();
   if (detectCache && detectCache.key === key && t - detectCache.at < DETECT_TTL_MS) {
     return new Map(detectCache.result);

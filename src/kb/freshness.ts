@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Graph-freshness golden rule (G1). The knowledge graph rebuilds on COMMIT
  * (graphify's post-commit hook), so between an edit and its commit the graph

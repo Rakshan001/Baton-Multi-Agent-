@@ -1,18 +1,22 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Shared status collection — the structured data behind `baton status` and the
  * `baton serve` /api/status endpoint. One source of truth for both.
  */
-import { detectAgents, detectRootAgents, type RootAgentSession } from './agents.js';
+import { detectAgents, detectionRoots, detectRootAgents, type RootAgentSession } from './agents.js';
 import { computeConflicts } from './conflicts.js';
 import { aheadBehind, worktreeStatus, type RepoState } from './git.js';
-import { loadTasks } from './store.js';
+import { isMaterialized, loadTasks } from './store.js';
 import { liveSessions, WATCHER_HEARTBEAT_STALE_MS } from './signals.js';
+import { runningHeadless } from './spawn.js';
 
 export interface StatusRow {
   slug: string;
   task: string;
   agent: string | null;
-  status: 'clean' | 'dirty' | 'conflict';
+  /** `missing` = the worktree is recorded but not on disk. See `worktreeStatus`. */
+  status: 'clean' | 'dirty' | 'conflict' | 'missing';
   repoState: RepoState;
   ahead: number;
   behind: number;
@@ -24,20 +28,38 @@ export interface StatusRow {
 }
 
 export async function collectStatus(root: string): Promise<StatusRow[]> {
-  const tasks = await loadTasks(root);
+  // Worktree-backed tasks only. A queued plan row names the branch and path it
+  // INTENDS to use but has neither yet, so including them would report every
+  // unclaimed task as `missing` — true of the directory, wrong about the task —
+  // and spawn git + agent detection per phantom path on a 2s poll. The pipeline
+  // view is where queued work belongs.
+  const tasks = (await loadTasks(root)).filter(isMaterialized);
+  // Runs this process started. `detectAgents` memoizes its ps scan for 5s while
+  // the poller ticks every 2s, so a just-started agent is absent from the board
+  // for up to five seconds — and a print-mode run shorter than that is never
+  // shown as working at all. We don't have to infer a run we launched
+  // ourselves: this map is the authority, and it is exactly what the Agents
+  // screen already merges in (agents/roster.ts).
+  const headless = new Map(runningHeadless().map((r) => [r.slug, r.agent]));
   const [agents, conflicts] = await Promise.all([
-    detectAgents(tasks.map((t) => t.worktreePath)),
+    detectAgents(tasks.map((t) => t.worktreePath), { root: detectionRoots(root, tasks) }),
     computeConflicts(tasks, root),
   ]);
 
   return Promise.all(
     tasks.map(async (t) => {
       const st = await worktreeStatus(t.worktreePath);
-      const { ahead, behind } = await aheadBehind(t.branch, t.baseBranch, root);
+      // The task's OWN repo: in a hub the branch lives in the sub-project, and
+      // the served root may not be a git repo at all. aheadBehind swallows
+      // every error as {0,0}, so asking the wrong repo drew each hub task with
+      // nothing to merge — the column that says "this is ready" reading zero.
+      const { ahead, behind } = await aheadBehind(t.branch, t.baseBranch, t.repoRoot ?? root);
       return {
         slug: t.slug,
         task: t.task,
-        agent: agents.get(t.worktreePath) ?? null,
+        // Scan first, headless second — the same precedence roster.ts uses, so
+        // one agent never gets two names across two screens.
+        agent: agents.get(t.worktreePath) ?? headless.get(t.slug) ?? null,
         status: st.state,
         repoState: st.repoState,
         ahead,
@@ -70,7 +92,10 @@ export async function rootAgentSummary(
   taskWorktreePaths: string[],
   opts: { detect?: (include: string[], exclude: string[]) => Promise<RootAgentSession[]> } = {},
 ): Promise<RootAgentCount[]> {
-  const detect = opts.detect ?? detectRootAgents;
+  // Every scanned root contributes its patterns, not just the hub: a
+  // sub-project's own `.baton/agents.json` agents run in that sub-project's
+  // checkout, and hub-only patterns would drop them from the count.
+  const detect = opts.detect ?? ((inc: string[], exc: string[]) => detectRootAgents(inc, exc, { root: [hubRoot, ...kbProjectPaths] }));
   const sessions = await detect([hubRoot, ...kbProjectPaths], taskWorktreePaths);
   const counts = new Map<string, number>();
   for (const s of sessions) counts.set(s.agent, (counts.get(s.agent) ?? 0) + 1);

@@ -1,14 +1,24 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — domain types
    Mirrors the CLI's HTTP contract (src/board.ts, src/history.ts,
    src/git.ts, src/server.ts). Kept in sync with a shape-guard test.
    ============================================================ */
 
-/** Agents Baton detects (src/agents.ts). `null` = no agent attached. */
-export type AgentId = "claude" | "cursor" | "codex" | "gemini" | "antigravity" | "aider" | "opencode";
+/** Agents Baton detects (src/agents.ts). `null` = no agent attached.
+ *  The union is OPEN (`string & {}` keeps literal autocomplete): the daemon
+ *  can report ids beyond the built-ins — `.baton/agents.json` custom agents —
+ *  and a closed union would make every screen silently drop their sessions. */
+export type AgentId =
+  | "claude" | "cursor" | "codex" | "gemini" | "antigravity" | "aider" | "opencode" | "openclaw"
+  | (string & {});
 
 /** Worktree state (src/git.ts). */
-export type Status = "clean" | "dirty" | "conflict";
+/** `missing` = the task records a worktree that is not on disk. Deliberately not
+ *  folded into `clean`: git failing to answer is the opposite of git saying
+ *  nothing changed, and the pill has to show which one it is. */
+export type Status = "clean" | "dirty" | "conflict" | "missing";
 
 /** In-progress git operation marker (src/git.ts RepoState). */
 export type RepoState = "clean" | "merging" | "rebasing" | "cherry-picking" | "reverting";
@@ -91,16 +101,54 @@ export interface Meta {
   branch: string | null;
   writeEnabled: boolean;
   version: string;
+  /** SPDX id and a source URL for THIS build — AGPL-3.0 §13 owes both to
+   *  anyone the dashboard is served to. Optional: an older daemon predates it. */
+  license?: string;
+  source?: string;
   /** True when the root is a multi-repo hub (not a git repo) — new tasks must
    *  target one of `projects`. False/undefined for a plain single repo. */
   hub?: boolean;
   /** The hub's sub-projects a task can target (empty for a single repo). */
   projects?: { id: string; name: string }[];
-  /** Interactive-terminal capability (tmux on the daemon's PATH). */
-  terminals?: { available: boolean; hint?: string };
+  /** Interactive-terminal capability, answered for THIS viewer: `tmux` means
+   *  the host lacks tmux (hint is a command to run), `remote` means terminals
+   *  are loopback-only and no credential changes that. */
+  terminals?: { available: boolean; reason?: "tmux" | "remote"; hint?: string };
   /** Which agents each launch mode supports — single source of truth is the
-   *  daemon (src/spawn.ts LAUNCHERS / src/terminals.ts INTERACTIVE_LAUNCHERS). */
-  agents?: { headless: string[]; interactive: string[] };
+   *  daemon (src/spawn.ts LAUNCHERS / src/terminals.ts INTERACTIVE_LAUNCHERS).
+   *  `known` is every agent the daemon's root knows INCLUDING detection-only
+   *  ones, which can be handed off to but not launched. Absent on daemons
+   *  older than this — fall back to the union of the two launcher lists.
+   *  `fromProject` names the ids the REPO defined (its `.baton/agents.json`)
+   *  rather than the machine's owner, so any surface that offers to launch one
+   *  can say where it came from. */
+  agents?: { headless: string[]; interactive: string[]; known?: string[]; fromProject?: string[] };
+  /** Who the daemon thinks this browser is. `local` means a loopback
+   *  connection, which needs no credential at all; a remote viewer is whichever
+   *  member the bearer token names. Absent on daemons older than this. */
+  viewer?: {
+    local: boolean;
+    memberId: string | null;
+    name: string | null;
+    role: MemberRole | null;
+  };
+}
+
+/** One Baton daemon on this machine — GET /api/daemons (src/daemons.ts).
+ *  Loopback-only: a remote viewer never sees the fleet at all. `stale` means
+ *  the record failed verification (crash leftover, or a reused pid/port) and
+ *  may only be cleaned up, never stopped. */
+export interface FleetDaemon {
+  pid: number;
+  port: number;
+  root: string;
+  startedAt: string;
+  version: string;
+  writeEnabled: boolean;
+  host: boolean;
+  status: "live" | "stale";
+  /** True on the row describing the daemon that answered this request. */
+  self: boolean;
 }
 
 /** One live interactive terminal — GET /api/terminals (src/terminals.ts). */
@@ -111,12 +159,25 @@ export interface TerminalInfo {
   startedAt: string;
 }
 
+/** One headless run this daemon is driving — GET /api/agents/running (src/spawn.ts). */
+export interface RunningAgentInfo {
+  slug: string;
+  agent: string;
+  model?: string;
+  startedAt: string;
+  /** Tail of the run's output, already redacted server-side. */
+  recentLines: string[];
+}
+
 /** One project-memory fact with evidence-checked freshness — GET /api/memory (src/memory.ts). */
 export interface MemoryFactStatus {
   id: string;
   type: "decision" | "gotcha" | "convention" | "reference" | "preference";
   fact: string;
   agent: string | null;
+  /** WHO claimed it, vs `agent` = WHAT wrote it down. Pre-author facts read as
+   *  "unknown" — the backend never sends undefined. */
+  author: string;
   task: string | null;
   createdAt: string;
   anchors: { commit: string | null; files: { path: string; hash: string }[] };
@@ -130,6 +191,56 @@ export interface MemoryFactStatus {
 
 /** A kb sub-project for per-server memory scoping (GET /api/memory.projects). */
 export interface MemoryProject { id: string; rel: string }
+
+/* ---- code review (three axes, src/reviews.ts) ----
+   The axes are deliberately NEVER merged and never cross-ranked: a Standards
+   nit and a Security hole are not comparable, so there is no combined total
+   anywhere in the API and there must not be one in the UI either. */
+export type ReviewAxis = "standards" | "spec" | "security";
+export type FindingStatus = "open" | "fixed" | "dismissed";
+export type FindingRoute = "fix-directly" | "systematic-debugging" | "bug-fix" | "implement";
+
+export interface ReviewFinding {
+  /** Stable identity (axis + file + title) — survives a re-review that reorders
+   *  or rewords findings. Always resolve by this, never by array position. */
+  id: string;
+  axis: ReviewAxis;
+  title: string;
+  file?: string;
+  line?: number;
+  /** Mandatory citation — an uncited finding is an opinion and is never stored. */
+  source: string;
+  detail?: string;
+  /** Only a documented-standard breach can be hard, and only on the Standards axis. */
+  hard: boolean;
+  status: FindingStatus;
+  route?: FindingRoute;
+}
+
+/** An axis that did not run, and why — an unreported skip reads as a clean pass. */
+export interface AxisSkip { axis: ReviewAxis; why: string }
+
+/** A review as GET /api/reviews serves it: the record plus derived per-axis
+ *  open counts and a staleness flag against the repo's current HEAD. */
+export interface ReviewRecord {
+  slug: string;
+  fixedPoint: string;
+  head: string;
+  axes: ReviewAxis[];
+  skipped: AxisSkip[];
+  findings: ReviewFinding[];
+  /** Set when the diff was too large to review whole — a silent partial review
+   *  reads as a clean one. */
+  partial?: string;
+  agent?: string;
+  /** WHO ran the review, vs `agent` = WHAT ran it. Tracks the LATEST review
+   *  (a re-review replaces the record), so it pairs with `updatedAt`. */
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+  open: Record<ReviewAxis, number>;
+  stale: boolean;
+}
 
 /** Auto-retention policy — GET/POST /api/memory/retention. */
 export interface RetentionPolicy {
@@ -436,6 +547,10 @@ export interface AgentRosterEntry {
   mcp: McpStatus;
   live: LiveSession[];
   idle: boolean;
+  /** Defined by this repo's `.baton/agents.json`, not by you — the Agents
+   *  screen labels it, because config that arrives with a `git pull` should
+   *  never look like a built-in. */
+  fromProject?: true;
 }
 
 /** POST /api/agents/:id/connect result. */
@@ -508,3 +623,198 @@ export interface ContextPackResponse {
   omitted: string[];
   fits: { id: string; label: string; limit: number; ok: boolean }[];
 }
+
+/* ---- Team: membership + the federated "who is editing what" plane ----
+   Cross-machine MEMBERS, not the local agent sessions in PresenceSession.
+   Everything here is a live view with a TTL: it is never persisted, so a
+   restarted host knows nothing until members report in again. */
+
+export type MemberRole = "owner" | "member";
+
+/** An owner's notice to one member — GET /api/members. */
+export interface MemberWarning {
+  id: string;
+  message: string;
+  from: string;
+  at: string;
+}
+
+/** One roster row: registry record merged with whatever the live plane knows. */
+export interface MemberRow {
+  id: string;
+  name: string;
+  role: MemberRole;
+  /** False for a live member with no registry record (a loopback heartbeat). */
+  registered: boolean;
+  createdAt: string;
+  revokedAt?: string;
+  online: boolean;
+  device: string | null;
+  sessions: number;
+  since: string | null;
+  lastSeen: string | null;
+  /** How many files they currently hold. */
+  claims: number;
+  warnings: MemberWarning[];
+  /** Deadline for the FIRST use of an invite; absent once redeemed or if none. */
+  expiresAt?: string;
+  /** When this member's token was first used to authenticate. */
+  firstUsedAt?: string;
+  /** Team id, or null. Already resolved against the teams that exist, so a
+   *  pointer at a deleted team arrives as null rather than as a dangling id. */
+  team: string | null;
+}
+
+/**
+ * A group of members (src/teams.ts).
+ *
+ * `projects` is a VIEW SCOPE — it decides what this team's rows are filtered to
+ * on this screen, and nothing else. It reaches no authorization decision on the
+ * server, and it is never applied to conflicts.
+ */
+export interface Team {
+  id: string;
+  name: string;
+  /** Hub project ids. **Empty = the whole hub**, not "no projects". */
+  projects: string[];
+  createdAt: string;
+}
+
+/** One claimed file. ADVISORY: claiming an already-claimed path succeeds. */
+export interface MemberClaim {
+  projectId: string | null;
+  relPath: string;
+  memberId: string;
+  memberName: string;
+  agent: string | null;
+  branch: string | null;
+  openedAt: string;
+  refreshedAt: string;
+}
+
+/** Two or more members on one path. `sameBranch` false = information, not a
+ *  warning: divergent branches meet at merge, not in a working tree. */
+export interface ClaimOverlap {
+  projectId: string | null;
+  relPath: string;
+  sameBranch: boolean;
+  holders: Array<{ memberId: string; memberName: string; agent: string | null; branch: string | null; since: string }>;
+}
+
+/** GET /api/members — the whole Team screen in one poll. */
+export interface TeamState {
+  members: MemberRow[];
+  teams: Team[];
+  claims: MemberClaim[];
+  overlaps: ClaimOverlap[];
+  ttlMs: number;
+  /** What THIS viewer may do. The server enforces it independently on every
+   *  owner endpoint — this only decides what is worth rendering. */
+  viewer: { local: boolean; memberId: string | null; isOwner: boolean };
+}
+
+/** POST /api/members (or …/rotate) — the token is returned exactly once. */
+export interface InviteResult {
+  member: { id: string; name: string; role: MemberRole; expiresAt?: string };
+  token: string;
+  /** Ready to paste: `npx baton join <url> --token …`. */
+  command: string;
+  expiresAt?: string;
+  note: string;
+}
+
+/** One way to expose the daemon — GET /api/reachability. Baton detects and
+ *  instructs; it never starts a tunnel itself (see src/reachability.ts). */
+export interface TunnelTool {
+  id: "ssh" | "tailscale" | "cloudflared";
+  label: string;
+  needsBinary: boolean;
+  installed: boolean;
+  install?: string;
+  why: string;
+  /** Commands only — never prose. */
+  steps: string[];
+  /** Follow-up prose, rendered as text rather than a copyable command. */
+  then?: string;
+}
+
+/** GET /api/reachability — owner-only: can anyone else actually reach this hub? */
+export interface Reachability {
+  bind: string;
+  loopbackOnly: boolean;
+  port: number;
+  allowedHosts: string[];
+  urls: string[];
+  lanAddresses: string[];
+  members: { active: number; owners: number };
+  tools: TunnelTool[];
+  /** Things that would make an invite fail outright. */
+  blockers: string[];
+  notes: string[];
+}
+
+/* ---- pipeline swimlanes — GET /api/pipeline (src/pipeline-view.ts) ---- */
+
+export type TaskState =
+  | "queued" | "claimed" | "active" | "paused" | "review" | "blocked" | "done" | "cancelled";
+
+/** What a lane header says about its phase. `holding` means every task in it is
+ *  finished but its branches have not landed — which is WHY the next lane is
+ *  locked, so it is a distinct state rather than a flavour of `complete`. */
+export type LaneStatus = "ungated" | "complete" | "holding" | "open" | "locked";
+
+export interface LaneTask {
+  slug: string;
+  title: string;
+  phase: number;
+  state: TaskState;
+  assignee: string | null;
+  holder: { agent: string; sessionSlug: string; at: string } | null;
+  dependsOn: string[];
+  planId: string | null;
+  /** The pipeline's own wording for why this cannot start, or null.
+   *  Rendered verbatim — the dashboard must not invent a second vocabulary for
+   *  a refusal the CLI answers to. */
+  blocker: string | null;
+  branch: string;
+  cancelledBy?: { actor: string; at: string; reason?: string };
+  stoppedReason?: string;
+}
+
+export interface Lane {
+  phase: number;
+  status: LaneStatus;
+  tasks: LaneTask[];
+  done: number;
+  total: number;
+}
+
+export interface PipelineView {
+  /** null means nothing is open — a finished plan, not a missing number. */
+  openPhase: number | null;
+  integrationHold: number | null;
+  deadlocked: boolean;
+  lanes: Lane[];
+  plans: Array<{ id: string; total: number; done: number; cancelled: number }>;
+  totals: { total: number; done: number; active: number; blocked: number; cancelled: number };
+}
+
+/** What a cancellation would touch — computed by the daemon, never by the UI. */
+export interface BlastRadius {
+  stopping: Array<{ slug: string; state: TaskState; holder: string | null }>;
+  alreadyFinished: string[];
+  /** Tasks that depend on something being cancelled and can then NEVER start. */
+  stranding: Array<{ slug: string; dependsOn: string[] }>;
+}
+
+export interface CancelResult {
+  ok: boolean;
+  dryRun: boolean;
+  scope: string;
+  radius: BlastRadius;
+  agentsStopped: number;
+  cancelled: string[];
+}
+
+export type CancelScopeInput =
+  | { slug: string } | { phase: number } | { plan: string };

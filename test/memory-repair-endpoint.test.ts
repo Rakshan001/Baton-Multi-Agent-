@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * E2E test for POST /api/memory/repair — the dashboard trigger for the M3
  * stale-repair queue. Spawns `node dist/cli.js serve` against a temp git repo.

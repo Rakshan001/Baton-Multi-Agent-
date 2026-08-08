@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Skills screen
    A searchable catalog of reusable agent playbooks (bundled +
@@ -25,6 +27,10 @@ const FEATURED_PACK: { id: string; blurb: string }[] = [
   { id: "verify-before-done", blurb: "Skeptic re-checks the diff before anything ships." },
 ];
 
+/* The skill a brand-new project should run before anything else. Surfaced on its own band so
+   it reads as the starting point rather than one card among many. */
+const STARTER_ID = "basic-setup";
+
 /* Proven skills from the wider Claude ecosystem — every URL verified to serve a
    raw SKILL.md. Clicking one prefills the import box (nothing installs without
    the user confirming), so the catalog isn't limited to what Baton bundles. */
@@ -50,6 +56,8 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
     const byId = new Map((skills.data ?? []).map((s) => [s.id, s]));
     return FEATURED_PACK.map((f) => ({ ...f, skill: byId.get(f.id) })).filter((f) => f.skill);
   }, [skills.data]);
+
+  const starter = useMemo(() => (skills.data ?? []).find((s) => s.id === STARTER_ID), [skills.data]);
 
   const list = useMemo(() => {
     const all = skills.data ?? [];
@@ -103,6 +111,25 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
             <button className="btn btn-primary fr" disabled={!source.trim() || busy} onClick={doImport}
               style={!source.trim() || busy ? { opacity: 0.55, cursor: "not-allowed" } : {}}>
               {busy ? "Importing…" : "Import"}
+            </button>
+          </div>
+        )}
+
+        {!q && starter && (
+          <div className="card" style={{ padding: "15px 16px", display: "flex", alignItems: "center", gap: 11 }}>
+            <span style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", flex: "none", background: "var(--clean-soft, var(--bg-surface-2))", border: "1px solid var(--border-subtle)", color: "var(--clean-text, var(--text-secondary))" }}>
+              <Icon name="lock" size={15} />
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Starting a new project?</div>
+              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                <span className="mono" style={{ color: "var(--accent-text)" }}>{STARTER_ID}</span> asks a few plain-language
+                questions, lays out an industry-standard folder structure, and installs the secret-leak protection —
+                then proves it works by trying to commit a fake key.
+              </div>
+            </div>
+            <button className="btn btn-sm fr" onClick={() => setQ(STARTER_ID)} data-tip="Show this skill" style={{ flex: "none" }}>
+              Show
             </button>
           </div>
         )}
@@ -201,6 +228,13 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
   const [busy, setBusy] = useState<SkillAgent | "all" | null>(null);
   const allInstalled = s.installs.length > 0 && s.installs.every((i) => i.installed);
 
+  /* Richer skills carry 10+ produces and 8 reference files — rendered in full they bury the
+     install controls below the fold. Cap both, expandable in one click. */
+  const [expandChips, setExpandChips] = useState(false);
+  const producesShown = expandChips ? s.produces : s.produces.slice(0, 5);
+  const refsShown = expandChips ? s.references : s.references.slice(0, 4);
+  const hiddenChips = s.produces.length - producesShown.length + (s.references.length - refsShown.length);
+
   async function toggle(agent: SkillAgent, installed: boolean) {
     setBusy(agent);
     try {
@@ -264,7 +298,7 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
         )}
         {s.produces.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {s.produces.map((p) => (
+            {producesShown.map((p) => (
               <span key={p} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-11)", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 99, padding: "2px 8px" }}>
                 <Icon name="layers" size={10} /> {p}
               </span>
@@ -274,12 +308,21 @@ function SkillCard({ s, writeEnabled, onChanged }: { s: SkillStatus; writeEnable
         {s.references.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
             <span style={{ fontSize: 10.5, color: "var(--text-quaternary)" }}>references</span>
-            {s.references.map((r) => (
+            {refsShown.map((r) => (
               <span key={r} className="mono" data-tip="Installed alongside the skill, loaded on demand" style={{ fontSize: 10.5, color: "var(--text-tertiary)", background: "var(--bg-base)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "1px 6px" }}>
                 {r.replace(/^references\//, "")}
               </span>
             ))}
           </div>
+        )}
+        {(hiddenChips > 0 || expandChips) && (
+          <button
+            onClick={() => setExpandChips((v) => !v)}
+            data-tip={expandChips ? "Show less" : "Show everything this skill produces and ships"}
+            style={{ alignSelf: "flex-start", padding: 0, background: "none", border: "none", cursor: "pointer", fontSize: 10.5, fontWeight: "var(--fw-semibold)", color: "var(--accent-text)", fontFamily: "inherit" }}
+          >
+            {expandChips ? "Show less" : `+${hiddenChips} more`}
+          </button>
         )}
       </div>
 

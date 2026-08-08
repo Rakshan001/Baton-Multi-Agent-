@@ -44,7 +44,7 @@ Baton detects whichever of `uv` / `pipx` is available and prints tailored guidan
 
 ## Wire up your agents
 
-Baton talks to six agent CLIs. Install whichever you use; Baton detects them on your `PATH`.
+Baton ships knowing these agent CLIs. Install whichever you use; Baton detects them on your `PATH`.
 
 | Agent | Binary | Headless | Interactive |
 |---|---|---|---|
@@ -54,6 +54,60 @@ Baton talks to six agent CLIs. Install whichever you use; Baton detects them on 
 | Cursor Agent | `cursor-agent` | — | ✅ |
 | Aider | `aider` | — | ✅ |
 | OpenCode | `opencode` | — | ✅ |
+| OpenClaw | `openclaw` | — | — (detection-only) |
+
+*Detection-only* means the agent shows up in the roster and process view, but
+Baton won't launch it for you yet — launch flags are only added once they've
+been verified against a real install.
+
+### Add your own agent (no Baton release needed)
+
+Any agent CLI not in the table can be taught to Baton with
+`~/.baton/agents.json` — or, for an agent only one repo's team uses, with
+`.baton/agents.json` inside that project (commit it and the whole team gets
+it — Baton's managed `.gitignore` block leaves exactly this file unignored;
+on a repo initialized by an older Baton, re-run `baton kb init` once or
+`git add -f` it). Both use the same format. Layering is additive and earlier-wins:
+built-ins, then `~/.baton`, then the project file — a config file adds
+agents, it never redefines one. The machine-global file loads at startup;
+the project file reloads on every use, so edits need no daemon restart.
+Entries are validated on load and `baton doctor` reports anything that
+didn't:
+
+```json
+{
+  "agents": [
+    {
+      "id": "myagent",
+      "label": "My Agent",
+      "binary": "myagent",
+      "headless":    { "args": ["run", "--model={model}", "-p", "{prompt}"] },
+      "interactive": { "args": ["--model={model}"] }
+    }
+  ]
+}
+```
+
+- `id` — lowercase letters/digits/dashes; a collision with a built-in is
+  refused (a config file must not redefine how `claude` runs).
+- `binary` — probed on `PATH`, and matched in the process table for detection
+  (add a `detect` regex string only if the default binary-name match is wrong).
+  **In a project file this must be an installed command name — never a path.**
+  `~/.baton/agents.json` is written by you, so `/opt/tools/mycli` is fine
+  there; a project file arrives with the code (a clone, a PR branch, a pull
+  you didn't read), and Baton probes every known binary with `<bin> --version`
+  on a poll. A repo-relative `./scripts/x` would therefore run a file the repo
+  itself ships, with no click anywhere — so project entries naming a path are
+  refused and reported in `baton doctor`. The same rule covers launcher `cmd`.
+  A project file can still only select software already on the machine, but
+  reviewing `.baton/agents.json` is worth the same attention as reviewing a
+  CI config in a PR.
+- Launcher `args` are an **argv template**, never a shell string: `{prompt}`
+  substitutes the prompt, and any token containing `{model}` is dropped when no
+  model override was asked for — write `--model={model}` as one token so
+  nothing dangles. A token must not mix `{model}` and `{prompt}` (the drop
+  would silently discard the prompt too — the launcher is refused). Omit
+  `headless`/`interactive` for detection-only.
 
 Give each agent the Baton + graphify MCP tools:
 

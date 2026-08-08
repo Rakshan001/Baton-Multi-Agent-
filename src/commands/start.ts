@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton start <slug>` — run an agent headlessly in the task's worktree,
  * streaming its output. `baton stop <slug>` ends it. The same engine powers

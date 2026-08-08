@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Unit tests for the Codex stdio↔HTTP graphify bridge.
  * Spawns no daemon — stubs fetch and drives the bridge over fake streams.

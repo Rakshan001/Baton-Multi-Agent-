@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * MCP config snippets so each agent CLI (Claude Code, Cursor, Codex, Gemini)
  * can query the graphify knowledge graph natively. Graphify entries point at

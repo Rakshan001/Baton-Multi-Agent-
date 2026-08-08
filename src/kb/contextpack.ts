@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Context pack — one paste-able markdown brief of the project (or hub) for
  * EXTERNAL chatbots (ChatGPT, Grok, DeepSeek): overview, stack, annotated

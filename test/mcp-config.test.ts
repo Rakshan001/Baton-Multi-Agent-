@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
 import { mcpTargetFor, mergeJsonConfig, mergeTomlConfig, serversForStateAntigravity, serversForStateCodex } from '../src/agents/connect.js';
 import { mcpServers, mcpServersCodex, codexSnippet, geminiSnippet, snippetFor } from '../src/kb/mcp.js';

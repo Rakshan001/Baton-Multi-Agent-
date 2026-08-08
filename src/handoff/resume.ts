@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton resume` (H4) — the pickup side of the manual relay. Lists every open
  * handoff brief in one place (task briefs living in worktree HANDOFF.md files

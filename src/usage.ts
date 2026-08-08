@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Real token usage, parsed from Claude Code's session JSONLs — input/output/
  * cache tokens + an estimated cost per session, mapped back to baton tasks.

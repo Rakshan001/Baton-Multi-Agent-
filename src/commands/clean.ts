@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton clean` — worktree GC (W1). Agents create ad-hoc worktrees (their own
  * `git worktree add`) and merge via GitHub PRs, so nothing ever removes the

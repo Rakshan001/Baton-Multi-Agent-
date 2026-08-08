@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Agent roster screen
    The real roster behind GET /api/agents: which CLIs are installed,
@@ -104,7 +106,17 @@ function AgentCard({
           <AgentGlyph id={a.id} size={20} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: "var(--fs-15)", fontWeight: "var(--fw-semibold)" }}>{a.label}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+            <span style={{ fontSize: "var(--fs-15)", fontWeight: "var(--fw-semibold)" }}>{a.label}</span>
+            {/* Where the definition came from, on the card you launch from:
+                this one was defined by the repo, not by you. */}
+            {a.fromProject && (
+              <span className="tag" style={{ flex: "none", color: "var(--warn, #b58900)" }}
+                data-tip="Defined by this repo's .baton/agents.json — it arrived with the code, so treat it like any other committed config you review">
+                from this repo
+              </span>
+            )}
+          </div>
           <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{a.binary}</div>
         </div>
         <StatusPill a={a} color={color} />

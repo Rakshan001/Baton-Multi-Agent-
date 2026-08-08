@@ -1,11 +1,16 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   cleanFinding, countByAxis, isReviewStale, listReviews, loadReview, openFindings,
-  resolveFinding, ReviewValidationError, safeSlug, saveReview, type ReviewFinding,
+  resolveFinding, ReviewValidationError, reviewHeads, safeSlug, saveReview, type ReviewFinding,
 } from '../src/reviews.js';
+import { git } from '../src/util/exec.js';
+import { headCommit } from '../src/git.js';
+import { createTask } from '../src/commands/new.js';
 
 /**
  * The review store exists so findings outlive the session that produced them.
@@ -96,6 +101,32 @@ describe('saveReview / loadReview', () => {
     expect(await loadReview(root, 'never-reviewed')).toBeNull();
   });
 
+  /*
+   * Attribution. `agent` says WHAT ran the review; `author` says WHO — and on a
+   * shared knowledge base those differ, because two people both run "claude".
+   * The temp dir has no git repo, so this also pins the contract that an
+   * unresolvable identity still yields a usable label instead of throwing: a
+   * review that fails to save is far worse than one attributed to a fallback.
+   */
+  it('stamps an author on save and round-trips it', async () => {
+    const saved = await saveReview(root, 'attributed', {
+      fixedPoint: 'main', head: 'abc123', findings: [finding()], agent: 'claude',
+    });
+    expect(saved.author.length).toBeGreaterThan(0);
+    expect(saved.author).not.toContain('\n');
+    expect((await loadReview(root, 'attributed'))!.author).toBe(saved.author);
+  });
+
+  // No migration step: a record written before authorship existed must load.
+  it('reads a record with no author field as unknown', async () => {
+    await saveReview(root, 'legacy', { fixedPoint: 'main', head: 'abc123', findings: [finding()] });
+    const path = join(root, '.baton', 'reviews', 'legacy.json');
+    const raw = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>;
+    delete raw.author;
+    await writeFile(path, JSON.stringify(raw), 'utf-8');
+    expect((await loadReview(root, 'legacy'))!.author).toBe('unknown');
+  });
+
   it('keeps a hostile slug inside .baton/reviews', () => {
     // traversal segments collapse to a separator, which is then stripped —
     // what matters is that no '/' or '..' survives into the filename
@@ -158,6 +189,26 @@ describe('counting and staleness', () => {
     expect(isReviewStale(rec, 'bbb')).toBe(true);
     // unknown current head is not a staleness claim we can make
     expect(isReviewStale(rec, '')).toBe(false);
+  });
+
+  it('reads an abbreviated sha and the full sha as the same commit', async () => {
+    // The bug this pins: `headCommit()` is `rev-parse --short`, while the
+    // code-review skill tells the agent to record `rev-parse HEAD` — the full
+    // 40-char sha. A strict !== between those two spellings of ONE commit
+    // called every review stale the instant it was saved, in every repo, so
+    // the warning that means "these findings may already be fixed" was on
+    // permanently and meant nothing. The old toy shas ('aaa'/'bbb') were the
+    // same length, which is why the suite never saw it.
+    const full = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+    const rec = await saveReview(root, 'abbrev', { fixedPoint: 'main', head: full, findings: [] });
+    expect(isReviewStale(rec, full.slice(0, 7))).toBe(false);
+    expect(isReviewStale(rec, full.slice(0, 12))).toBe(false);
+    expect(isReviewStale(rec, full)).toBe(false);
+    // A genuinely different commit is still stale at any abbreviation.
+    expect(isReviewStale(rec, 'ffffffff')).toBe(true);
+    // ...and the reverse spelling too: a short head recorded, full sha now.
+    const short = await saveReview(root, 'abbrev2', { fixedPoint: 'main', head: full.slice(0, 7), findings: [] });
+    expect(isReviewStale(short, full)).toBe(false);
   });
 });
 
@@ -274,6 +325,104 @@ describe('secret redaction', () => {
     });
     const onDisk = await readFile(join(root, '.baton', 'reviews', 'sec.json'), 'utf-8');
     expect(onDisk).not.toContain('BEGIN RSA PRIVATE KEY');
+  });
+
+  it('redacts the sibling fields too — skipped.why and partial', async () => {
+    /*
+     * The findings fields were redacted from day one; these took the same path
+     * to every member unredacted. "Why an axis was skipped" is exactly where an
+     * agent writes "could not run SAST — needs KEY=…", and `partial` is a
+     * reproduce-command magnet ("re-run with GH_TOKEN=… gh pr diff").
+     */
+    await saveReview(root, 'sib', {
+      fixedPoint: 'main', head: 'aaa',
+      findings: [finding()],
+      skipped: [{ axis: 'security', why: `could not run SAST — needs ${SK}` }],
+      partial: `diff truncated; reproduce with ${AWS}`,
+    });
+    const onDisk = await readFile(join(root, '.baton', 'reviews', 'sib.json'), 'utf-8');
+    expect(onDisk).not.toContain(SK);
+    expect(onDisk).not.toContain(AWS);
+    // Read-side symmetry: a hand-edited file is redacted on the way out too.
+    await writeFile(join(root, '.baton', 'reviews', 'sib.json'),
+      onDisk.replace('"partial": "', `"partial": "${AWS} `), 'utf-8');
+    const rec = (await loadReview(root, 'sib'))!;
+    expect(JSON.stringify(rec)).not.toContain(AWS);
+  });
+});
+
+describe('concurrent writes', () => {
+  it('two racing resolves both persist — the lock serializes read-modify-write', async () => {
+    /*
+     * The daemon is one process serving concurrent requests, and resolve is
+     * load → mutate → save with awaits in between. Unserialized, both loads
+     * see the same file, and the later rename silently reverts the earlier
+     * resolve — while BOTH callers got a record back claiming success. The
+     * tmp+rename only ever prevented torn files, not lost updates.
+     */
+    await saveReview(root, 'race', {
+      fixedPoint: 'main', head: 'aaa',
+      findings: [
+        finding({ title: 'first' }),
+        finding({ title: 'second' }),
+      ],
+    });
+    await Promise.all([
+      resolveFinding(root, 'race', 0, 'fixed'),
+      resolveFinding(root, 'race', 1, 'dismissed'),
+    ]);
+    const rec = (await loadReview(root, 'race'))!;
+    expect(rec.findings.map((f) => f.status).sort()).toEqual(['dismissed', 'fixed']);
+  });
+});
+
+/**
+ * A review's head is recorded by an agent working in a TASK WORKTREE, on the
+ * task's branch. Staleness used to be judged against the served root — a
+ * different checkout on a different branch, and in a hub often a different
+ * repo (or no repo at all). Both directions were wrong: a diverged task branch
+ * read stale forever, and a root with no commits read never-stale, silently
+ * switching the warning off.
+ */
+describe('reviewHeads — which checkout a review is compared against', () => {
+  let repo: string;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'baton-revheads-'));
+    await git(['init', '-q'], repo);
+    await git(['config', 'user.email', 'test@baton.dev'], repo);
+    await git(['config', 'user.name', 'Baton Test'], repo);
+    await git(['checkout', '-q', '-b', 'main'], repo);
+    await writeFile(join(repo, 'README.md'), '# r\n', 'utf-8');
+    await git(['add', '.'], repo);
+    await git(['commit', '-q', '-m', 'initial'], repo);
+  });
+  afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
+
+  it('asks the task worktree, so a review of the branch it was taken on is not stale', async () => {
+    const task = await createTask('Review this branch', repo);
+    await writeFile(join(task.worktreePath, 'x.txt'), 'x\n', 'utf-8');
+    await git(['add', '.'], task.worktreePath);
+    await git(['commit', '-q', '-m', 'work on the branch'], task.worktreePath);
+
+    const wtHead = (await headCommit(task.worktreePath))!;
+    const rootHead = (await headCommit(repo))!;
+    expect(wtHead).not.toBe(rootHead); // the branch has moved; main has not
+
+    const heads = await reviewHeads(repo, [task.slug]);
+    expect(heads.get(task.slug)).toBe(wtHead);
+
+    const rec = await saveReview(repo, task.slug, { fixedPoint: 'main', head: wtHead, findings: [] });
+    expect(isReviewStale(rec, heads.get(task.slug)!)).toBe(false);
+    // What the old code compared against — a review taken seconds ago,
+    // announced as stale because main happens to sit somewhere else.
+    expect(isReviewStale(rec, rootHead)).toBe(true);
+  });
+
+  it('falls back to the served root when the review outlived its task', async () => {
+    // Merged and removed: the worktree is gone, and the only checkout left to
+    // ask about is the root.
+    expect((await reviewHeads(repo, ['vanished'])).get('vanished')).toBe(await headCommit(repo));
   });
 });
 

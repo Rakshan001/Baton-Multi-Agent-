@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,7 +9,7 @@ import {
   detectSecret, factSimilarity, fingerprintOf, listMemories, memoryBriefSection, parseFactFile,
   recallMemories, renderFactFile, saveMemory, scoreMemory, slugifyId,
   deriveProject, factsToPrune,
-  MemoryValidationError, type MemoryFact, type MemoryStatus,
+  MemoryValidationError, UndurableFactError, type MemoryFact, type MemoryStatus,
 } from '../src/memory.js';
 
 describe('deriveProject (per-server scoping)', () => {
@@ -86,6 +88,49 @@ describe('detectSecret', () => {
     expect(detectSecret('The auth middleware lives in src/auth.ts and reads JWT_SECRET from env')).toBeNull();
     expect(detectSecret('Merge with --no-squash keeps history')).toBeNull();
   });
+
+  /**
+   * The original seven patterns matched exact prefixes and a QUOTED assignment,
+   * which between them missed every shape probed here — including the likeliest
+   * one, a line pasted straight out of a .env file. Memories are plain files
+   * read by every agent, and once the KB is git-tracked a missed key is one
+   * that gets pushed, so a leak stops being local.
+   */
+  it('catches the shapes that actually leak', () => {
+    const cases: Array<[string, string]> = [
+      ['Stripe secret key', 'the billing key is sk_live_EXAMPLENOTAREALKEY'],
+      ['unquoted assignment', 'set DATABASE_PASSWORD=hunter2correcthorse in the env'],
+      // `_` is a word char, so \bsecret\b never matched inside AWS_SECRET_ACCESS_KEY.
+      ['.env line', 'AWS_SECRET_ACCESS_KEY=EXAMPLE/NOTAREAL/SECRETVALUE'],
+      ['database password in a URL', 'connect via postgres://admin:s3cr3tP4ss@db.internal:5432/app'],
+      ['mongodb URL', 'mongodb+srv://user:MyP4ssw0rd123@cluster0.mongodb.net'],
+      ['Google API key', 'the maps key is AIzaEXAMPLENOTAREALGOOGLEAPIKEYXXX'],
+      ['bearer token', 'send Authorization: Bearer EXAMPLENOTAREALBEARERTOKEN'],
+      ['npm token', 'npm_EXAMPLENOTAREALNPMTOKENVALUEXX'],
+      ['GitHub token', 'ghp_EXAMPLENOTAREALGITHUBTOKENXX'],
+    ];
+    for (const [name, text] of cases) expect(detectSecret(text), name).toBeTruthy();
+  });
+
+  /**
+   * False positives cost more than they look: this gate has no override, so a
+   * wrongly refused fact is knowledge permanently lost. Every one of these is a
+   * thing an engineering memory legitimately says.
+   */
+  it('stays silent on facts that merely TALK about credentials', () => {
+    const fine = [
+      'The member token is hashed with scrypt and never logged in full.',
+      'Password reset flows live in src/auth/reset.ts and expire after 1 hour.',
+      "apiKey: z.string().describe('the caller key')", // code shape, not a value
+      'token: string',
+      'The API key is stored in 1Password under Engineering, never in the repo.',
+      'the base commit was 9f8c2b1a4d6e0f37a5b8c9d0e1f2a3b4c5d6e7f8 on baton/fix.',
+      'anchor hash 9f8c2b1a4d6e0f37a5b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0',
+      'docs live at https://baton.dev/guide/memory',
+      'clone git@github.com:Rakshan001/Baton.git over ssh',
+    ];
+    for (const text of fine) expect(detectSecret(text), text.slice(0, 40)).toBeNull();
+  });
 });
 
 describe('fact file round-trip', () => {
@@ -94,6 +139,7 @@ describe('fact file round-trip', () => {
     type: 'gotcha',
     fact: 'The SSE ring buffer holds only 200 events; terminal output is excluded.',
     agent: 'claude',
+    author: 'dev@example.com',
     task: 'some-task',
     createdAt: '2026-06-12T00:00:00.000Z',
     anchors: { commit: 'abc123', files: [{ path: 'src/events.ts', hash: 'deadbeef0000' }] },
@@ -107,6 +153,7 @@ describe('fact file round-trip', () => {
     expect(parsed!.id).toBe(fact.id);
     expect(parsed!.type).toBe('gotcha');
     expect(parsed!.fact).toBe(fact.fact);
+    expect(parsed!.author).toBe('dev@example.com');
     expect(parsed!.anchors.commit).toBe('abc123');
     expect(parsed!.anchors.files).toEqual([{ path: 'src/events.ts', hash: 'deadbeef0000' }]);
   });
@@ -114,11 +161,34 @@ describe('fact file round-trip', () => {
   it('parse rejects garbage', () => {
     expect(parseFactFile('not a fact file')).toBeNull();
   });
+
+  // Facts written before author existed must still load. Reading them as
+  // `unknown` is the whole reason there is no migration step.
+  it('a fact file with no author field reads as unknown, not undefined', () => {
+    const legacy = [
+      '---', 'id: legacy-fact', 'type: gotcha', 'agent: claude', 'task: null',
+      "created: '2026-01-01T00:00:00.000Z'", 'commit: abc123', 'files: []',
+      'supersedes: null', 'fingerprint: legacy', '---', '', 'A fact from before authorship existed.',
+    ].join('\n');
+    const parsed = parseFactFile(legacy);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.author).toBe('unknown');
+  });
+
+  // Regression: js-yaml throws on an undefined value (it dumps null fine), so an
+  // author that went missing would abort the write and lose the entire fact.
+  it('renders even when author is missing at runtime', () => {
+    const noAuthor = { ...fact, author: undefined as unknown as string };
+    const parsed = parseFactFile(renderFactFile(noAuthor));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.author).toBe('unknown');
+    expect(parsed!.fact).toBe(fact.fact);
+  });
 });
 
 describe('scoreMemory', () => {
   const fact: MemoryFact = {
-    id: 'mem-x', type: 'convention', agent: null, task: 'fix-auth-flow',
+    id: 'mem-x', type: 'convention', agent: null, author: 'dev@example.com', task: 'fix-auth-flow',
     fact: 'All git calls go through util/exec.ts — shell-free, hardened.',
     createdAt: '2026-06-12T00:00:00.000Z',
     anchors: { commit: null, files: [{ path: 'src/util/exec.ts', hash: 'aa' }] },
@@ -225,6 +295,82 @@ describe('memory store (real temp git repo)', () => {
     await expect(saveMemory(root, { fact: 'too short' })).rejects.toThrow(MemoryValidationError);
     await expect(saveMemory(root, { fact: 'The deploy key is ghp_abcdefghijklmnopqrstuvwxyz012345 for CI.' }))
       .rejects.toThrow(/refusing to store/);
+  });
+
+  /*
+   * The anti-capture gate (memory-durability.ts) at the write path. Truth is
+   * checked on every READ via anchors; this is the question that comes before
+   * it — knowledge that was never about the code cannot be policed by hashing
+   * the code, so it must not be stored at all.
+   */
+  describe('anti-capture gate', () => {
+    it('refuses a never-durable fact and writes nothing', async () => {
+      const before = (await listMemories(root)).length;
+      await expect(saveMemory(root, { fact: 'In this session I fixed the guard and pushed the branch.' }))
+        .rejects.toThrow(/not durable knowledge \(narrative/);
+      expect(await listMemories(root)).toHaveLength(before);
+    });
+
+    it('names the phrase and the rewrite, so a rejection is one edit from a save', async () => {
+      await expect(saveMemory(root, { fact: 'The playwright MCP server is broken, so skip it entirely.' }))
+        .rejects.toThrow(/"is broken".*hardens into a refusal/s);
+      // Same knowledge, stated durably — accepted.
+      const ok = await saveMemory(root, {
+        fact: 'The playwright MCP server fails to attach under a hub root; drive the dashboard with curl instead.',
+      });
+      expect(ok.id).toMatch(/^mem-/);
+    });
+
+    it('EXPLICIT file anchors waive the evidence-backed classes', async () => {
+      const saved = await saveMemory(root, {
+        fact: 'The a.txt fast path does not work once the file is rewritten by the release script.',
+        files: ['a.txt'],
+      });
+      expect(saved.anchors.files.map((f) => f.path)).toEqual(['a.txt']);
+    });
+
+    it('a filename merely MENTIONED does not waive it — only an asserted anchor does', async () => {
+      // Anchors derived from the prose (deriveFileAnchors) would find a.txt here,
+      // which would make the waiver self-serving: every claim naming any real
+      // file would exempt itself. The caller has to vouch for the evidence.
+      await expect(saveMemory(root, { fact: 'The a.txt loader is broken and always has been.' }))
+        .rejects.toThrow(/not durable knowledge \(tool-disparagement/);
+    });
+
+    it('does not waive a session narrative or a self-resolved flake, anchored or not', async () => {
+      await expect(saveMemory(root, { fact: 'In this session we rewrote a.txt twice.', files: ['a.txt'] }))
+        .rejects.toThrow(/narrative/);
+      await expect(saveMemory(root, { fact: 'The a.txt check failed once, then it passed on the second run.', files: ['a.txt'] }))
+        .rejects.toThrow(/transient/);
+    });
+
+    it('an anchor that does not resolve is not evidence, so it grants no waiver', async () => {
+      // A missing file hashes to '' and stays '' forever, so it never trips the
+      // staleness check. Honouring it would hand out a waiver that also opts the
+      // fact out of the very verification the waiver is justified by — i.e. the
+      // gate would be bypassable by naming any path at all.
+      await expect(saveMemory(root, {
+        fact: 'The uploader is broken and always has been, top to bottom.',
+        files: ['does-not-exist.ts'],
+      })).rejects.toThrow(/not durable knowledge/);
+    });
+
+    it('is a distinct error class, so callers can tell "restate this" from "that had a credential in it"', async () => {
+      await expect(saveMemory(root, { fact: 'In this session I rewrote the loader.' }))
+        .rejects.toThrow(UndurableFactError);
+      // Both are still MemoryValidationError — every existing catch keeps working.
+      await expect(saveMemory(root, { fact: 'In this session I rewrote the loader.' }))
+        .rejects.toThrow(MemoryValidationError);
+      // The credential rejection must NOT be the durable-rewrite class.
+      await expect(saveMemory(root, { fact: 'The deploy key is ghp_abcdefghijklmnopqrstuvwxyz012345 for CI.' }))
+        .rejects.not.toThrow(UndurableFactError);
+    });
+
+    it('reports a secret before durability, so a rejected fact is never echoed back with a token in it', async () => {
+      await expect(saveMemory(root, {
+        fact: 'In this session the CI token ghp_abcdefghijklmnopqrstuvwxyz012345 stopped working.',
+      })).rejects.toThrow(/refusing to store/);
+    });
   });
 
   it('ignores absolute and traversal file anchors', async () => {

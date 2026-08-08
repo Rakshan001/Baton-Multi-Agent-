@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton setup [path]` — the friendly front door. Classifies the target folder
  * and routes to the right setup, so a folder that holds several *separate* git

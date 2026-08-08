@@ -1,17 +1,19 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton route "<task>"` — which agent/model should take this task, and why:
  * matched rule or severity score, the tier's fallback chain, and which chain
  * entry actually resolves on this machine.
  */
-import { gitRoot } from '../git.js';
 import { agentInstalled } from '../agents/roster.js';
+import { activeBatonRoot } from '../store.js';
 import { CONFIG_FILE, loadRouting, resolveChain, suggestRoute } from '../routing.js';
 
-const available = (agent: string): Promise<boolean> =>
-  agent === 'any' ? Promise.resolve(true) : agentInstalled(agent);
+const available = (agent: string, root: string): Promise<boolean> =>
+  agent === 'any' ? Promise.resolve(true) : agentInstalled(agent, root);
 
 export async function routeCmd(text: string): Promise<void> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const { config, path, errors } = await loadRouting(root);
   for (const e of errors) console.error(`! ${CONFIG_FILE}: ${e}`);
 
@@ -22,7 +24,7 @@ export async function routeCmd(text: string): Promise<void> {
     : s.source === 'single' ? 'single-agent mode'
     : 'no rule matched — default';
 
-  const resolved = await resolveChain(s.chain, available);
+  const resolved = await resolveChain(s.chain, (agent) => available(agent, root));
   const pick = resolved?.entry ?? s.chain[0];
   const model = pick.model ? ` (model: ${pick.model})` : '';
 

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — New session dialog
    Creates an isolated worktree + branch (POST /api/tasks, wraps
@@ -109,7 +111,13 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
             <div style={{ padding: "12px 20px", borderTop: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ flex: 1, fontSize: "var(--fs-12)", color: "var(--text-quaternary)" }}><span className="kbd">⌘</span> <span className="kbd">↵</span> to create</span>
               <button className="btn fr" onClick={onClose} disabled={busy}>Cancel</button>
-              <button className="btn btn-primary fr" onClick={submit} disabled={!task.trim() || busy || (!!hubProjects && !project)}>
+              {/* Creating a session makes a branch and a worktree — a write, and
+                  so disabled + explained on a read-only daemon, exactly like
+                  merge, remove and the agent controls. */}
+              <button className="btn btn-primary fr" onClick={submit}
+                disabled={!BatonAPI.writeEnabled || !task.trim() || busy || (!!hubProjects && !project)}
+                data-tip={BatonAPI.writeEnabled ? undefined : "Read-only — start `baton serve --write` to enable"}
+                style={BatonAPI.writeEnabled ? {} : { opacity: 0.55, cursor: "not-allowed" }}>
                 {busy ? <><Icon name="refresh" size={13} style={{ animation: "spin 0.8s linear infinite" }} /> Creating…</> : <><Icon name="plus" size={14} /> Create session</>}
               </button>
             </div>

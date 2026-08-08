@@ -138,9 +138,11 @@ pkill -f 'tmux -C attach' && rm -rf /tmp/tmux-$UID
 
 ### Does Baton support agents other than Claude Code?
 
-Yes. Baton coordinates **Claude Code, Cursor, Codex, Gemini CLI, Aider, and
-OpenCode** on one repo. Headless print-mode runs (`baton start`) support claude,
-codex, and gemini; interactive tmux terminals in the dashboard support all six.
+Yes. Baton coordinates **Claude Code, Cursor, Codex, Gemini CLI, Aider,
+OpenCode, and OpenClaw** on one repo — and any other agent CLI you teach it
+via `~/.baton/agents.json` (see [installation](./installation.md)). Headless
+print-mode runs (`baton start`) support claude, codex, and gemini; interactive
+tmux terminals in the dashboard cover every agent with an interactive launcher.
 Routing and handoff briefs can target cursor, codex, gemini, or any.
 
 ### Where is my data stored?
@@ -149,7 +151,8 @@ Everything is local to your repo and machine:
 
 - **Tasks / worktrees** — branches `baton/<slug>` with worktrees under
   `.baton/wt/<slug>`.
-- **Memory** — evidence-anchored facts at `.baton/memory/facts/` (always the
+- **Memory** — evidence-anchored facts at `baton/memory/facts/` (tracked) and
+  `.baton/memory/facts/` (local-only); both are read (always the
   **main** repo, even when written from a worktree).
 - **Reports** — completion reports at `.baton/reports/<slug>.md`.
 - **History** — a local SQLite file-touch index.

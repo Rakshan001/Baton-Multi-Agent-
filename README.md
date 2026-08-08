@@ -6,9 +6,15 @@
 
 **Baton is a local coordination hub + knowledge base for running multiple AI coding agents on one repo** — Claude Code, Cursor, Codex, Gemini, Aider, OpenCode. Isolated git worktrees, a realtime dashboard, shared evidence-anchored memory, installable skills, and one-file session handoff.
 
-[Quickstart](docs/quickstart.md) · [Documentation](docs/README.md) · [CLI reference](docs/cli-reference.md) · [Architecture](docs/architecture.md)
+<a href="https://baton-landing.vercel.app"><img src="https://img.shields.io/badge/Read%20the%20docs-baton--landing.vercel.app-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Baton documentation website"></a>
 
-[![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) [![Website](https://img.shields.io/badge/website-baton--landing.vercel.app-000?logo=vercel&logoColor=white)](https://baton-landing.vercel.app) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
+### 🌐 [**baton-landing.vercel.app**](https://baton-landing.vercel.app)
+
+[Docs](https://baton-landing.vercel.app/docs) · [Features](https://baton-landing.vercel.app/features) · [How it works](https://baton-landing.vercel.app/how-it-works) · [Use cases](https://baton-landing.vercel.app/use-cases) · [FAQ](https://baton-landing.vercel.app/faq) · [About](https://baton-landing.vercel.app/about)
+
+<sub>In this repo: <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/README.md">Documentation</a> · <a href="docs/cli-reference.md">CLI reference</a> · <a href="docs/architecture.md">Architecture</a></sub>
+
+[![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-AGPL--3.0-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
 
 </div>
 
@@ -48,7 +54,7 @@ Do the expensive thinking where it's powerful (or included in your plan); do the
 > which port), run every command itself, and leave you a personalized
 > `GETTING_STARTED.md` in your project when it's done.
 
-Requires **Node ≥ 20**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
+Requires **Node ≥ 24**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
 
 ```bash
 git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton && cd baton
@@ -108,7 +114,14 @@ History, memory, and reports are plain files + git — so when you *do* open the
 
 ## Documentation
 
-Full docs live in [**`docs/`**](docs/README.md):
+> [!TIP]
+> ### 🌐 Read the docs on the web → **[baton-landing.vercel.app/docs](https://baton-landing.vercel.app/docs)**
+>
+> Cross-linked and nicer to read than raw markdown — start with **[How it works](https://baton-landing.vercel.app/how-it-works)** for the handoff flow, **[Use cases](https://baton-landing.vercel.app/use-cases)** for real setups, or the **[FAQ](https://baton-landing.vercel.app/faq)**.
+>
+> **[Home](https://baton-landing.vercel.app)** · **[Docs](https://baton-landing.vercel.app/docs)** · **[Features](https://baton-landing.vercel.app/features)** · **[How it works](https://baton-landing.vercel.app/how-it-works)** · **[Use cases](https://baton-landing.vercel.app/use-cases)** · **[FAQ](https://baton-landing.vercel.app/faq)** · **[About](https://baton-landing.vercel.app/about)**
+
+The same docs also live in this repo under [**`docs/`**](docs/README.md):
 
 - **[Installation](docs/installation.md)** · **[Quickstart](docs/quickstart.md)** · **[CLI reference](docs/cli-reference.md)**
 - **[Dashboard](docs/dashboard.md)** · **[Knowledge base](docs/knowledge-graph.md)** · **[Session handoff](docs/session-handoff.md)**
@@ -125,7 +138,7 @@ Full docs live in [**`docs/`**](docs/README.md):
 
 ## Contributing
 
-Baton is open source (MIT) and contributions are welcome — the project is deliberately easy to hack on:
+Baton is open source (AGPL-3.0) and contributions are welcome — the project is deliberately easy to hack on:
 
 - **Orient first**: [STATUS.md](STATUS.md) is the living map — what's built, what's pending, and where every module lives. [docs/architecture.md](docs/architecture.md) explains the shape; [CLAUDE.md](CLAUDE.md) lists the conventions that must not break (zero-dependency daemon, SSE-only realtime, shell-free git).
 - **How changes land**: every feature is TDD'd (the test exists and fails before the code), and non-negotiable behaviors are guarded by *invariant tests* — if a future edit drops a safety rule from a bundled skill, the suite fails loudly.
@@ -143,6 +156,16 @@ Open a PR against `main` with tests. If you're changing coordination behavior, r
 
 ## License
 
-MIT © Rakshan Shetty. See [LICENSE](LICENSE).
+**AGPL-3.0-or-later** © Rakshan Shetty. See [LICENSE](LICENSE).
+
+Use it, change it, run it commercially — all fine. The one condition: if you
+distribute Baton or **run a modified version as a network service**, the people
+using it get the source under the same terms. That second clause is the reason
+this is AGPL and not GPL — Baton is a daemon with a web dashboard, so hosting it
+without ever shipping a binary would otherwise be a way around the license.
+
+Baton was MIT until 2026-08-07. Copies taken before then keep their MIT
+grant — relicensing does not reach backwards. Contributions are accepted under
+the terms in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 <div align="center"><sub><b>Pass it on.</b></sub></div>

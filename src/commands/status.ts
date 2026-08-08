@@ -1,17 +1,19 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `baton status [--watch]` — central view of all sessions:
  * task · live agent · git status · ahead/behind · likely conflicts.
  */
 import { basename } from 'node:path';
 import { collectStatus } from '../board.js';
-import { gitRoot } from '../git.js';
+import { activeBatonRoot } from '../store.js';
 
 function pad(s: string, n: number): string {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
 async function buildTable(): Promise<string> {
-  const root = await gitRoot();
+  const root = await activeBatonRoot();
   const rows = await collectStatus(root);
   if (rows.length === 0) {
     return 'No tasks. Create one: baton new "<task>"';

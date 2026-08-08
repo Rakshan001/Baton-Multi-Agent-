@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Loopback-origin / anti-CSRF helpers for the local daemon. Pure; unit-tested.
  *
@@ -19,6 +21,36 @@ const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$
  */
 export function isLoopbackOrigin(origin: string | undefined | null): boolean {
   return !origin || LOOPBACK_ORIGIN_RE.test(origin);
+}
+
+/**
+ * The anti-CSRF check widened for a deliberately exposed daemon — the Origin
+ * counterpart to `isAllowedHostHeader`.
+ *
+ * A dashboard opened at `http://mac-mini.local:7077` sends that Origin on every
+ * write, which `isLoopbackOrigin` refuses. Without this the page loads, reads
+ * fine, and every single button fails — the worst kind of broken, because it
+ * looks like it works.
+ *
+ * Widening is safe for exactly the same reason the Host allow-list is: only
+ * names the operator DECLARED pass, never a wildcard. A page on evil.com still
+ * arrives with `Origin: https://evil.com` and is still refused. And a remote
+ * request needs a member token regardless — which a cross-site page cannot
+ * obtain, because nothing here rides on ambient credentials (no cookies). This
+ * is the tighter of the two checks, not the only one.
+ */
+export function isAllowedOrigin(origin: string | undefined | null, allowed: string[]): boolean {
+  if (isLoopbackOrigin(origin)) return true;
+  const name = originHostname(origin!);
+  if (!name) return false;
+  return allowed.some((a) => a && hostnameOf(a) === name);
+}
+
+/** Hostname of an Origin header, or '' if it is not a usable http(s) origin.
+ *  `null` (sandboxed iframe, file://) parses to nothing and is refused. */
+export function originHostname(origin: string): string {
+  const m = /^https?:\/\/([^/?#]+)$/i.exec(origin.trim());
+  return m ? hostnameOf(m[1]!) : '';
 }
 
 const LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
@@ -44,6 +76,54 @@ const LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
  */
 export function isLoopbackHost(host: string | undefined | null): boolean {
   return !!host && LOOPBACK_HOST_RE.test(host);
+}
+
+/** The name part of a Host header, without the port and without IPv6 brackets. */
+export function hostnameOf(host: string): string {
+  const h = host.trim().toLowerCase();
+  if (h.startsWith('[')) return h.slice(1, h.indexOf(']') > 0 ? h.indexOf(']') : undefined);
+  const colon = h.lastIndexOf(':');
+  return colon > 0 && !h.slice(colon + 1).includes(':') ? h.slice(0, colon) : h;
+}
+
+/**
+ * The anti-rebinding check widened for a deliberately exposed daemon.
+ *
+ * Loopback always passes (the local-first default). Beyond that, ONLY names the
+ * operator declared pass — never a wildcard. That is what keeps `--host` from
+ * silently re-opening the DNS-rebinding hole the loopback check exists to close:
+ * an attacker who rebinds `evil.com` at the daemon's address still arrives with
+ * `Host: evil.com`, which is not on the list.
+ *
+ * Note that binding `0.0.0.0` therefore does NOT make the daemon reachable by
+ * name on its own — the operator must say which names they expect. Failing
+ * closed on a misconfiguration is the intended behaviour.
+ */
+export function isAllowedHostHeader(host: string | undefined | null, allowed: string[]): boolean {
+  if (isLoopbackHost(host)) return true;
+  if (!host) return false;
+  const name = hostnameOf(host);
+  if (!name) return false;
+  return allowed.some((a) => a && hostnameOf(a) === name);
+}
+
+/**
+ * True when the CONNECTION itself came from this machine.
+ *
+ * Distinct from `isLoopbackHost`, and the difference is the whole point:
+ * - `isLoopbackHost` reads a client-supplied header and answers "what name did
+ *   the browser dial?" — the anti-rebinding question.
+ * - this reads the socket's peer address, which no client can forge, and answers
+ *   "is this process local?" — the authorization question.
+ *
+ * Only the second is safe to decide access on, which is why the bearer-token
+ * requirement keys on this and not on Host. Node reports an IPv4 peer on a
+ * dual-stack listener as `::ffff:127.0.0.1`, so that form is matched too.
+ */
+export function isLoopbackAddr(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  const a = addr.trim().toLowerCase().replace(/^::ffff:/, '');
+  return a === '127.0.0.1' || a === '::1' || a.startsWith('127.');
 }
 
 /** HTTP methods that mutate server state and therefore need the anti-CSRF check. */

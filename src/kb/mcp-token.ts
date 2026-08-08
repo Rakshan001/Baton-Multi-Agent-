@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /** Per-repo secret embedded in the daemon's graphify proxy URL, so only clients
  *  holding Baton's written MCP config (not a random local web page) can query
  *  the graph. Persisted so it survives daemon restarts (configs stay valid). */

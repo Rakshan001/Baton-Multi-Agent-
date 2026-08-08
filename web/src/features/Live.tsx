@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Live coding session (ported from live.jsx)
    Demo mode: scripted activity stream (showcase). Real mode: the
@@ -108,7 +110,16 @@ function LiveSessionRail({ sessions, currentSlug, onPick, onClose }: {
 }) {
   const live = sessions.filter((s) => s.agent !== null);
   const idle = sessions.filter((s) => s.agent === null);
-  const groups = AGENT_REGISTRY.map((a) => ({ a, items: live.filter((s) => s.agent === a.id) })).filter((g) => g.items.length);
+  // Registry agents first, then any id the registry doesn't know (a
+  // `.baton/agents.json` custom agent) with the neutral-glyph fallback — every
+  // live session must land in SOME group, or the "N live" count in the header
+  // promises rows the rail doesn't show.
+  const inRegistry = new Set<string>(AGENT_REGISTRY.map((a) => a.id!));
+  const extraIds = [...new Set(live.map((s) => s.agent!))].filter((id) => !inRegistry.has(id)).sort();
+  const groups = [
+    ...AGENT_REGISTRY.map((a) => ({ a, items: live.filter((s) => s.agent === a.id) })),
+    ...extraIds.map((id) => ({ a: getAgent(id), items: live.filter((s) => s.agent === id) })),
+  ].filter((g) => g.items.length);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggle = (id: string) => setCollapsed((c) => ({ ...c, [id]: !c[id] }));
 

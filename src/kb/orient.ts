@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * `orient` — a small, budgeted onboarding brief a fresh agent session gets so it
  * understands the project without re-exploring the repo. DURABLE content only
@@ -13,7 +15,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath, sep } from 'node:path';
 import { recallMemories, memoryBriefSection } from '../memory.js';
 import { listReports, type CompletionReport } from '../reports.js';
-import { resolveMcpRoot } from '../store.js';
+import { activeBatonRoot } from '../store.js';
 import { gitRoot } from '../git.js';
 import { gitTry } from '../util/exec.js';
 import { loadKb } from './state.js';
@@ -161,6 +163,6 @@ export async function orientForCwd(cwd: string = process.cwd(), opts: { topic?: 
   // memory/reports resolve their own store from a git path; use the git root so
   // hub sub-repos and worktrees behave like the MCP tools do.
   const gitPath = await gitRoot(cwd).catch(() => cwd);
-  const root = await resolveMcpRoot(cwd).catch(() => gitPath);
+  const root = await activeBatonRoot(cwd).catch(() => gitPath);
   return buildOrientation(root, { ...opts, cwd });
 }
