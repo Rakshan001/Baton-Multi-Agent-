@@ -39,6 +39,25 @@ export function installHint(d: GraphifyDetection): string {
   return 'pip install graphifyy   (or install uv first: https://docs.astral.sh/uv/)';
 }
 
+/**
+ * The same guidance as an argv array, for when the user asks `baton setup` to
+ * run the install rather than copy it.
+ *
+ * An argv array and never a string: a string implies a shell, and the third
+ * `installHint` variant carries a parenthetical URL a shell would try to run.
+ *
+ * `null` means "do not run anything" — either graphify is already here, or
+ * neither uv nor pipx is, and the remaining option is bare `pip`, which
+ * installs into whichever Python happens to lead PATH (often the system one).
+ * Choosing that for someone silently is worse than showing them the hint.
+ */
+export function graphifyInstallCommand(d: GraphifyDetection): { cmd: string; args: string[] } | null {
+  if (d.ok) return null;
+  if (d.uv) return { cmd: 'uv', args: ['tool', 'install', 'graphifyy'] };
+  if (d.pipx) return { cmd: 'pipx', args: ['install', 'graphifyy'] };
+  return null;
+}
+
 /** True when an LLM backend key is configured — semantic extraction would work. */
 export function hasLlmBackend(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(

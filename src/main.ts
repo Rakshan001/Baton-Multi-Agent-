@@ -83,7 +83,8 @@ program
   .argument('[path]', 'folder to set up (default: current directory)')
   .option('--hub', 'multi-repo: one centralized hub (merged graph + one dashboard)')
   .option('--individual', 'multi-repo: set up each repo on its own')
-  .option('--yes', 'accept the recommended defaults without prompting')
+  .option('--yes', 'accept project defaults without prompting (never installs software)')
+  .option('--agents <list>', 'comma-separated agents to wire (skips the prompt), e.g. claude,codex')
   .option('--no-mcp', 'skip writing graphify MCP servers to .mcp.json')
   .option('--no-docs', 'skip adding the coordination guide to AGENTS.md/CLAUDE.md')
   .option('--share', 'commit the KB to git so teammates skip re-indexing')
@@ -91,7 +92,7 @@ program
   .option('--serve', 'use the dashboard (skip the headless-vs-dashboard prompt)')
   .option('--headless', 'KB only — agents use it over MCP, no dashboard')
   .description('set up Baton for a repo — or a folder of several repos (hub vs individual)')
-  .action((path: string | undefined, opts: { hub?: boolean; individual?: boolean; yes?: boolean; mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; serve?: boolean; headless?: boolean }) =>
+  .action((path: string | undefined, opts: { hub?: boolean; individual?: boolean; yes?: boolean; agents?: string; mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; serve?: boolean; headless?: boolean }) =>
     run(() => setupCmd(path, opts)));
 
 program
