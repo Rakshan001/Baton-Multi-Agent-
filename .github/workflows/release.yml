@@ -1,0 +1,90 @@
+name: Release
+
+# Publishing is driven by a tag, so the released artifact always corresponds to
+# a commit anyone can check out. `workflow_dispatch` runs everything except the
+# publish, for rehearsing a release without spending a version number.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for npm provenance: npm exchanges this for a signed attestation
+  # linking the tarball to this workflow, this commit, and this repository.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    # A fork that happens to push a v* tag must not try to publish with (and
+    # would not have) the upstream token.
+    if: github.repository == 'Rakshan001/Baton-Multi-Agent-'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # --- Guards, before anything is built or published ------------------
+
+      - name: Tag must match the version being published
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match package.json version $pkg."
+            echo "A published version that disagrees with its tag makes the release unauditable:"
+            echo "there is no commit you can check out to get the code that shipped."
+            exit 1
+          fi
+          echo "tag v$tag matches package.json ✓"
+
+      - name: Version must not already exist on npm
+        run: |
+          set -eu
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::error::$name@$version is already published. npm versions are immutable — bump the version."
+            exit 1
+          fi
+          echo "$name@$version is unpublished ✓"
+
+      # --- Install, build, test -------------------------------------------
+
+      - name: Install (root)
+        run: npm ci
+
+      - name: Install (web)
+        run: npm ci --prefix web
+
+      - name: Build (both workspaces)
+        run: npm run build && npm run build:web
+
+      - name: Test
+        run: npm test
+
+      # --- Publish ---------------------------------------------------------
+
+      # `npm publish` runs prepack, which rebuilds both workspaces and refuses
+      # to produce a tarball missing any shipped artifact (scripts/prepack.mjs).
+      # --provenance publishes the signed build attestation; --access public is
+      # explicit so the first publish of a scoped name could never go private.
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Rehearsal only (no tag)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: echo "Built and tested without publishing — push a v* tag to release."

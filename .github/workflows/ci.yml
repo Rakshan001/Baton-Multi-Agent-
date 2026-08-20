@@ -59,3 +59,64 @@ jobs:
       # --- Test (needs both builds above) ---
       - name: Test (root)
         run: npm test
+
+  install-smoke:
+    name: Install the tarball like a stranger
+    runs-on: ubuntu-latest
+    # A clean image with node and git and nothing of ours: no repo checkout on
+    # PATH, no globally linked baton, no graphify, no agent CLIs. This is the
+    # machine the package actually lands on, and the only place where "works on
+    # my machine" packaging bugs — a path missing from `files`, a devDependency
+    # imported at runtime, a dashboard that was never built — can surface before
+    # a user finds them.
+    container: node:24-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install (root)
+        run: npm ci
+
+      - name: Install (web)
+        run: npm ci --prefix web
+
+      # prepack builds both workspaces and refuses to pack a tarball missing any
+      # shipped artifact, so this exercises the real publish path.
+      - name: Pack
+        run: npm pack --pack-destination /tmp
+
+      # --ignore-scripts is the point, not caution: the package promises to run
+      # no install scripts, and security-conscious teams set this globally. If
+      # Baton ever needed one, this step is where that breaks.
+      - name: Install the tarball globally
+        run: npm install -g --ignore-scripts /tmp/batonhq-*.tgz
+
+      - name: Set it up the way a new user would
+        run: |
+          set -eux
+          # Reports the version it was published as, not a hardcoded one.
+          test "$(baton --version)" = "$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
+
+          mkdir -p /tmp/demo && cd /tmp/demo
+          git init -q
+          git config user.email ci@example.com
+          git config user.name CI
+          echo '{"name":"demo"}' > package.json
+          git add -A && git commit -qm init
+
+          # No graphify in this image, so this also proves the degraded path:
+          # setup must finish and wire coordination rather than dying on the
+          # knowledge base it cannot build.
+          baton setup --yes --headless --local --agents claude
+
+          # Coordination is set up even without the graph.
+          test -f /tmp/demo/.mcp.json
+          baton ls
+
+      - name: The dashboard is in the tarball, not just the repo
+        run: |
+          set -eux
+          # `baton serve` resolves web/dist relative to its own dist/server.js,
+          # so this is checked against the INSTALLED copy, not the checkout.
+          installed="$(dirname "$(readlink -f "$(command -v baton)")")"
+          test -f "$installed/../web/dist/index.html"
