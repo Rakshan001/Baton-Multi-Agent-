@@ -1,6 +1,6 @@
 {
-  "name": "baton-cli",
-  "version": "0.0.1",
+  "name": "batonhq",
+  "version": "0.1.0",
   "description": "Hand a unit of coding work from one AI agent to another — plan on your expensive agent, pass the baton to your cheap one.",
   "type": "module",
   "bin": {
@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
+    "build:web": "npm run build --prefix web",
+    "prepack": "node scripts/prepack.mjs",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "lint": "tsc --noEmit"
@@ -28,6 +30,10 @@
     "type": "git",
     "url": "git+https://github.com/Rakshan001/Baton-Multi-Agent-.git"
   },
+  "homepage": "https://baton-landing.vercel.app",
+  "bugs": {
+    "url": "https://github.com/Rakshan001/Baton-Multi-Agent-/issues"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -41,7 +47,8 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^15.0.0",
     "execa": "^10.0.1",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
