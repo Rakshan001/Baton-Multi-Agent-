@@ -162,7 +162,7 @@ the product's first impression.
 | E1 | Node < 24 | Friendly message naming found/required/why; exit 1. No stack trace. |
 | E2 | `process.versions.node` absent or unparseable | Guard allows the run rather than blocking on its own uncertainty. |
 | E3 | Non-TTY (CI, pipe, nohup) | Every prompt takes its default; never hangs waiting on stdin. |
-| E4 | `--yes` | Takes every recommended default without prompting. |
+| E4 | `--yes` | Takes every default that touches the project, and installs no software — `--yes` is what CI and Dockerfiles run. Skipped installs print as a command. |
 | E5 | Ctrl-C mid-wizard | Exits without a stack trace, leaving no half-written config. |
 | E6 | Garbage prompt input | Re-asks rather than accepting a wrong answer. |
 | E7 | Multi-select input: `1,3`, `all`, `none`, empty, out-of-range | All parse; empty = default set; `none` = connect nothing. |
@@ -189,15 +189,42 @@ it, the first report comes from a stranger.
 
 ## Phases
 
-- [ ] **Phase 1 — Package identity.** `batonhq`, 0.1.0, `prepack` building
+All phases are implemented; `[x]` marks what shipped in this branch.
+
+- [x] **Phase 1 — Package identity.** `batonhq`, 0.1.0, `prepack` building
       both workspaces, `homepage`/`bugs`, `--version` reads package.json.
-- [ ] **Phase 2 — Node preflight guard.** `src/cli.ts` → `src/main.ts`;
+- [x] **Phase 2 — Node preflight guard.** `src/cli.ts` → `src/main.ts`;
       new launcher; E1, E2.
-- [ ] **Phase 3 — Tarball audit.** A test asserting `dist/`, `web/dist/`,
+- [x] **Phase 3 — Tarball audit.** A test asserting `dist/`, `web/dist/`,
       and `dist/skills/bundled` are in the pack manifest; E17.
-- [ ] **Phase 4 — Wizard.** Preflight banner, agent multi-select, graphify
+- [x] **Phase 4 — Wizard.** Preflight banner, agent multi-select, graphify
       consent, skills, global-install offer; E3–E16.
-- [ ] **Phase 5 — Release CI.** Publish on `v*` tag with provenance and a
+- [x] **Phase 5 — Release CI.** Publish on `v*` tag with provenance and a
       tag/version match check; E18.
-- [ ] **Phase 6 — Clean-container install smoke test.**
-- [ ] **Phase 7 — Docs.** README, installation, quickstart, CHANGELOG.
+- [x] **Phase 6 — Clean-container install smoke test.**
+- [x] **Phase 7 — Docs.** README, installation, quickstart, CHANGELOG.
+
+## What implementation changed about this design
+
+Three things the design did not anticipate, found while building it:
+
+**`kb init` refuses without graphify.** The design assumed "degrade, do not
+block" was a property of the wizard. It was not: `kb init` sets an exit code and
+writes nothing when graphify is missing, and setup called it *before* offering
+the install, then printed "✓ ready" anyway. So the offer moved ahead of every
+write, and a run without graphify now skips the knowledge base deliberately and
+says which parts still work.
+
+**`zod` was a phantom dependency.** `src/mcp.ts` and `src/mcp-pipeline.ts`
+import it; nothing declared it. It resolved only because the MCP SDK depends on
+it and npm hoists — so `baton mcp` would have died under pnpm or Yarn PnP. Now
+declared, with a test that walks every import in `src/` so the next one cannot
+sneak in.
+
+**`--version` was hardcoded.** It read `0.0.1` from a string literal while
+package.json moved independently.
+
+Phase 3 also merged into the existing `test/packaging.test.ts` rather than
+replacing it: that file already asked npm directly what the tarball contains,
+and it documents why `web/.npmignore` exists (npm falls back to `web/.gitignore`,
+which ignores `dist/`). The manifest assertions were added alongside it.

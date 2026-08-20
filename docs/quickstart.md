@@ -1,19 +1,28 @@
 # Quickstart
 
-From a clone to the running dashboard and your first agent handoff. Assumes you've finished [Installation](./installation.md) (Node ≥ 24, git, `uv`, and `baton` on your `PATH`).
+From nothing to the running dashboard and your first agent handoff. You need **Node ≥ 24** and **git**; everything else the wizard handles or offers.
 
-## 1. Index your repo
+## 1. Set up your repo
 
-Run this once at the root of any git repo. It builds a knowledge graph, installs a git hook to keep it fresh, and writes the MCP config agents use to query it.
+Run this once at the root of any git repo:
 
 ```bash
-baton kb init
+npx batonhq setup
+```
+
+It scans first — git, node, whether `graphify` is present, which agent CLIs are on your `PATH` — then asks which agents to wire, whether to turn on the knowledge graph, and whether you want the dashboard or headless MCP. Each question has a recommended answer; Enter takes it.
+
+By the end it has built the knowledge graph (if you said yes), installed a git hook to keep it fresh, written the MCP config agents use to query it, and offered to put `baton` on your `PATH`.
+
+```bash
 baton kb status   # confirm it indexed (projects + node/edge counts)
 ```
 
 Baton auto-detects sub-projects (e.g. a repo with `api/` and `web/`) and builds one graph each plus a merged cross-project view. See [Knowledge base](./knowledge-graph.md).
 
-> **One command for everything:** `baton setup` classifies the folder for you — a single repo, or a folder holding several repos (a centralized hub vs. one setup per repo) — and runs the right `kb init`. See [the CLI reference](./cli-reference.md#setup).
+> **Several separate repos?** Point setup at the folder holding them and choose the hub — one merged graph and one dashboard across all of them. See [the CLI reference](./cli-reference.md#setup).
+>
+> **Already know what you want?** `baton kb init` is the low-level command setup calls, and `--yes --agents claude,codex` skips the questions entirely.
 
 ## 2. Start the dashboard
 
