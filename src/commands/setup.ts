@@ -69,7 +69,8 @@ async function chooseUseMode(opts: SetupOpts): Promise<UseMode> {
 }
 
 /** Closing next-steps for a single-root setup (single repo or hub), per chosen mode. */
-async function finishSingle(root: string, opts: SetupOpts, headline: string, agents: string[]): Promise<void> {
+async function finishSingle(root: string, opts: SetupOpts, headline: string, agents: string[], graphOk: boolean): Promise<void> {
+  if (!graphOk) headline += ' (without the knowledge graph)';
   if ((await chooseUseMode(opts)) === 'dashboard') {
     const port = await nextFreePort(7077, new Set());
     console.log(`\n✓ ${headline}. Open the dashboard:`);
@@ -234,39 +235,73 @@ export function graphifyStep(detection: GraphifyDetection, opts: SetupOpts): Gra
 }
 
 /**
- * Offer to install graphify. Never blocks: the knowledge graph is one feature,
- * and worktrees, the dashboard, handoff, memory and coordination all work
- * without it. Someone who declines gets a working Baton, not a dead end.
+ * Offer to install graphify, and report whether it is usable afterwards.
+ *
+ * This runs BEFORE anything is written, which is the whole point: `kb init`
+ * refuses outright without graphify (src/commands/kb.ts), so an offer made
+ * after it would arrive too late to save the run — the user would have already
+ * watched the knowledge base fail.
+ *
+ * Never blocks. Declining costs the knowledge graph and nothing else: worktrees,
+ * tasks, edit signals, memory, handoff and the dashboard are all graph-free.
  */
-async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Promise<void> {
+async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Promise<boolean> {
   const step = graphifyStep(detection, opts);
-  if (step.kind === 'already') return; // do not ask about what is already here
+  if (step.kind === 'already') return true; // do not ask about what is already here
 
   console.log('\n  The knowledge graph needs the `graphify` CLI (Python).');
 
   if (step.kind === 'no-installer') {
     console.log(`    Install it yourself when convenient: ${step.hint}`);
     console.log('    Everything else works without it.');
-    return;
+    return false;
   }
   if (step.kind === 'deferred') {
     console.log(`    Not installed under --yes (it installs software). Later: ${step.line}`);
-    return;
+    return false;
   }
   if (!(await askYesNo(`    Install it now with \`${step.line}\`?`, true))) {
     console.log(`    Skipped — the graph stays off. Later: ${step.line}`);
-    return;
+    return false;
   }
 
   try {
     await execa(step.cmd, step.args, { stdio: 'inherit', timeout: 5 * 60_000 });
-    console.log('    ✓ graphify installed — run `baton reindex` to build the graph.');
   } catch (e) {
     // Offline, behind a proxy, a broken Python — none of it is Baton's problem
     // to solve, and none of it should cost the user the setup they came for.
     console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
     console.log(`      Setup continues without the graph. Try later: ${step.line}`);
+    return false;
   }
+
+  // Trust the probe, not the exit code: `uv tool install` succeeds while
+  // placing the binary in ~/.local/bin, which is on PATH here only because
+  // ensureBinPath() appended it — and on a stripped PATH it still may not be.
+  // Claiming a graph we cannot actually run would fail later, less legibly.
+  if ((await detectGraphify()).ok) {
+    console.log('    ✓ graphify installed.');
+    return true;
+  }
+  console.log('    ✓ installed, but not visible on PATH from here.');
+  console.log('      Open a new shell and run `baton kb init` to finish the graph.');
+  return false;
+}
+
+/**
+ * `kb init`, unless graphify is absent — in which case say precisely what is
+ * being skipped and what still works, rather than letting kb init print its own
+ * failure into the middle of a setup that then claims success.
+ */
+async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boolean): Promise<void> {
+  if (graphOk) {
+    await kbInitCmd(target, kbOpts(opts));
+    return;
+  }
+  console.log('\n  · Knowledge base skipped — it needs the graphify CLI.');
+  console.log('    Everything else is set up: worktrees, tasks, edit signals, memory,');
+  console.log('    handoff and the dashboard all work without the graph.');
+  console.log('    Once graphify is installed, finish with:  baton kb init');
 }
 
 /** Offer the bundled skill catalog. Failure here never fails the setup. */
@@ -371,14 +406,16 @@ export async function setupCmd(path: string | undefined, opts: SetupOpts = {}): 
     return;
   }
 
+  // Before anything is written: `kb init` refuses without graphify, so an offer
+  // made after it would arrive too late to rescue the run.
+  const graphOk = await offerGraphify(scan.graphify, opts);
+
   const agents = await chooseAgents(opts, scan.agents);
-  const configured = await configureTarget(t, root, opts, agents);
+  const configured = await configureTarget(t, root, opts, agents, graphOk);
   if (!configured) return; // the user cancelled at the git-init prompt
 
-  // Closing steps, once per run rather than once per repo: both touch the
-  // machine, not the project, so repeating them for each repo of a hub would
-  // ask the same question three times and install the same thing three times.
-  await offerGraphify(scan.graphify, opts);
+  // Closing step, once per run rather than once per repo: skills install into a
+  // catalog every repo of a hub shares, so repeating it would ask three times.
   await offerSkills(configured, opts);
   await offerGlobalInstall(opts);
   console.log('');
@@ -398,18 +435,19 @@ async function configureTarget(
   root: string,
   opts: SetupOpts,
   agents: string[],
+  graphOk: boolean,
 ): Promise<string | null> {
   switch (t.kind) {
     case 'single-repo':
       console.log(`\n✓ ${basename(t.root)} is a git repo — setting up Baton here.`);
-      await kbInitCmd(t.root, kbOpts(opts));
-      await finishSingle(t.root, opts, `${basename(t.root)} is ready`, agents);
+      await initKnowledgeBase(t.root, opts, graphOk);
+      await finishSingle(t.root, opts, `${basename(t.root)} is ready`, agents, graphOk);
       return t.root;
 
     case 'single-subrepo':
       console.log(`\nfound one git repo (${t.repo.name}) under ${basename(root)} — setting it up.`);
-      await kbInitCmd(t.repo.path, kbOpts(opts));
-      await finishSingle(t.repo.path, opts, `${t.repo.name} is ready`, agents);
+      await initKnowledgeBase(t.repo.path, opts, graphOk);
+      await finishSingle(t.repo.path, opts, `${t.repo.name} is ready`, agents, graphOk);
       return t.repo.path;
 
     case 'bare-project': {
@@ -423,8 +461,8 @@ async function configureTarget(
         return null;
       }
       await gitInit(root);
-      await kbInitCmd(root, kbOpts(opts));
-      await finishSingle(root, opts, `${basename(root)} is ready`, agents);
+      await initKnowledgeBase(root, opts, graphOk);
+      await finishSingle(root, opts, `${basename(root)} is ready`, agents, graphOk);
       return root;
     }
 
@@ -441,10 +479,10 @@ async function configureTarget(
             'hub',
           );
       if (mode === 'hub') {
-        await setupHub(root, t.repos, opts, agents);
+        await setupHub(root, t.repos, opts, agents, graphOk);
         return root;
       }
-      await setupIndividual(t.repos, opts, agents);
+      await setupIndividual(t.repos, opts, agents, graphOk);
       // Skills install into ONE project's catalog; for individual mode the
       // first repo is the only defensible choice, and they all share the
       // bundled catalog anyway.
@@ -454,7 +492,7 @@ async function configureTarget(
 }
 
 /** Centralized hub: make the container root a git repo, then one kb init (merged graph). */
-async function setupHub(root: string, repos: SubProject[], opts: SetupOpts, agents: string[]): Promise<void> {
+async function setupHub(root: string, repos: SubProject[], opts: SetupOpts, agents: string[], graphOk: boolean): Promise<void> {
   if (!(await isGitRepo(root))) {
     console.log('\n→ git init (hub root) ...');
     await gitInit(root);
@@ -469,17 +507,17 @@ async function setupHub(root: string, repos: SubProject[], opts: SetupOpts, agen
       console.log('      git config user.email you@example.com && git config user.name "You"');
     }
   }
-  await kbInitCmd(root, kbOpts(opts));
-  return finishSingle(root, opts, 'centralized hub ready', agents);
+  await initKnowledgeBase(root, opts, graphOk);
+  return finishSingle(root, opts, 'centralized hub ready', agents, graphOk);
 }
 
 /** Per-repo setup: run kb init inside each repo; suggest a port per repo. */
-async function setupIndividual(repos: SubProject[], opts: SetupOpts, agents: string[]): Promise<void> {
+async function setupIndividual(repos: SubProject[], opts: SetupOpts, agents: string[], graphOk: boolean): Promise<void> {
   const used = new Set<number>();
   const built: { path: string; port: number }[] = [];
   for (const r of repos) {
     console.log(`\n=== ${r.name} ===`);
-    await kbInitCmd(r.path, kbOpts(opts));
+    await initKnowledgeBase(r.path, opts, graphOk);
     built.push({ path: r.path, port: await nextFreePort(7077, used) }); // skip taken ports
   }
   if ((await chooseUseMode(opts)) === 'dashboard') {
