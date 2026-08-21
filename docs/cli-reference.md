@@ -1,6 +1,6 @@
 # CLI reference
 
-Every `baton` command. If you didn't run `npm link`, use `node dist/cli.js <command>` instead of `baton <command>`.
+Every `baton` command. Install it with `npm install -g batonhq`, or prefix any command with `npx batonhq` to run it without installing. Working from a source checkout without `npm link`? Use `node dist/cli.js <command>`.
 
 ```bash
 baton --help        # list all commands

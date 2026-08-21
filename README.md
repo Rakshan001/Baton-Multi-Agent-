@@ -54,19 +54,36 @@ Do the expensive thinking where it's powerful (or included in your plan); do the
 > which port), run every command itself, and leave you a personalized
 > `GETTING_STARTED.md` in your project when it's done.
 
-Requires **Node ≥ 24**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
+Requires **Node ≥ 24** and **git**. Run this in any repo:
 
 ```bash
-git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton && cd baton
+npx batonhq setup
+```
 
-npm install && npm install --prefix web   # CLI/daemon + dashboard deps
-npm run build && npm run build --prefix web
-uv tool install graphifyy                 # the graphify CLI (code graphs)
-npm link                                  # optional: puts `baton` on your PATH
+It scans the folder, asks a handful of questions — one repo or a hub over several, which agents you use, dashboard or headless — recommends an answer to each, and wires everything up. Then:
 
-baton kb init        # index the repo into a knowledge graph + wire up agents
+```bash
 baton serve --write  # daemon + dashboard → http://localhost:7077
 ```
+
+<details>
+<summary>Installing it permanently, and the optional knowledge graph</summary>
+
+```bash
+npm install -g batonhq     # `baton` on your PATH (setup offers this at the end)
+```
+
+The knowledge graph needs one extra tool, the Python [`graphify`](https://pypi.org/project/graphifyy/) CLI:
+
+```bash
+uv tool install graphifyy  # or pipx install graphifyy
+```
+
+Setup offers to install it for you and **never blocks on it** — without it you lose the graph, and worktrees, tasks, edit signals, memory, handoff and the dashboard all still work. See [docs/installation.md](docs/installation.md).
+
+The npm package is **`batonhq`**; the command is **`baton`**. (Unrelated packages named `baton`, `baton-cli` and `create-baton` belong to other projects.)
+
+</details>
 
 Then create an isolated session and point an agent at it:
 

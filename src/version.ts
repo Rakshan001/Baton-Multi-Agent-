@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 
 const require_ = createRequire(import.meta.url);
 
-type Pkg = { version?: string; repository?: string | { url?: string } };
+type Pkg = { name?: string; version?: string; repository?: string | { url?: string } };
 
 const pkg: Pkg = (() => {
   try {
@@ -16,6 +16,15 @@ const pkg: Pkg = (() => {
 })();
 
 export const BATON_VERSION: string = pkg.version ?? '0.0.0';
+
+/**
+ * The npm id, which is NOT the command. The binary is `baton`; the registry
+ * name is `batonhq`, because `baton`, `baton-cli` and `create-baton` were all
+ * taken by other people's packages. Read from package.json rather than typed
+ * out, so the one place a user is told to run `npm i -g <name>` cannot drift
+ * from the name that would actually install.
+ */
+export const PACKAGE_NAME: string = pkg.name ?? 'batonhq';
 
 /**
  * Where to get the source of the daemon that is running right now.

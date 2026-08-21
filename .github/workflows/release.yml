@@ -1,0 +1,111 @@
+name: Release
+
+# Publishing is driven by a tag, so the released artifact always corresponds to
+# a commit anyone can check out. `workflow_dispatch` runs everything except the
+# publish, for rehearsing a release without spending a version number.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The whole authentication story. npm trusted publishing exchanges this OIDC
+  # token for a short-lived, workflow-scoped credential, so no npm token is
+  # stored in this repository at all — nothing to leak, nothing to rotate, and
+  # nothing for a compromised dependency to read out of the environment. It also
+  # produces the provenance attestation automatically, with no --provenance flag.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    # A fork that happens to push a v* tag must not try to publish with (and
+    # would not have) the upstream token.
+    if: github.repository == 'Rakshan001/Baton-Multi-Agent-'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          # registry-url is not decoration: it writes the .npmrc that points the
+          # publish at the public registry. Without it npm never attempts the
+          # OIDC exchange and the publish fails as unauthenticated.
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 already ships a new
+      # enough npm, but pinning the floor here means a change to the runner's
+      # bundled npm cannot quietly turn releases back into a token flow.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          set -eu
+          npm install -g npm@latest
+          npm --version
+
+      # --- Guards, before anything is built or published ------------------
+
+      - name: Tag must match the version being published
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match package.json version $pkg."
+            echo "A published version that disagrees with its tag makes the release unauditable:"
+            echo "there is no commit you can check out to get the code that shipped."
+            exit 1
+          fi
+          echo "tag v$tag matches package.json ✓"
+
+      - name: Version must not already exist on npm
+        run: |
+          set -eu
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::error::$name@$version is already published. npm versions are immutable — bump the version."
+            exit 1
+          fi
+          echo "$name@$version is unpublished ✓"
+
+      # --- Install, build, test -------------------------------------------
+
+      - name: Install (root)
+        run: npm ci
+
+      - name: Install (web)
+        run: npm ci --prefix web
+
+      - name: Build (both workspaces)
+        run: npm run build && npm run build:web
+
+      - name: Test
+        run: npm test
+
+      # --- Publish ---------------------------------------------------------
+
+      # `npm publish` runs prepack, which rebuilds both workspaces and refuses
+      # to produce a tarball missing any shipped artifact (scripts/prepack.mjs).
+      #
+      # No NODE_AUTH_TOKEN: authentication is the OIDC exchange granted by
+      # `id-token: write` above, which also generates provenance on its own —
+      # passing --provenance here would be redundant. --access public stays
+      # explicit so a scoped name could never go private by default.
+      #
+      # This requires a trusted publisher registered on npmjs.com for this
+      # package, pointing at THIS repository and the workflow file
+      # `release.yml`. Renaming this file breaks publishing until the trusted
+      # publisher is updated to match.
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm publish --access public
+
+      - name: Rehearsal only (no tag)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: echo "Built and tested without publishing — push a v* tag to release."
