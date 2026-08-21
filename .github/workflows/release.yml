@@ -10,8 +10,11 @@ on:
 
 permissions:
   contents: read
-  # Required for npm provenance: npm exchanges this for a signed attestation
-  # linking the tarball to this workflow, this commit, and this repository.
+  # The whole authentication story. npm trusted publishing exchanges this OIDC
+  # token for a short-lived, workflow-scoped credential, so no npm token is
+  # stored in this repository at all — nothing to leak, nothing to rotate, and
+  # nothing for a compromised dependency to read out of the environment. It also
+  # produces the provenance attestation automatically, with no --provenance flag.
   id-token: write
 
 jobs:
@@ -29,8 +32,20 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '24'
+          # registry-url is not decoration: it writes the .npmrc that points the
+          # publish at the public registry. Without it npm never attempts the
+          # OIDC exchange and the publish fails as unauthenticated.
           registry-url: 'https://registry.npmjs.org'
           cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 already ships a new
+      # enough npm, but pinning the floor here means a change to the runner's
+      # bundled npm cannot quietly turn releases back into a token flow.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          set -eu
+          npm install -g npm@latest
+          npm --version
 
       # --- Guards, before anything is built or published ------------------
 
@@ -77,13 +92,19 @@ jobs:
 
       # `npm publish` runs prepack, which rebuilds both workspaces and refuses
       # to produce a tarball missing any shipped artifact (scripts/prepack.mjs).
-      # --provenance publishes the signed build attestation; --access public is
-      # explicit so the first publish of a scoped name could never go private.
+      #
+      # No NODE_AUTH_TOKEN: authentication is the OIDC exchange granted by
+      # `id-token: write` above, which also generates provenance on its own —
+      # passing --provenance here would be redundant. --access public stays
+      # explicit so a scoped name could never go private by default.
+      #
+      # This requires a trusted publisher registered on npmjs.com for this
+      # package, pointing at THIS repository and the workflow file
+      # `release.yml`. Renaming this file breaks publishing until the trusted
+      # publisher is updated to match.
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/')
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Rehearsal only (no tag)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
