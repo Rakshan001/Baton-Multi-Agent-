@@ -10,7 +10,7 @@ Run this once at the root of any git repo:
 npx batonhq setup
 ```
 
-It scans first — git, node, whether `graphify` is present, which agent CLIs are on your `PATH` — then asks which agents to wire, whether to turn on the knowledge graph, and whether you want the dashboard or headless MCP. Each question has a recommended answer; Enter takes it.
+It scans first — git, node, whether `graphify` is present, which agent CLIs are on your `PATH` — then asks which agents to wire and whether to turn on the knowledge graph. Each question has a recommended answer; Enter takes it.
 
 By the end it has built the knowledge graph (if you said yes), installed a git hook to keep it fresh, written the MCP config agents use to query it, and offered to put `baton` on your `PATH`.
 

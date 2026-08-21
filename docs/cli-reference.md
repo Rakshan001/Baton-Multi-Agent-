@@ -26,7 +26,7 @@ baton setup [path]
 | `--no-mcp` | Don't write graphify MCP servers to `.mcp.json`. |
 | `--no-docs` | Don't add the coordination guide to `AGENTS.md` / `CLAUDE.md`. |
 | `--share` / `--local` | Commit the KB to git (so teammates skip re-indexing) vs. keep it local. |
-| `--serve` / `--headless` | Use the dashboard vs. KB-only (agents over MCP, no dashboard). |
+| `--serve` / `--headless` | Deprecated and ignored. The dashboard was always optional and MCP access always on, so these never gated anything. |
 
 ### `new`
 Scaffold a branch (`baton/<slug>`) + git worktree (under `.baton/wt/<slug>`) for a task.

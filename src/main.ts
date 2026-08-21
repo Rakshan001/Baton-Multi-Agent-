@@ -89,8 +89,8 @@ program
   .option('--no-docs', 'skip adding the coordination guide to AGENTS.md/CLAUDE.md')
   .option('--share', 'commit the KB to git so teammates skip re-indexing')
   .option('--local', 'keep the KB local-only (skip the share question)')
-  .option('--serve', 'use the dashboard (skip the headless-vs-dashboard prompt)')
-  .option('--headless', 'KB only — agents use it over MCP, no dashboard')
+  .option('--serve', 'deprecated — the dashboard is always available (flag ignored)')
+  .option('--headless', 'deprecated — agents always get MCP access (flag ignored)')
   .description('set up Baton for a repo — or a folder of several repos (hub vs individual)')
   .action((path: string | undefined, opts: { hub?: boolean; individual?: boolean; yes?: boolean; agents?: string; mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; serve?: boolean; headless?: boolean }) =>
     run(() => setupCmd(path, opts)));

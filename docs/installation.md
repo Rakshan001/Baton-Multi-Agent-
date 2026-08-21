@@ -24,11 +24,21 @@ The wizard scans the folder first and shows what it found, then asks:
 1. **one repo, or a hub over several?** — detected automatically; a folder holding 2+ git repos can become one centralized hub (merged graph, one dashboard) or be set up individually
 2. **which agents do you use?** — recommends the ones already on your `PATH`
 3. **turn on the knowledge graph?** — offers to run `uv tool install graphifyy`
-4. **dashboard, or headless over MCP?**
-5. **install the bundled skills?**
-6. **install `baton` globally?** — only when you came in via `npx`
+4. **install the bundled skills?**
+5. **install `baton` globally?** — only when you came in via `npx`
 
 Every question has a recommended answer; pressing Enter takes it.
+
+There is deliberately no "dashboard or headless" question. The dashboard is a
+viewer, not a mode: the knowledge graph, the KB, the MCP servers, the git hooks,
+the skills and the agent wiring are set up either way, and `baton serve` is
+there whenever you want to watch. Nothing is gated behind running it.
+
+> **Do not `npm i batonhq` inside your project.** Baton is a command-line tool;
+> no code in your project imports it. Adding it as a dependency makes every
+> `npm install` there rebuild it and everything alongside it — native modules
+> included — and when one of those rebuilds fails, the backtrace names Baton and
+> looks like Baton's fault. Use `npx batonhq <command>`, or install it globally.
 
 ### Installing it permanently
 
