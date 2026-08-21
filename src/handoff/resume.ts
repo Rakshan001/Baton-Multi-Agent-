@@ -9,7 +9,7 @@
  */
 import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
 import { parseFrontmatter, type Frontmatter } from '../util/frontmatter.js';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { batonDir, loadTasks } from '../store.js';
 import { handoffPath } from './brief.js';
@@ -90,9 +90,35 @@ export async function setBriefStatusAt(path: string, status: 'ready' | 'in-progr
     const parsed = parseFrontmatter(await readFile(path, 'utf-8'));
     if (parsed.data.baton !== 1) return false;
     parsed.data.status = status;
-    await writeFile(path, matter.stringify(parsed.content, parsed.data), 'utf-8');
+    // tmp + rename, like saveTasks: this is a read-modify-write over the brief,
+    // and the brief IS the work product — a torn write loses the handoff itself,
+    // not just its status.
+    const tmp = `${path}.${process.pid}.tmp`;
+    await writeFile(tmp, matter.stringify(parsed.content, parsed.data), 'utf-8');
+    await rename(tmp, path);
     return true;
   } catch {
     return false;
   }
+}
+
+export type BriefCloseResult = 'closed' | 'already-done' | 'not-found' | 'failed';
+
+/**
+ * Close a brief by slug — the terminal transition a SESSION brief had no path
+ * to. `baton done` resolves a TASK, and `setBriefStatus` is worktree-scoped, so
+ * before this a session handoff could reach `in-progress` and never `done`,
+ * leaving it in `baton resume` and GET /api/handoffs forever (both filter on
+ * `status !== 'done'`).
+ *
+ * The slug is matched against enumerated filenames and never joined into a
+ * path, so a hostile slug cannot escape `.baton/handoffs/`.
+ */
+export async function closeBriefBySlug(root: string, slug: string): Promise<BriefCloseResult> {
+  const brief = (await listBriefs(root)).find((b) => b.slug === slug);
+  if (!brief) return 'not-found';
+  // Re-running a close is not an error: an agent retrying after a dropped
+  // connection must not get a failure for work it already did.
+  if (brief.status === 'done') return 'already-done';
+  return (await setBriefStatusAt(brief.path, 'done')) ? 'closed' : 'failed';
 }

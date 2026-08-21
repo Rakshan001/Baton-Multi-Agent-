@@ -15,6 +15,7 @@
  */
 import { activeBatonRoot, getTask, loadTasks } from '../store.js';
 import { briefStalenessWarning, readBrief, setBriefStatus } from '../handoff/brief.js';
+import { closeBriefBySlug } from '../handoff/resume.js';
 import { resolveTask } from './pass.js';
 import { isTerminal, stateOf } from '../pipeline.js';
 import { nextFor } from '../lifecycle.js';
@@ -148,7 +149,27 @@ export async function doneCmd(slug: string | undefined, opts: { attest?: boolean
   const root = await activeBatonRoot();
   const task = await resolveTask(root, slug);
   if (!task) {
-    console.error(slug ? `No task '${slug}'` : 'Not inside a baton worktree — pass a slug: baton done <slug>');
+    // A session brief is not a task, but `baton done <slug>` is where anyone
+    // would close one — and until A1 there was no way to close one at all, so a
+    // finished session handoff advertised itself forever. Tasks still win when a
+    // slug names both: resolveTask ran first.
+    if (slug) {
+      const closed = await closeBriefBySlug(root, slug);
+      if (closed === 'closed') {
+        console.log(`✓ ${slug} marked done — it will stop showing in \`baton resume\`.`);
+        return;
+      }
+      if (closed === 'already-done') {
+        console.log(`✓ ${slug} is already done.`);
+        return;
+      }
+      if (closed === 'failed') {
+        console.error(`✗ could not update the handoff brief for '${slug}'.`);
+        process.exitCode = 1;
+        return;
+      }
+    }
+    console.error(slug ? `No task or handoff brief '${slug}'` : 'Not inside a baton worktree — pass a slug: baton done <slug>');
     process.exitCode = 1;
     return;
   }

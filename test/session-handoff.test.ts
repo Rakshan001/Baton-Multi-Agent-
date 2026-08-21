@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import matter from 'gray-matter';
 import { createSessionHandoff } from '../src/handoff/session-brief.js';
 import { addTask } from '../src/store.js';
-import { listBriefs, setBriefStatusAt } from '../src/handoff/resume.js';
+import { closeBriefBySlug, listBriefs, setBriefStatusAt } from '../src/handoff/resume.js';
 
 /**
  * H1 — the manual-relay flow: ANY session (Cursor at 99% usage, a root Claude
@@ -273,5 +273,83 @@ describe('listBriefs / setBriefStatusAt — the resume side (H4)', () => {
     await writeFile(join(root, '.baton', 'handoffs', 'junk.md'), '# not a brief\n', 'utf-8');
     const briefs = await listBriefs(root);
     expect(briefs.find((b) => b.slug === 'junk')).toBeUndefined();
+  });
+});
+
+/**
+ * A1 — a SESSION brief must be able to reach `done`.
+ *
+ * Before this, `setBriefStatusAt(path, 'done')` had no caller anywhere: the only
+ * `done` writer was `setBriefStatus(worktreePath, …)`, and `baton done` resolves
+ * a TASK, so a session slug exited "No task '<slug>'". A finished handoff
+ * therefore kept advertising itself in `baton resume` and in GET /api/handoffs
+ * forever — both filter on `status !== 'done'`, a status a session brief could
+ * never reach.
+ */
+describe('closeBriefBySlug — a finished session handoff stops advertising itself (A1)', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'baton-close-'));
+    await mkdir(join(root, '.baton'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('closes an open session brief, so the status both consumers filter on is reached', async () => {
+    await createSessionHandoff(root, { slug: 'sess-done', title: 'D', next: 'n' });
+
+    expect(await closeBriefBySlug(root, 'sess-done')).toBe('closed');
+
+    const brief = (await listBriefs(root)).find((b) => b.slug === 'sess-done')!;
+    expect(brief.status).toBe('done');
+    // The user-visible outcome: gone from the open list `baton resume` prints
+    // and `/api/handoffs` returns.
+    expect((await listBriefs(root)).filter((b) => b.status !== 'done')).toHaveLength(0);
+  });
+
+  it('keeps the brief body intact — closing is a status flip, not a rewrite', async () => {
+    const r = await createSessionHandoff(root, {
+      slug: 'sess-body', title: 'Body survives', next: 'run the failing test first',
+    });
+    const before = matter(await readFile(r.path, 'utf-8')).content;
+
+    await closeBriefBySlug(root, 'sess-body');
+
+    expect(matter(await readFile(r.path, 'utf-8')).content).toBe(before);
+  });
+
+  // A1-E8: re-running a close must not be an error. An agent that retries after
+  // a dropped connection would otherwise get a non-zero exit for work it did.
+  it('closing twice is a no-op, not an error', async () => {
+    await createSessionHandoff(root, { slug: 'sess-twice', title: 'T', next: 'n' });
+    expect(await closeBriefBySlug(root, 'sess-twice')).toBe('closed');
+    expect(await closeBriefBySlug(root, 'sess-twice')).toBe('already-done');
+  });
+
+  it('an unknown slug is not-found — never a silent success', async () => {
+    expect(await closeBriefBySlug(root, 'sess-nope')).toBe('not-found');
+  });
+
+  // A1-E2: the brief can vanish between listing and writing (another agent
+  // merged the task, or the user deleted it). That is a failed close, not a crash.
+  it('reports not-found rather than throwing when the brief file has vanished', async () => {
+    const r = await createSessionHandoff(root, { slug: 'sess-gone', title: 'G', next: 'n' });
+    const { rm: rmFile } = await import('node:fs/promises');
+    await rmFile(r.path);
+    expect(await closeBriefBySlug(root, 'sess-gone')).toBe('not-found');
+  });
+
+  // A1-E3: the status write is read-modify-write. A torn write would corrupt the
+  // brief, which IS the work product — so it goes through tmp + rename like
+  // saveTasks, and must not leave the tmp file behind.
+  it('leaves no temp file behind — the status write is atomic', async () => {
+    await createSessionHandoff(root, { slug: 'sess-atomic', title: 'A', next: 'n' });
+    await closeBriefBySlug(root, 'sess-atomic');
+
+    const { readdir } = await import('node:fs/promises');
+    const left = (await readdir(join(root, '.baton', 'handoffs')))
+      .filter((f) => !f.endsWith('.md') && f !== '.auto');
+    expect(left).toEqual([]);
   });
 });
