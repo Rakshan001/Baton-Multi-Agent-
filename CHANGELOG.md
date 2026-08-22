@@ -41,6 +41,14 @@ and this project follows
   `decodeKey` understands one — so a burst like three arrow-downs decoded to a
   single `ignore` and the list sat still. Chunks are now split into keys first,
   escape sequences kept whole.
+- **An installed Cursor was reported as not installed.** Presence was probed by
+  looking for the agent's binary, and Cursor's is `cursor-agent` — a separate
+  terminal CLI. Anyone using the Cursor *editor* was told Cursor was missing
+  while it sat open in front of them, and the same held for a Codex or Gemini
+  config without the CLI. Wiring an agent writes an MCP entry and needs no
+  binary at all, so the probe was answering a different question than the one on
+  screen. It now also looks for the agent's own config directory and reports
+  which it found (`claude on your PATH`, `config found in ~/.cursor`).
 - **The multi-repo list was unreadable when two repos shared a name.** It
   printed `basename(path)`, so a real project scanned as five repos of which
   two pairs looked identical — at different depths, with nothing on screen
@@ -70,7 +78,16 @@ and this project follows
   one fewer question.
 
 ### Added
-- **Arrow-key prompts.** The wizard's questions are now checkbox and radio
+- **Pick which repos join a hub.** A folder of several repos offered "all of
+  them, or each on its own", and neither is the usual shape — five repos are
+  commonly three that belong together and two that do not. The repos are now a
+  checkbox list with everything ticked, so Enter still means what it did.
+  Unchecked repos are left completely alone, and setup says which ones and how
+  to add them later, because unticking something should not quietly cause work
+  to happen to it.
+- **Pick which skills to install.** Twelve bundled skills were all-or-nothing.
+  Same list, all ticked; Enter installs the lot exactly as before.
+- **Setup can bootstrap `uv`.** The wizard's questions are now checkbox and radio
   lists — `↑↓` to move, space to toggle, `a` for all, `n` for none, Enter to
   confirm — instead of asking you to type numbers and map "Cursor Agent" onto
   "2". Each option carries a short note beside it (`found on your PATH`,

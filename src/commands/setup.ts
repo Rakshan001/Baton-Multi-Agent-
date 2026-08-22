@@ -12,6 +12,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { createServer } from 'node:net';
 import { execa } from 'execa';
 import { gitTry } from '../util/exec.js';
@@ -184,16 +185,18 @@ const CONNECT_LINE: Record<AgentConnectOutcome['status'], (o: AgentConnectOutcom
  * visible facts — "install graphify?" lands differently when the line above
  * says it is missing.
  */
-async function preflight(root: string): Promise<{ graphify: GraphifyDetection; agents: string[] }> {
+async function preflight(root: string): Promise<{ graphify: GraphifyDetection; agents: string[]; presence: Record<string, AgentPresence> }> {
   console.log('\n  Baton — coordination hub for multiple AI coding agents\n');
   console.log(`  Scanning ${root} …`);
 
-  const [graphify, isRepo, ...installed] = await Promise.all([
+  const [graphify, isRepo, ...found] = await Promise.all([
     detectGraphify(),
     isGitRepo(root),
-    ...DEFAULT_CONNECT_AGENTS.map((id) => agentInstalled(id, root)),
+    ...DEFAULT_CONNECT_AGENTS.map((id) => detectAgentPresence(id, root)),
   ] as const);
-  const agents = DEFAULT_CONNECT_AGENTS.filter((_, i) => installed[i]);
+  const presence: Record<string, AgentPresence> = {};
+  DEFAULT_CONNECT_AGENTS.forEach((id, i) => { presence[id] = found[i]; });
+  const agents = DEFAULT_CONNECT_AGENTS.filter((id) => presence[id] !== 'none');
 
   console.log(`    ${isRepo ? '✓ git repo' : '· not a git repo yet'}`);
   console.log(`    ✓ node ${process.versions.node}`);
@@ -202,14 +205,14 @@ async function preflight(root: string): Promise<{ graphify: GraphifyDetection; a
       ? `    ✓ graphify ${graphify.version ?? ''}`.trimEnd()
       : '    ✗ graphify — the knowledge graph stays off until it is installed',
   );
-  console.log(agents.length ? `    ✓ agents on PATH: ${agents.join(', ')}` : '    · no agent CLIs found on PATH yet');
+  console.log(agents.length ? `    ✓ agents found: ${agents.join(', ')}` : '    · no agents detected yet — you can still wire them');
 
   // Said during the scan, before a single file is written: if they installed
   // Baton the wrong way, that is the thing to fix first.
   const misinstalled = batonAsDependency(await readPackageJson(root));
   if (misinstalled) console.log(misinstalled);
 
-  return { graphify, agents };
+  return { graphify, agents, presence };
 }
 
 /** The host project's package.json, or null if absent/unreadable/not JSON. */
@@ -227,11 +230,12 @@ async function readPackageJson(root: string): Promise<unknown> {
  * installed there is nothing to narrow to, so the full set is offered — the
  * config is then already right whenever the first agent shows up.
  */
-async function chooseAgents(opts: SetupOpts, installed: string[]): Promise<string[]> {
+async function chooseAgents(opts: SetupOpts, presence: Record<string, AgentPresence>): Promise<string[]> {
   if (opts.agents !== undefined) {
     return opts.agents.split(',').map((s) => s.trim()).filter(Boolean);
   }
-  const recommended = installed.length ? installed : [...DEFAULT_CONNECT_AGENTS];
+  const detected = DEFAULT_CONNECT_AGENTS.filter((id) => presence[id] !== 'none');
+  const recommended = detected.length ? detected : [...DEFAULT_CONNECT_AGENTS];
   if (opts.yes) return recommended;
 
   return askMultiSelect(
@@ -239,10 +243,9 @@ async function chooseAgents(opts: SetupOpts, installed: string[]): Promise<strin
     DEFAULT_CONNECT_AGENTS.map((id) => ({
       key: id,
       label: AGENTS[id]?.label ?? id,
-      // The note belongs beside the row, not inside its name: "not installed"
-      // is a fact about your machine, and wiring one up now is still useful —
-      // the config is waiting the day you install it.
-      hint: installed.includes(id) ? 'found on your PATH' : 'not installed — wiring it now still works',
+      // The note belongs beside the row, not inside its name — and it reports
+      // HOW the agent was found, because an editor install is a real install.
+      hint: agentPresenceHint(presence[id] ?? 'none', AGENTS[id]?.binary ?? id, AGENT_HOME_DIR[id]),
     })),
     recommended,
   );
@@ -281,6 +284,84 @@ export type GraphifyStep =
  * A colliding name gets its path relative to the scanned root; the rest stay
  * short, so the ordinary case reads no differently than it did.
  */
+/**
+ * How an agent was found — and the answer must not be "installed / not
+ * installed", because that is not the question the wizard is asking.
+ *
+ * The probe used to be `agentInstalled`, which looks for the agent's binary.
+ * For Cursor that binary is `cursor-agent`, a separate terminal CLI: someone
+ * running the Cursor *editor* has no such file, and got told Cursor was not
+ * installed while it sat open in front of them. Wiring an agent means writing
+ * an MCP entry, which needs no CLI at all — so the editor's own config
+ * directory counts, and says so.
+ */
+export type AgentPresence = 'cli' | 'config' | 'none';
+
+/** Where each agent keeps its own settings, relative to the user's home. */
+const AGENT_HOME_DIR: Record<string, string> = {
+  claude: '.claude',
+  cursor: '.cursor',
+  codex: '.codex',
+  gemini: '.gemini',
+};
+
+export function agentPresenceHint(presence: AgentPresence, binary: string, home?: string): string {
+  if (presence === 'cli') return `${binary} on your PATH`;
+  // Naming the directory keeps this honest for both halves: Cursor is an editor,
+  // Codex and Gemini are CLIs whose config can exist without the binary.
+  if (presence === 'config') return home ? `config found in ~/${home}` : 'config found on this machine';
+  return 'not detected — wiring it now still works';
+}
+
+/** CLI first, then the agent's own config directory. */
+export async function detectAgentPresence(id: string, root?: string): Promise<AgentPresence> {
+  if (await agentInstalled(id, root)) return 'cli';
+  const dir = AGENT_HOME_DIR[id];
+  if (dir && existsSync(join(homedir(), dir))) return 'config';
+  return 'none';
+}
+
+/**
+ * Which of the discovered repos the hub should cover.
+ *
+ * "All of them, or each on its own" was the only offer, and neither is the
+ * common shape: a folder of five repos is usually three that belong together
+ * and two that do not. Everything is ticked, so Enter still means what it
+ * always did.
+ */
+async function chooseHubRepos(
+  repos: SubProject[],
+  labels: string[],
+  opts: SetupOpts,
+): Promise<SubProject[]> {
+  if (opts.yes) return repos;
+  // Keyed by path: two repos can share a name, which is the whole reason
+  // describeRepos exists.
+  const picked = await askMultiSelect(
+    '\n  Which repos should the hub cover?',
+    repos.map((r, i) => ({ key: r.path, label: labels[i] ?? r.name })),
+    repos.map((r) => r.path),
+  );
+  return repos.filter((r) => picked.includes(r.path));
+}
+
+/**
+ * What was left out of a hub, and how to add it later.
+ *
+ * A hub over five repos when you wanted three used to mean answering
+ * "individually" and setting up five. Now the repos are a checkbox list — and
+ * unchecking one must not quietly cause work to happen to it, so what was
+ * skipped is stated rather than left to be inferred from silence.
+ */
+export function excludedRepoNote(all: readonly string[], chosen: readonly string[]): string | null {
+  const left = all.filter((r) => !chosen.includes(r));
+  if (!left.length) return null;
+  return [
+    `  Not included, and nothing was written in them: ${left.join(', ')}`,
+    '    Add one later by running `baton setup --hub` again from this folder.',
+  ].join('\n');
+}
+
 export function describeRepos(root: string, repos: readonly SubProject[]): string[] {
   const count = new Map<string, number>();
   for (const r of repos) count.set(r.name, (count.get(r.name) ?? 0) + 1);
@@ -433,9 +514,9 @@ async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boole
 
 /** Offer the bundled skill catalog. Failure here never fails the setup. */
 async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
-  let bundled: string[];
+  let bundled: { id: string; name: string; description: string }[];
   try {
-    bundled = (await listSkillStatus(root)).filter((s) => s.source === 'bundled').map((s) => s.id);
+    bundled = (await listSkillStatus(root)).filter((s) => s.source === 'bundled');
   } catch (e) {
     // Never silently: this used to `return` with nothing printed, so a broken
     // catalog cost the user all twelve skills while setup still ended in a tick
@@ -446,21 +527,37 @@ async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
   }
   if (!bundled.length) return;
 
-  if (!opts.yes && !(await askYesNo(`\n  Install ${bundled.length} bundled skills into your agents?`, true))) {
-    console.log('    Skipped — `baton skills list` shows them whenever you want.');
+  // A list rather than a yes/no: twelve skills is enough that "all or none" is
+  // a poor pair of options. All ticked, so Enter behaves exactly as it did.
+  const chosen = opts.yes
+    ? bundled.map((s) => s.id)
+    : await askMultiSelect(
+        `\n  Install bundled skills into your agents? (${bundled.length} available)`,
+        bundled.map((s) => ({ key: s.id, label: s.name, hint: shorten(s.description) })),
+        bundled.map((s) => s.id),
+      );
+
+  if (!chosen.length) {
+    console.log('    None installed — `baton skills list` shows them whenever you want.');
     return;
   }
 
   let installed = 0;
-  for (const id of bundled) {
+  for (const id of chosen) {
     // One unsupported agent or unwritable dir must not cost the other skills.
     try {
       await installSkillEverywhere(root, id);
       installed++;
     } catch { /* reported in the count below */ }
   }
-  console.log(`    ✓ installed ${installed}/${bundled.length} skills`);
-  if (installed < bundled.length) console.log('      (the rest need an agent with a skills directory — `baton skills list`)');
+  console.log(`    ✓ installed ${installed}/${chosen.length} skills`);
+  if (installed < chosen.length) console.log('      (the rest need an agent with a skills directory — `baton skills list`)');
+}
+
+/** One short line beside a skill name; the full text is `baton skills list`. */
+function shorten(text: string, max = 52): string {
+  const line = text.split('\n')[0].trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 /** Where `baton` resolves on PATH right now, or null. */
@@ -542,7 +639,7 @@ export async function setupCmd(path: string | undefined, opts: SetupOpts = {}): 
   // made after it would arrive too late to rescue the run.
   const graphOk = await offerGraphify(scan.graphify, opts);
 
-  const agents = await chooseAgents(opts, scan.agents);
+  const agents = await chooseAgents(opts, scan.presence);
   const configured = await configureTarget(t, root, opts, agents, graphOk);
   if (!configured) return; // the user cancelled at the git-init prompt
 
@@ -602,8 +699,11 @@ async function configureTarget(
     }
 
     case 'multi-repo': {
+      // One label list for the listing, the picker and the excluded note: they
+      // must agree, and describeRepos disambiguates against the set it is given.
+      const labels = describeRepos(root, t.repos);
       console.log(`\nfound ${t.repos.length} separate git repos under ${basename(root)}:`);
-      for (const line of describeRepos(root, t.repos)) console.log(`  • ${line}`);
+      for (const line of labels) console.log(`  • ${line}`);
       const mode = opts.hub ? 'hub' : opts.individual ? 'individual'
         : await askChoice(
             '\nThese look like one project across several servers. How should Baton set them up?',
@@ -614,7 +714,15 @@ async function configureTarget(
             'hub',
           );
       if (mode === 'hub') {
-        await setupHub(root, t.repos, opts, agents, graphOk);
+        const chosen = await chooseHubRepos(t.repos, labels, opts);
+        if (!chosen.length) {
+          console.log('\n  No repos selected — nothing was written.');
+          return null;
+        }
+        await setupHub(root, chosen, opts, agents, graphOk);
+        const byPath = new Map(t.repos.map((r, i) => [r.path, labels[i]]));
+        const note = excludedRepoNote(labels, chosen.map((r) => byPath.get(r.path) ?? r.name));
+        if (note) console.log(`\n${note}`);
         return root;
       }
       await setupIndividual(t.repos, opts, agents, graphOk);
