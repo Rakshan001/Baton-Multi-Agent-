@@ -20,6 +20,39 @@ install steps see [SETUP.md](../SETUP.md).
 | Mutating buttons (merge, remove, agent start) are greyed out | The daemon is read-only. Restart it with `baton serve --write`. See [Read-only mode](#read-only-mode) below. |
 | Action refused even with `--write` | Every mutating request must carry a loopback `Origin` header (a central anti-CSRF guard). The dashboard and `curl` from localhost pass; a request without a loopback origin is rejected by design. |
 
+### `npm i batonhq` fails with a node-gyp / native build error
+
+Symptoms — a wall of `gyp` output ending in something like:
+
+```
+npm error command sh -c prebuild-install || node-gyp rebuild --release
+npm error /bin/sh: -c: line 0: syntax error near unexpected token `('
+npm error gyp ERR! build error
+```
+
+**Baton is not the thing that failed, and it is not what should be installed.**
+
+`npm i batonhq` asks npm to reconcile your project's *entire* dependency tree.
+If that project has native modules — `better-sqlite3`, `node-sass`, anything
+Electron — npm rebuilds them from source, and any pre-existing reason they
+cannot compile now surfaces with `batonhq` sitting in the command line. Two
+common ones: no prebuilt binary exists for your Node version, or your project
+path contains characters the generated Makefile does not quote, such as
+parentheses in `.../MIAM-(Marketing)/...`.
+
+Baton itself has five dependencies, all pure JavaScript, and no build step.
+
+Install it as the tool it is:
+
+```bash
+npx batonhq setup        # nothing is added to your project
+npm i -g batonhq         # or put `baton` on your PATH
+```
+
+Both leave your project's `node_modules` untouched. If `batonhq` already
+reached your `package.json`, `npm remove batonhq` — `baton setup` also warns you
+about this when it scans.
+
 ### Graph tools need `baton serve`
 
 `query_graph` and `get_node` go through the daemon's shared graphify pool, not

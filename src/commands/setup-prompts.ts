@@ -10,7 +10,13 @@
  * be tested without a TTY.
  *
  * Zero-dependency, like the rest of the CLI: node:readline, nothing else.
+ *
+ * On a real terminal these defer to ./interactive-select.ts, which draws the
+ * arrow-key list people expect. The typed-number paths below stay because they
+ * are what runs when there is no terminal to draw on — CI, a pipe, `nohup` —
+ * and deleting them would turn "no TTY" from a fallback into a hang.
  */
+import { runSelect } from './interactive-select.js';
 
 /** The env vars npm exports into a script or `npx` child. */
 export interface NpmEnv {
@@ -71,9 +77,13 @@ export async function askYesNo(question: string, fallback: boolean): Promise<boo
  */
 export async function askMultiSelect(
   question: string,
-  options: ReadonlyArray<{ key: string; label: string }>,
+  options: ReadonlyArray<{ key: string; label: string; hint?: string }>,
   fallback: readonly string[],
 ): Promise<string[]> {
+  // A terminal gets checkboxes; everything else falls through to typing.
+  const picked = await runSelect(question, options, true, fallback);
+  if (picked !== null) return picked;
+
   const keys = options.map((o) => o.key);
   const menu = options.map((o, i) => `  ${i + 1}) ${o.label}`).join('\n');
   const recommended = fallback.length ? fallback.join(', ') : 'none';

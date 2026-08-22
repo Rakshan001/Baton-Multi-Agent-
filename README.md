@@ -60,7 +60,7 @@ Requires **Node ≥ 24** and **git**. Run this in any repo:
 npx batonhq setup
 ```
 
-It scans the folder, asks a handful of questions — one repo or a hub over several, which agents you use, dashboard or headless — recommends an answer to each, and wires everything up. Then:
+It scans the folder, then asks a handful of arrow-key questions — one repo or a hub over several, which agents you use, whether to turn on the knowledge graph. Each option carries a note explaining it, and Enter takes the recommendation. Then:
 
 ```bash
 baton serve --write  # daemon + dashboard → http://localhost:7077
@@ -72,6 +72,11 @@ baton serve --write  # daemon + dashboard → http://localhost:7077
 ```bash
 npm install -g batonhq     # `baton` on your PATH (setup offers this at the end)
 ```
+
+Those two — `npx` or a global install — are the ways that work. **Never
+`npm i batonhq` inside a project**: Baton is a CLI, nothing imports it, and as a
+dependency it makes every `npm install` in that project rebuild the whole tree,
+native modules and all.
 
 The knowledge graph needs one extra tool, the Python [`graphify`](https://pypi.org/project/graphifyy/) CLI:
 

@@ -26,6 +26,7 @@ import { ensureBatonGitignore } from '../kb/batonignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
 import { resolveBatonRoot , activeBatonRoot } from '../store.js';
+import { runSelect } from './interactive-select.js';
 
 /** Exported for the T2 budget/trigger invariant test — every session reads this. */
 export const AGENT_GUIDE = `
@@ -93,9 +94,13 @@ async function askShare(): Promise<boolean> {
  */
 export async function askChoice<T extends string>(
   question: string,
-  choices: Array<{ key: T; label: string }>,
+  choices: Array<{ key: T; label: string; hint?: string }>,
   fallback: T,
 ): Promise<T> {
+  // A terminal gets a radio list; the typed path below is what runs without one.
+  const picked = await runSelect(question, choices, false, [fallback]);
+  if (picked !== null) return (picked[0] as T) ?? fallback;
+
   if (!process.stdin.isTTY || !process.stdout.isTTY) return fallback;
   const { createInterface } = await import('node:readline/promises');
   const rl = createInterface({ input: process.stdin, output: process.stdout });

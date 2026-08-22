@@ -52,33 +52,66 @@ export interface SetupOpts {
  * rather than taking their recommended answer.
  */
 
-type UseMode = 'dashboard' | 'headless';
-
-/** Dashboard vs headless: --serve / --headless flags win, else ask (default dashboard). */
-async function chooseUseMode(opts: SetupOpts): Promise<UseMode> {
-  if (opts.serve) return 'dashboard';
-  if (opts.headless) return 'headless';
-  return askChoice(
-    '\nHow will agents use this knowledge base?',
-    [
-      { key: 'dashboard', label: 'With the dashboard — realtime UI on localhost (baton serve)' },
-      { key: 'headless', label: 'Headless — agents read it over MCP, no dashboard' },
-    ],
-    'dashboard',
-  );
+/**
+ * The closing message, returned as data so a test can hold it to its promise.
+ *
+ * Setup used to ask which of these two facts to print — "how will agents use
+ * this knowledge base: with the dashboard, or headless over MCP?" — as though
+ * the answer switched machinery on and off. It never did. The answer reached
+ * exactly one console.log branch; the graph, the KB, the MCP servers, the git
+ * hooks, the skills and the agent wiring all ran either way, and the headless
+ * branch's own second line invited you to run `baton serve` whenever you felt
+ * like it. So the question charged the reader a decision and, worse, implied
+ * they were giving something up by taking it.
+ *
+ * The dashboard is a viewer, not a mode. Both lines are true at once, so both
+ * are printed and the question is gone.
+ */
+export function closingLines(root: string, headline: string, port: number, graphOk: boolean): string[] {
+  const what = graphOk ? headline : `${headline} (without the knowledge graph)`;
+  return [
+    `\n✓ ${what}.`,
+    '    Your agents can read it over MCP already — there is nothing else to start.',
+    '    To watch them work, open the dashboard:',
+    `      cd ${root} && baton serve -p ${port} --write   →  http://localhost:${port}`,
+  ];
 }
 
-/** Closing next-steps for a single-root setup (single repo or hub), per chosen mode. */
+/**
+ * `npm i batonhq` is the reflex, and it is the wrong move: npm reconciles the
+ * host project's entire dependency tree, so a repo with native modules
+ * recompiles them — and a node-gyp backtrace with `batonhq` in the command line
+ * reads, to the person staring at it, exactly like Baton's fault. Baton is a
+ * CLI; no code in a project ever imports it.
+ *
+ * Takes the parsed package.json rather than a path: it is arbitrary user input,
+ * and a malformed one must not throw and take a finished setup down with it.
+ */
+export function batonAsDependency(pkg: unknown): string | null {
+  if (typeof pkg !== 'object' || pkg === null) return null;
+  const rec = pkg as Record<string, unknown>;
+  const listedIn = (field: string): boolean => {
+    const deps = rec[field];
+    return typeof deps === 'object' && deps !== null && PACKAGE_NAME in deps;
+  };
+  if (!listedIn('dependencies') && !listedIn('devDependencies')) return null;
+  return [
+    `\n  ! ${PACKAGE_NAME} is listed in this project's package.json.`,
+    '    Baton is a command-line tool, not a library — no code here imports it.',
+    '    Kept as a dependency, every `npm install` in this project rebuilds it and',
+    '    everything alongside it, native modules included. That is a long detour',
+    '    for a CLI, and when one of those rebuilds fails it looks like Baton broke.',
+    '',
+    `    Remove it:  npm remove ${PACKAGE_NAME}`,
+    `    Then run:   npx ${PACKAGE_NAME} <command>     — no install at all`,
+    "                npm i -g " + PACKAGE_NAME + "          — puts `baton` on your PATH",
+  ].join('\n');
+}
+
+/** Closing next-steps for a single-root setup (single repo or hub). */
 async function finishSingle(root: string, opts: SetupOpts, headline: string, agents: string[], graphOk: boolean): Promise<void> {
-  if (!graphOk) headline += ' (without the knowledge graph)';
-  if ((await chooseUseMode(opts)) === 'dashboard') {
-    const port = await nextFreePort(7077, new Set());
-    console.log(`\n✓ ${headline}. Open the dashboard:`);
-    console.log(`    cd ${root} && baton serve -p ${port} --write   →  http://localhost:${port}`);
-  } else {
-    console.log(`\n✓ ${headline}. Agents read it over MCP — no dashboard needed.`);
-    console.log('    (Run `baton serve` here anytime to open the dashboard.)');
-  }
+  const port = await nextFreePort(7077, new Set());
+  for (const line of closingLines(root, headline, port, graphOk)) console.log(line);
   await connectAllAgents(root, opts, agents);
 }
 
@@ -170,7 +203,22 @@ async function preflight(root: string): Promise<{ graphify: GraphifyDetection; a
       : '    ✗ graphify — the knowledge graph stays off until it is installed',
   );
   console.log(agents.length ? `    ✓ agents on PATH: ${agents.join(', ')}` : '    · no agent CLIs found on PATH yet');
+
+  // Said during the scan, before a single file is written: if they installed
+  // Baton the wrong way, that is the thing to fix first.
+  const misinstalled = batonAsDependency(await readPackageJson(root));
+  if (misinstalled) console.log(misinstalled);
+
   return { graphify, agents };
+}
+
+/** The host project's package.json, or null if absent/unreadable/not JSON. */
+async function readPackageJson(root: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  } catch {
+    return null; // no package.json, unreadable, or invalid JSON — all the same here
+  }
 }
 
 /**
@@ -190,7 +238,11 @@ async function chooseAgents(opts: SetupOpts, installed: string[]): Promise<strin
     '\n  Which agents should Baton wire up?',
     DEFAULT_CONNECT_AGENTS.map((id) => ({
       key: id,
-      label: `${AGENTS[id]?.label ?? id}${installed.includes(id) ? '  (found on PATH)' : ''}`,
+      label: AGENTS[id]?.label ?? id,
+      // The note belongs beside the row, not inside its name: "not installed"
+      // is a fact about your machine, and wiring one up now is still useful —
+      // the config is waiting the day you install it.
+      hint: installed.includes(id) ? 'found on your PATH' : 'not installed — wiring it now still works',
     })),
     recommended,
   );
@@ -455,7 +507,10 @@ async function configureTarget(
       const go = opts.yes || opts.hub
         ? 'yes'
         : await askChoice('Initialize a git repo here and set up Baton?',
-            [{ key: 'yes', label: 'Yes — git init here, then set up' }, { key: 'no', label: 'Cancel' }], 'yes');
+            [
+              { key: 'yes', label: 'Yes, git init here', hint: 'Baton needs a repo to track worktrees and edits' },
+              { key: 'no', label: 'Cancel', hint: 'nothing has been written yet' },
+            ], 'yes');
       if (go !== 'yes') {
         console.log('cancelled.');
         return null;
@@ -473,8 +528,8 @@ async function configureTarget(
         : await askChoice(
             '\nThese look like one project across several servers. How should Baton set them up?',
             [
-              { key: 'hub', label: 'Centralized hub — one merged graph + one dashboard for all (recommended)' },
-              { key: 'individual', label: 'Individually — each repo gets its own Baton setup' },
+              { key: 'hub', label: 'Centralized hub', hint: 'one merged graph + one dashboard — recommended' },
+              { key: 'individual', label: 'Individually', hint: 'a separate knowledge base per repo' },
             ],
             'hub',
           );
@@ -520,12 +575,9 @@ async function setupIndividual(repos: SubProject[], opts: SetupOpts, agents: str
     await initKnowledgeBase(r.path, opts, graphOk);
     built.push({ path: r.path, port: await nextFreePort(7077, used) }); // skip taken ports
   }
-  if ((await chooseUseMode(opts)) === 'dashboard') {
-    console.log('\n✓ all repos set up. Start each daemon, then add the ports as connections (top-left → Add connection…):');
-    for (const b of built) console.log(`    cd ${b.path} && baton serve -p ${b.port} --write`);
-  } else {
-    console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP — no dashboard needed.');
-  }
+  console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP already.');
+  console.log('  To watch them, start each daemon and add the ports as connections (top-left → Add connection…):');
+  for (const b of built) console.log(`    cd ${b.path} && baton serve -p ${b.port} --write`);
   for (const b of built) {
     console.log(`\n  [${basename(b.path)}]`);
     await connectAllAgents(b.path, opts, agents);
