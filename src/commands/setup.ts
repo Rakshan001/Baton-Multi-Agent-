@@ -21,7 +21,7 @@ import { askChoice, kbInitCmd } from './kb.js';
 import { connectAgents, type AgentConnectOutcome } from '../agents/connect.js';
 import { DEFAULT_CONNECT_AGENTS } from './connect.js';
 import { askMultiSelect, askYesNo, shouldOfferGlobalInstall } from './setup-prompts.js';
-import { detectGraphify, graphifyInstallCommand, installHint, type GraphifyDetection } from '../kb/graphify.js';
+import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, type GraphifyDetection } from '../kb/graphify.js';
 import { agentInstalled } from '../agents/roster.js';
 import { AGENTS } from '../agents/registry.js';
 import { installSkillEverywhere, listSkillStatus } from '../skills/install.js';
@@ -265,8 +265,10 @@ export function mayInstallSoftware(opts: { yes?: boolean }): boolean {
 export type GraphifyStep =
   | { kind: 'already' }
   | { kind: 'no-installer'; hint: string }
-  | { kind: 'deferred'; line: string }
-  | { kind: 'offer'; cmd: string; args: string[]; line: string };
+  | { kind: 'deferred'; line: string; then?: string }
+  | { kind: 'offer'; cmd: string; args: string[]; line: string }
+  /** Nothing installed, but a package manager can install uv, which installs graphify. */
+  | { kind: 'bootstrap-uv'; cmd: string; args: string[]; line: string; then: string };
 
 /**
  * Pure half of the graphify step, so the policy above is testable without
@@ -275,15 +277,26 @@ export type GraphifyStep =
 export function graphifyStep(detection: GraphifyDetection, opts: SetupOpts): GraphifyStep {
   if (detection.ok) return { kind: 'already' };
 
-  const command = graphifyInstallCommand(detection);
-  // No uv and no pipx. The remaining route is bare `pip`, which we will not run
-  // on someone's behalf — see graphifyInstallCommand.
-  if (!command) return { kind: 'no-installer', hint: installHint(detection) };
+  // uv or pipx is here: one command and we are done.
+  const direct = graphifyInstallCommand(detection);
+  if (direct) {
+    const line = `${direct.cmd} ${direct.args.join(' ')}`;
+    return mayInstallSoftware(opts)
+      ? { kind: 'offer', cmd: direct.cmd, args: direct.args, line }
+      : { kind: 'deferred', line };
+  }
 
-  const line = `${command.cmd} ${command.args.join(' ')}`;
+  // Neither is here. Bare `pip` is still refused — see graphifyInstallCommand —
+  // but a package manager can install uv, and uv brings its own Python, so the
+  // machine needs no system Python at all. Two argv commands, no shell.
+  const uv = uvInstallCommand(detection);
+  if (!uv) return { kind: 'no-installer', hint: installHint(detection) };
+
+  const line = `${uv.cmd} ${uv.args.join(' ')}`;
+  const then = 'uv tool install graphifyy';
   return mayInstallSoftware(opts)
-    ? { kind: 'offer', cmd: command.cmd, args: command.args, line }
-    : { kind: 'deferred', line };
+    ? { kind: 'bootstrap-uv', cmd: uv.cmd, args: uv.args, line, then }
+    : { kind: 'deferred', line, then };
 }
 
 /**
@@ -309,34 +322,74 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
     return false;
   }
   if (step.kind === 'deferred') {
-    console.log(`    Not installed under --yes (it installs software). Later: ${step.line}`);
+    const later = step.then ? `${step.line}, then ${step.then}` : step.line;
+    console.log(`    Not installed under --yes (it installs software). Later: ${later}`);
     return false;
+  }
+
+  // Nothing installed at all, but a package manager can bootstrap the chain.
+  if (step.kind === 'bootstrap-uv') {
+    console.log(`    uv is not installed either, but \`${step.cmd}\` can install it.`);
+    console.log(`    Two commands: \`${step.line}\`, then \`${step.then}\`.`);
+    console.log('    uv brings its own Python, so nothing else has to be installed.');
+    if (!(await askYesNo('    Install both now?', true))) {
+      console.log(`    Skipped — the graph stays off. Later: ${step.line}, then ${step.then}`);
+      return false;
+    }
+    if (!(await runInstall(step.cmd, step.args, step.line))) return false;
+
+    // Re-probe rather than trusting the exit code: a package manager can
+    // succeed while putting uv somewhere this process's PATH cannot see.
+    const afterUv = await detectGraphify();
+    if (afterUv.ok) { console.log('    ✓ graphify installed.'); return true; }
+    if (!afterUv.uv) {
+      console.log('    ✓ uv installed, but not visible on PATH from here.');
+      console.log(`      Open a new shell, then run: ${step.then}`);
+      return false;
+    }
+    if (!(await runInstall('uv', ['tool', 'install', 'graphifyy'], step.then))) return false;
+    return await confirmGraphify(step.then);
   }
   if (!(await askYesNo(`    Install it now with \`${step.line}\`?`, true))) {
     console.log(`    Skipped — the graph stays off. Later: ${step.line}`);
     return false;
   }
 
+  if (!(await runInstall(step.cmd, step.args, step.line))) return false;
+  return await confirmGraphify(step.line);
+}
+
+/**
+ * Run one installer. `false` means it failed and said so.
+ *
+ * Offline, behind a proxy, a broken Python, a locked package manager — none of
+ * it is Baton's problem to solve, and none of it should cost the user the setup
+ * they came for. So a failure is reported and the run continues.
+ */
+async function runInstall(cmd: string, args: string[], line: string): Promise<boolean> {
   try {
-    await execa(step.cmd, step.args, { stdio: 'inherit', timeout: 5 * 60_000 });
+    await execa(cmd, args, { stdio: 'inherit', timeout: 10 * 60_000 });
+    return true;
   } catch (e) {
-    // Offline, behind a proxy, a broken Python — none of it is Baton's problem
-    // to solve, and none of it should cost the user the setup they came for.
     console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
-    console.log(`      Setup continues without the graph. Try later: ${step.line}`);
+    console.log(`      Setup continues without the graph. Try later: ${line}`);
     return false;
   }
+}
 
-  // Trust the probe, not the exit code: `uv tool install` succeeds while
-  // placing the binary in ~/.local/bin, which is on PATH here only because
-  // ensureBinPath() appended it — and on a stripped PATH it still may not be.
-  // Claiming a graph we cannot actually run would fail later, less legibly.
+/**
+ * Trust the probe, not the exit code: `uv tool install` succeeds while placing
+ * the binary in ~/.local/bin, which is on PATH here only because ensureBinPath()
+ * appended it — and on a stripped PATH it still may not be. Claiming a graph we
+ * cannot actually run would fail later, less legibly.
+ */
+async function confirmGraphify(line: string): Promise<boolean> {
   if ((await detectGraphify()).ok) {
     console.log('    ✓ graphify installed.');
     return true;
   }
   console.log('    ✓ installed, but not visible on PATH from here.');
-  console.log('      Open a new shell and run `baton kb init` to finish the graph.');
+  console.log(`      Open a new shell and run \`baton kb init\` to finish the graph. (${line})`);
   return false;
 }
 
@@ -361,8 +414,13 @@ async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
   let bundled: string[];
   try {
     bundled = (await listSkillStatus(root)).filter((s) => s.source === 'bundled').map((s) => s.id);
-  } catch {
-    return; // no catalog on disk (an unusual install) — silently skip
+  } catch (e) {
+    // Never silently: this used to `return` with nothing printed, so a broken
+    // catalog cost the user all twelve skills while setup still ended in a tick
+    // — the same green-over-half-done failure the knowledge-graph step had.
+    console.log(`\n  ! could not read the skills catalog (${(e as Error).message.split('\n')[0]})`);
+    console.log('    No skills were installed. `baton skills list` shows what should be there.');
+    return;
   }
   if (!bundled.length) return;
 

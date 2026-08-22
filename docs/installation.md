@@ -23,7 +23,13 @@ The wizard scans the folder first and shows what it found, then asks:
 
 1. **one repo, or a hub over several?** — detected automatically; a folder holding 2+ git repos can become one centralized hub (merged graph, one dashboard) or be set up individually
 2. **which agents do you use?** — recommends the ones already on your `PATH`
-3. **turn on the knowledge graph?** — offers to run `uv tool install graphifyy`
+3. **turn on the knowledge graph?** — offers to run `uv tool install graphifyy`.
+   On a machine with neither `uv` nor `pipx`, it offers to install `uv` first
+   via Homebrew (or winget on Windows) and then graphify — two commands, both
+   run as argv against a package manager. uv brings its own Python, so no
+   system Python is needed. Where there is no package manager at all, setup
+   prints the official installer rather than running it: piping a downloaded
+   script into a shell is not something Baton does on your behalf
 4. **install the bundled skills?**
 5. **install `baton` globally?** — only when you came in via `npx`
 
