@@ -29,6 +29,11 @@ The wizard scans the folder first and shows what it found, then asks:
 
 Every question has a recommended answer; pressing Enter takes it.
 
+The prompts are arrow-key lists — `↑↓` to move, space to toggle a checkbox, `a`
+for all, `n` for none, Enter to confirm — with a short note beside each option
+explaining what it means. Where there is no terminal to draw on (CI, a pipe,
+`nohup`) they fall back to the typed-number form, so scripts keep working.
+
 There is deliberately no "dashboard or headless" question. The dashboard is a
 viewer, not a mode: the knowledge graph, the KB, the MCP servers, the git hooks,
 the skills and the agent wiring are set up either way, and `baton serve` is

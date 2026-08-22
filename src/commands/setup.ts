@@ -238,7 +238,11 @@ async function chooseAgents(opts: SetupOpts, installed: string[]): Promise<strin
     '\n  Which agents should Baton wire up?',
     DEFAULT_CONNECT_AGENTS.map((id) => ({
       key: id,
-      label: `${AGENTS[id]?.label ?? id}${installed.includes(id) ? '  (found on PATH)' : ''}`,
+      label: AGENTS[id]?.label ?? id,
+      // The note belongs beside the row, not inside its name: "not installed"
+      // is a fact about your machine, and wiring one up now is still useful —
+      // the config is waiting the day you install it.
+      hint: installed.includes(id) ? 'found on your PATH' : 'not installed — wiring it now still works',
     })),
     recommended,
   );
@@ -503,7 +507,10 @@ async function configureTarget(
       const go = opts.yes || opts.hub
         ? 'yes'
         : await askChoice('Initialize a git repo here and set up Baton?',
-            [{ key: 'yes', label: 'Yes — git init here, then set up' }, { key: 'no', label: 'Cancel' }], 'yes');
+            [
+              { key: 'yes', label: 'Yes, git init here', hint: 'Baton needs a repo to track worktrees and edits' },
+              { key: 'no', label: 'Cancel', hint: 'nothing has been written yet' },
+            ], 'yes');
       if (go !== 'yes') {
         console.log('cancelled.');
         return null;
@@ -521,8 +528,8 @@ async function configureTarget(
         : await askChoice(
             '\nThese look like one project across several servers. How should Baton set them up?',
             [
-              { key: 'hub', label: 'Centralized hub — one merged graph + one dashboard for all (recommended)' },
-              { key: 'individual', label: 'Individually — each repo gets its own Baton setup' },
+              { key: 'hub', label: 'Centralized hub', hint: 'one merged graph + one dashboard — recommended' },
+              { key: 'individual', label: 'Individually', hint: 'a separate knowledge base per repo' },
             ],
             'hub',
           );

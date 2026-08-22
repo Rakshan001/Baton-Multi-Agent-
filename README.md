@@ -60,7 +60,7 @@ Requires **Node ≥ 24** and **git**. Run this in any repo:
 npx batonhq setup
 ```
 
-It scans the folder, asks a handful of questions — one repo or a hub over several, which agents you use, whether to turn on the knowledge graph — recommends an answer to each, and wires everything up. Then:
+It scans the folder, then asks a handful of arrow-key questions — one repo or a hub over several, which agents you use, whether to turn on the knowledge graph. Each option carries a note explaining it, and Enter takes the recommendation. Then:
 
 ```bash
 baton serve --write  # daemon + dashboard → http://localhost:7077

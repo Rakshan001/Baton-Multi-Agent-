@@ -19,6 +19,17 @@ and this project follows
   one fewer question.
 
 ### Added
+- **Arrow-key prompts.** The wizard's questions are now checkbox and radio
+  lists — `↑↓` to move, space to toggle, `a` for all, `n` for none, Enter to
+  confirm — instead of asking you to type numbers and map "Cursor Agent" onto
+  "2". Each option carries a short note beside it (`found on your PATH`,
+  `one merged graph + one dashboard — recommended`), so the thing that explains
+  the choice sits next to the choice.
+
+  Built on `node:tty` raw mode and ANSI escapes rather than a prompts library:
+  Baton ships five pure-JS dependencies and argues for itself partly on being
+  small enough to audit. Where there is no terminal — CI, a pipe, `nohup` — the
+  typed-number prompts still run, so nothing scripted changes.
 - **Setup warns when `batonhq` is a dependency of the project it is setting
   up.** `npm i batonhq` is the reflex and it is the wrong move: npm reconciles
   the host project's whole dependency tree, so a repo with native modules
