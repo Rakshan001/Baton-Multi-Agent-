@@ -8,9 +8,11 @@
  * screen — is a pure function and is pinned here.
  */
 import { describe, it, expect } from 'vitest';
+import { PassThrough } from 'node:stream';
 import {
   decodeKey, applyKey, renderLines, initialState, chosenKeys,
-  type SelectItem,
+  runSelect, splitKeys,
+  type SelectItem, type SelectInput,
 } from '../src/commands/interactive-select.js';
 
 const ESC = '\u001b';
@@ -177,5 +179,86 @@ describe('renderLines', () => {
 
   it('does not advertise space-to-toggle in a single-select', () => {
     expect(renderLines(single()).join('\n')).not.toMatch(/toggle/i);
+  });
+});
+
+/**
+ * The regression that shipped in 0.1.1.
+ *
+ * `for await (const c of stream) { … break }` calls the iterator's return(),
+ * which destroys the stream. stdin is a process-wide singleton, so the first
+ * prompt to finish took stdin with it: a multi-repo setup died on its second
+ * question with "The operation was aborted", and the skills and global-install
+ * questions after the first picker silently never appeared at all.
+ *
+ * Two prompts on one input is therefore the case worth pinning, not one.
+ */
+describe('runSelect leaves the input usable', () => {
+  const OUT = () => {
+    const written: string[] = [];
+    return { isTTY: true, written, write(c: string) { written.push(c); return true; } };
+  };
+  const fakeTTY = () => {
+    const s = new PassThrough() as unknown as SelectInput & PassThrough;
+    (s as unknown as { isTTY: boolean }).isTTY = true;
+    (s as unknown as { setRawMode: (m: boolean) => void }).setRawMode = () => {};
+    return s;
+  };
+
+  it('does not destroy the input when the prompt ends', async () => {
+    const input = fakeTTY();
+    const pending = runSelect('pick', ITEMS, true, ['claude'], { input, output: OUT() });
+    input.write('\r');
+    await pending;
+    expect(input.destroyed).toBe(false);
+  });
+
+  it('answers a second prompt on the same input', async () => {
+    const input = fakeTTY();
+    const output = OUT();
+
+    const first = runSelect('agents', ITEMS, true, ['claude'], { input, output });
+    input.write('\r');
+    expect(await first).toEqual(['claude']);
+
+    // 0.1.1 died here: the stream was already gone.
+    const second = runSelect('hub or individual', ITEMS, false, ['cursor'], { input, output });
+    input.write('\r');
+    expect(await second).toEqual(['cursor']);
+  });
+
+  it('returns null without a TTY, so callers fall back to typing', async () => {
+    const input = fakeTTY();
+    (input as unknown as { isTTY: boolean }).isTTY = false;
+    expect(await runSelect('q', ITEMS, true, [], { input, output: OUT() })).toBeNull();
+  });
+});
+
+describe('splitKeys', () => {
+  // Holding a key down delivers one chunk with many keystrokes in it. Before
+  // this, that chunk decoded to a single 'ignore' and the picker looked frozen.
+  it('splits a burst of arrow keys', () => {
+    expect(splitKeys(`${ESC}[B${ESC}[B${ESC}[B`)).toEqual([`${ESC}[B`, `${ESC}[B`, `${ESC}[B`]);
+  });
+
+  it('splits plain characters', () => {
+    expect(splitKeys('abc')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('keeps a lone key intact', () => {
+    expect(splitKeys('\r')).toEqual(['\r']);
+  });
+
+  it('mixes escape sequences and characters', () => {
+    expect(splitKeys(`${ESC}[A x`)).toEqual([`${ESC}[A`, ' ', 'x']);
+  });
+
+  it('treats a bare escape as its own key, so Escape still cancels', () => {
+    expect(splitKeys(ESC)).toEqual([ESC]);
+  });
+
+  it('round-trips through decodeKey', () => {
+    expect(splitKeys(`${ESC}[B ${ESC}[A\r`).map(decodeKey))
+      .toEqual(['down', 'toggle', 'up', 'submit']);
   });
 });

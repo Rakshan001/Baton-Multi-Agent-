@@ -25,6 +25,28 @@ and this project follows
   on their behalf.
 
 ### Fixed
+- **The arrow-key prompts broke every prompt after the first.** `for await (… of
+  stdin) { … break }` calls the iterator's `return()`, which *destroys* the
+  stream. stdin is a process-wide singleton, so the first picker to finish took
+  stdin with it. A multi-repo setup died on its second question with
+  `error: The operation was aborted`, and the skills and global-install
+  questions — both of which come after a picker — silently never appeared, which
+  is why `baton` was missing from PATH after an `npx` setup. Now iterated with
+  `destroyOnReturn: false`.
+
+  The same fix removed an explicit `resume()`: it put the stream in flowing
+  mode before the iterator attached, where data with no listener is discarded.
+  The async iterator owns flow control.
+- **Holding a key down did nothing.** One read can carry several keystrokes, and
+  `decodeKey` understands one — so a burst like three arrow-downs decoded to a
+  single `ignore` and the list sat still. Chunks are now split into keys first,
+  escape sequences kept whole.
+- **The multi-repo list was unreadable when two repos shared a name.** It
+  printed `basename(path)`, so a real project scanned as five repos of which
+  two pairs looked identical — at different depths, with nothing on screen
+  saying so. That is the list you read to decide whether to merge them all into
+  one knowledge graph. Colliding names now show their path relative to the
+  scanned root; everything else stays short.
 - **The skills step could fail silently.** An unreadable catalog hit a bare
   `catch { return; }` — no message, no exit code, and setup still finished with
   a tick while twelve skills were quietly missing. It now says what failed and
