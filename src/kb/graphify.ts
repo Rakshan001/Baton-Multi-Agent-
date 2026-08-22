@@ -20,23 +20,71 @@ export interface GraphifyDetection {
   /** Available installers, for tailored guidance when graphify is missing. */
   uv: boolean;
   pipx: boolean;
+  /**
+   * Package managers that can install `uv` itself, for the machine that has
+   * none of the above. Probed only when graphify is missing — a machine that
+   * already has it does not need to be asked about Homebrew.
+   */
+  brew: boolean;
+  winget: boolean;
 }
 
 export async function detectGraphify(): Promise<GraphifyDetection> {
   // version string needed for the ok path; probeBinary covers the boolean installers
   try {
     const { stdout } = await execa('graphify', ['--version'], { timeout: QUICK_TIMEOUT_MS });
-    return { ok: true, version: stdout.trim().replace(/^graphify\s+/, ''), uv: true, pipx: true };
+    // The installer flags are moot once graphify is here; nothing reads them.
+    return { ok: true, version: stdout.trim().replace(/^graphify\s+/, ''), uv: true, pipx: true, brew: true, winget: true };
   } catch {
     const [uv, pipx] = await Promise.all([probeBinary('uv'), probeBinary('pipx')]);
-    return { ok: false, uv, pipx };
+    // Only worth asking the OS about package managers if neither route exists.
+    if (uv || pipx) return { ok: false, uv, pipx, brew: false, winget: false };
+    const [brew, winget] = await Promise.all([
+      probeBinary('brew'),
+      process.platform === 'win32' ? probeBinary('winget') : Promise.resolve(false),
+    ]);
+    return { ok: false, uv, pipx, brew, winget };
   }
 }
 
+/**
+ * What to tell someone to run, given what their machine has.
+ *
+ * This used to lead with `pip install graphifyy` — the one route Baton itself
+ * refuses to take, because pip lands in whichever Python leads PATH, often the
+ * system one. Recommending by hand the thing you declined to do for them, for
+ * reasons that apply just as much to them, is bad advice. Everything now routes
+ * through uv, which brings its own Python and needs no system one at all.
+ */
 export function installHint(d: GraphifyDetection): string {
   if (d.uv) return 'uv tool install graphifyy';
   if (d.pipx) return 'pipx install graphifyy';
-  return 'pip install graphifyy   (or install uv first: https://docs.astral.sh/uv/)';
+
+  const uv = uvInstallCommand(d);
+  if (uv) return `${uv.cmd} ${uv.args.join(' ')}   then: uv tool install graphifyy`;
+
+  // No package manager. The official installer is a remote script piped into a
+  // shell — fine for a human who chose to run it, not something Baton should
+  // execute on anyone's behalf. So it is printed, and only printed.
+  return 'curl -LsSf https://astral.sh/uv/install.sh | sh   then: uv tool install graphifyy';
+}
+
+/**
+ * How to install `uv` itself, as an argv array — or `null` for "do not run
+ * anything here".
+ *
+ * The same rule as graphifyInstallCommand, one level down. A package manager is
+ * a signed, audited artefact and an argv array: `brew install uv` is safe to
+ * run for someone. The alternative is `curl … | sh`, which downloads a script
+ * at runtime and pipes it into a shell — and a tool people install to
+ * coordinate agents over their source code has no business doing that on their
+ * behalf. That case returns null, and installHint prints the command instead.
+ */
+export function uvInstallCommand(d: GraphifyDetection): { cmd: string; args: string[] } | null {
+  if (d.ok || d.uv) return null; // nothing to bootstrap
+  if (d.brew) return { cmd: 'brew', args: ['install', 'uv'] };
+  if (d.winget) return { cmd: 'winget', args: ['install', '--id', 'astral-sh.uv', '-e', '--source', 'winget'] };
+  return null;
 }
 
 /**

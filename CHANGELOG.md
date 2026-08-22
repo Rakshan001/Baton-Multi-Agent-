@@ -7,6 +7,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — a machine with nothing on it
+
+### Added
+- **Setup can bootstrap `uv`.** Previously a machine with neither `uv` nor
+  `pipx` got a hint and no knowledge graph — which is exactly what a clean
+  laptop is. Setup now offers to install `uv` through Homebrew (or winget on
+  Windows) and then graphify: two commands, both argv arrays against a package
+  manager. uv brings its own Python, so nothing else has to be installed.
+
+  Where there is **no** package manager, setup prints
+  `curl -LsSf https://astral.sh/uv/install.sh | sh` rather than running it. That
+  is the same rule that already makes Baton refuse bare `pip`, one level down: a
+  package manager is a signed artefact and an argv array, while the official
+  installer is a script downloaded at runtime and piped into a shell. A tool
+  people install to coordinate agents over their source code should not do that
+  on their behalf.
+
+### Fixed
+- **The skills step could fail silently.** An unreadable catalog hit a bare
+  `catch { return; }` — no message, no exit code, and setup still finished with
+  a tick while twelve skills were quietly missing. It now says what failed and
+  names `baton skills list`. Same green-over-half-done failure the
+  knowledge-graph step had before 0.1.0.
+
+### Changed
+- `installHint` leads with `uv` instead of bare `pip install graphifyy`.
+  Recommending by hand the one route Baton itself refuses to take — pip installs
+  into whichever Python leads PATH, often the system one — was bad advice.
+
 ## [0.1.1] — install guidance, and one question that was never real
 
 ### Removed
