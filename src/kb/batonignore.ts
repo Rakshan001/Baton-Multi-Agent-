@@ -23,7 +23,68 @@ const BATON_GITIGNORE_END = '# <<< baton';
 // DIRECTORY, so `!.baton/agents.json` would be dead under `.baton/` — and that
 // file is the one .baton artifact meant to be committed (the per-project agent
 // registry the docs tell teams to share).
-const BASE_ENTRIES = ['.baton/*', '!.baton/agents.json', 'graphify-out/', '.graphifyignore', '.mcp.json'];
+// `**/` rather than a bare `.baton/*`: a pattern containing a slash is anchored
+// to the repo root, so in a monorepo whose sub-projects each got a `.baton/`
+// under one git root, only the top one was ignored.
+// All three project-scoped MCP configs, not just Claude's: `setup` writes
+// whichever ones the chosen agents need, and `baton kb mcp --agent cursor`
+// prints a snippet carrying `/mcp/g/<token>/` for the user to paste into
+// `.cursor/mcp.json`. Ignoring one of the three for that reason is half a rule.
+const BASE_ENTRIES = [
+  '**/.baton/*',
+  '!**/.baton/agents.json',
+  'graphify-out/',
+  '.graphifyignore',
+  '.mcp.json',
+  '**/.cursor/mcp.json',
+  '**/.agents/mcp_config.json',
+];
+
+/** Directories whose whole contents are Baton's, keyed for `git rm -r --cached`. */
+const FOOTPRINT_DIRS = ['.baton', 'graphify-out'];
+/** Individual files Baton writes into a directory the user also owns. */
+const FOOTPRINT_FILES = ['.graphifyignore', '.mcp.json', '.cursor/mcp.json', '.agents/mcp_config.json'];
+
+/**
+ * Which of these already-tracked paths the managed block now claims.
+ *
+ * Adding a line to `.gitignore` does nothing to a file git is already tracking,
+ * so a repo set up before this block existed keeps committing `.baton/kb.json`
+ * forever while setup cheerfully prints `✓ .gitignore updated`. Pure: git does
+ * the ignore-matching upstream (`ls-files -ci`), this only picks out the paths
+ * that are ours, so a file the user chose to track-and-ignore is left out of it.
+ */
+export function batonFootprint(trackedIgnored: string[]): string[] {
+  return trackedIgnored.filter((raw) => {
+    const p = raw.trim().replace(/^\.\//, '');
+    if (!p) return false;
+    // The one .baton file meant to be committed — never suggest untracking it.
+    if (p === '.baton/agents.json' || p.endsWith('/.baton/agents.json')) return false;
+    if (FOOTPRINT_DIRS.some((d) => p.startsWith(`${d}/`) || p.includes(`/${d}/`))) return true;
+    return FOOTPRINT_FILES.some((f) => p === f || p.endsWith(`/${f}`));
+  });
+}
+
+/**
+ * The one-line `git rm` the user can run, naming each directory once.
+ *
+ * Collapsing `.baton/kb.json` and `.baton/tasks.json` down to `.baton` is what
+ * keeps the command readable in a repo with a dozen tracked skill files — and
+ * it is also what would untrack `.baton/agents.json`, the one file in there
+ * teams are told to commit. Git's exclude pathspec buys back that single file
+ * without giving up the collapse.
+ */
+export function untrackCommand(paths: string[]): string {
+  const targets = new Set<string>();
+  for (const p of paths) {
+    const dir = FOOTPRINT_DIRS.find((d) => p.startsWith(`${d}/`) || p.includes(`/${d}/`));
+    targets.add(dir ? p.slice(0, p.indexOf(dir) + dir.length) : p);
+  }
+  const spared = [...targets]
+    .filter((t) => t === '.baton' || t.endsWith('/.baton'))
+    .map((t) => `':(exclude)${t}/agents.json'`);
+  return `git rm -r --cached ${[...targets].sort().join(' ')}${spared.length ? ` ${spared.sort().join(' ')}` : ''}`;
+}
 
 function managedBlock(share: boolean): string {
   const entries = share ? BASE_ENTRIES : [...BASE_ENTRIES, 'CODEBASE.md'];

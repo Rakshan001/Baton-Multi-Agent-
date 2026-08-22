@@ -20,10 +20,18 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const GRAPHIFY_IGNORE_MARKER = '# baton: generated knowledge-base files (do not index)';
-export const GRAPHIFY_IGNORE_ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
+// `graphify-out/` and `.baton/` are here rather than left to the .gitignore
+// mirror on purpose. The mirror is taken before `kb init` adds Baton's block to
+// .gitignore, so on a fresh repo it cannot contain them — and the graph then
+// indexes its own output (observed: 1020 nodes → 1910 on an unchanged repo).
+// Naming them here makes the block correct on its own, whatever the mirror says.
+export const GRAPHIFY_IGNORE_ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/', 'graphify-out/', '.baton/'];
+/** The block shipped before graphify-out/ and .baton/ were added — upgraded in place. */
+const LEGACY_ENTRIES = ['CODEBASE.md', 'AGENTS.md', 'kb/'];
 const MIRROR_HEADER = '# mirrored from .gitignore so graphify keeps honouring it';
 
 const managedBlock = () => `${GRAPHIFY_IGNORE_MARKER}\n${GRAPHIFY_IGNORE_ENTRIES.join('\n')}`;
+const legacyBlock = () => `${GRAPHIFY_IGNORE_MARKER}\n${LEGACY_ENTRIES.join('\n')}`;
 
 /** The full correct contents: optional gitignore mirror + the managed block. */
 function renderManaged(gitignore: string | null): string {
@@ -34,7 +42,7 @@ function renderManaged(gitignore: string | null): string {
 
 /** The legacy bare managed file: just our block, no gitignore mirror. */
 function isBareManaged(existing: string): boolean {
-  return existing.trim() === managedBlock();
+  return existing.trim() === managedBlock() || existing.trim() === legacyBlock();
 }
 
 /**
@@ -46,6 +54,9 @@ export function composeGraphifyIgnore(existing: string, gitignore: string | null
   if (!existing.trim()) return desired;                              // fresh create
   if (existing.trim() === desired.trim()) return null;              // already correct
   if (isBareManaged(existing) && (gitignore ?? '').trim()) return desired; // upgrade stale bare → mirrored
+  // A file still carrying the older block: swap that block for the current one
+  // and leave every other line — mirror and user additions alike — untouched.
+  if (existing.includes(legacyBlock())) return existing.replace(legacyBlock(), managedBlock());
   if (existing.includes(GRAPHIFY_IGNORE_MARKER)) return null;       // managed + user extras (or already mirrored) → leave
   // A user-authored .graphifyignore without our block: append the block, but
   // don't mirror .gitignore (they've chosen to own the ignore policy).
