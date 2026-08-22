@@ -7,6 +7,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — Baton stops indexing Baton
+
+### Fixed
+- **The knowledge graph was eating its own output.** Running `baton setup` a
+  second time on an unchanged repo took it from 1020 nodes and 82 communities to
+  1910 and 179, then reported that the community set had drifted and backed up
+  the curated graph. Nothing had been added to the codebase; the second pass was
+  indexing `graphify-out/` and `.baton/` from the first.
+
+  `.graphifyignore` is seeded by mirroring `.gitignore`, but `kb init` seeds it
+  *before* it adds Baton's own entries to `.gitignore` — so on a fresh repo the
+  mirror is copied from a file that does not yet mention either path, and
+  `composeGraphifyIgnore` then declines to touch a managed file again, making the
+  omission permanent. The managed block now names `graphify-out/` and `.baton/`
+  itself, so it is correct regardless of what the mirror caught, and an existing
+  `.graphifyignore` is upgraded in place on the next run rather than left stale.
+
+  This never showed up in development because Baton's own `.gitignore` has listed
+  both paths by hand since long before any of this existed. Only a repo that
+  starts without them can hit it.
+
+- **Two of the three MCP configs setup writes were left untracked.** `setup`
+  writes `.mcp.json`, `.cursor/mcp.json` and `.agents/mcp_config.json` depending
+  on which agents you pick, and the ignore block named only the first. A Claude
+  user got a clean `git status` and a Cursor user did not. These files can also
+  carry a Baton MCP token — `baton kb mcp --agent cursor` prints a snippet
+  containing `/mcp/g/<token>/` and tells you to paste it into `.cursor/mcp.json`
+  — so ignoring one of the three for that reason and not the others was half a
+  rule. All three are ignored now.
+
+- **A nested `.baton/` stayed untracked in a monorepo.** `.baton/*` contains a
+  slash, which anchors it to the repo root, so in a repo whose sub-projects each
+  got their own `.baton/` only the top one was ignored. The entries are `**/`
+  prefixed now. `.baton/agents.json` remains committable, as documented.
+
+### Added
+- **Setup says when its own files are already tracked.** Adding a line to
+  `.gitignore` does nothing to a file git is already tracking, so a repo set up
+  before the managed block existed kept committing `.baton/kb.json` on every
+  commit while setup printed `✓ .gitignore updated` directly above it. It now
+  lists what is affected and hands over the `git rm --cached` line — which spares
+  `.baton/agents.json` — rather than running it. Untracking files across
+  somebody's repo uninvited is not a setup step.
+
 ## [0.1.2] — a machine with nothing on it
 
 ### Added

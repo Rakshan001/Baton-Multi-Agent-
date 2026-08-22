@@ -16,8 +16,8 @@ describe('composeBatonGitignore — gitignore the footprint `kb init` writes', (
     const out = composeBatonGitignore('', false)!;
     // `.baton/*` with a negation, never `.baton/`: git does not descend into
     // an ignored directory, so a dir-ignore would make the negation dead.
-    expect(out).toContain('!.baton/agents.json');
-    expect(out).not.toMatch(/^\.baton\/$/m);
+    expect(out).toContain('!**/.baton/agents.json');
+    expect(out).not.toMatch(/^(\*\*\/)?\.baton\/$/m);
   });
 
   it('keeps CODEBASE.md tracked in share mode (teammates get the map)', () => {
