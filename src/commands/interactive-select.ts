@@ -77,6 +77,31 @@ export function decodeKey(seq: string): Key {
   return 'ignore';
 }
 
+/**
+ * One read can carry several keystrokes.
+ *
+ * Holding an arrow key down, typing quickly, or pasting all deliver a single
+ * chunk like "\u001b[B\u001b[B\u001b[B". decodeKey only understands one key,
+ * so an unsplit chunk decoded to 'ignore' and the picker sat there looking
+ * frozen while the user held a key down.
+ *
+ * Escape sequences are kept whole; everything else is a character.
+ */
+export function splitKeys(chunk: string): string[] {
+  const keys: string[] = [];
+  for (let i = 0; i < chunk.length; i++) {
+    if (chunk[i] !== ESC) { keys.push(chunk[i]); continue; }
+    // CSI: ESC [ … final byte in @-~. Anything else is a bare ESC.
+    const rest = chunk.slice(i);
+    const csi = /^\u001b\[[0-9;?]*[ -/]*[@-~]/.exec(rest);
+    if (csi) { keys.push(csi[0]); i += csi[0].length - 1; continue; }
+    const ss3 = /^\u001b O?[A-Za-z]/.exec(rest) ?? /^\u001bO[A-Za-z]/.exec(rest);
+    if (ss3) { keys.push(ss3[0]); i += ss3[0].length - 1; continue; }
+    keys.push(ESC);
+  }
+  return keys;
+}
+
 /** Pure reducer. Returns the same state, unchanged, once the prompt is over. */
 export function applyKey(state: SelectState, key: Key): SelectState {
   if (state.status !== 'active') return state;
@@ -167,14 +192,32 @@ function dim(text: string): string {
  * Cancelling exits 130, the shell's convention for "terminated by SIGINT", and
  * matches what Ctrl-C already does at every other prompt in the wizard.
  */
+export interface SelectIO {
+  input: SelectInput;
+  output: SelectOutput;
+}
+
+/** Just enough of a TTY to drive the picker — and to fake one in a test. */
+export type SelectInput = NodeJS.ReadableStream & {
+  isTTY?: boolean;
+  setRawMode?(mode: boolean): void;
+  setEncoding(encoding: BufferEncoding): unknown;
+  resume(): unknown;
+  pause(): unknown;
+  iterator(opts: { destroyOnReturn: boolean }): AsyncIterableIterator<unknown>;
+};
+
+export type SelectOutput = { isTTY?: boolean; write(chunk: string): unknown };
+
 export async function runSelect(
   question: string,
   items: readonly SelectItem[],
   multi: boolean,
   recommended: readonly string[],
+  io: SelectIO = { input: process.stdin, output: process.stdout },
 ): Promise<string[] | null> {
-  const { stdin, stdout } = process;
-  if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== 'function') return null;
+  const { input, output } = io;
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') return null;
   if (items.length === 0) return [];
 
   let state = initialState(items, multi, recommended);
@@ -184,34 +227,46 @@ export async function runSelect(
     const lines = renderLines(state);
     // Redraw in place: back up over what we drew last time, clearing as we go,
     // so the list does not march down the scrollback on every keystroke.
-    if (painted > 0) stdout.write(`${ESC}[${painted}A`);
-    for (const line of lines) stdout.write(`${ESC}[2K\r${line}\n`);
+    if (painted > 0) output.write(`${ESC}[${painted}A`);
+    for (const line of lines) output.write(`${ESC}[2K\r${line}\n`);
     painted = lines.length;
   };
 
-  stdout.write(`${question}\n`);
-  stdout.write(`${ESC}[?25l`); // hide the cursor; it has nowhere useful to sit
-  stdin.setRawMode(true);
-  stdin.resume();
-  stdin.setEncoding('utf8');
+  output.write(`${question}\n`);
+  output.write(`${ESC}[?25l`); // hide the cursor; it has nowhere useful to sit
+  input.setRawMode(true);
+  input.setEncoding('utf8');
   paint();
 
+  // `destroyOnReturn: false` is load-bearing, not a tuning knob.
+  //
+  // Breaking out of a plain `for await (const c of stream)` calls the
+  // iterator's return(), which DESTROYS the stream. stdin is a process-wide
+  // singleton, so the first prompt to finish would take stdin with it and every
+  // later prompt — the next picker, the skills question, the global-install
+  // offer — would fail on a dead stream. That shipped in 0.1.1: the second
+  // prompt in a multi-repo setup died with "The operation was aborted", and the
+  // two questions after the first picker silently never appeared.
+  const keys = input.iterator({ destroyOnReturn: false });
+
   try {
-    for await (const chunk of stdin) {
-      state = applyKey(state, decodeKey(String(chunk)));
-      if (state.status !== 'active') break;
+    outer: for await (const chunk of keys) {
+      // One read can hold several keystrokes — see splitKeys.
+      for (const key of splitKeys(String(chunk))) {
+        state = applyKey(state, decodeKey(key));
+        if (state.status !== 'active') break outer;
+      }
       paint();
     }
   } finally {
     // Restoring the terminal must happen even if the loop throws: a process
     // that dies in raw mode leaves the user's shell without an echo.
-    stdin.setRawMode(false);
-    stdin.pause();
-    stdout.write(`${ESC}[?25h`);
+    input.setRawMode(false);
+    output.write(`${ESC}[?25h`);
   }
 
   if (state.status === 'cancelled') {
-    stdout.write('\n  cancelled — nothing was written.\n');
+    output.write('\n  cancelled — nothing was written.\n');
     process.exit(130);
   }
 
