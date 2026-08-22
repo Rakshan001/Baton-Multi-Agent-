@@ -41,6 +41,12 @@ and this project follows
   `decodeKey` understands one — so a burst like three arrow-downs decoded to a
   single `ignore` and the list sat still. Chunks are now split into keys first,
   escape sequences kept whole.
+- **The multi-repo list was unreadable when two repos shared a name.** It
+  printed `basename(path)`, so a real project scanned as five repos of which
+  two pairs looked identical — at different depths, with nothing on screen
+  saying so. That is the list you read to decide whether to merge them all into
+  one knowledge graph. Colliding names now show their path relative to the
+  scanned root; everything else stays short.
 - **The skills step could fail silently.** An unreadable catalog hit a bare
   `catch { return; }` — no message, no exit code, and setup still finished with
   a tick while twelve skills were quietly missing. It now says what failed and

@@ -11,7 +11,7 @@
  */
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { execa } from 'execa';
 import { gitTry } from '../util/exec.js';
@@ -269,6 +269,28 @@ export type GraphifyStep =
   | { kind: 'offer'; cmd: string; args: string[]; line: string }
   /** Nothing installed, but a package manager can install uv, which installs graphify. */
   | { kind: 'bootstrap-uv'; cmd: string; args: string[]; line: string; then: string };
+
+/**
+ * The list shown before "hub, or individually?".
+ *
+ * It printed `basename(path)`, which is not unique. A real Flutter project
+ * scanned as five repos of which two pairs shared a name, at different depths,
+ * with nothing on screen to tell them apart — and that list is exactly what
+ * someone reads to decide whether to merge them all into one knowledge graph.
+ *
+ * A colliding name gets its path relative to the scanned root; the rest stay
+ * short, so the ordinary case reads no differently than it did.
+ */
+export function describeRepos(root: string, repos: readonly SubProject[]): string[] {
+  const count = new Map<string, number>();
+  for (const r of repos) count.set(r.name, (count.get(r.name) ?? 0) + 1);
+  return repos.map((r) => {
+    if ((count.get(r.name) ?? 0) < 2) return r.name;
+    // relative() is '' when the root IS the repo, and a root cannot collide
+    // with anything below it — fall back to the name rather than an empty line.
+    return relative(root, r.path) || r.name;
+  });
+}
 
 /**
  * Pure half of the graphify step, so the policy above is testable without
@@ -581,7 +603,7 @@ async function configureTarget(
 
     case 'multi-repo': {
       console.log(`\nfound ${t.repos.length} separate git repos under ${basename(root)}:`);
-      for (const r of t.repos) console.log(`  • ${r.name}`);
+      for (const line of describeRepos(root, t.repos)) console.log(`  • ${line}`);
       const mode = opts.hub ? 'hub' : opts.individual ? 'individual'
         : await askChoice(
             '\nThese look like one project across several servers. How should Baton set them up?',
