@@ -86,7 +86,18 @@ export class LocalExecutor implements Executor {
     };
     if (req.mode === 'headless') {
       const res = await startAgent(req.slug, { agent: req.agentId, model: req.model, prompt: req.prompt }, root);
-      return { ...base, mode: 'headless', ref: `pid:${res.pid ?? 0}` };
+      // The resolved agent and model, not the requested ones: `baton start` with
+      // no --agent picks a default in here, and printing the request instead of
+      // the result would make that line a guess (P2-E5).
+      return {
+        ...base,
+        agentId: res.agent,
+        model: res.model,
+        mode: 'headless',
+        ref: `pid:${res.pid ?? 0}`,
+        pid: res.pid ?? null,
+        promptSource: res.promptSource,
+      };
     }
     const term = await createTerminal(req.slug, { agent: req.agentId, model: req.model, prompt: req.prompt }, root);
     return { ...base, mode: 'interactive', ref: `tmux:${term.sessionName}` };

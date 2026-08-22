@@ -71,6 +71,18 @@ export interface RunHandle {
   mode: RunMode;
   startedAt: string;
   /**
+   * The pid, where the backend has one. `null` rather than 0 when it does not:
+   * `baton start` prints `pid ${pid ?? '?'}`, and 0 is a pid that never exists.
+   */
+  pid?: number | null;
+  /**
+   * Whether the prompt came from a HANDOFF.md brief or the task description.
+   * On the handle because `baton start` prints it, and a re-route that dropped
+   * it would silently turn every start into "task description" (P2-E5).
+   * Headless only — an interactive TUI is not handed a prompt at launch.
+   */
+  promptSource?: 'handoff' | 'task';
+  /**
    * The Baton root this run belongs to. Carried on the handle rather than
    * re-derived, because a handle is read back from disk after a daemon restart,
    * when the process cwd says nothing about where the run came from.

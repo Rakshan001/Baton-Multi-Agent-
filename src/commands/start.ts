@@ -6,7 +6,17 @@
  * the dashboard's start/stop buttons (POST /api/tasks/:slug/agent/*).
  */
 import { bus } from '../events.js';
-import { HEADLESS_AGENTS, startAgent, stopAgent, waitForAgent } from '../spawn.js';
+import { HEADLESS_AGENTS, stopAgent, waitForAgent } from '../spawn.js';
+import { LocalExecutor } from '../executors/local.js';
+import { activeBatonRoot } from '../store.js';
+
+/**
+ * P2-E5: routed through the executor seam so that when the Orca backend lands,
+ * `baton start` gets it without another rewrite. Behaviour is unchanged and
+ * that is asserted directly (executor-start-parity.test.ts) — the printed line
+ * is a contract people read and scripts grep.
+ */
+const executor = new LocalExecutor();
 
 export async function startCmd(slug: string, opts: { agent?: string; model?: string; prompt?: string }): Promise<void> {
   const unsub = bus.onType('agent.output', (e) => {
@@ -15,8 +25,17 @@ export async function startCmd(slug: string, opts: { agent?: string; model?: str
     }
   });
   try {
-    const r = await startAgent(slug, opts);
-    console.log(`▶ ${r.agent}${r.model ? ` (model: ${r.model})` : ''} started in worktree (pid ${r.pid ?? '?'}) · prompt: ${r.promptSource === 'handoff' ? 'HANDOFF.md brief' : 'task description'}`);
+    const r = await executor.launch({
+      slug,
+      agentId: opts.agent ?? '',
+      nativeId: opts.agent ?? '',
+      model: opts.model,
+      cwd: '',
+      prompt: opts.prompt ?? '',
+      env: { BATON_ROOT: await activeBatonRoot() },
+      mode: 'headless',
+    });
+    console.log(`▶ ${r.agentId}${r.model ? ` (model: ${r.model})` : ''} started in worktree (pid ${r.pid ?? '?'}) · prompt: ${r.promptSource === 'handoff' ? 'HANDOFF.md brief' : 'task description'}`);
     console.log('  Ctrl+C stops the agent\n');
     process.on('SIGINT', () => {
       stopAgent(slug);
