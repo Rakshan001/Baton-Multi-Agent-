@@ -49,6 +49,28 @@ describe('cli uninstall honesty', () => {
     expect(getCliInstallState().installed).toBe(false);
   });
 
+  it('targets ~/.baton whatever the product is branded as', () => {
+    // Regression: dataDir() once derived `~/.${brand.commandName}`. In this repo
+    // commandName is "baton", so the two coincided and every test passed — the
+    // divergence only appeared in a rebranded build, where uninstall deleted an
+    // empty `~/.<brand>` and left the user's real knowledge base behind after
+    // they explicitly asked for it to be removed.
+    //
+    // The CLI writes to `~/.baton` unconditionally (src/daemons.ts:52,
+    // src/agents/registry.ts:134). The app must address the same directory, so
+    // this path is not a branding concern and must not be derived from one.
+    const home = mkdtempSync(join(tmpdir(), 'baton-uninstall-brand-'));
+    dirs.push(home);
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    mkdirSync(join(home, '.baton'), { recursive: true });
+
+    const result = uninstallCli({ deleteDataDir: false });
+    expect(result.dataDirPath).toBe(join(home, '.baton'));
+    expect(result.dataDirKept).toBe(true);
+    expect(existsSync(join(home, '.baton'))).toBe(true);
+  });
+
   it('only deletes the data dir when explicitly requested', () => {
     const home = mkdtempSync(join(tmpdir(), 'baton-uninstall-del-'));
     dirs.push(home);
