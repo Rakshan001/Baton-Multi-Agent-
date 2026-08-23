@@ -1,0 +1,6 @@
+{
+  "name": "baton-desktop",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js"
+}
