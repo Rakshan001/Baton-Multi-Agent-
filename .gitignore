@@ -38,6 +38,13 @@ graphify-out/
 # Machine-specific MCP config (absolute paths; regenerate with `baton kb init`)
 .mcp.json
 
+# Desktop packaging
+electron/dist/
+electron/ui-dist/
+electron/ui/node_modules/
+resources/baton/
+release/
+
 # Test coverage
 coverage/
 .refs/

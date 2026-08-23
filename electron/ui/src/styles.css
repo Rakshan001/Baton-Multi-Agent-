@@ -1,0 +1,55 @@
+/* Copyright (C) 2026 Rakshan Shetty */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --panel: #171a21;
+  --text: #e8eaed;
+  --muted: #9aa0a6;
+  --line: #2a2f3a;
+  --accent: #F26522;
+  --danger: #e57373;
+  --ok: #81c784;
+  --warn: #ffb74d;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+.app { display: flex; flex-direction: column; min-height: 100%; padding: 20px 24px 16px; gap: 16px; }
+.boot { padding: 40px; color: var(--muted); }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.brand-block h1 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
+.tagline { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.write-toggle { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+button {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 13px;
+}
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.linkish { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
+.fleet { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 12px; overflow: hidden; }
+.fleet th, .fleet td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.fleet th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.row-actions { display: flex; gap: 6px; }
+.pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.pill.running { background: color-mix(in srgb, var(--ok) 25%, transparent); color: var(--ok); }
+.pill.stale { background: color-mix(in srgb, var(--warn) 25%, transparent); color: var(--warn); }
+.pill.stopped { background: #2a2f3a; color: var(--muted); }
+.pill.missing { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+.pill.write { background: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--accent); }
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.empty { padding: 48px 20px; text-align: center; background: var(--panel); border-radius: 12px; }
+.muted { color: var(--muted); font-size: 12px; }
+.error { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); padding: 10px 12px; border-radius: 8px; }
+.dash-bar {
+  display: flex; gap: 12px; align-items: center;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  padding: 8px 12px; border-radius: 8px;
+}
+.foot { margin-top: auto; display: flex; gap: 8px; align-items: center; padding-top: 8px; border-top: 1px solid var(--line); }
