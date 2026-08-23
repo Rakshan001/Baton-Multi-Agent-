@@ -10,6 +10,7 @@ import {
 import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ATTRIBUTION, attributionLines } from './attribution.js';
 import { brandingDir, loadBrand } from './brand.js';
 import {
   bundledCliPath, getCliInstallState, installCliSymlink, installCliUserPath, uninstallCli,
@@ -160,6 +161,9 @@ async function refreshTray(): Promise<void> {
   tray.setToolTip(`${brand.productName} — ${rows.length} running`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: brand.productName, enabled: false },
+    // Windows and Linux have no app menu, so the tray is the only place the
+    // About panel is reachable there.
+    { label: `About ${brand.productName}`, click: () => app.showAboutPanel() },
     { type: 'separator' },
     ...rows.map((r) => ({
       label: `${r.name} :${r.port}`,
@@ -371,8 +375,23 @@ function registerIpc(): void {
   });
 }
 
+/**
+ * The OS-native About panel. Whatever name a distribution ships under, this is
+ * where the authorship credit surfaces — see electron/attribution.ts for why it
+ * does not come from brand.json.
+ */
+function applyAboutPanel(): void {
+  if (typeof app.setAboutPanelOptions !== 'function') return; // older Electron / tests
+  app.setAboutPanelOptions({
+    applicationName: brand.productName,
+    copyright: attributionLines(brand.productName).join('\n'),
+    credits: `${ATTRIBUTION.upstreamName} — ${ATTRIBUTION.upstreamSource}`,
+  });
+}
+
 app.whenReady().then(() => {
   app.setName(brand.productName);
+  applyAboutPanel();
   registerIpc();
   createWindow();
   createTray();
