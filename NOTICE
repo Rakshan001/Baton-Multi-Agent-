@@ -10,6 +10,20 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 
+ADDITIONAL TERM UNDER AGPL-3.0 SECTION 7(b) — ATTRIBUTION MUST BE PRESERVED
+
+As permitted by section 7(b) of the GNU Affero General Public License, the
+copyright holder requires that the author attribution above be preserved: in
+this file, in the per-file copyright headers, and in the Appropriate Legal
+Notices displayed by any work containing this material — including the About
+panel of a desktop application, a settings pane, or a dashboard footer.
+
+Rebranding is otherwise permitted and expected. A distribution may change the
+product name, the icons, the command name and the repository it points at. It
+may not present this work as authored by anyone other than the copyright holder
+named above, and it may not remove the source offer required by sections 6 and
+13. Removing this attribution terminates the licence under section 8.
+
 Baton was released under the MIT License from 2026-06-08 to 2026-08-07, and is
 AGPL-3.0-or-later from the commit after 0a734e1 onward — that commit is the last
 one published under MIT. Copies obtained at or before it keep the MIT terms they

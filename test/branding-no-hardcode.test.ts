@@ -37,6 +37,11 @@ describe('branding is data, not code', () => {
         // brand.ts and electron-builder read brand.json — they may mention field names, not values.
         if (file.endsWith(`${join('electron', 'brand.ts')}`)) continue;
         if (file.includes(`${join('config', 'electron-builder')}`)) continue;
+        // attribution.ts is the deliberate exception: it names the UPSTREAM work,
+        // which must survive a rebrand and therefore cannot come from brand.json.
+        // In this repo productName happens to equal upstreamName, so it collides
+        // here and only here. See test/attribution-preserved.test.ts.
+        if (file.endsWith(`${join('electron', 'attribution.ts')}`)) continue;
         const text = readFileSync(file, 'utf8');
         for (const needle of forbidden) {
           if (text.includes(JSON.stringify(needle)) || new RegExp(`['"\`]${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`).test(text)) {
