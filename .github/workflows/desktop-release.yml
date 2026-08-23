@@ -1,0 +1,88 @@
+name: Desktop release
+
+on:
+  push:
+    branches: [feat/baton-desktop, main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix web
+      - run: npm run build
+      - run: npm run build --prefix web
+      - run: npx vitest run
+      - run: node config/scripts/stage-payload.mjs
+
+  build-mac:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix web
+      - run: npm ci --prefix electron/ui
+      - run: npm run build
+      - run: npm run build --prefix web
+      - run: npm run build:desktop
+      - run: node config/scripts/stage-payload.mjs
+      - run: npx electron-builder --mac --config config/electron-builder.cjs --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: release/*.{dmg,zip}
+
+  build-win:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix web
+      - run: npm ci --prefix electron/ui
+      - run: npm run build
+      - run: npm run build --prefix web
+      - run: npm run build:desktop
+      - run: node config/scripts/stage-payload.mjs
+      - run: npx electron-builder --win --config config/electron-builder.cjs --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: release/*.{exe,yml}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            Unsigned nightly / tagged build.
+
+            **macOS:** right-click → Open the first time (Gatekeeper).
+            **Windows:** SmartScreen may warn — More info → Run anyway.
