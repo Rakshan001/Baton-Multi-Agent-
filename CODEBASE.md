@@ -41,8 +41,6 @@ docs/
   dashboard.md
   installation.md
   knowledge-graph.md
-  landing-page-prompt.md
-  logo-prompt.md
   … +14 more files
 graphify-out/ (133 files)
 node_modules/ (2003 files)

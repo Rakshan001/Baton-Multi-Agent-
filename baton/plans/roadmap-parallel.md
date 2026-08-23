@@ -5,7 +5,7 @@ requireReview: true
 ---
 
 <!--
-Written by the Orcabaton session. See docs/CHANGES-FROM-ORCABATON-SESSION.md.
+Written by the Orcabaton session. Background lives in the private strategy repo.
 
   baton plan check roadmap-parallel
   baton plan apply roadmap-parallel

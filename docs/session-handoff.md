@@ -94,7 +94,7 @@ deterministic rules in `baton.config.json` — **no LLM call**. Routing scores t
 task by keyword rules first, then by severity → tier when no rule hits, and
 walks a fallback chain so an uninstalled first choice is skipped rather than
 failing. See [`src/routing.ts`](../src/routing.ts) and the
-[tiered routing plan](./TIERED-ROUTING-PLAN.md).
+[agent routing](./agent-routing.md).
 
 The `pass` output explains *why* a target was chosen:
 
@@ -224,6 +224,6 @@ run with `baton serve --write`, and the request needs a loopback `Origin`
 ## Related
 
 - [Worktrees](./quickstart.md) — `baton new`, isolated worktrees, `baton merge`.
-- [Agent routing](./TIERED-ROUTING-PLAN.md) — how `baton.config.json` rules pick an agent.
+- [Agent routing](./agent-routing.md) — how `baton.config.json` rules pick an agent.
 - [CLI reference](./cli-reference.md) — all commands and flags.
 - [../README.md](../README.md) — project overview.
