@@ -32,9 +32,21 @@ export interface UninstallResult {
 
 interface Saved { kind: CliInstallKind; path: string; commandName: string }
 
-/** Machine data dir — same root the CLI daemon registry uses (src/daemons.ts). */
+/**
+ * Machine data dir — the same root the CLI writes to (src/daemons.ts:52,
+ * src/agents/registry.ts:134), which is `~/.baton` regardless of branding.
+ *
+ * This is deliberately NOT derived from brand.commandName. The daemon, the
+ * graphs and the memory store all live under `~/.baton`; a rebranded build
+ * still runs that same daemon, so deriving a different path here would make
+ * the app operate on a directory the CLI never touches. In this repo the two
+ * happened to coincide, which is exactly why the divergence was invisible. It
+ * appears only once commandName differs from the upstream name, and then
+ * uninstall deletes an empty directory while the user's real knowledge base
+ * survives the "delete my data" they explicitly asked for.
+ */
 function dataDir(): string {
-  return join(homedir(), `.${loadBrand().commandName}`);
+  return join(homedir(), '.baton');
 }
 
 function stateFile(): string {
