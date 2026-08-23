@@ -128,7 +128,15 @@ describe.runIf(hasDist)('plan approval over HTTP', () => {
       expect(status).toBe(200);
       // antigravity has no local launcher, so this is a refusal, not a launch —
       // and the phone must be shown that rather than an empty list.
-      expect(body.refusals[0]).toMatchObject({ slug: 'auth-docs', code: 'no-mode' });
+      //
+      // Which refusal code depends on the machine, and both are correct: a dev
+      // box with antigravity present reports `no-mode` (detected, but Baton
+      // won't guess its spawn args), a CI runner without it reports
+      // `not-installed`. Asserting one of them made this test pass locally and
+      // fail on every runner. What the route actually promises is that the task
+      // is refused rather than silently launched under a different agent.
+      expect(body.refusals[0].slug).toBe('auth-docs');
+      expect(['no-mode', 'not-installed']).toContain(body.refusals[0].code);
       expect(body.launches).toEqual([]);
     });
 
