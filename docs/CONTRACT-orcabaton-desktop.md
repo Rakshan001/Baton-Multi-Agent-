@@ -1,7 +1,7 @@
 # Contract: what the Orcabaton desktop app relies on
 
 **Audience:** anyone changing `src/server.ts`, `src/daemons.ts`, or the published
-`baton-cli` package shape.
+`batonhq` package shape.
 
 Orcabaton (the Orca fork at `../orcabaton`) ships a desktop client for this
 daemon. It is a **separate MIT repo that never imports Baton source** — it
@@ -186,7 +186,7 @@ something broken, with these codes:
 
 | Code | Trigger — keep these true |
 |---|---|
-| `not-baton` | `package.json.name` must stay **`baton-cli`** |
+| `not-baton` | `package.json.name` must stay **`batonhq`** — the published name (`baton-cli` on npm belongs to an unrelated project) |
 | `not-built` | **`dist/cli.js`** must exist (run `npm run build` before packing) |
 | `missing-licence` | a `LICENSE` file must be present |
 | `no-source-url` | `repository.url` must be set — it becomes the AGPL source offer |

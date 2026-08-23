@@ -175,4 +175,4 @@ baton/
 - Default executor target — Cursor first, or generic?
 - Should `pass` auto-run `git diff` to capture the intended change, or only describe it?
 - Price table: hardcode + let users override in `~/.baton/prices.json`?
-- Name availability: confirm npm `baton` (fallback: `baton-cli`, `agent-baton`, `@you/baton`).
+- Published as **`batonhq`** on npm. (`baton` and `baton-cli` are both taken by unrelated projects.) The installed command stays `baton`.

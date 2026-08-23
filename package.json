@@ -1,7 +1,7 @@
 {
-  "name": "baton-cli",
-  "version": "0.0.1",
-  "description": "Hand a unit of coding work from one AI agent to another — plan on your expensive agent, pass the baton to your cheap one.",
+  "name": "batonhq",
+  "version": "0.1.3",
+  "description": "Hand a unit of coding work from one AI agent to another \u2014 plan on your expensive agent, pass the baton to your cheap one.",
   "type": "module",
   "bin": {
     "baton": "dist/cli.js"
