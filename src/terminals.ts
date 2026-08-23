@@ -24,6 +24,7 @@ import { detectTmux, exactPane, exactSession, repoPrefix, sessionNameFor, slugFr
 import { bus } from './events.js';
 import { hasHeadlessRun } from './spawn.js';
 import { AGENTS, agentsFor, type InteractiveLauncher } from './agents/registry.js';
+import { endpointLaunchInjection, interactiveLaunchEnv } from './endpoints/live-endpoints.js';
 
 // Session naming + tmux exec live in util/tmux.js so spawn.ts and rm.ts can
 // coordinate cross-process through the same deterministic names.
@@ -339,6 +340,15 @@ export async function createTerminal(
     throw new Error(`'${launcher.cmd}' is not installed or not on PATH`);
   }
 
+  // Interactive launches carry a base URL but never a credential — tmux turns
+  // each variable into a shell prefix on the agent's own command line.
+  const launchInjection = await endpointLaunchInjection(repoRoot, agent, opts.model);
+  // P27's refusal comes first: it is about where the code GOES, which outranks
+  // the interactive-credential question below.
+  if (launchInjection.refusal) throw new Error(launchInjection.refusal);
+  const injected = interactiveLaunchEnv(launchInjection, agent);
+  if ('refuse' in injected) throw new Error(injected.refuse);
+
   const cols = clampDim(opts.cols, 80, 20, 500);
   const rows = clampDim(opts.rows, 24, 5, 200);
   await tmux([
@@ -347,6 +357,7 @@ export async function createTerminal(
     '-c', task.worktreePath,
     '-x', String(cols), '-y', String(rows),
     buildSessionCommand(launcher, opts.prompt, opts.model, {
+      ...injected.env,
       BATON_ROOT: repoRoot,
       BATON_SLUG: slug,
       BATON_TASK: task.task,

@@ -20,7 +20,7 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import { collectStatus, collectPresence, rootAgentSummary } from './board.js';
 import { collectDiff } from './diff.js';
-import { currentBranch, headCommit, isGitRepo } from './git.js';
+import { currentBranch, headCommit, isGitRepo, listWorktrees } from './git.js';
 import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding, reviewHeads } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
 import { batonDir, loadTasks, mutateTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
@@ -35,7 +35,7 @@ import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError }
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
 import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './commands/rm.js';
 import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
 import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, graphPathFor, kbStatus, loadKb, saveKb } from './kb/state.js';
@@ -45,7 +45,7 @@ import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
 import {
-  importSkill, installSkill, installSkillEverywhere, listSkillStatus, uninstallSkill,
+  importSkill, installSkill, installSkillEverywhere, listSkillStatus, resolveSkillRoot, uninstallSkill,
   SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
 } from './skills/install.js';
 import { bus } from './events.js';
@@ -63,6 +63,12 @@ import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
 import { agentActiveLoads, pickHandoffTarget } from './handoff/workload.js';
 import { buildContextPack, UnknownProjectError as UnknownKbProjectError } from './kb/contextpack.js';
+import { queryNeighbours } from './kb/neighbours.js';
+import { endpointsStatus } from './endpoints/status.js';
+import { enrollmentFor } from './endpoints/enrollment.js';
+import { loadProviderPolicy, resolveProviderMode, setUserProviderMode } from './endpoints/policy.js';
+import { endpointViaFor, reachesKind, knownAgentIds } from './endpoints/reach.js';
+import { loadEndpointsConfig } from './endpoints/config.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION, SOURCE_URL } from './version.js';
 import { usageForRepo } from './usage.js';
@@ -92,6 +98,7 @@ import {
 import {
   EMPTY_REGISTRY, MemberError, addMember, clearTeamAssignments, hasActiveMembers, loadMembers,
   markTokenUsed, memberId as slugMemberId, revokeMember, rotateMember, setMemberTeam,
+  bearerFrom, verifyToken,
 } from './members.js';
 import {
   TeamError, addTeam, findTeam, loadTeams, removeTeam, teamId as slugTeamId, updateTeam,
@@ -103,6 +110,12 @@ import {
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
 import { canSeeWarnings, decideAccess, requiresOwner, type AccessDecision } from './access.js';
+import { loadTrust, planDigest, recordApproval, trustVerdict } from './plan-trust.js';
+import { parsePlan } from './plan.js';
+import { runDispatch } from './dispatch-run.js';
+import {
+  dispatchDeps, resolvePlanDispatch, DispatchUnresolvable, type ResolveOpts, type ResolvedDispatch,
+} from './executors/dispatch-resolve.js';
 import { localClaims, PresenceStore, PRESENCE_TTL_MS, type HeartbeatInput } from './federation.js';
 import { loadHostLink, sendHeartbeat, type HeartbeatPayload } from './host-link.js';
 import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
@@ -553,6 +566,62 @@ function send(res: ServerResponse, status: number, body: unknown, origin: string
 function isOperator(access: AccessDecision, opts: ServeOptions): boolean {
   if (access.allow && access.local) return true;
   return !!opts.behindProxy && !requiresOwner(access);
+}
+
+
+/** A plan id becomes a file path under `baton/plans/`. The grammar is the
+ *  traversal guard — `../../LEAKME` is not a plan name, and normalizing it
+ *  would only move the question. */
+const SAFE_PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+
+/** Every plan file on disk, with whether it is approved as it now stands. */
+async function listPlansForApi(root: string): Promise<Array<Record<string, unknown>>> {
+  let names: string[] = [];
+  try {
+    names = (await readdir(join(root, PLANS_DIR))).filter((f: string) => f.endsWith('.md'));
+  } catch {
+    return [];                       // no plans directory is "no plans", not an error
+  }
+  const trust = await loadTrust(root);
+  const out: Array<Record<string, unknown>> = [];
+  for (const file of names.sort()) {
+    const id = file.replace(/\.md$/, '');
+    if (!SAFE_PLAN_ID.test(id)) continue;
+    let digest: string | null = null;
+    let goal = '';
+    let tasks = 0;
+    try {
+      const text = await readFile(join(root, PLANS_DIR, file), 'utf-8');
+      digest = planDigest(text);
+      const parsed = parsePlan(text, id);
+      goal = parsed.plan.goal;
+      tasks = parsed.plan.tasks.length;
+    } catch { /* an unreadable plan is still worth listing by name */ }
+    const record = trust[id] ?? null;
+    out.push({
+      id, goal, tasks, sha256: digest,
+      approved: digest !== null && trustVerdict(record, digest).ok,
+      approvedBy: record?.approvedBy ?? null,
+    });
+  }
+  return out;
+}
+
+/** Resolve one plan, turning every refusal into an HTTP-shaped answer. */
+async function resolvePlanForApi(
+  root: string,
+  planId: string,
+  opts: ResolveOpts = {},
+): Promise<{ r: ResolvedDispatch } | { status: number; error: Record<string, unknown> }> {
+  try {
+    return { r: await resolvePlanDispatch(root, planId, opts) };
+  } catch (e) {
+    if (e instanceof DispatchUnresolvable) {
+      return { status: 422, error: { error: e.message, code: e.code, detail: e.detail } };
+    }
+    // `readPlanFile` throws a plain Error when no candidate spelling exists.
+    return { status: 404, error: { error: `No plan '${planId}'`, code: 'plan-not-found' } };
+  }
 }
 
 function denyReadOnly(res: ServerResponse, origin: string): void {
@@ -1501,7 +1570,36 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (markdown === null) {
       return send(res, 404, { error: `no plan '${id}'`, hint: `plans live in ${PLANS_DIR}/` }, origin);
     }
-    return send(res, 200, { id, markdown, path: `${PLANS_DIR}/${id}.md` }, origin);
+    /*
+     * P10 — the phone approves what it read, so the digest travels with the
+     * document. It is cheap (hash the bytes already in hand) and it is the one
+     * field an approval cannot be made without.
+     *
+     * The resolved decision is NOT included by default: working it out probes
+     * the executor and reads the whole board, and the dashboard reads this
+     * route only to render markdown. `?resolve=1` is the phone asking for the
+     * expensive half.
+     */
+    const sha256 = planDigest(markdown);
+    const record = (await loadTrust(root))[id] ?? null;
+    const base = {
+      id, markdown, path: `${PLANS_DIR}/${id}.md`,
+      sha256,
+      approved: trustVerdict(record, sha256).ok,
+      approvedBy: record?.approvedBy ?? null,
+    };
+    if (url.searchParams.get('resolve') !== '1') return send(res, 200, base, origin);
+
+    const resolved = await resolvePlanForApi(root, id);
+    if ('error' in resolved) return send(res, resolved.status, resolved.error, origin);
+    return send(res, 200, {
+      ...base,
+      goal: resolved.r.plan.goal,
+      backend: resolved.r.backend,
+      launches: resolved.r.decision.launches,
+      refusals: resolved.r.decision.refusals,
+      warnings: resolved.r.warnings,
+    }, origin);
   }
 
   /*
@@ -1571,6 +1669,105 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       radius: outcome.radius,
       agentsStopped: agentsStopped(outcome.radius),
       cancelled: outcome.cancelled,
+    }, origin);
+  }
+
+  /*
+   * P10 — the plan surface a phone approves from.
+   *
+   * The desktop reaches these over loopback on the phone's behalf, so the
+   * caller is the owner as far as `decideAccess` is concerned. What travels
+   * over the wire is the gate itself: an approval names the exact bytes the
+   * caller read, and a plan that changed since is refused rather than vouched
+   * for by someone who never saw it.
+   */
+  if (method === 'GET' && path === '/api/pipeline/plans') {
+    return send(res, 200, { plans: await listPlansForApi(root) }, origin);
+  }
+
+  const planMatch = /^\/api\/pipeline\/plans\/([^/]+)\/approve$/.exec(path);
+  if (planMatch && method === 'POST') {
+    const planId = decodeURIComponent(planMatch[1]!);
+    // A plan id becomes a file path. `../../LEAKME` must never be one, and the
+    // grammar is the guard rather than a normalize-and-hope.
+    if (!SAFE_PLAN_ID.test(planId)) {
+      return send(res, 400, { error: `'${planId}' is not a plan name`, code: 'bad-plan-id' }, origin);
+    }
+
+    {
+      if (requiresOwner(access)) return denyNotOwner(res, origin);
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
+      const body = await readJsonBody<{ sha256?: string }>(req);
+      const claimed = typeof body?.sha256 === 'string' ? body.sha256.trim() : '';
+      if (!claimed) {
+        // Omitting it must never read as "approve whatever is on disk". The
+        // digest IS the approval; without one there is nothing to record.
+        return send(res, 400, {
+          error: 'approve must name the sha256 you read',
+          hint: 'GET /api/pipeline/plans/<id> returns it as `sha256`.',
+          code: 'digest-required',
+        }, origin);
+      }
+      const resolved = await resolvePlanForApi(root, planId);
+      if ('error' in resolved) return send(res, resolved.status, resolved.error, origin);
+      const digest = resolved.r.digest;
+      if (claimed !== digest) {
+        // P10-E1/E2. The caller rendered different bytes, or the plan moved
+        // under it. Either way it cannot vouch for what is there now.
+        return send(res, 409, {
+          error: 'the plan changed since you read it — re-read it before approving',
+          code: 'digest-mismatch',
+          sha256: digest,
+        }, origin);
+      }
+      // P10-E3. A retry and a double tap are the same event; re-stamping `at`
+      // would make an audit trail that says a human approved twice.
+      const existing = (await loadTrust(root))[planId] ?? null;
+      if (existing && existing.sha256 === digest) {
+        return send(res, 200, { ok: true, alreadyApproved: true, ...existing }, origin);
+      }
+      const record = {
+        planId, sha256: digest, approvedBy: actorLabel(access), at: new Date().toISOString(),
+      };
+      await recordApproval(root, record);
+      return send(res, 200, { ok: true, alreadyApproved: false, ...record }, origin);
+    }
+  }
+
+  if (method === 'POST' && path === '/api/dispatch') {
+    if (requiresOwner(access)) return denyNotOwner(res, origin);
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ plan?: string; max?: number; dryRun?: boolean; agent?: string }>(req);
+    const planId = typeof body?.plan === 'string' ? body.plan.trim() : '';
+    if (!SAFE_PLAN_ID.test(planId)) {
+      return send(res, 400, { error: `'${planId}' is not a plan name`, code: 'bad-plan-id' }, origin);
+    }
+    const resolved = await resolvePlanForApi(root, planId, {
+      ...(body?.agent ? { agent: body.agent } : {}),
+      ...(typeof body?.max === 'number' ? { max: String(body.max) } : {}),
+    });
+    if ('error' in resolved) return send(res, resolved.status, resolved.error, origin);
+
+    const verdict = trustVerdict((await loadTrust(root))[planId] ?? null, resolved.r.digest);
+    if (!verdict.ok) {
+      return send(res, 409, { error: verdict.reason, code: verdict.code, sha256: resolved.r.digest }, origin);
+    }
+
+    const report = await runDispatch(
+      root,
+      resolved.r.decision.launches,
+      dispatchDeps(root, resolved.r.executor),
+      { dryRun: body?.dryRun === true },
+    );
+    // P10-E5. Launches AND refusals, always. "Dispatched" over three silent
+    // refusals is a lie, and a small screen is where it is easiest to tell.
+    return send(res, 200, {
+      ok: true,
+      dryRun: report.dryRun,
+      started: report.started,
+      failed: report.failed,
+      refusals: resolved.r.decision.refusals,
+      warnings: resolved.r.warnings,
     }, origin);
   }
 
@@ -1687,6 +1884,109 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     res.on('error', () => rs.destroy());
     rs.pipe(res);
     return;
+  }
+
+  // GET /api/endpoints/status — what your own model servers are serving, and
+  // whether reaching each one keeps code on your network. Read-only, and it
+  // NEVER carries a credential: reachability, model names and egress class are
+  // the whole payload (P19-E1). The `keyRef` is not sent either — the phone has
+  // no use for the name of an environment variable on someone else's machine.
+  if (method === 'GET' && path === '/api/endpoints/status') {
+    const rows = await endpointsStatus(root);
+    return send(res, 200, { endpoints: rows }, origin);
+  }
+
+  /*
+   * GET /api/endpoints/providers — which provider each agent would use, and why.
+   * POST /api/endpoints/providers — set this machine's mode for one agent.
+   *
+   * Both are LOOPBACK-ONLY, like terminals. The mode is a property of this
+   * machine (P27-E10), so a remote member setting it is not a coherent
+   * operation — and the thing being set decides where this repo's source code
+   * is sent, which is not a decision to accept from the network.
+   */
+  if (path === '/api/endpoints/providers' && (method === 'GET' || method === 'POST')) {
+    if (!(access.allow && access.local)) {
+      return send(res, 403, {
+        error: 'provider routing is settable from this machine only',
+        hint: 'the mode is per-machine; use SSH port-forwarding, the same as a terminal',
+      }, origin);
+    }
+    if (method === 'POST') {
+      const body = await readJsonBody<{ agent?: string; mode?: string }>(req);
+      const agent = typeof body?.agent === 'string' ? body.agent.trim() : '';
+      if (!agent) return send(res, 400, { error: 'agent is required' }, origin);
+      const mode = body?.mode === 'vendor' || body?.mode === 'gateway' ? body.mode : null;
+      // A `null` mode CLEARS the setting rather than being an error: "go back to
+      // whatever the repo or the default says" is a thing people need to do.
+      await setUserProviderMode(root, agent, mode);
+    }
+    const policy = await loadProviderPolicy(root);
+    const { config } = await loadEndpointsConfig(root);
+    return send(res, 200, {
+      agents: knownAgentIds().map((agent) => {
+        const decision = resolveProviderMode(agent, policy, process.env);
+        return {
+          ...decision,
+          // Which endpoint it WOULD use, so the pane can name it without a
+          // second round trip. Never the credential, and never the keyRef.
+          endpointId: config.endpoints.find((e) => reachesKind(endpointViaFor(agent), e.kind))?.id ?? null,
+          /** Set from the repo's committed config ⇒ not this machine's to change. */
+          pinnedByRepo: policy.repo[agent] !== undefined,
+        };
+      }),
+    }, origin);
+  }
+
+  // GET /api/endpoints/enrollment — the company's endpoints, for the member
+  // asking. P18: the shared gateway key is NEVER in this payload; each member
+  // gets a credential minted for them, or none at all and a note saying so.
+  //
+  // Scoped to the CALLER's own identity, taken from the verified token rather
+  // than from anything they can type: a member asking for someone else's
+  // credential is not a request this route can express. A local caller is the
+  // host itself, and enrolls under a reserved name so their keys are still
+  // revocable by id.
+  if (method === 'GET' && path === '/api/endpoints/enrollment') {
+    /*
+     * 🔴 The identity has to be resolved HERE, not taken from `access`.
+     *
+     * A loopback peer is allowed through with no credential (access.ts rule 1),
+     * so `access.member` is null even when a valid member token was presented —
+     * and loopback is the normal path: the Orca app, an SSH tunnel and curl on
+     * the host all arrive that way. Taking `access.member` would file every
+     * credential under `local`, which is the name `baton member revoke` never
+     * looks at (P18-E2), and would collide two members onto one identity.
+     */
+    const presented = bearerFrom(req.headers.authorization);
+    const identified = presented ? verifyToken(await currentMembers(root), presented) : null;
+    const memberId = identified?.id ?? access.member?.id ?? 'local';
+    return send(res, 200, await enrollmentFor(root, memberId), origin);
+  }
+
+  // GET /api/kb/neighbours?node=<id>|file=<path>&project=<id>&limit=<n> —
+  // browse the graph without downloading it. /api/kb/graph streams the file
+  // whole (144 MB for the Orcabaton repo, against an 8 MB client cap), which
+  // is why the Orca panel refuses it. Read-only.
+  if (method === 'GET' && path === '/api/kb/neighbours') {
+    const state = await loadKb(root);
+    if (!state) return send(res, 404, { error: 'knowledge base not initialized', hint: 'run: baton kb init' }, origin);
+    const id = url.searchParams.get('project') ?? (state.mergedGraphPath ? 'merged' : state.projects[0]?.id);
+    const graphPath = id === 'merged' ? state.mergedGraphPath : state.projects.find((p) => p.id === id)?.graphPath;
+    if (!graphPath) return send(res, 404, { error: `no project '${id}'` }, origin);
+    // Number(null) is 0, not NaN — reading an absent ?limit through Number()
+    // would silently cap every answer at one row.
+    const limitRaw = url.searchParams.get('limit');
+    const limit = limitRaw === null ? Number.NaN : Number(limitRaw);
+    const out = await queryNeighbours(graphPath, {
+      node: url.searchParams.get('node') ?? undefined,
+      file: url.searchParams.get('file') ?? undefined,
+      ...(Number.isFinite(limit) ? { limit } : {}),
+    });
+    if (out.ok) return send(res, 200, out, origin);
+    // Each refusal keeps its own status: a query that named nothing is the
+    // caller's mistake, everything else is a thing that is missing.
+    return send(res, out.code === 'needs-selector' ? 400 : 404, { code: out.code, error: out.message }, origin);
   }
 
   // GET /api/kb/context?project=<id|all>&tokens=<n>&format=<md|json> —
@@ -2008,7 +2308,27 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
   // GET /api/skills — the catalog (bundled + imported) with per-agent install state
   if (method === 'GET' && path === '/api/skills') {
-    return send(res, 200, { skills: await listSkillStatus(root), agents: SKILL_AGENTS }, origin);
+    // Q22. The catalog is scoped to the same place an install would land, or
+    // "installed" would describe a different checkout from the one the button
+    // writes to.
+    const asked = resolveSkillRoot(root, url.searchParams.get('worktree') ?? undefined, await listWorktrees(root));
+    // A READ falls back to the served root instead of refusing: a client may
+    // name a directory inside the repo that is not itself a worktree, and
+    // answering nothing would blank the panel over a scoping detail. It says
+    // which root it used, so the answer is never ambiguous. The WRITE below
+    // still refuses — that one decides where files land.
+    const scopeRoot = asked.ok ? asked.root : root;
+    return send(res, 200, {
+      skills: await listSkillStatus(scopeRoot),
+      root: scopeRoot,
+      agents: SKILL_AGENTS,
+      // Q22. Advertised rather than left for the client to infer: a panel warns
+      // about untracked files BEFORE anyone installs, so reading it off the
+      // install response would be too late, and an older daemon that omits the
+      // field is correctly read as "does not exclude". False in a folder
+      // workspace, where there is no checkout to exclude from.
+      excludesInstalls: await isGitRepo(scopeRoot),
+    }, origin);
   }
 
   // POST /api/skills/import — add a skill from a path or http(s) URL (write-gated)
@@ -2032,19 +2352,26 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (skm && (method === 'POST' || method === 'DELETE')) {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const id = decodeURIComponent(skm[1]);
-    const agent = (method === 'POST'
-      ? (await readJsonBody<{ agent?: string }>(req))?.agent
-      : url.searchParams.get('agent')) ?? '';
+    const body = method === 'POST' ? await readJsonBody<{ agent?: string; worktree?: string }>(req) : null;
+    const agent = (method === 'POST' ? body?.agent : url.searchParams.get('agent')) ?? '';
+    // Q22. A path from a client decides where files are written, so it is
+    // checked against `git worktree list` before anything is written.
+    const scope = resolveSkillRoot(
+      root,
+      (method === 'POST' ? body?.worktree : url.searchParams.get('worktree')) ?? undefined,
+      await listWorktrees(root),
+    );
+    if (!scope.ok) return send(res, 400, { error: scope.reason }, origin);
     try {
       if (method === 'DELETE') {
-        return send(res, 200, await uninstallSkill(root, id, agent), origin);
+        return send(res, 200, await uninstallSkill(scope.root, id, agent), origin);
       }
       if (agent === 'all') {
-        const results = await installSkillEverywhere(root, id);
+        const results = await installSkillEverywhere(scope.root, id);
         for (const r of results) bus.publish({ type: 'skill.installed', skill: id, agent: r.agent });
         return send(res, 201, { results }, origin);
       }
-      const result = await installSkill(root, id, agent);
+      const result = await installSkill(scope.root, id, agent);
       bus.publish({ type: 'skill.installed', skill: id, agent });
       return send(res, 201, result, origin);
     } catch (e) {

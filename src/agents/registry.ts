@@ -84,7 +84,13 @@ export const AGENTS: Record<string, AgentDef> = {
     // The CLI is `agy`; the IDE runs as Antigravity.app (Electron + helpers).
     // Detection-only for now: launcher flags are inherited-from-gemini per the
     // migration docs but unverified on a real install — don't guess spawn args.
-    detect: /(^|\/|\s)agy(\s|$)|antigravity/i,
+    // Both alternatives are anchored. The second used to be a bare `antigravity`
+    // substring, which matched any command line that merely CONTAINED the word —
+    // a shell applying a plan with `@antigravity` in it, a directory named
+    // `antigravity-docs` — and `resolveAgentId` then handed that process every
+    // task assigned to the real agent. `.app` is allowed after the name so the
+    // Electron bundle path still resolves.
+    detect: /(^|[/\s])(agy|antigravity)([\s/.]|$)/i,
   },
   aider: {
     id: 'aider', label: 'Aider', binary: 'aider',

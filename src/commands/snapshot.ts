@@ -22,6 +22,7 @@ import { parseFrontmatter } from '../util/frontmatter.js';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { batonDir, activeBatonRoot } from '../store.js';
+import { gitExcludeLocal } from '../git.js';
 import { gitTry } from '../util/exec.js';
 import { buildBrief, handoffPath, readBrief, setBriefStatus, writeBrief, type HandoffBrief } from '../handoff/brief.js';
 import { renderContinuationHead, renderCursorRule, CURSOR_RULE_REL } from '../handoff/continuation.js';
@@ -172,19 +173,6 @@ async function writeCursorRule(worktreePath: string, brief: HandoffBrief): Promi
     await writeFile(file, rule, 'utf-8');
     await gitExcludeLocal(worktreePath, CURSOR_RULE_REL);
   } catch { /* the Cursor rule is a convenience — never block a snapshot for it */ }
-}
-
-/** Add a repo-root-anchored pattern to the checkout's local `.git/info/exclude` (idempotent). */
-async function gitExcludeLocal(worktreePath: string, rel: string): Promise<void> {
-  const common = await gitTry(['-C', worktreePath, 'rev-parse', '--git-common-dir']);
-  if (!common.ok) return;
-  const excludeFile = join(resolve(worktreePath, common.stdout.trim()), 'info', 'exclude');
-  let current = '';
-  try { current = await readFile(excludeFile, 'utf-8'); } catch { /* not created yet */ }
-  const pattern = `/${rel}`;
-  if (current.split('\n').some((l) => l.trim() === pattern || l.trim() === rel)) return;
-  await mkdir(dirname(excludeFile), { recursive: true });
-  await writeFile(excludeFile, `${current}${current && !current.endsWith('\n') ? '\n' : ''}${pattern}\n`, 'utf-8');
 }
 
 export async function snapshotCmd(slug: string | undefined, opts: { force?: boolean; from?: string; quiet?: boolean } = {}): Promise<void> {

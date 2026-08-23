@@ -33,6 +33,15 @@ import { pushCmd } from './commands/push.js';
 import { rmCmd } from './commands/rm.js';
 import { worktreeGcCmd } from './commands/clean.js';
 import { cleanCmd, doctorCmd } from './commands/doctor.js';
+import {
+  endpointsGrantCmd,
+  endpointsGrantsCmd,
+  endpointsPreviewCmd,
+  endpointsUseCmd,
+  endpointsRefreshCmd,
+  endpointsRevokeGrantCmd,
+  endpointsStatusCmd,
+} from './commands/endpoints.js';
 import { pathCmd } from './commands/path.js';
 import { kbContextCmd, kbExportCmd, kbImportCmd, kbInitCmd, kbMcpCmd, kbRebuildCmd, kbShareCmd, kbStatusCmd } from './commands/kb.js';
 import { mcpCmd } from './commands/mcp.js';
@@ -56,6 +65,7 @@ import { progressCmd } from './commands/progress.js';
 import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
 import { bugsCmd } from './commands/bugs.js';
 import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
+import { dispatchCmd, planApproveCmd, type DispatchOpts } from './commands/dispatch.js';
 import { taskAddCmd, taskRmCmd, type TaskAddOpts } from './commands/task.js';
 import { nextCmd } from './commands/next.js';
 import { blockCmd, pauseCmd } from './commands/pause.js';
@@ -621,7 +631,7 @@ task
 
 const plan = program
   .command('plan')
-  .description(`phased task plans written as markdown in ${PLANS_DIR}/: check, apply`);
+  .description(`phased task plans written as markdown in ${PLANS_DIR}/: check, apply, approve`);
 
 plan
   .command('check')
@@ -636,6 +646,70 @@ plan
   .option('--force', 'proceed even when the change lands under a working agent')
   .description('turn a plan into queued tasks — shows the diff first, refuses in-flight changes')
   .action((file: string, opts: { dryRun?: boolean; force?: boolean }) => run(() => planApplyCmd(file, opts)));
+
+plan
+  .command('approve')
+  .argument('<file>', `plan name (looked up in ${PLANS_DIR}/) or a path to a .md file`)
+  .option('--agent <id>', 'resolve every task to this agent instead')
+  .option('--backend <id>', 'local | orca')
+  .description('show exactly what dispatch would launch, then record that you read it')
+  .action((file: string, opts: DispatchOpts) => run(() => planApproveCmd(file, opts)));
+
+program
+  .command('dispatch')
+  .argument('<file>', `plan name (looked up in ${PLANS_DIR}/) or a path to a .md file`)
+  .option('--dry-run', 'resolve everything, claim nothing, start nothing')
+  .option('--max <n>', 'start at most N agents this run')
+  .option('--agent <id>', 'override the plan and route every task to this agent')
+  .option('--backend <id>', 'local | orca')
+  .option('--yes', 'approve this exact plan as part of dispatching it')
+  .option('--allow-paid-fallback', 'if a self-hosted endpoint is down, allow the chain to fall through to a model that costs money (off by default; every promotion is named)')
+  .description('claim, brief and launch every startable task in an approved plan')
+  .action((file: string, opts: DispatchOpts) => run(() => dispatchCmd(file, opts)));
+
+const endpoints = program
+  .command('endpoints')
+  .description('your own model servers: what they serve, and whether using them keeps code on your network');
+
+endpoints
+  .command('status')
+  .description('per endpoint: reachable, models served, and the egress class of each')
+  .action(() => run(() => endpointsStatusCmd()));
+
+endpoints
+  .command('refresh')
+  .description("re-pull the company's endpoints from your host; your own are left alone")
+  .action(() => run(() => endpointsRefreshCmd()));
+
+endpoints
+  .command('grant <member> <model>')
+  .description('let one person use a model that leaves your network')
+  .option('--endpoint <id>', 'which endpoint, when more than one serves the model')
+  .action((member: string, model: string, opts: { endpoint?: string }) =>
+    run(() => endpointsGrantCmd(member, model, opts)));
+
+endpoints
+  .command('revoke <member> <model>')
+  .description('take that back; work already running finishes on the model it started with')
+  .option('--endpoint <id>', 'which endpoint, when more than one serves the model')
+  .action((member: string, model: string, opts: { endpoint?: string }) =>
+    run(() => endpointsRevokeGrantCmd(member, model, opts)));
+
+endpoints
+  .command('preview <agent>')
+  .description('exactly what launching this agent would set — endpoint, egress, variables')
+  .option('--model <model>', 'the model it would be launched with')
+  .action((agent: string, opts: { model?: string }) => run(() => endpointsPreviewCmd(agent, opts)));
+
+endpoints
+  .command('use <agent> <mode>')
+  .description("point one agent at 'vendor' (its own key) or 'gateway' (your own models)")
+  .action((agent: string, mode: string) => run(() => endpointsUseCmd(agent, mode)));
+
+endpoints
+  .command('grants')
+  .description('who may send code off your network, and to which model')
+  .action(() => run(() => endpointsGrantsCmd()));
 
 const review = program
   .command('review')

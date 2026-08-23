@@ -14,6 +14,16 @@
  */
 import type { HandoffMeta } from './brief.js';
 import { guardrailOneLine } from './guardrails.js';
+import { fenceOverhead, fenceUntrusted, isFenceScaffolding } from './untrusted.js';
+
+/** Trim quoted text to a budget at a word boundary. Never applied to a rendered fence. */
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= 1) return '';
+  const cut = text.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
 
 /** ~700 tokens-worth of chars: enough for objective + next action + guardrails, no more. */
 export const CONTINUATION_MAX_CHARS = 800;
@@ -47,7 +57,9 @@ export function parseHandoffFacts(body: string): HandoffFacts {
       // First following line that is real prose (skip a "> note" quote line).
       for (let j = i + 1; j < lines.length && !lines[j].startsWith('#'); j++) {
         const cand = lines[j].trim();
-        if (cand && !cand.startsWith('>')) { objective = cand; break; }
+        // The objective is quoted (see handoff/untrusted.ts), so skip the
+        // quoting itself — otherwise the head reads back the opening marker.
+        if (cand && !cand.startsWith('>') && !isFenceScaffolding(cand)) { objective = cand; break; }
       }
     }
 
@@ -87,10 +99,23 @@ export function renderContinuationHead(
   const branch = meta.branch ? ` (branch \`${meta.branch}\`)` : '';
   const doneCmd = facts.slug ? `\`baton done ${facts.slug}\`` : 'mark HANDOFF.md done';
 
-  const out = [
+  /*
+   * Ordering here is a security property, not formatting.
+   *
+   * This head is the highest-authority channel Baton writes: `.cursor/rules`
+   * with `alwaysApply: true`, and Claude Code's SessionStart `additionalContext`
+   * via `baton orient --auto`. The objective and next action are lifted out of
+   * HANDOFF.md's fence (parseHandoffFacts skips the scaffolding on purpose, so
+   * the reader sees the task rather than the quoting) — which means printing
+   * them beside Baton's imperatives would launder attacker-controlled plan text
+   * into Baton's own voice, and fencing HANDOFF.md would be protection in name
+   * only.
+   *
+   * So: everything carrying Baton's authority goes FIRST, and the untrusted
+   * spans go last, back inside a fence.
+   */
+  const ours = [
     '## ▶ Resume this task (active handoff)',
-    `**Objective:** ${facts.objective}`,
-    `**Next action:** ${facts.nextAction || 'continue the objective — read HANDOFF.md for the plan.'}`,
     ...(facts.workdir ? [`**Work in:** \`cd ${facts.workdir}\`${branch}`] : []),
     'Read **HANDOFF.md** in full before re-planning — it holds the plan, files already edited, and prior notes.',
     // Positive-phrased guardrails (ISS-07): requirement form outlasts prohibition
@@ -98,7 +123,15 @@ export function renderContinuationHead(
     guardrailOneLine(doneCmd),
   ].join('\n');
 
-  return out.length > maxChars ? out.slice(0, maxChars - 1).trimEnd() + '…' : out;
+  const nextAction = facts.nextAction || 'continue the objective — read HANDOFF.md for the plan.';
+
+  // Budget the QUOTED TEXT, never the rendered block: truncating the block could
+  // cut the terminator off the fence we just opened, which is the one edit that
+  // turns quoting into an escape hatch.
+  const room = Math.max(0, maxChars - ours.length - fenceOverhead('handoff.resume'));
+  const quoted = clip(`Objective: ${facts.objective}\nNext action: ${nextAction}`, room);
+
+  return `${ours}\n${fenceUntrusted('handoff.resume', quoted)}`;
 }
 
 /** Worktree-relative path of the Cursor auto-load rule (git-excluded by the writer). */

@@ -21,7 +21,7 @@ import { requireOperator } from '../operator.js';
  *  statement of intent, and in team mode it is how a teammate's plan arrives. */
 export const PLANS_DIR = 'baton/plans';
 
-async function readPlanFile(root: string, file: string): Promise<{ text: string; path: string }> {
+export async function readPlanFile(root: string, file: string): Promise<{ text: string; path: string }> {
   // Bare name → look under the tracked plans directory, so `baton plan apply
   // auth` works from anywhere in the repo.
   const candidates = file.includes('/') || file.endsWith('.md')

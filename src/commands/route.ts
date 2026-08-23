@@ -7,7 +7,8 @@
  */
 import { agentInstalled } from '../agents/roster.js';
 import { activeBatonRoot } from '../store.js';
-import { CONFIG_FILE, loadRouting, resolveChain, suggestRoute } from '../routing.js';
+import { CONFIG_FILE, entryLabel, loadRouting, resolveChain, suggestRoute } from '../routing.js';
+import { loadLiveEndpoints } from '../endpoints/live-endpoints.js';
 
 const available = (agent: string, root: string): Promise<boolean> =>
   agent === 'any' ? Promise.resolve(true) : agentInstalled(agent, root);
@@ -24,11 +25,22 @@ export async function routeCmd(text: string): Promise<void> {
     : s.source === 'single' ? 'single-agent mode'
     : 'no rule matched — default';
 
-  const resolved = await resolveChain(s.chain, (agent) => available(agent, root));
+  const live = await loadLiveEndpoints(root);
+  const walked = await resolveChain(s.chain, (agent) => available(agent, root), live?.policyFor(s.tier));
+  // `route` explains a decision, so a refusal is the answer here — not an
+  // error. It still prints the chain and severity below.
+  const refusal = walked && 'refused' in walked ? walked : null;
+  const resolved = walked && 'entry' in walked ? walked : null;
   const pick = resolved?.entry ?? s.chain[0];
   const model = pick.model ? ` (model: ${pick.model})` : '';
 
-  console.log(`→ ${pick.agent}${model}   ${why}${s.confidence === 'low' ? ' · low confidence' : ''}`);
+  console.log(refusal
+    ? `✗ refused   ${why}`
+    : `→ ${pick.agent}${model}   ${why}${s.confidence === 'low' ? ' · low confidence' : ''}`);
+  if (refusal) console.log(`  ${refusal.reason}`);
+  if (resolved?.promoted) {
+    console.log(`  ⚠ promoted ${entryLabel(resolved.promoted.from)} → ${entryLabel(resolved.promoted.to)} (paid): ${resolved.promoted.reason}`);
+  }
   console.log(`  severity: ${s.severity}/100${s.signals.length ? `   ${s.signals.join(' · ')}` : ''}`);
   if (s.downshift) {
     const alt = s.downshift.chain.map((e) => e.agent + (e.model ? `:${e.model}` : '')).join(' → ');
@@ -41,7 +53,7 @@ export async function routeCmd(text: string): Promise<void> {
     });
     console.log(`  ${s.tier ? `${s.tier} tier ` : ''}chain: ${chain.join(' → ')}${resolved?.skipped.length ? `   (skipped, not installed: ${resolved.skipped.join(', ')})` : ''}`);
   }
-  if (!resolved) console.log(`  note: nothing in the chain is installed — install '${s.chain[0].agent}' or route elsewhere with --to`);
+  if (!refusal && !resolved) console.log(`  note: nothing in the chain is installed — install '${s.chain[0].agent}' or route elsewhere with --to`);
   console.log(`  mode: ${s.mode}${s.mode === 'manual' ? ' (suggestions are advisory — Baton will not auto-route)' : ''}`);
   console.log(`  config: ${path ?? 'built-in defaults (create baton.config.json to customize)'}`);
   console.log(`  hand off with: baton pass <slug> --to ${pick.agent}   (or omit --to to auto-route)`);

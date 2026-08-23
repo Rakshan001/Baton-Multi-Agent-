@@ -7,6 +7,7 @@
  * no members and this registry stays empty.
  */
 import { activeMembers, addMember, loadMembers, membersPath, revokeMember, type MemberRole } from '../members.js';
+import { revokeIssuedKeysFor } from '../endpoints/enrollment.js';
 import { activeBatonRoot } from '../store.js';
 import { findTeam, loadTeams, teamId } from '../teams.js';
 
@@ -64,5 +65,17 @@ export async function memberRevokeCmd(idOrName: string): Promise<void> {
   const root = await activeBatonRoot();
   const m = await revokeMember(root, idOrName);
   console.log(`✓ ${m.id} revoked — their token stops working on the next request.`);
+
+  // P18-E2 — the member token is only half of it. If this host issued them a
+  // gateway credential, that credential keeps working until the gateway is told
+  // otherwise, and nothing else in this flow tells it.
+  const outcomes = await revokeIssuedKeysFor(root, m.id);
+  for (const o of outcomes) {
+    console.log(o.revoked
+      ? `  ✓ their credential for '${o.endpointId}' was revoked at the gateway`
+      // Never printed as done when it is not: an admin who reads "revoked" over
+      // a failed call believes a leaver is locked out when they are not.
+      : `  ! could NOT revoke their credential for '${o.endpointId}' — it may still work. Retry, or revoke key ${o.keyId} in the gateway's own UI.`);
+  }
   console.log('  Note: this blocks FUTURE access only. Anything already cloned or read stays on their machine.');
 }

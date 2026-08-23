@@ -214,7 +214,23 @@ const SECRET_PATTERNS: Array<{ re: RegExp; what: string }> = [
    */
 ];
 
+/**
+ * Credentials resolved at runtime — a gateway key from `endpoints.keyRef`.
+ * Pattern matching cannot recognise an arbitrary key someone's gateway issued,
+ * so the launcher registers the VALUE it is about to put in a child's
+ * environment (P16-E5). Registered, never logged.
+ */
+const runtimeSecrets = new Set<string>();
+
+/** Short values are ignored: redacting a 3-character "key" would black out
+ *  ordinary prose everywhere it happened to appear. */
+export function registerRuntimeSecret(value: string): void {
+  const v = value.trim();
+  if (v.length >= 8) runtimeSecrets.add(v);
+}
+
 export function detectSecret(text: string): string | null {
+  for (const secret of runtimeSecrets) if (text.includes(secret)) return 'endpoint credential';
   for (const { re, what } of SECRET_PATTERNS) if (re.test(text)) return what;
   return null;
 }

@@ -15,6 +15,8 @@ import {
   AGENTS, CUSTOM_AGENT_IDS, CUSTOM_AGENT_ISSUES, customAgentsPath,
   loadProjectAgents, projectAgentsPath, type AgentDef,
 } from '../agents/registry.js';
+import { loadEndpointsConfig } from '../endpoints/config.js';
+import { endpointDoctorLines } from '../endpoints/doctor-report.js';
 
 const KIND_LABEL: Record<JunkItem['kind'], string> = {
   'orphan-worktree-task': 'orphaned worktree (stale task)',
@@ -78,6 +80,17 @@ export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): P
   printKb(await auditKb(root));
   await reportShadowBatons(root, !!opts.fix);
   printCustomAgents(root);
+  await printEndpoints(root);
+}
+
+/** Self-hosted model servers (P15). Silent when none are configured — that is
+ *  the normal case, not a finding. */
+async function printEndpoints(root: string): Promise<void> {
+  const { config, errors } = await loadEndpointsConfig(root);
+  const lines = endpointDoctorLines(config, errors);
+  if (!lines.length) return;
+  console.log('');
+  for (const line of lines) console.log(line);
 }
 
 /** Custom agents (~/.baton/agents.json + <root>/.baton/agents.json,

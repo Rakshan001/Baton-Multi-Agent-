@@ -211,3 +211,28 @@ describe('renderDiff', () => {
     expect(lines).toContain('- login-ui');
   });
 });
+
+/**
+ * P3 step 1 — the plan owns `model` the same way it owns `assignee`.
+ */
+describe('applyPlan — model', () => {
+  const WITH = plan('## Phase 1\n\n### auth-schema\n**model:** sonnet\n\nTables.\n');
+  const WITHOUT = plan('## Phase 1\n\n### auth-schema\n\nTables.\n');
+
+  it('carries the plan\'s model onto a new row', () => {
+    const { tasks } = applyPlan([], WITH, OPTS);
+    expect(tasks[0]!.model).toBe('sonnet');
+  });
+
+  it('clears a model the plan no longer asks for', () => {
+    // `merged` spreads the old row first, so an owned field the plan dropped
+    // survives unless it is written back. A stale model is intent nobody holds.
+    const { tasks } = applyPlan([row({ slug: 'auth-schema', model: 'sonnet' })], WITHOUT, OPTS);
+    expect(tasks[0]!.model).toBeUndefined();
+  });
+
+  it('reports model as a moved field, so `plan apply` shows the change', () => {
+    const { entries } = applyPlan([row({ slug: 'auth-schema' })], WITH, OPTS);
+    expect(entries[0]!.fields).toContain('model');
+  });
+});

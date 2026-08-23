@@ -13,6 +13,7 @@
  * enough that the dispatcher can refuse *before* spawning instead of
  * discovering mid-launch that the agent it promised cannot run.
  */
+import type { EndpointVia } from '../endpoints/reach.js';
 
 /** Who actually starts the process. */
 export type ExecutorId = 'local' | 'orca';
@@ -42,6 +43,10 @@ export interface AgentCapability {
   acceptsPromptAtLaunch: boolean;
   /** `'unknown'` where a backend cannot cheaply probe; treated as installed rather than blocking a launch on a guess. */
   installed: boolean | 'unknown';
+  /** How this agent can be pointed at a self-hosted endpoint — `null` where
+   *  its vendor does not allow it at all. A vendor property, not a backend
+   *  one, so it is the same on every executor. See endpoints/reach.ts. */
+  endpointVia: EndpointVia;
 }
 
 export interface LaunchRequest {

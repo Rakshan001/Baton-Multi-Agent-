@@ -22,14 +22,18 @@
 import { parseFrontmatter } from '../util/frontmatter.js';
 import { mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { bundledSkills, type SkillDef } from './catalog.js';
+import { gitExcludeLocal, gitUnexcludeLocal } from '../git.js';
 
 /** Agent CLIs that have a skill/rule directory Baton can write. */
 export const SKILL_AGENTS = ['claude', 'cursor', 'antigravity'] as const;
 export type SkillAgent = (typeof SKILL_AGENTS)[number];
 
 export interface SkillTarget {
+  /** Everything installing writes, as repo-relative paths to git-exclude.
+   *  A directory covers its references; SKILL.md alone does not. */
+  excludes: string[];
   agent: SkillAgent;
   /** Absolute path of the main skill file. */
   path: string;
@@ -77,26 +81,68 @@ export class SkillImportError extends Error {
 
 const SKILLS_DIR = (root: string) => join(root, '.baton', 'skills');
 
-function isSkillAgent(agent: string): agent is SkillAgent {
+export function isSkillAgent(agent: string): agent is SkillAgent {
   return (SKILL_AGENTS as readonly string[]).includes(agent);
 }
 
 /** Where a skill installs for an agent, or null if Baton can't write it. */
+/**
+ * Where an install is allowed to land (Q22).
+ *
+ * The requested path arrives over HTTP and decides where files are WRITTEN, so
+ * it is honoured only when git itself lists it as a worktree of the served
+ * repo. Everything else is refused, including an empty worktree list — that
+ * means the question could not be answered, and honouring the path then would
+ * make the check decorative exactly when it matters.
+ *
+ * Comparison is `resolve()`d and case-folded on win32. Two real checkouts that
+ * differ only by a symlink (macOS `/var` → `/private/var`) will not match and
+ * the install is refused; a refusal is an inconvenience, a write outside the
+ * repo is not.
+ */
+export type SkillRootChoice = { ok: true; root: string } | { ok: false; reason: string };
+
+export function resolveSkillRoot(
+  servedRoot: string,
+  requested: string | undefined,
+  worktrees: readonly { path: string }[],
+): SkillRootChoice {
+  const want = (requested ?? '').trim();
+  if (!want) return { ok: true, root: servedRoot };
+
+  const norm = (p: string): string => {
+    const abs = resolve(p);
+    return process.platform === 'win32' ? abs.toLowerCase() : abs;
+  };
+  const target = norm(want);
+  const match = worktrees.find((w) => norm(w.path) === target);
+  if (match) return { ok: true, root: match.path };
+
+  const known = worktrees.map((w) => w.path).join(', ');
+  return {
+    ok: false,
+    reason: known
+      ? `'${want}' is not a worktree of this repo. Known worktrees: ${known}`
+      : `'${want}' cannot be checked — git listed no worktrees for this repo.`,
+  };
+}
+
 export function skillTargetFor(agent: string, id: string, root: string): SkillTarget | null {
   if (agent === 'claude') {
     const dir = join('.claude', 'skills', id);
-    return { agent, path: join(root, dir, 'SKILL.md'), rel: join(dir, 'SKILL.md'), refsDir: join(root, dir) };
+    return { agent, path: join(root, dir, 'SKILL.md'), rel: join(dir, 'SKILL.md'), refsDir: join(root, dir), excludes: [dir] };
   }
   if (agent === 'cursor') {
     const rel = join('.cursor', 'rules', `${id}.mdc`);
-    // Single-file rule; references travel in a sibling <id>/ folder.
-    return { agent, path: join(root, rel), rel, refsDir: join(root, '.cursor', 'rules', id) };
+    // Single-file rule; references travel in a sibling <id>/ folder — so two
+    // patterns, not one, and the sibling is the half that is easy to forget.
+    return { agent, path: join(root, rel), rel, refsDir: join(root, '.cursor', 'rules', id), excludes: [rel, join('.cursor', 'rules', id)] };
   }
   if (agent === 'antigravity') {
     // Antigravity reads .agents/skills/<id>/SKILL.md — same layout as Claude
     // (verified on a live Antigravity workspace, references/ included).
     const dir = join('.agents', 'skills', id);
-    return { agent, path: join(root, dir, 'SKILL.md'), rel: join(dir, 'SKILL.md'), refsDir: join(root, dir) };
+    return { agent, path: join(root, dir, 'SKILL.md'), rel: join(dir, 'SKILL.md'), refsDir: join(root, dir), excludes: [dir] };
   }
   return null; // codex, gemini, aider, opencode — no standard skill dir
 }
@@ -228,6 +274,16 @@ export interface InstallResult {
   wrote: boolean;
   /** Number of reference files written alongside the skill. */
   references: number;
+  /**
+   * Whether Baton git-excluded what it wrote. False outside a git repo (a
+   * folder workspace), where there is nothing to exclude from.
+   *
+   * Reported rather than assumed because a client updates separately from the
+   * daemon: an Orca panel newer than its Baton must be able to tell "excluded"
+   * from "this daemon does not do that yet", and an absent field reads as the
+   * latter.
+   */
+  excluded: boolean;
 }
 
 export async function installSkill(root: string, id: string, agent: string): Promise<InstallResult> {
@@ -248,7 +304,16 @@ export async function installSkill(root: string, id: string, agent: string): Pro
     await writeFile(dest, ref.content, 'utf-8');
     references++;
   }
-  return { skill: id, agent, rel: target.rel, path: target.path, wrote: true, references };
+  // Q22. Baton's own scaffolding must not become the agent's diff: every
+  // untracked file here reaches `baton done` as a dirtyFile, where one entry is
+  // a hard refusal. Done HERE rather than at each call site, because
+  // dispatch-resolve remembered and the CLI and HTTP route did not.
+  // No-ops outside a git repo, which is the folder-workspace case.
+  let excluded = false;
+  for (const rel of target.excludes) {
+    excluded = (await gitExcludeLocal(root, rel)) || excluded;
+  }
+  return { skill: id, agent, rel: target.rel, path: target.path, wrote: true, references, excluded };
 }
 
 /**
@@ -275,6 +340,9 @@ export async function uninstallSkill(root: string, id: string, agent: string): P
     await rm(target.path, { force: true });                 // the .mdc rule
     await rm(target.refsDir, { recursive: true, force: true }); // sibling <id>/ references
   }
+  // Symmetric with install. A pattern that outlives what it was for makes a
+  // hand-written file at the same path invisible to git, and silently.
+  for (const rel of target.excludes) await gitUnexcludeLocal(root, rel);
   return { removed: had, rel: target.rel };
 }
 

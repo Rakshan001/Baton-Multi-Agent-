@@ -57,6 +57,8 @@ export interface PipelineFields {
   dependsOn?: string[];
   /** Agent id, or null/absent for the open pool that anyone may claim. */
   assignee?: string | null;
+  /** Plan-owned intent. What actually ran is in the runs ledger, not here. */
+  model?: string;
   skills?: string[];
   principles?: string[];
   expects?: string[];

@@ -88,7 +88,11 @@ export function firstAgentIn(commands: string[], root?: string): string | null {
   }
   for (const cmd of commands) {
     for (const { id } of patterns) {
-      if (id && new RegExp(`(^|[/\\\\\\s])${id}`, 'i').test(cmd)) return id;
+      // Bounded at BOTH ends, like every `detect` pattern: unbounded, an id
+      // matched any longer word starting with it — `/x/aider-notes/index.js`
+      // read as the aider agent. `/`, `.` and whitespace end a program name;
+      // `-` continues a different one.
+      if (id && new RegExp(`(^|[/\\\\\\s])${id}([\\s/.]|$)`, 'i').test(cmd)) return id;
     }
   }
   return null;

@@ -16,9 +16,82 @@
  * (.refs/daintree/electron/services/git/porcelainConflicts.ts, Apache-2.0).
  * See NOTICE.
  */
-import { stat } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { git, gitTry } from './util/exec.js';
+
+/**
+ * Add a repo-root-anchored pattern to the checkout's local `.git/info/exclude`
+ * (idempotent, best-effort).
+ *
+ * Baton writes its own artifacts into the worktree it hands to an agent —
+ * HANDOFF.md, skill files, the Cursor continuation rule. Untracked, every one
+ * of them lands in `worktreeStatus().changedFiles`, which `baton done` passes
+ * to the evidence gate as `dirtyFiles`, where a single entry is a hard refusal.
+ * Left alone, Baton would make the task it just briefed impossible to finish.
+ *
+ * `--git-common-dir` resolves to the MAIN repo for a linked worktree, so one
+ * write covers every worktree — which is what we want: the pattern is about
+ * Baton's artifacts, not about one checkout.
+ */
+const excludeWritten = new Set<string>();
+
+/** Git exclude patterns are posix-separated on every platform, but callers
+ *  build `rel` with `path.join`, which yields backslashes on Windows. A
+ *  backslashed pattern silently matches nothing. */
+function excludePattern(rel: string): string {
+  return `/${rel.replace(/\\/g, '/').replace(/^\/+/, '')}`;
+}
+
+async function excludeFileFor(worktreePath: string): Promise<string | null> {
+  const common = await gitTry(['-C', worktreePath, 'rev-parse', '--git-common-dir']);
+  if (!common.ok) return null;
+  return join(resolve(worktreePath, common.stdout.trim()), 'info', 'exclude');
+}
+
+/** Returns whether the pattern is in place — false outside a git repo, which
+ *  is the folder-workspace case and not a failure. */
+export async function gitExcludeLocal(worktreePath: string, rel: string): Promise<boolean> {
+  const pattern = excludePattern(rel);
+  // Writing a brief is a hot path — `baton pass`, every snapshot, and (soon)
+  // every dispatched task. The exclude only ever needs writing once per
+  // checkout, so remember it rather than paying a `git rev-parse` per call.
+  const memo = `${resolve(worktreePath)}\0${pattern}`;
+  if (excludeWritten.has(memo)) return true;
+  const excludeFile = await excludeFileFor(worktreePath);
+  if (!excludeFile) return false;
+  let current = '';
+  try { current = await readFile(excludeFile, 'utf-8'); } catch { /* not created yet */ }
+  const bare = pattern.slice(1);
+  if (current.split('\n').some((l) => l.trim() === pattern || l.trim() === bare)) {
+    excludeWritten.add(memo);
+    return true;
+  }
+  await mkdir(dirname(excludeFile), { recursive: true });
+  await writeFile(excludeFile, `${current}${current && !current.endsWith('\n') ? '\n' : ''}${pattern}\n`, 'utf-8');
+  excludeWritten.add(memo);
+  return true;
+}
+
+/**
+ * Take one pattern back out, leaving every other line untouched.
+ *
+ * The pair matters: a pattern that outlives what it was for makes a
+ * hand-written file at the same path invisible to git, and invisible is the
+ * one failure mode nobody debugs — `git status` simply does not mention it.
+ */
+export async function gitUnexcludeLocal(worktreePath: string, rel: string): Promise<void> {
+  const pattern = excludePattern(rel);
+  const bare = pattern.slice(1);
+  excludeWritten.delete(`${resolve(worktreePath)}\0${pattern}`);
+  const excludeFile = await excludeFileFor(worktreePath);
+  if (!excludeFile) return;
+  let current = '';
+  try { current = await readFile(excludeFile, 'utf-8'); } catch { return; }
+  const kept = current.split('\n').filter((l) => l.trim() !== pattern && l.trim() !== bare);
+  const next = kept.join('\n');
+  if (next !== current) await writeFile(excludeFile, next, 'utf-8');
+}
 
 export type RepoState = 'clean' | 'merging' | 'rebasing' | 'cherry-picking' | 'reverting';
 

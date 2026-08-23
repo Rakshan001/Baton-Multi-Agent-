@@ -16,7 +16,9 @@ import { execa, type ResultPromise } from 'execa';
 import { activeBatonRoot } from './store.js';
 import { getTask } from './store.js';
 import { detectSecret } from './memory.js';
+import { endpointLaunchInjection } from './endpoints/live-endpoints.js';
 import { readBrief } from './handoff/brief.js';
+import { fenceUntrusted } from './handoff/untrusted.js';
 import { memoryBriefSection, recallMemories } from './memory.js';
 import { tmuxSessionExists } from './util/tmux.js';
 import { bus } from './events.js';
@@ -83,7 +85,7 @@ const LINE_CAP = 500;
  * event bus, into the 500-line ring buffer, and out through
  * `GET /api/agents/running` — which any member of a `--host` daemon can read.
  */
-function redactLine(line: string): string {
+export function redactLine(line: string): string {
   const what = detectSecret(line);
   return what ? `[redacted: ${what}]` : line;
 }
@@ -131,6 +133,31 @@ function flushPartial(slug: string, run: RunningAgent): void {
   }
 }
 
+/**
+ * The prompt for a run with no brief to hand it: the task, quoted, plus what
+ * Baton wants the agent to do about it.
+ *
+ * Pure, and exported, because the ordering here is a security property rather
+ * than a formatting preference. The task text comes from a plan file that git
+ * can deliver from anyone's branch, so it goes inside the fence as data;
+ * everything that carries Baton's authority — the orientation pointer, the
+ * isolation rule, the scope — stays outside it, after the terminator, where the
+ * quoted text provably cannot have written it.
+ */
+export function composeTaskPrompt(taskText: string, scope: string[], memorySection: string): string {
+  const scopeLine = scope.length
+    ? `\n\nYour scope: ${scope.join(', ')}. Stay within it; if you must touch files outside it, check_files first — another agent may own that area.`
+    : '';
+  const memory = memorySection ? `\n\n${memorySection}` : '';
+  return `Your task is described in the quoted block below.\n\n${fenceUntrusted('plan.task', taskText)}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${scopeLine}${memory}`;
+}
+
+/** How a headless run ended. `code` is null when a signal ended it. */
+export interface AgentExit {
+  code: number | null;
+  stopped: boolean;
+}
+
 export interface StartResult {
   slug: string;
   agent: string;
@@ -167,7 +194,8 @@ export async function startAgent(
 
   // Prompt: prefer a HANDOFF.md brief (the curated knowledge pack), else the
   // task plus recalled project memory — a few hundred tokens of verified facts
-  // beats the agent re-exploring the repo.
+  // beats the agent re-exploring the repo. See composeTaskPrompt for the
+  // fallback's shape and why the task text is quoted rather than interpolated.
   let prompt = opts.prompt;
   let promptSource: StartResult['promptSource'] = 'task';
   if (!prompt) {
@@ -182,12 +210,18 @@ export async function startAgent(
         const section = memoryBriefSection(recalled.facts, recalled.staleDropped, recalled.staleGrounding);
         if (section) memory = `\n\n${section}`;
       } catch { /* memory is an enhancement — never block a launch */ }
-      const scope = task.scope?.length
-        ? `\n\nYour scope: ${task.scope.join(', ')}. Stay within it; if you must touch files outside it, check_files first — another agent may own that area.`
-        : '';
-      prompt = `${task.task}\n\nRead CODEBASE.md first for orientation. Work only inside this directory; commit when done.${scope}${memory}`;
+      prompt = composeTaskPrompt(task.task, task.scope ?? [], memory);
     }
   }
+
+  // P16 step 1. Per-launch only: the alternative everyone reaches for is
+  // writing ~/.claude/settings.json, which re-points every Claude Code session
+  // on the machine — including someone's unrelated work.
+  const injected = await endpointLaunchInjection(repoRoot, agent, opts.model);
+  // P27 — a gateway-mode agent whose gateway is unreachable does not launch.
+  // Proceeding would send this repo to the vendor at the moment the developer
+  // believed it was staying on their network.
+  if (injected.refusal) throw new Error(injected.refusal);
 
   const child = execa(launcher.cmd, launcher.args(prompt, opts.model), {
     cwd: task.worktreePath,
@@ -201,9 +235,23 @@ export async function startAgent(
     // Windows has no process groups in this sense; see killTree.
     detached: process.platform !== 'win32',
     // Identity: the agent's `baton mcp` reads these to resolve the hub store
-    // (BATON_ROOT) and to recognize its own edits (BATON_SLUG), instead of
-    // guessing from a worktree cwd.
-    env: { ...process.env, FORCE_COLOR: '0', BATON_ROOT: repoRoot, BATON_SLUG: slug, BATON_TASK: task.task },
+    // (BATON_ROOT), to recognize its own edits (BATON_SLUG), and to introduce
+    // itself as the agent we actually launched (BATON_AGENT) instead of letting
+    // `resolveAgentId` fall back to sniffing a parent process. That last one is
+    // what `assignee` is matched against, so a guess here reads as a different
+    // agent and gets refused from its own task.
+    env: {
+      ...process.env,
+      // After process.env on purpose: the plan named a model that lives on
+      // this endpoint, so an inherited ANTHROPIC_BASE_URL pointing somewhere
+      // else would send it to a gateway that does not serve it.
+      ...injected.env,
+      FORCE_COLOR: '0',
+      BATON_ROOT: repoRoot,
+      BATON_SLUG: slug,
+      BATON_TASK: task.task,
+      BATON_AGENT: agent,
+    },
   });
   const run: RunningAgent = {
     agent, model: opts.model, child, startedAt: new Date().toISOString(), lines: [], partial: { out: '', err: '' },
@@ -335,8 +383,26 @@ export function runningHeadless(): RunningInfo[] {
 }
 
 /** Wait for a run to finish (CLI streaming mode). Resolves when the agent exits. */
-export async function waitForAgent(slug: string): Promise<void> {
+/**
+ * Wait for a headless run and report HOW it ended.
+ *
+ * The outcome is the return value rather than a bus message because the caller
+ * that needs it — the dispatcher — has to turn it into a task state, and
+ * parsing our own `✗ agent exited 1` line back out of the bus would be a second
+ * encoding of the same fact.
+ *
+ * `null` when nothing was running under that slug: a caller must be able to
+ * tell "it finished" from "it was never here".
+ */
+export async function waitForAgent(slug: string): Promise<AgentExit | null> {
   const run = running.get(slug);
-  if (!run) return;
-  await run.child.catch(() => undefined);
+  if (!run) return null;
+  const e = await run.child.then(
+    () => ({ code: 0, stopped: false }),
+    (err: { exitCode?: number; isTerminated?: boolean }) => ({
+      code: err.exitCode ?? null,
+      stopped: err.isTerminated === true,
+    }),
+  );
+  return e;
 }

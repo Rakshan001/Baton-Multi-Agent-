@@ -329,3 +329,128 @@ describe('loadPlan', () => {
     expect(plan.tasks[0]!.task).toContain('Keep the scope tight');
   });
 });
+
+/**
+ * P3 step 1 — `model` is intent, so the plan owns it.
+ *
+ * The same split as `assignee` (intent) vs `claimedBy.agent` (fact): what a
+ * plan asks for is one field, what actually launched is a record in the runs
+ * ledger. Merging them would make "the plan wanted sonnet but opus ran"
+ * unrepresentable, which is precisely the drift a board has to be able to show.
+ */
+describe('parsePlan — model', () => {
+  it('reads **model:** as a field, not as an unknown one', () => {
+    const { plan, issues } = parsePlan('## Phase 1\n\n### auth-api @claude\n**model:** sonnet\n', 'p');
+    expect(issues).toEqual([]);
+    expect(plan.tasks[0]!.model).toBe('sonnet');
+  });
+
+  it('keeps a provider-qualified model intact', () => {
+    // `ollama/qwen3-coder` is a native model string agents pass straight
+    // through; slugifying it the way an assignee is slugified would destroy it.
+    const { plan } = parsePlan('## Phase 1\n\n### t\n**model:** ollama/qwen3-coder\n', 'p');
+    expect(plan.tasks[0]!.model).toBe('ollama/qwen3-coder');
+  });
+
+  it('a task with no model has none — never an empty string', () => {
+    // `model: ''` would reach a CLI as `--model ''` and start something nobody
+    // chose. Absent has to stay absent.
+    const { plan, issues } = parsePlan('## Phase 1\n\n### t\n**model:**\n', 'p');
+    expect(issues).toEqual([]);
+    expect(plan.tasks[0]!.model).toBeUndefined();
+  });
+
+  it('refuses a model that could not be an argument', () => {
+    // A plan can arrive by `git pull` from a branch nobody reviewed (P3-E2) and
+    // this value becomes argv. Refuse it rather than sanitize it: a silently
+    // rewritten model runs something other than what the plan says.
+    for (const bad of ['--dangerously-skip', 'a b', '$(id)', '../../etc/passwd', 'x;rm -rf /']) {
+      const { plan, issues } = parsePlan(`## Phase 1\n\n### t\n**model:** ${bad}\n`, 'p');
+      expect(issues.length, bad).toBe(1);
+      expect(issues[0]!.message, bad).toMatch(/not a usable model/);
+      expect(plan.tasks[0]!.model, bad).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * Scope overlap is about work happening AT THE SAME TIME.
+ *
+ * The check grouped by phase and never read `dependsOn`, so two tasks where one
+ * waits for the other were reported as running in parallel over the same files.
+ * They cannot: `eligibleFor` will not start the second until the first is done.
+ *
+ * The advice it gave made it worse — "move one to another phase" pushes a plan
+ * toward coarse barriers that stop every unrelated task too, when the precise
+ * dependency was already written down.
+ */
+describe('validatePlan — overlap and dependencies', () => {
+  const twoTasks = (after: string) => `## Phase 1
+
+### extractor
+**scope:** \`src/kb/**\`
+
+Build it.
+
+### grammars
+${after}**scope:** \`src/kb/**\`
+
+Package them.
+`;
+
+  const check = (text: string) => validatePlan(parsePlan(text, 'p').plan).map((i) => i.message).join();
+
+  it('still refuses two independent tasks that would collide', () => {
+    expect(check(twoTasks(''))).toMatch(/same files/);
+  });
+
+  it('allows the overlap when one task waits for the other', () => {
+    expect(check(twoTasks('**after:** extractor\n'))).toBe('');
+  });
+
+  it('allows it through a chain, not just a direct edge', () => {
+    const plan = `## Phase 1
+
+### a
+**scope:** \`src/x/**\`
+
+A.
+
+### b
+**after:** a
+
+B.
+
+### c
+**after:** b
+**scope:** \`src/x/**\`
+
+C.
+`;
+    expect(check(plan)).toBe('');
+  });
+
+  it('still refuses a collision between two branches of the same chain', () => {
+    // Both wait for `a`, so they start together — the dependency does not
+    // order them relative to each other.
+    const plan = `## Phase 1
+
+### a
+
+A.
+
+### b
+**after:** a
+**scope:** \`src/x/**\`
+
+B.
+
+### c
+**after:** a
+**scope:** \`src/x/**\`
+
+C.
+`;
+    expect(check(plan)).toMatch(/same files/);
+  });
+});

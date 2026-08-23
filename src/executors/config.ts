@@ -20,6 +20,9 @@
  * a dispatcher with no work to do.
  */
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 export type ExecutorBackend = 'auto' | 'local' | 'orca';
 
 export interface ExecutorConfig {
@@ -123,4 +126,23 @@ export function validateExecutorConfig(raw: unknown): { config: ExecutorConfig; 
   }
 
   return { config: { backend, orca, dispatch: { maxConcurrent, maxPerAgent } }, errors };
+}
+
+/**
+ * Read the `executor` block from `baton.config.json` — the same file routing
+ * uses. A missing or unparseable file is the default config, never an error:
+ * dispatch has to keep working while somebody is halfway through editing it.
+ */
+export async function loadExecutorConfig(root: string): Promise<{ config: ExecutorConfig; errors: string[] }> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(join(root, 'baton.config.json'), 'utf-8'));
+  } catch (e) {
+    const missing = (e as NodeJS.ErrnoException).code === 'ENOENT';
+    return {
+      config: DEFAULT_EXECUTOR_CONFIG,
+      errors: missing ? [] : [`could not read baton.config.json: ${(e as Error).message} — using executor defaults`],
+    };
+  }
+  return validateExecutorConfig(raw);
 }

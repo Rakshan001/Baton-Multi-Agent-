@@ -62,6 +62,13 @@ export function claim(
   who: Who,
   now: string,
   opts: EligibilityOpts = {},
+  /**
+   * P3-E12 — a human dispatching with `--agent` outranks the plan's `@agent`.
+   * It waives the assignee rule and nothing else: the state check, the phase
+   * barrier and the dependency rule all still apply, because none of those is
+   * what the operator overrode.
+   */
+  { override = false }: { override?: boolean } = {},
 ): Outcome {
   const t = tasks.find((x) => x.slug === slug);
   if (!t) return fail('missing', `No task '${slug}'.`);
@@ -71,12 +78,15 @@ export function claim(
     const holder = t.claimedBy ? ` (${t.claimedBy.agent})` : '';
     return fail('held', `'${slug}' is ${state}${holder} — nothing to claim.`);
   }
-  if (t.assignee != null && t.assignee !== who.agent) {
+  if (!override && t.assignee != null && t.assignee !== who.agent) {
     return fail('not-yours', `'${slug}' is assigned to ${t.assignee}.`);
   }
   // The barrier and the dependency rule, re-derived here rather than read from
   // a flag: `eligibleFor` is the one definition, and a second copy would drift.
-  if (!eligibleFor(who.agent, tasks as readonly PipelineTask[], opts).some((e) => e.slug === slug)) {
+  // Startability is asked of whoever the row names, so an override changes who
+  // runs the task and not whether it may run at all.
+  const asWhom = override ? (t.assignee ?? who.agent) : who.agent;
+  if (!eligibleFor(asWhom, tasks as readonly PipelineTask[], opts).some((e) => e.slug === slug)) {
     // The cause, not just the verdict. "Not startable yet" sends someone to
     // `baton next` to be told the phase has not landed or a dependency has not
     // been pushed — both of which name a command, and neither of which anyone

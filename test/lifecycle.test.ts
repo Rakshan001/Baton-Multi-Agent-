@@ -249,3 +249,45 @@ describe('nextFor', () => {
     expect(nextFor('claude', [row({ slug: 'a', assignee: 'cursor' })])).toBeNull();
   });
 });
+
+/**
+ * P3-E12 — `baton dispatch --agent X` on a task the plan assigned to someone
+ * else. The human wins.
+ *
+ * Without this the flag half-works: the dispatcher picks X, then `claim`
+ * refuses because the row still says `@antigravity`, and the operator gets
+ * "'auth-docs' is assigned to antigravity" from a command in which they just
+ * said otherwise. It overrides exactly one rule — the assignee — and no other.
+ */
+describe('claim — an explicit override', () => {
+  const assigned = row({ slug: 'a', assignee: 'antigravity' });
+
+  it('is refused without it, which is right for an agent claiming its own work', () => {
+    expect(claim([assigned], 'a', claude, NOW)).toMatchObject({ ok: false, refusal: { code: 'not-yours' } });
+  });
+
+  it('lets a human reassign the task at dispatch time', () => {
+    const r = claim([assigned], 'a', claude, NOW, {}, { override: true });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.task.claimedBy?.agent).toBe('claude');
+    // The plan's intent is not rewritten. The board shows both, which is how it
+    // can explain that a human overrode it.
+    expect(r.task.assignee).toBe('antigravity');
+  });
+
+  it('does not override the phase barrier', () => {
+    const tasks = [row({ slug: 'p1', phase: 1 }), row({ slug: 'p2', phase: 2, assignee: 'antigravity' })];
+    expect(claim(tasks, 'p2', claude, NOW, {}, { override: true })).toMatchObject({ ok: false, refusal: { code: 'not-eligible' } });
+  });
+
+  it('does not override an unmet dependency', () => {
+    const tasks = [row({ slug: 'a' }), row({ slug: 'b', dependsOn: ['a'], assignee: 'antigravity' })];
+    expect(claim(tasks, 'b', claude, NOW, {}, { override: true })).toMatchObject({ ok: false, refusal: { code: 'not-eligible' } });
+  });
+
+  it('does not take a task somebody is already working on', () => {
+    const held = row({ slug: 'a', assignee: 'antigravity', state: 'active', claimedBy: { agent: 'codex', sessionSlug: 's', at: T0 } });
+    expect(claim([held], 'a', claude, NOW, {}, { override: true })).toMatchObject({ ok: false, refusal: { code: 'held' } });
+  });
+});

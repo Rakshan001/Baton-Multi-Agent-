@@ -71,12 +71,15 @@ async function recordGrant(root: string, granted: Task): Promise<Task> {
  *
  * @param resume adopt the task even though someone holds it — allowed only when
  *               the pipeline's own liveness rule says it has stalled.
+ * @param override the plan assigned this task to a different agent and a human
+ *               said otherwise (`baton dispatch --agent`). Waives the assignee
+ *               rule only — the barrier and dependencies still hold.
  */
 export async function claimTask(
   root: string,
   slug: string,
   who: Who,
-  opts: { resume?: boolean } = {},
+  opts: { resume?: boolean; override?: boolean } = {},
 ): Promise<ClaimResult> {
   const now = new Date().toISOString();
   let adoptedFrom: string | undefined;
@@ -140,7 +143,7 @@ export async function claimTask(
       const out = takeover(tasks, slug, who, now, { now: Date.now(), livenessOf: probe });
       return { tasks: out.ok ? out.tasks : null, result: out };
     }
-    const out = claim(tasks, slug, who, now, gate);
+    const out = claim(tasks, slug, who, now, gate, { override: opts.override });
     return { tasks: out.ok ? out.tasks : null, result: out };
   });
   const task = unwrap(won);

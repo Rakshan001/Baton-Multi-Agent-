@@ -473,23 +473,124 @@ export interface ResolvedRoute {
   index: number;
   /** Agents skipped because their CLI wasn't available. */
   skipped: string[];
+  /** P16-E7. Set only when the walk crossed from self-hosted to paid, which
+   *  needs consent. Consent is not silence: callers name this in the report. */
+  promoted?: { from: TierEntry; to: TierEntry; reason: string };
 }
+
+/** What an entry costs to run. `unserved` is a local-tier model no configured
+ *  endpoint serves — almost always a typo. */
+export type EntryCost = 'self-hosted' | 'paid' | 'unserved';
+
+/**
+ * Everything the walk needs to know about money, injected — routing.ts stays
+ * pure and knows nothing about endpoints or HTTP.
+ */
+export interface ChainCostPolicy {
+  /** The tier this chain came from. Only `local` means "your own hardware". */
+  tier: string | null;
+  costOf: (entry: TierEntry) => EntryCost;
+  /** Why this entry cannot run right now — a GATEWAY problem. Never "the CLI
+   *  is missing": that is `isAvailable`, and it is allowed to fall through. */
+  blocked?: (entry: TierEntry) => string | null;
+  /** Models the configured endpoints actually serve, for the P16-E2 message. */
+  served?: string[];
+  allowPaidFallback: boolean;
+}
+
+export interface ChainRefusal {
+  refused: 'paid-fallback' | 'model-not-served';
+  from: TierEntry;
+  /** The paid entry the walk would have promoted to, when there was one. */
+  next: TierEntry | null;
+  reason: string;
+}
+
+function promotionRefused(
+  stranded: { entry: TierEntry; reason: string },
+  next: TierEntry,
+  policy: ChainCostPolicy,
+): ChainRefusal {
+  const cost = policy.costOf(next) === 'unserved' ? 'is not on your hardware either' : 'costs money';
+  return {
+    refused: 'paid-fallback', from: stranded.entry, next,
+    reason: `${stranded.reason}, and '${next.agent}${next.model ? `:${next.model}` : ''}' ${cost}. Fix the endpoint, or pass --allow-paid-fallback (or set endpoints.allowPaidFallback) to spend on it deliberately.`,
+  };
+}
+
+/** How a chain entry is named in output. The model is half the identity: a
+ *  promotion inside one agent (`claude:qwen3-coder` → `claude:opus`) is still
+ *  the expensive one, and printing the agent alone reads as "claude → claude". */
+export const entryLabel = (e: TierEntry): string => (e.model ? `${e.agent}:${e.model}` : e.agent);
+
+/** The tier name that means "runs on hardware you own". */
+const SELF_HOSTED_TIER = 'local';
 
 /**
  * Walk a fallback chain and return the first entry whose agent is available
  * (per the injected predicate — probeBinary in real use, fixtures in demo).
  * Null when nothing in the chain is installed.
+ *
+ * 🔴 With a cost policy, one fall-through is forbidden: an entry that could not
+ * run BECAUSE ITS GATEWAY FAILED never promotes to an entry that costs money.
+ * This chain is a fallback the user asked for; a gateway outage is not, and
+ * quietly moving twenty queued tasks onto a frontier model is a bill found days
+ * later. Falling through because a CLI is not installed still works exactly as
+ * before — that really is the user's own configuration.
  */
 export async function resolveChain(
   chain: TierEntry[],
   isAvailable: (agent: string) => Promise<boolean>,
-): Promise<ResolvedRoute | null> {
+  policy?: ChainCostPolicy,
+): Promise<ResolvedRoute | ChainRefusal | null> {
   const skipped: string[] = [];
+  let stranded: { entry: TierEntry; reason: string } | null = null;
+
   for (let i = 0; i < chain.length; i++) {
-    if (chain[i].agent === 'any' || (await isAvailable(chain[i].agent))) {
-      return { entry: chain[i], index: i, skipped };
+    const entry = chain[i];
+
+    if (entry.agent !== 'any' && !(await isAvailable(entry.agent))) {
+      skipped.push(entry.agent);
+      continue;
     }
-    skipped.push(chain[i].agent);
+
+    const block = policy?.blocked?.(entry) ?? null;
+    if (block) {
+      if (!stranded && policy?.costOf(entry) === 'self-hosted') stranded = { entry, reason: block };
+      continue;
+    }
+
+    const cost = policy?.costOf(entry);
+    // Two shapes of "this one is not free": a paid entry anywhere, and a model
+    // the local tier claims but no endpoint serves. Consent has to cover both,
+    // and a local tier's last resort is usually the second shape.
+    const crosses = cost === 'paid' || (policy?.tier === SELF_HOSTED_TIER && cost === 'unserved');
+
+    if (stranded && crosses && policy) {
+      if (!policy.allowPaidFallback) return promotionRefused(stranded, entry, policy);
+      return { entry, index: i, skipped, promoted: { from: stranded.entry, to: entry, reason: stranded.reason } };
+    }
+
+    // Nothing failed upstream, so an unserved local-tier model is what it looks
+    // like: a name that matches no endpoint (P16-E2).
+    if (policy?.tier === SELF_HOSTED_TIER && cost === 'unserved') {
+      const served = policy.served?.length ? policy.served.join(', ') : 'nothing — no endpoints are configured';
+      return {
+        refused: 'model-not-served', from: entry, next: null,
+        reason: `'${entry.model ?? entry.agent}' is in the ${SELF_HOSTED_TIER} tier but no configured endpoint serves it. Served: ${served}. Fix the model name, add the endpoint, or move it out of the ${SELF_HOSTED_TIER} tier if it is meant to run on the vendor's servers.`,
+      };
+    }
+
+    return { entry, index: i, skipped };
+  }
+
+  // Nothing ran. Say which of the two reasons it was: "install the CLI" sends
+  // someone after a binary that is already there while the gateway stays down.
+  if (stranded) {
+    return {
+      refused: 'paid-fallback', from: stranded.entry, next: null,
+      reason: `${stranded.reason}, and nothing else in the chain can run without spending money.`,
+    };
   }
   return null;
 }

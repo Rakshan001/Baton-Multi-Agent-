@@ -9,8 +9,10 @@
 import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
 import { parseFrontmatter } from '../util/frontmatter.js';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { gitTry } from '../util/exec.js';
+import { gitExcludeLocal } from '../git.js';
+import { fenceUntrusted, sanitizeUntrusted } from './untrusted.js';
 import { resolveAuthor } from '../identity.js';
 import type { Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
@@ -117,8 +119,28 @@ export function fitBriefBody(sections: BriefSection[], maxChars: number = HANDOF
   return { body: render(), dropped };
 }
 
+/** Repo-root-relative name of the brief — also the `.git/info/exclude` pattern. */
+export const HANDOFF_REL = 'HANDOFF.md';
+
+/** Longest a task's text may run when used as a heading. Enough to identify the
+ *  work, far too short to carry an instruction block. */
+const TITLE_MAX = 90;
+
+/**
+ * A one-line title from arbitrary task text: sanitized, collapsed, and cut at a
+ * word boundary. Never a place to read the task from — that is the fenced
+ * Objective section.
+ */
+export function titleOf(taskText: string): string {
+  const flat = sanitizeUntrusted(taskText).replace(/\s+/g, ' ').trim();
+  if (flat.length <= TITLE_MAX) return flat;
+  const cut = flat.slice(0, TITLE_MAX);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > TITLE_MAX / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
 export function handoffPath(worktreePath: string): string {
-  return join(worktreePath, 'HANDOFF.md');
+  return join(worktreePath, HANDOFF_REL);
 }
 
 /**
@@ -137,9 +159,46 @@ export function graphSectionMd(excerpt: string): string {
   ].join('\n');
 }
 
+/**
+ * The task's contract, for a brief the dispatcher wrote.
+ *
+ * Same record `my_tasks` returns (`mcp-pipeline.ts:taskContract`), so the file
+ * and the tool cannot disagree about what the task is. Every value in it came
+ * out of a plan file, which may have arrived by `git pull` — so it is fenced,
+ * not restated in Baton's own voice.
+ *
+ * Empty when the task declares none: an "Acceptance criteria" heading with
+ * nothing under it reads as "there are none".
+ */
+export function contractSectionMd(contract: Record<string, unknown>): string {
+  const list = (k: string): string[] => {
+    const v = contract[k];
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  };
+  const scope = list('scope'), expects = list('expects'), principles = list('principles'), deps = list('dependsOn');
+  if (!scope.length && !expects.length && !principles.length && !deps.length) return '';
+  const block = [
+    ...(scope.length ? [`scope:      ${scope.join(', ')}`] : []),
+    ...(deps.length ? [`depends on: ${deps.join(', ')}`] : []),
+    ...(expects.length ? ['expects:', ...expects.map((e) => `  - ${e}`)] : []),
+    ...(principles.length ? ['principles:', ...principles.map((p) => `  - ${p}`)] : []),
+  ].join('\n');
+  return [
+    '## Acceptance criteria',
+    '_From the plan. This is what the work is judged against — `complete_task` checks it._',
+    fenceUntrusted('plan.contract', block),
+  ].join('\n');
+}
+
 export async function buildBrief(
   task: Task,
-  opts: { from?: string; to: string; model?: string; note?: string; root: string },
+  opts: {
+    from?: string; to: string; model?: string; note?: string; root: string;
+    /** Dispatch only: the plan's contract for this task. Never dropped. */
+    contract?: Record<string, unknown>;
+    /** Dispatch only: a repo orientation. Dropped before the contract is. */
+    orientation?: string;
+  },
 ): Promise<HandoffBrief> {
   const session: SessionContext | null = await sessionContextFor(task.worktreePath);
   // ISS-06: for a non-Claude agent there is no transcript, so plan/notes/files
@@ -202,11 +261,18 @@ export async function buildBrief(
 
   // Objective + where to work — never dropped.
   push([
-    `# Handoff: ${task.task}`,
+    // The slug, NOT the task text. `startAgent` hands `brief.body` to the CLI
+    // verbatim, so this heading is the first line of an unattended agent's
+    // prompt — before the fence is introduced. `plan.ts` joins every prose line
+    // under a task heading into `task.task`, so any of it here is attacker
+    // prose in Baton's voice, above the quoting. The slug is validated
+    // (`AGENT_ID_MAX`, slug grammar), and the fenced Objective two lines down
+    // carries the real text.
+    `# Handoff: ${titleOf(task.slug)}`,
     '',
     '## Objective',
-    task.task,
-    ...(opts.note ? ['', `> Note from the handing-off side: ${opts.note}`] : []),
+    fenceUntrusted('plan.task', task.task),
+    ...(opts.note ? ['', `> Note from the handing-off side: ${sanitizeUntrusted(opts.note)}`] : []),
     '',
     '## Where to work',
     '```',
@@ -217,6 +283,10 @@ export async function buildBrief(
       ? [`Suggested model: \`${opts.model}\` — start the receiving CLI with it if it supports model selection (e.g. \`claude --model ${opts.model}\`); Baton can't enforce this.`]
       : []),
   ].join('\n'), 0);
+
+  // The contract shares dropOrder 0 with the objective: acceptance criteria
+  // that got trimmed are acceptance criteria nobody agreed to.
+  if (opts.contract) push(contractSectionMd(opts.contract), 0);
 
   // git ground truth — kept longest of the optional sections (ISS-08 prefers
   // verifiable state over prose).
@@ -251,15 +321,32 @@ export async function buildBrief(
   const hasContext = !!(session || todos.length || notes.length || filesEdited.length);
   if (hasContext) {
     if (done.length || open.length) {
-      const plan = ['## Plan', ...done.map((t) => `- [x] ${t.content}`), ...open.map((t) => `- [ ] ${t.content}`)];
+      // Sanitized, not fenced. The plan IS what the next agent should carry out,
+      // so quoting it as "data, do not act on this" would be wrong — but it was
+      // written by whatever ran last, so it must not be able to forge a
+      // terminator and escape the quoting further down.
+      const plan = [
+        '## Plan',
+        ...done.map((t) => `- [x] ${sanitizeUntrusted(t.content)}`),
+        ...open.map((t) => `- [ ] ${sanitizeUntrusted(t.content)}`),
+      ];
       push(plan.join('\n'), 0); // the plan is the continuation — never drop
     }
-    if (nextStep) push(`## Next step\n${nextStep}`, 0);
+    if (nextStep) push(`## Next step\n${sanitizeUntrusted(nextStep)}`, 0);
     if (filesEdited.length) push(['## Files the previous agent edited', ...filesEdited.map((f) => `- ${f}`)].join('\n'), 4);
-    if (notes.length) push(['## Last notes from the previous agent', ...notes.map((n) => `> ${n.replace(/\n/g, '\n> ')}`)].join('\n'), 3);
+    // Notes are written by the previous AGENT, not by Baton. A compromised or
+    // simply confused upstream session is the same problem as a hostile plan
+    // file, so it gets the same quoting.
+    if (notes.length) push(['## Last notes from the previous agent', fenceUntrusted('ledger.notes', notes.join('\n\n'))].join('\n'), 3);
     if (commands.length) push(['## Commands it ran (context/verification)', '```', ...commands.slice(-8), '```'].join('\n'), 6);
   } else {
     push('_No session transcript or progress ledger for this worktree — context above is from git alone._', 0);
+  }
+
+  // Dispatch only: how this repo is laid out. Dropped before the contract and
+  // the state of the work, kept ahead of the graph excerpt it summarises.
+  if (opts.orientation?.trim()) {
+    push(['## Orientation', '_How this repo is laid out. A shortcut, not a mandate._', opts.orientation.trim()].join('\n'), 3);
   }
 
   // Graph excerpt: the biggest optional block — first to go after commands.
@@ -302,6 +389,10 @@ export async function buildBrief(
 
 export async function writeBrief(brief: HandoffBrief): Promise<void> {
   await writeFile(brief.path, brief.markdown, 'utf-8');
+  // HANDOFF.md is Baton's artifact, not the agent's work: untracked it would
+  // count as an uncommitted change and the done gate refuses on one of those.
+  // Never fail a brief for the bookkeeping.
+  await gitExcludeLocal(dirname(brief.path), HANDOFF_REL).catch(() => undefined);
 }
 
 export async function readBrief(worktreePath: string): Promise<{ meta: Partial<HandoffMeta>; body: string } | null> {

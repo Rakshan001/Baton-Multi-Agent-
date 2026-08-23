@@ -14,16 +14,40 @@
  * routing.ts:resolveChain, not here.
  */
 import type { AgentCapability, ExecutorId, RunMode } from './types.js';
+import type { EndpointConfig } from '../endpoints/config.js';
+import type { EndpointHealth } from '../endpoints/health.js';
+import { agentsReachingKind, reachesKind } from '../endpoints/reach.js';
 
 export type { AgentCapability, ExecutorId, RunMode } from './types.js';
 
-export type RefusalCode = 'unknown-agent' | 'not-installed' | 'no-mode' | 'no-model';
+export type RefusalCode =
+  | 'unknown-agent'
+  | 'not-installed'
+  | 'no-mode'
+  | 'no-model'
+  /** An impossible pairing: this agent's vendor allows no self-hosted model. */
+  | 'no-endpoint'
+  /** The gateway did not answer. */
+  | 'endpoint-unreachable'
+  /** It answered 401 — or we have no credential to send it. */
+  | 'endpoint-unauthorized';
 
 export interface LaunchWant {
   agentId: string;
   model?: string;
   /** `'any'` lets the resolver pick; it prefers headless. */
   want: RunMode | 'any';
+}
+
+/**
+ * The endpoint serving the wanted model, if one does, and what we know about
+ * it. `endpoint: null` is the ordinary case — a vendor model — and refuses
+ * nothing. An absent `health` means nobody probed: a dispatcher that has not
+ * asked must not refuse on an answer it never got.
+ */
+export interface LaunchEndpoint {
+  endpoint: EndpointConfig | null;
+  health?: EndpointHealth;
 }
 
 export type Resolution =
@@ -51,6 +75,7 @@ export function resolveLaunch(
   req: LaunchWant,
   caps: ReadonlyMap<string, AgentCapability>,
   backend: ExecutorId,
+  via?: LaunchEndpoint,
 ): Resolution {
   const { agentId, model, want } = req;
   const cap = caps.get(agentId);
@@ -89,5 +114,73 @@ export function resolveLaunch(
     };
   }
 
+  const endpointRefusal = refuseEndpoint(cap, model, via);
+  if (endpointRefusal) return endpointRefusal;
+
   return { ok: true, agentId, nativeId: cap.nativeId, mode, model };
+}
+
+/**
+ * P16 step 2. Only reached when the wanted model is served by one of YOUR
+ * endpoints — a vendor model never gets here, so Antigravity on Antigravity's
+ * own models keeps launching exactly as before (P16-E6).
+ */
+function refuseEndpoint(
+  cap: AgentCapability,
+  model: string | undefined,
+  via: LaunchEndpoint | undefined,
+): Resolution | null {
+  const endpoint = via?.endpoint;
+  if (!endpoint) return null;
+  const agentId = cap.agentId;
+
+  if (cap.endpointVia === null) {
+    const who = agentsReachingKind(endpoint.kind);
+    return {
+      ok: false, code: 'no-endpoint', agentId,
+      message: `'${agentId}' cannot be pointed at a self-hosted model — its vendor allows no custom endpoint. Assign ${who.join(', ') || 'an agent that can reach it'}, or remove the model '${model}' to use ${agentId}'s own models.`,
+    };
+  }
+
+  if (!reachesKind(cap.endpointVia, endpoint.kind)) {
+    const who = agentsReachingKind(endpoint.kind);
+    return {
+      ok: false, code: 'no-endpoint', agentId,
+      message: `'${endpoint.id}' serves ${endpoint.kind} and '${agentId}' does not speak that dialect. Assign ${who.join(', ') || 'an agent that does'}, or serve '${model}' from an endpoint '${agentId}' can reach.`,
+    };
+  }
+
+  // Declared a credential that is not there. Launching anyway would call a
+  // gateway with no key — see endpoints/config.ts.
+  if (!endpoint.usable) {
+    return {
+      ok: false, code: 'endpoint-unauthorized', agentId,
+      message: `'${endpoint.id}' is configured but unusable: ${endpoint.unusable}. Baton will not call a gateway without the credential it was told to send.`,
+    };
+  }
+
+  // A probe that timed out is not permission to launch. It is also not proof
+  // the gateway is down, so the message says which of the two we know.
+  if (via?.health === 'unknown') {
+    return {
+      ok: false, code: 'endpoint-unreachable', agentId,
+      message: `'${endpoint.id}' (${endpoint.url}) did not answer in time, so we cannot tell whether '${model}' would run — it may be slow, or unreachable from this machine. Baton will not move this task to a paid model on its own.`,
+    };
+  }
+
+  if (via?.health === 'unreachable') {
+    return {
+      ok: false, code: 'endpoint-unreachable', agentId,
+      message: `'${endpoint.id}' (${endpoint.url}) did not answer, so '${model}' cannot run. Start the gateway or fix the URL — Baton will not move this task to a paid model on its own.`,
+    };
+  }
+
+  if (via?.health === 'unauthorized') {
+    return {
+      ok: false, code: 'endpoint-unauthorized', agentId,
+      message: `'${endpoint.id}' rejected the credential (HTTP 401/403). The gateway is up, so this is the key, not the connection: check ${endpoint.keyRef ?? 'the credential it expects'}.`,
+    };
+  }
+
+  return null;
 }

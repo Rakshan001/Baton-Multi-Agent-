@@ -21,6 +21,7 @@ import { gitTry } from '../util/exec.js';
 import { isGitRepo } from '../git.js';
 import { findNestedGitRepos } from '../kb/projects.js';
 import { setupCmd } from './setup.js';
+import { applyEnrollment, fetchEnrollment } from '../endpoints/enrollment.js';
 import { saveHostLink } from '../host-link.js';
 import {
   branchOf, cleanManifest, hasEmbeddedCredentials, readManifest, remoteOf, writeManifest,
@@ -327,6 +328,24 @@ export async function joinCmd(source: string, dir: string | undefined, opts: Joi
         ...(opts.device ? { device: opts.device } : {}),
       });
       console.log(`  ✓ host remembered (0600 at ${path}) — your file claims will publish while \`baton serve\` runs`);
+
+      /*
+       * P18 step 2 — the same join carries the company's model endpoints.
+       *
+       * Deliberately not fatal. The repos are the hard part and they landed; a
+       * host that cannot enroll this machine yet is a `baton endpoints refresh`
+       * away, and failing the whole join over it would throw away work that
+       * succeeded. Nothing is half-written either way (P18-E6).
+       */
+      const { payload, error } = await fetchEnrollment({ url: source, token: opts.token! });
+      if (payload && payload.endpoints.length) {
+        await applyEnrollment(targetRoot, payload);
+        console.log(`  ✓ ${payload.endpoints.length} company model endpoint(s) configured, ${payload.credentials.length} with a credential of your own`);
+        for (const note of payload.notes) console.log(`    ! ${note}`);
+      } else if (error) {
+        console.error(`  ! could not fetch the company's model endpoints (${error})`);
+        console.error('    Nothing was written. Run `baton endpoints refresh` once the host is reachable.');
+      }
     } catch (e) {
       // Not fatal: the clones are the hard part and they succeeded. Say what
       // to run rather than failing a join that otherwise worked.

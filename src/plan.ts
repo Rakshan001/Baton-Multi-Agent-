@@ -31,6 +31,8 @@ export interface PlanTask {
   phase: number;
   dependsOn: string[];
   assignee: string | null;
+  /** Plan-owned intent. What actually launched lives in the runs ledger. */
+  model?: string;
   scope: string[];
   skills: string[];
   principles: string[];
@@ -101,6 +103,10 @@ const SECTION_HEADING = /^##(?!#)\s/;
 const TASK_HEADING = /^###\s+(.+?)\s*$/;
 const TRAILING_ASSIGNEE = /\s@(\S+)$/;
 const FIELD = /^\*\*([a-z]+):\*\*\s*(.*)$/i;
+/** A model reaches a CLI as argv, and a plan can arrive by `git pull`. Refuse
+ *  anything outside the grammar every real model id already fits — never
+ *  rewrite it, because a silently sanitized model runs something else. */
+const MODEL_OK = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,79}$/;
 /** A known field key in any shape but the one that works — see `parsePlan`. */
 const MISWRITTEN_FIELD = /^(?:[-*+]\s+)?[*_]{0,2}(scope|skills|principles|expects|dependsOn|after|task)[*_]{0,2}\s*:\s*(.*)$/i;
 /**
@@ -213,6 +219,12 @@ export function parsePlan(text: string, fallbackId = 'plan'): { plan: Plan; issu
       else if (key === 'expects') current.expects = val.split(';').map((s) => s.trim()).filter(Boolean);
       else if (key === 'dependson' || key === 'after') current.dependsOn = listField(val);
       else if (key === 'task') current.task = val.trim();
+      else if (key === 'model') {
+        const m = val.trim();
+        if (!m) current.model = undefined;
+        else if (MODEL_OK.test(m)) current.model = m;
+        else issues.push({ where: current.slug, message: `'${m}' is not a usable model id` });
+      }
       else issues.push({ where: current.slug, message: `unknown field '${key}'` });
       continue;
     }
@@ -293,6 +305,29 @@ export function overlappingPair(a: string[], b: string[]): [string, string] | nu
  * half-applied plan — and a half-applied plan is worse than no plan, since the
  * barrier will happily gate on tasks that were never meant to exist.
  */
+/**
+ * Every ordered pair `a\nb` where b transitively waits for a.
+ *
+ * Transitive, not just the direct edge: a → b → c orders a before c just as
+ * firmly, and a plan that spells out its chain should not be told to flatten it.
+ */
+function orderedPairs(tasks: readonly PlanTask[]): Set<string> {
+  const deps = new Map(tasks.map((t) => [t.slug, t.dependsOn]));
+  const out = new Set<string>();
+  // `root` is carried through the recursion: the pair being recorded is always
+  // (ancestor, the task we started from), not (ancestor, its immediate child).
+  const walk = (root: string, from: string, seen: Set<string>): void => {
+    for (const d of deps.get(from) ?? []) {
+      if (seen.has(d)) continue;              // a cycle is reported elsewhere
+      seen.add(d);
+      out.add(`${d}\n${root}`);
+      walk(root, d, seen);
+    }
+  };
+  for (const t of tasks) walk(t.slug, t.slug, new Set([t.slug]));
+  return out;
+}
+
 export function validatePlan(plan: Plan): PlanIssue[] {
   const issues: PlanIssue[] = [];
   const bySlug = new Map<string, PlanTask>();
@@ -334,10 +369,17 @@ export function validatePlan(plan: Plan): PlanIssue[] {
     const list = byPhase.get(t.phase);
     if (list) list.push(t); else byPhase.set(t.phase, [t]);
   }
+  const ordered = orderedPairs(plan.tasks);
   for (const [phase, list] of byPhase) {
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {
         if (!list[i].scope.length || !list[j].scope.length) continue;
+        // Overlap is about work happening AT THE SAME TIME. A task that waits
+        // for another never runs beside it — `eligibleFor` will not start it —
+        // so flagging the pair is a false alarm whose advice ("move one to
+        // another phase") pushes the plan toward a barrier that also stops
+        // every unrelated task. The dependency was the precise answer already.
+        if (ordered.has(`${list[i].slug}\n${list[j].slug}`) || ordered.has(`${list[j].slug}\n${list[i].slug}`)) continue;
         const hit = overlappingPair(list[i].scope, list[j].scope);
         if (hit) {
           const [x, y] = hit;

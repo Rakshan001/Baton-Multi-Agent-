@@ -80,7 +80,7 @@ export interface ApplyResult {
 }
 
 /** Fields a plan owns. Anything else on a Task belongs to the runtime. */
-const OWNED = ['task', 'phase', 'dependsOn', 'assignee', 'scope', 'skills', 'principles', 'expects'] as const;
+const OWNED = ['task', 'phase', 'dependsOn', 'assignee', 'model', 'scope', 'skills', 'principles', 'expects'] as const;
 
 function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
   const x = a ?? [], y = b ?? [];
@@ -94,6 +94,7 @@ function movedFields(t: Task, p: PlanTask): string[] {
     const differs = f === 'task' ? t.task !== p.task
       : f === 'phase' ? (t.phase ?? 0) !== p.phase
       : f === 'assignee' ? (t.assignee ?? null) !== p.assignee
+      : f === 'model' ? t.model !== p.model
       : !sameList(t[f] as string[] | undefined, p[f]);
     if (differs) out.push(f);
   }
@@ -121,6 +122,7 @@ function queuedRow(p: PlanTask, plan: Plan, o: ApplyOpts): Task {
     phase: p.phase,
     dependsOn: p.dependsOn,
     assignee: p.assignee,
+    ...(p.model ? { model: p.model } : {}),
     scope: p.scope,
     skills: p.skills,
     principles: p.principles,
@@ -139,6 +141,9 @@ function merged(t: Task, p: PlanTask, plan: Plan): Task {
     phase: p.phase,
     dependsOn: p.dependsOn,
     assignee: p.assignee,
+    // Written unconditionally, unlike a new row: `...t` above would otherwise
+    // preserve a model the plan has since dropped.
+    model: p.model,
     scope: p.scope,
     skills: p.skills,
     principles: p.principles,

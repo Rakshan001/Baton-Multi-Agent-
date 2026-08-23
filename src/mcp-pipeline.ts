@@ -107,8 +107,14 @@ async function caller(): Promise<Who> {
 const holds = (t: Task, who: Who): boolean =>
   t.claimedBy?.agent === who.agent && !isTerminal(stateOf(t));
 
-/** One task, described the way an agent needs it: contract, not bookkeeping. */
-function brief(t: Task): Record<string, unknown> {
+/**
+ * One task, described the way an agent needs it: contract, not bookkeeping.
+ *
+ * Exported because a dispatched agent needs the same contract in its HANDOFF.md
+ * that `my_tasks` would hand it — one definition of "what this task is", not a
+ * second one written for the brief that drifts from the tool's answer.
+ */
+export function taskContract(t: Task): Record<string, unknown> {
   return {
     slug: t.slug,
     task: t.task,
@@ -167,7 +173,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
         // Ordered by what to do first: finish what you hold, then unblock others
         // by reviewing, then start something new.
         holding: held.map((t) => ({
-          ...brief(t),
+          ...taskContract(t),
           worktree: t.worktreePath,
           ...(t.reviewedBy?.verdict === 'reject' ? { sentBackBy: t.reviewedBy.actor, fix: t.reviewedBy.notes } : {}),
           next: stateOf(t) === 'blocked'
@@ -175,12 +181,12 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
             : `complete_task when finished · report_blocked if you cannot proceed · \`baton pause ${t.slug}\` if you are out of time`,
         })),
         awaitingYourReview: toReview.map((t) => ({
-          ...brief(t),
+          ...taskContract(t),
           worktree: t.worktreePath,
           writtenBy: t.contributors?.map((c) => c.agent) ?? [t.claimedBy?.agent].filter(Boolean),
           next: `read the diff, then: \`baton review approve ${t.slug}\` or \`baton review reject ${t.slug} -n "<what to fix>"\``,
         })),
-        startable: startable.map(brief),
+        startable: startable.map(taskContract),
         stalledYouCouldAdopt: stalled.map((t) => ({
           slug: t.slug, task: t.task, heldBy: t.claimedBy?.agent ?? 'unknown',
           next: `\`baton take ${t.slug} --resume\` — read what is already there before adding to it`,
@@ -237,7 +243,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
       try {
         const { task, materialized } = await claimTask(root, target, who, { resume: Boolean(resume) });
         return asText({
-          claimed: brief(task),
+          claimed: taskContract(task),
           // The isolation rule, in the answer rather than in the description:
           // it costs nothing here and it is what keeps parallel agents apart.
           worktree: task.worktreePath,

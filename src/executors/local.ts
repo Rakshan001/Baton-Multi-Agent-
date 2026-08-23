@@ -13,6 +13,7 @@ import { agentsFor, type AgentDef } from '../agents/registry.js';
 import { agentInstalled } from '../agents/roster.js';
 import { tmuxSessionExists, killSessionFor } from '../util/tmux.js';
 import type { AgentCapability, Executor, LaunchRequest, Observation, RunHandle, RunMode } from './types.js';
+import { endpointViaFor } from '../endpoints/reach.js';
 
 /**
  * Sentinels pushed through a launcher's own `args()` to see what it does with
@@ -72,6 +73,7 @@ export class LocalExecutor implements Executor {
         supportsModel: launcherUses(def, probeMode, MODEL_PROBE, PROMPT_PROBE, MODEL_PROBE),
         acceptsPromptAtLaunch: launcherUses(def, probeMode, PROMPT_PROBE, PROMPT_PROBE, MODEL_PROBE),
         installed: await isInstalled(def.id, root),
+        endpointVia: endpointViaFor(def.id),
       });
     }));
 

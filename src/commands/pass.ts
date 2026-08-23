@@ -15,7 +15,8 @@ import { gitTry } from '../util/exec.js';
 import { batonDir, getTask, loadTasks, type Task , activeBatonRoot } from '../store.js';
 import { buildBrief, readBrief, writeBrief, type HandoffBrief } from '../handoff/brief.js';
 import { runAutoSessionHandoff } from '../handoff/auto-session.js';
-import { loadRouting, resolveChain, suggestRoute, type RouteSuggestion } from '../routing.js';
+import { entryLabel, loadRouting, resolveChain, suggestRoute, type RouteSuggestion } from '../routing.js';
+import { loadLiveEndpoints } from '../endpoints/live-endpoints.js';
 import { agentInstalled } from '../agents/roster.js';
 import { bus } from '../events.js';
 
@@ -84,6 +85,8 @@ export interface PassResult {
   routed: RouteSuggestion | null; // set when the target came from routing, not --to
   /** Chain agents skipped because their CLI isn't installed. */
   skipped: string[];
+  /** P16-E7: this handoff crossed from self-hosted to paid, with consent. */
+  promoted?: { from: string; to: string; reason: string };
 }
 
 /** Core pass pipeline, shared by CLI and POST /api/tasks/:slug/handoff. */
@@ -119,14 +122,25 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
   // uninstalled first choice (e.g. Ollama down) falls through, never fails.
   let routed: RouteSuggestion | null = null;
   let skipped: string[] = [];
+  let promoted: PassResult['promoted'];
   let to = opts.to;
   let model = opts.model;
   if (!to || to === 'auto') {
     const { config } = await loadRouting(repoRoot);
     routed = suggestRoute(task.task, config);
-    const resolved = await resolveChain(routed.chain, (agent) => agentInstalled(agent, repoRoot));
-    const pick = resolved?.entry ?? routed.chain[0];
-    skipped = resolved?.skipped ?? [];
+    const live = await loadLiveEndpoints(repoRoot);
+    const walked = await resolveChain(routed.chain, (agent) => agentInstalled(agent, repoRoot), live?.policyFor(routed.tier));
+    if (walked && 'refused' in walked) {
+      // A brief NAMES the next agent, so getting this wrong spends money on a
+      // model nobody chose. --auto fires from a session hook and must never
+      // fail the session, so it writes nothing instead; an explicit pass says
+      // why out loud.
+      if (opts.auto) return null;
+      throw new Error(`Cannot hand off: ${walked.reason}`);
+    }
+    const pick = walked?.entry ?? routed.chain[0];
+    skipped = walked?.skipped ?? [];
+    promoted = walked?.promoted && { from: entryLabel(walked.promoted.from), to: entryLabel(walked.promoted.to), reason: walked.promoted.reason };
     to = pick.agent;
     model = opts.model ?? pick.model;
   }
@@ -144,7 +158,7 @@ export async function passTask(slug: string | undefined, opts: PassOptions, root
   await writeBrief(brief);
   recordHandoff(repoRoot, { slug: task.slug, from: brief.meta.from, to: brief.meta.to, createdAt: brief.meta.created, status: 'ready' });
   bus.publish({ type: 'handoff.created', slug: task.slug, toAgent: brief.meta.to });
-  return { brief, routed, skipped };
+  return { brief, routed, skipped, ...(promoted ? { promoted } : {}) };
 }
 
 /** How long to wait for a hook payload before giving up and writing a
