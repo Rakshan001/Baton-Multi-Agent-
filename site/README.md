@@ -54,7 +54,7 @@ arrival pulses the node and materializes a `HANDOFF.md` glyph.
 
 > Optional upgrade: swap `components/BatonPassScene.tsx` for a React Three Fiber
 > 3D scene (glassy node meshes, bloom, particle trail, mouse parallax) as
-> described in `docs/landing-page-prompt.md`. It was intentionally implemented in
+> originally briefed. It was intentionally implemented in
 > SVG here so the build stays dependency-light and runs anywhere.
 
 ## Notes

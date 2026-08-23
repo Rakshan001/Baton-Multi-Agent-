@@ -42,10 +42,9 @@ Project status and setup live at the repo root:
 - [BUILD.md](../BUILD.md) / [MVP.md](../MVP.md) — product vision and scope.
 - [CLAUDE.md](../CLAUDE.md) — context auto-loaded by Claude Code (conventions + commands).
 
-The research that scoped Baton (2026-06 snapshot) is preserved under [`research/`](./research/) and the numbered notes in this folder:
+The research that scoped Baton (2026-06 snapshot) survives as the numbered notes in this folder:
 
 - [01 — Coordination & locking](./01-coordination-and-locking.md)
 - [02 — Handoff market](./02-handoff-market.md)
 - [03 — Session export tools](./03-session-export-tools.md)
-- [Tiered routing plan](./TIERED-ROUTING-PLAN.md) · [KB token & storage research](./research/kb-token-and-storage.md)
-- [Landing-page build prompt](./landing-page-prompt.md) — brief for the marketing site (see [`site/`](../site/)).
+- [Marketing site](../site/) — the landing page this documentation supports.
