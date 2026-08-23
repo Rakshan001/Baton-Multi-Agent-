@@ -28,6 +28,19 @@ module.exports = {
     { from: `resources/${brand.commandName}`, to: brand.commandName },
     { from: 'branding', to: 'branding', filter: ['brand.json', 'wordmark.svg', 'icons/**/*'] },
   ],
+  /**
+   * electron-builder takes the app entry from the ROOT package.json's `main`,
+   * not from electron/package.json. This repo's root manifest is the CLI's npm
+   * package, which has no `main` at all (it ships a `bin`), so the packaged app
+   * fell back to `index.js` and every build died with "index.js was not found
+   * in this archive" — after the asar was already assembled, which is why the
+   * failure looked like corruption rather than a missing field.
+   *
+   * extraMetadata writes `main` into the package.json inside the asar only. The
+   * npm manifest stays untouched, which matters: `electron/` is not in its
+   * `files`, so a real `main` there would point at a path the tarball lacks.
+   */
+  extraMetadata: { main: 'electron/dist/main.js' },
   asar: true,
   beforePack: async () => {
     const staged = join(__dirname, '..', 'resources', brand.commandName, 'package', 'dist', 'cli.js');
