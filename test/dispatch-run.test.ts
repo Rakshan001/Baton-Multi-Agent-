@@ -270,7 +270,10 @@ describe('exitOutcome', () => {
 describe('the recovery commands are real', () => {
   it('names only commands the CLI registers', async () => {
     const { readFile } = await import('node:fs/promises');
-    const cli = await readFile(new URL('../src/cli.ts', import.meta.url), 'utf8');
+    // The command tree lives in main.ts, not cli.ts. cli.ts is a launcher whose
+    // emptiness is the feature: it runs the Node-version check before the
+    // module graph — and 60-odd command modules — is resolved.
+    const cli = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
     const registered = new Set([...cli.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]!));
     const source = await readFile(new URL('../src/dispatch-run.ts', import.meta.url), 'utf8');
     const named = [...source.matchAll(/`baton ([a-z-]+)/g)].map((m) => m[1]!);

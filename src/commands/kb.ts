@@ -22,10 +22,11 @@ import { getMcpToken } from '../kb/mcp-token.js';
 import { mergeJsonConfig, McpConfigParseError } from '../agents/connect.js';
 import { codebaseDocStatus, refreshCodebaseDocs } from '../kb/codebasemd.js';
 import { ensureGraphifyIgnores } from '../kb/graphifyignore.js';
-import { ensureBatonGitignore } from '../kb/batonignore.js';
+import { batonFootprint, ensureBatonGitignore, untrackCommand } from '../kb/batonignore.js';
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
 import { resolveBatonRoot , activeBatonRoot } from '../store.js';
+import { runSelect } from './interactive-select.js';
 
 /** Exported for the T2 budget/trigger invariant test — every session reads this. */
 export const AGENT_GUIDE = `
@@ -93,9 +94,13 @@ async function askShare(): Promise<boolean> {
  */
 export async function askChoice<T extends string>(
   question: string,
-  choices: Array<{ key: T; label: string }>,
+  choices: Array<{ key: T; label: string; hint?: string }>,
   fallback: T,
 ): Promise<T> {
+  // A terminal gets a radio list; the typed path below is what runs without one.
+  const picked = await runSelect(question, choices, false, [fallback]);
+  if (picked !== null) return (picked[0] as T) ?? fallback;
+
   if (!process.stdin.isTTY || !process.stdout.isTTY) return fallback;
   const { createInterface } = await import('node:readline/promises');
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -110,6 +115,26 @@ export async function askChoice<T extends string>(
   } finally {
     rl.close();
   }
+}
+
+/**
+ * Adding a line to `.gitignore` does nothing to a file git already tracks. A
+ * repo set up before Baton's managed block existed therefore keeps committing
+ * `.baton/kb.json` on every commit while setup prints `✓ .gitignore updated`
+ * right above it. Report the mismatch and hand over the command; running
+ * `git rm --cached` across someone's repo uninvited is not a setup step.
+ */
+async function reportTrackedFootprint(root: string): Promise<void> {
+  const tracked = await gitTry(['ls-files', '-c', '-i', '--exclude-standard'], root);
+  if (!tracked.ok) return;
+  const stale = batonFootprint(tracked.stdout.split('\n'));
+  if (!stale.length) return;
+  const shown = stale.slice(0, 4).join(', ');
+  const more = stale.length > 4 ? `, +${stale.length - 4} more` : '';
+  console.log(`! ${stale.length} generated file${stale.length === 1 ? '' : 's'} already tracked in git — ignoring them now changes nothing:`);
+  console.log(`    ${shown}${more}`);
+  console.log('  Untrack them (they stay on disk):');
+  console.log(`    ${untrackCommand(stale)}`);
 }
 
 export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; port?: string } = {}): Promise<void> {
@@ -177,6 +202,7 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   // Keep the generated footprint (.baton/, graphify-out/, .mcp.json, …) out of
   // git status. No-ops on a hub root (already ignores everything).
   if (await ensureBatonGitignore(root, share)) console.log('✓ .gitignore updated (baton keeps generated files out of git)');
+  await reportTrackedFootprint(root);
   const docs = await refreshCodebaseDocs(root, state);
   console.log(`✓ CODEBASE.md ×${docs.length} (token-cheap structure maps)`);
   if (share) {

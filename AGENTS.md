@@ -77,29 +77,29 @@ and skips exactly the decision the human should make.
 6. **Write mode** — start the dashboard read-only first, or with `--write`
    (enables merge/remove/rebuild from the UI) right away?
 
-## Step 2 — Build Baton
+## Step 2 — Install Baton
 
-Clone this repo first if it isn't already on disk, then build it:
+Install from npm. The package is **`batonhq`**; the command is **`baton`**.
 
 ```bash
-git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton
-cd baton
+npm install -g batonhq       # puts `baton` on PATH
+baton --version              # confirm before continuing
 
-npm install                  # CLI + daemon deps
-npm install --prefix web     # dashboard deps
-
-npm run build                # tsc → dist/
-npm run build --prefix web   # vite → web/dist/ (served by `baton serve`)
-
-uv tool install graphifyy    # or: pipx install graphifyy / pip install graphifyy
-
-npm link                     # optional — puts `baton` on PATH
-                              # otherwise use `node <path-to-baton>/dist/cli.js …`
+uv tool install graphifyy    # or: pipx install graphifyy
+                             # needed only for the knowledge graph
 ```
 
-Each step is idempotent — skip ones already satisfied (e.g. `dist/` already
-built) instead of blindly re-running, but re-run if the human's answers imply
-something changed (e.g. a fresh clone).
+Check `baton --version` first and skip the install if it already answers — every
+step here is idempotent, but re-running a global install for no reason is slow
+and can surprise the human with a version bump they didn't ask for.
+
+If you cannot install globally (a permissions error on the npm prefix is the
+usual cause), prefix every `baton …` command below with `npx batonhq` instead.
+Report the failure to the human rather than silently switching, so they can
+decide whether to fix their prefix.
+
+Building from a clone is only for working on Baton itself — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Step 3 — Wire up the target project
 
@@ -120,8 +120,14 @@ cd <repo-a> && baton setup [--share]
 cd <repo-b> && baton setup [--share]
 ```
 
-(If `npm link` wasn't run, use `node <path-to-baton>/dist/cli.js setup …` —
-and the same substitution for every `baton …` command below.)
+(If the global install failed, use `npx batonhq setup …` — and the same
+substitution for every `baton …` command below.)
+
+Add `--agents <list>` from the Step 1 answers to skip the agent prompt, and
+`--yes` to take every project default without prompting. Note that `--yes`
+deliberately installs no software: if `graphify` is missing it will report the
+one-line command rather than running it, so install it in Step 2 if the human
+wants the knowledge graph.
 
 Verify it worked before moving on: `baton kb status` should list the indexed
 project(s) with node/edge counts. For a hub, confirm every sub-repo appears.

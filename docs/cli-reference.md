@@ -1,6 +1,6 @@
 # CLI reference
 
-Every `baton` command. If you didn't run `npm link`, use `node dist/cli.js <command>` instead of `baton <command>`.
+Every `baton` command. Install it with `npm install -g batonhq`, or prefix any command with `npx batonhq` to run it without installing. Working from a source checkout without `npm link`? Use `node dist/cli.js <command>`.
 
 ```bash
 baton --help        # list all commands
@@ -26,7 +26,7 @@ baton setup [path]
 | `--no-mcp` | Don't write graphify MCP servers to `.mcp.json`. |
 | `--no-docs` | Don't add the coordination guide to `AGENTS.md` / `CLAUDE.md`. |
 | `--share` / `--local` | Commit the KB to git (so teammates skip re-indexing) vs. keep it local. |
-| `--serve` / `--headless` | Use the dashboard vs. KB-only (agents over MCP, no dashboard). |
+| `--serve` / `--headless` | Deprecated and ignored. The dashboard was always optional and MCP access always on, so these never gated anything. |
 
 ### `new`
 Scaffold a branch (`baton/<slug>`) + git worktree (under `.baton/wt/<slug>`) for a task.
