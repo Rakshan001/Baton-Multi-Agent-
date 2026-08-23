@@ -4,43 +4,102 @@ How to get Baton running on a fresh machine. For a guided first run afterwards, 
 
 ## Prerequisites
 
-| Tool | Why | Check |
-|---|---|---|
-| **Node.js ≥ 24** | The CLI + daemon (uses built-in `node:sqlite` and recursive `fs.watch`). Node 24 is the first release whose bundled SQLite carries **FTS5**, which memory recall ranks with; older runtimes either lack `node:sqlite` entirely or silently fall back to a weaker scorer. | `node --version` |
-| **git** | Worktrees, branches, history — the whole model is git-native. | `git --version` |
-| **uv** (or pipx/pip) | Installs the [`graphify`](https://pypi.org/project/graphifyy/) CLI for the knowledge graph. | `uv --version` |
-| **tmux** *(optional)* | Interactive agent terminals in the dashboard. Without it, headless runs still work. | `tmux -V` |
-
-Install `uv` from <https://docs.astral.sh/uv/>, or use `pipx` / `pip` instead (see below).
+| Tool | Required? | Why | Check |
+|---|---|---|---|
+| **Node.js ≥ 24** | **yes** | The CLI + daemon (uses built-in `node:sqlite` and recursive `fs.watch`). Node 24 is the first release whose bundled SQLite carries **FTS5**, which memory recall ranks with; older runtimes either lack `node:sqlite` entirely or silently fall back to a weaker scorer. Baton refuses to start below 24 rather than degrading quietly. | `node --version` |
+| **git** | **yes** | Worktrees, branches, history — the whole model is git-native. | `git --version` |
+| **uv** (or pipx) | optional | Installs the [`graphify`](https://pypi.org/project/graphifyy/) CLI for the knowledge graph. Without it you lose the graph and nothing else. | `uv --version` |
+| **tmux** | optional | Interactive agent terminals in the dashboard. Without it, headless runs still work. | `tmux -V` |
 
 ## Install
 
-```bash
-git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton
-cd baton
-
-npm install                  # CLI + daemon deps
-npm install --prefix web     # dashboard deps
-
-npm run build                # tsc → dist/
-npm run build --prefix web   # vite → web/dist/ (served by `baton serve`)
-
-uv tool install graphifyy    # the `graphify` CLI (knowledge graphs)
-
-npm link                     # optional: puts `baton` on your PATH
-                             # (otherwise run `node dist/cli.js …`)
-```
-
-> If you skip `npm link`, replace every `baton …` in the docs with `node dist/cli.js …`.
-
-### Installing graphify without uv
+One command, in any repo:
 
 ```bash
-pipx install graphifyy       # or
-pip install graphifyy
+npx batonhq setup
 ```
 
-Baton detects whichever of `uv` / `pipx` is available and prints tailored guidance if `graphify` is missing.
+The wizard scans the folder first and shows what it found, then asks:
+
+1. **one repo, or a hub over several?** — detected automatically; a folder holding 2+ git repos can become one centralized hub (merged graph, one dashboard) or be set up individually
+2. **which agents do you use?** — recommends the ones already on your `PATH`
+3. **turn on the knowledge graph?** — offers to run `uv tool install graphifyy`.
+   On a machine with neither `uv` nor `pipx`, it offers to install `uv` first
+   via Homebrew (or winget on Windows) and then graphify — two commands, both
+   run as argv against a package manager. uv brings its own Python, so no
+   system Python is needed. Where there is no package manager at all, setup
+   prints the official installer rather than running it: piping a downloaded
+   script into a shell is not something Baton does on your behalf
+4. **install the bundled skills?**
+5. **install `baton` globally?** — only when you came in via `npx`
+
+Every question has a recommended answer; pressing Enter takes it.
+
+The prompts are arrow-key lists — `↑↓` to move, space to toggle a checkbox, `a`
+for all, `n` for none, Enter to confirm — with a short note beside each option
+explaining what it means. Where there is no terminal to draw on (CI, a pipe,
+`nohup`) they fall back to the typed-number form, so scripts keep working.
+
+There is deliberately no "dashboard or headless" question. The dashboard is a
+viewer, not a mode: the knowledge graph, the KB, the MCP servers, the git hooks,
+the skills and the agent wiring are set up either way, and `baton serve` is
+there whenever you want to watch. Nothing is gated behind running it.
+
+> **Do not `npm i batonhq` inside your project.** Baton is a command-line tool;
+> no code in your project imports it. Adding it as a dependency makes every
+> `npm install` there rebuild it and everything alongside it — native modules
+> included — and when one of those rebuilds fails, the backtrace names Baton and
+> looks like Baton's fault. Use `npx batonhq <command>`, or install it globally.
+
+### Installing it permanently
+
+```bash
+npm install -g batonhq   # the package is `batonhq`; the command is `baton`
+```
+
+The npm name differs from the command because `baton`, `baton-cli` and
+`create-baton` are all taken on npm by unrelated projects.
+
+### Unattended installs
+
+```bash
+baton setup --yes --agents claude,codex
+```
+
+`--yes` accepts every default that touches **your project**, and installs no
+software — no `uv tool install`, no `npm i -g`. That rule exists because `--yes`
+is what CI, Dockerfiles and provisioning scripts run, which is exactly where a
+surprise network install is least welcome. Anything it skips is printed as a
+command you can run yourself.
+
+With no TTY (a pipe, CI, `nohup`) every prompt takes its default rather than
+waiting on stdin, so setup never hangs.
+
+### The knowledge graph, later
+
+Setup never blocks on `graphify`. If you skip it, the knowledge base is skipped
+too and Baton says so — worktrees, tasks, edit signals, memory, handoff and the
+dashboard all work without it. When you want the graph:
+
+```bash
+uv tool install graphifyy    # or: pipx install graphifyy
+baton kb init                # finish the part that was skipped
+```
+
+Baton detects whichever of `uv` / `pipx` is available and prints tailored
+guidance. It will not install through bare `pip`, which would land the package
+in whichever Python happens to lead your `PATH`.
+
+### Building from source
+
+For hacking on Baton itself, see [CONTRIBUTING.md](../CONTRIBUTING.md). In short:
+
+```bash
+git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton && cd baton
+npm install && npm install --prefix web
+npm run build && npm run build:web
+npm link                     # otherwise run `node dist/cli.js …`
+```
 
 ## Wire up your agents
 

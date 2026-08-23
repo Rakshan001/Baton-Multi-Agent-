@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
+    "build:web": "npm run build --prefix web",
+    "prepack": "node scripts/prepack.mjs",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "lint": "tsc --noEmit",
@@ -36,6 +38,10 @@
     "type": "git",
     "url": "git+https://github.com/Rakshan001/Baton-Multi-Agent-.git"
   },
+  "homepage": "https://baton-landing.vercel.app",
+  "bugs": {
+    "url": "https://github.com/Rakshan001/Baton-Multi-Agent-/issues"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -48,14 +54,15 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^15.0.0",
-    "execa": "^10.0.0",
-    "gray-matter": "^4.0.3"
+    "execa": "^10.0.1",
+    "gray-matter": "^4.0.3",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "electron": "^37.2.6",
     "electron-builder": "^26.0.12",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

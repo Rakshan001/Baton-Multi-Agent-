@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { composeGraphifyIgnore } from '../src/kb/graphifyignore.js';
 
 const MARKER = '# baton: generated knowledge-base files (do not index)';
-const BARE = `${MARKER}\nCODEBASE.md\nAGENTS.md\nkb/\n`;
+const BARE = `${MARKER}\nCODEBASE.md\nAGENTS.md\nkb/\ngraphify-out/\n.baton/\n`;
 
 describe('composeGraphifyIgnore', () => {
   it('mirrors the repo .gitignore when creating the file fresh', () => {
@@ -13,7 +13,8 @@ describe('composeGraphifyIgnore', () => {
     expect(out).toContain('logs/');
     expect(out).toContain('mirrored from .gitignore');
     expect(out).toContain(MARKER);
-    expect(out.trimEnd().endsWith('kb/')).toBe(true);
+    // the mirror comes first, the managed block last
+    expect(out.indexOf('mirrored from .gitignore')).toBeLessThan(out.indexOf(MARKER));
   });
 
   it('writes just the managed block when there is no .gitignore', () => {

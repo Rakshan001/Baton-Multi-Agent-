@@ -11,14 +11,22 @@
  */
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { createServer } from 'node:net';
+import { execa } from 'execa';
 import { gitTry } from '../util/exec.js';
 import { isGitRepo } from '../git.js';
 import { detectProjects, findNestedGitRepos, PROJECT_MARKERS, type SubProject } from '../kb/projects.js';
 import { askChoice, kbInitCmd } from './kb.js';
 import { connectAgents, type AgentConnectOutcome } from '../agents/connect.js';
 import { DEFAULT_CONNECT_AGENTS } from './connect.js';
+import { askMultiSelect, askYesNo, shouldOfferGlobalInstall } from './setup-prompts.js';
+import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, type GraphifyDetection } from '../kb/graphify.js';
+import { agentInstalled } from '../agents/roster.js';
+import { AGENTS } from '../agents/registry.js';
+import { installSkillEverywhere, listSkillStatus } from '../skills/install.js';
+import { PACKAGE_NAME } from '../version.js';
 
 /** Options shared with `kb init`, plus the setup-mode flags. */
 export interface SetupOpts {
@@ -33,35 +41,79 @@ export interface SetupOpts {
   serve?: boolean;
   /** Force the headless / MCP-only path (skip the prompt). */
   headless?: boolean;
+  /** Comma-separated agent ids to wire, skipping the prompt (`--agents claude,codex`). */
+  agents?: string;
 }
 
-type UseMode = 'dashboard' | 'headless';
+/**
+ * What `--yes` means here, stated once because the rest of the file depends on
+ * it: accept every default that touches THIS PROJECT, and never install
+ * software. An unattended run is exactly where a surprise `uv tool install` or
+ * `npm i -g` is least welcome, so those steps report themselves and move on
+ * rather than taking their recommended answer.
+ */
 
-/** Dashboard vs headless: --serve / --headless flags win, else ask (default dashboard). */
-async function chooseUseMode(opts: SetupOpts): Promise<UseMode> {
-  if (opts.serve) return 'dashboard';
-  if (opts.headless) return 'headless';
-  return askChoice(
-    '\nHow will agents use this knowledge base?',
-    [
-      { key: 'dashboard', label: 'With the dashboard — realtime UI on localhost (baton serve)' },
-      { key: 'headless', label: 'Headless — agents read it over MCP, no dashboard' },
-    ],
-    'dashboard',
-  );
+/**
+ * The closing message, returned as data so a test can hold it to its promise.
+ *
+ * Setup used to ask which of these two facts to print — "how will agents use
+ * this knowledge base: with the dashboard, or headless over MCP?" — as though
+ * the answer switched machinery on and off. It never did. The answer reached
+ * exactly one console.log branch; the graph, the KB, the MCP servers, the git
+ * hooks, the skills and the agent wiring all ran either way, and the headless
+ * branch's own second line invited you to run `baton serve` whenever you felt
+ * like it. So the question charged the reader a decision and, worse, implied
+ * they were giving something up by taking it.
+ *
+ * The dashboard is a viewer, not a mode. Both lines are true at once, so both
+ * are printed and the question is gone.
+ */
+export function closingLines(root: string, headline: string, port: number, graphOk: boolean): string[] {
+  const what = graphOk ? headline : `${headline} (without the knowledge graph)`;
+  return [
+    `\n✓ ${what}.`,
+    '    Your agents can read it over MCP already — there is nothing else to start.',
+    '    To watch them work, open the dashboard:',
+    `      cd ${root} && baton serve -p ${port} --write   →  http://localhost:${port}`,
+  ];
 }
 
-/** Closing next-steps for a single-root setup (single repo or hub), per chosen mode. */
-async function finishSingle(root: string, opts: SetupOpts, headline: string): Promise<void> {
-  if ((await chooseUseMode(opts)) === 'dashboard') {
-    const port = await nextFreePort(7077, new Set());
-    console.log(`\n✓ ${headline}. Open the dashboard:`);
-    console.log(`    cd ${root} && baton serve -p ${port} --write   →  http://localhost:${port}`);
-  } else {
-    console.log(`\n✓ ${headline}. Agents read it over MCP — no dashboard needed.`);
-    console.log('    (Run `baton serve` here anytime to open the dashboard.)');
-  }
-  await connectAllAgents(root, opts);
+/**
+ * `npm i batonhq` is the reflex, and it is the wrong move: npm reconciles the
+ * host project's entire dependency tree, so a repo with native modules
+ * recompiles them — and a node-gyp backtrace with `batonhq` in the command line
+ * reads, to the person staring at it, exactly like Baton's fault. Baton is a
+ * CLI; no code in a project ever imports it.
+ *
+ * Takes the parsed package.json rather than a path: it is arbitrary user input,
+ * and a malformed one must not throw and take a finished setup down with it.
+ */
+export function batonAsDependency(pkg: unknown): string | null {
+  if (typeof pkg !== 'object' || pkg === null) return null;
+  const rec = pkg as Record<string, unknown>;
+  const listedIn = (field: string): boolean => {
+    const deps = rec[field];
+    return typeof deps === 'object' && deps !== null && PACKAGE_NAME in deps;
+  };
+  if (!listedIn('dependencies') && !listedIn('devDependencies')) return null;
+  return [
+    `\n  ! ${PACKAGE_NAME} is listed in this project's package.json.`,
+    '    Baton is a command-line tool, not a library — no code here imports it.',
+    '    Kept as a dependency, every `npm install` in this project rebuilds it and',
+    '    everything alongside it, native modules included. That is a long detour',
+    '    for a CLI, and when one of those rebuilds fails it looks like Baton broke.',
+    '',
+    `    Remove it:  npm remove ${PACKAGE_NAME}`,
+    `    Then run:   npx ${PACKAGE_NAME} <command>     — no install at all`,
+    "                npm i -g " + PACKAGE_NAME + "          — puts `baton` on your PATH",
+  ].join('\n');
+}
+
+/** Closing next-steps for a single-root setup (single repo or hub). */
+async function finishSingle(root: string, opts: SetupOpts, headline: string, agents: string[], graphOk: boolean): Promise<void> {
+  const port = await nextFreePort(7077, new Set());
+  for (const line of closingLines(root, headline, port, graphOk)) console.log(line);
+  await connectAllAgents(root, opts, agents);
 }
 
 /** Forwarded to kbInitCmd (strip the setup-only flags). */
@@ -126,13 +178,438 @@ const CONNECT_LINE: Record<AgentConnectOutcome['status'], (o: AgentConnectOutcom
 };
 
 /**
+ * What this machine can offer, printed once before anything is written.
+ *
+ * A wizard that starts by asking questions makes the user guess what it already
+ * knows. Showing the scan first means every later prompt is read against
+ * visible facts — "install graphify?" lands differently when the line above
+ * says it is missing.
+ */
+async function preflight(root: string): Promise<{ graphify: GraphifyDetection; agents: string[]; presence: Record<string, AgentPresence> }> {
+  console.log('\n  Baton — coordination hub for multiple AI coding agents\n');
+  console.log(`  Scanning ${root} …`);
+
+  const [graphify, isRepo, ...found] = await Promise.all([
+    detectGraphify(),
+    isGitRepo(root),
+    ...DEFAULT_CONNECT_AGENTS.map((id) => detectAgentPresence(id, root)),
+  ] as const);
+  const presence: Record<string, AgentPresence> = {};
+  DEFAULT_CONNECT_AGENTS.forEach((id, i) => { presence[id] = found[i]; });
+  const agents = DEFAULT_CONNECT_AGENTS.filter((id) => presence[id] !== 'none');
+
+  console.log(`    ${isRepo ? '✓ git repo' : '· not a git repo yet'}`);
+  console.log(`    ✓ node ${process.versions.node}`);
+  console.log(
+    graphify.ok
+      ? `    ✓ graphify ${graphify.version ?? ''}`.trimEnd()
+      : '    ✗ graphify — the knowledge graph stays off until it is installed',
+  );
+  console.log(agents.length ? `    ✓ agents found: ${agents.join(', ')}` : '    · no agents detected yet — you can still wire them');
+
+  // Said during the scan, before a single file is written: if they installed
+  // Baton the wrong way, that is the thing to fix first.
+  const misinstalled = batonAsDependency(await readPackageJson(root));
+  if (misinstalled) console.log(misinstalled);
+
+  return { graphify, agents, presence };
+}
+
+/** The host project's package.json, or null if absent/unreadable/not JSON. */
+async function readPackageJson(root: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  } catch {
+    return null; // no package.json, unreadable, or invalid JSON — all the same here
+  }
+}
+
+/**
+ * Which agents to wire. Recommends the ones actually found on PATH, because a
+ * list of four when you use one is a list you have to think about. With none
+ * installed there is nothing to narrow to, so the full set is offered — the
+ * config is then already right whenever the first agent shows up.
+ */
+async function chooseAgents(opts: SetupOpts, presence: Record<string, AgentPresence>): Promise<string[]> {
+  if (opts.agents !== undefined) {
+    return opts.agents.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  const detected = DEFAULT_CONNECT_AGENTS.filter((id) => presence[id] !== 'none');
+  const recommended = detected.length ? detected : [...DEFAULT_CONNECT_AGENTS];
+  if (opts.yes) return recommended;
+
+  return askMultiSelect(
+    '\n  Which agents should Baton wire up?',
+    DEFAULT_CONNECT_AGENTS.map((id) => ({
+      key: id,
+      label: AGENTS[id]?.label ?? id,
+      // The note belongs beside the row, not inside its name — and it reports
+      // HOW the agent was found, because an editor install is a real install.
+      hint: agentPresenceHint(presence[id] ?? 'none', AGENTS[id]?.binary ?? id, AGENT_HOME_DIR[id]),
+    })),
+    recommended,
+  );
+}
+
+/**
+ * May this run install software on the machine?
+ *
+ * `--yes` accepts every default that touches THIS PROJECT, and installs
+ * nothing. --yes is what CI, Dockerfiles and provisioning scripts run, which is
+ * exactly where fetching a Python package or writing a global npm prefix is
+ * least wanted and least visible. Anyone who wants the install can answer the
+ * prompt, or run the one-line command printed in its place.
+ */
+export function mayInstallSoftware(opts: { yes?: boolean }): boolean {
+  return !opts.yes;
+}
+
+/** What the graphify step should do, decided before anything is printed. */
+export type GraphifyStep =
+  | { kind: 'already' }
+  | { kind: 'no-installer'; hint: string }
+  | { kind: 'deferred'; line: string; then?: string }
+  | { kind: 'offer'; cmd: string; args: string[]; line: string }
+  /** Nothing installed, but a package manager can install uv, which installs graphify. */
+  | { kind: 'bootstrap-uv'; cmd: string; args: string[]; line: string; then: string };
+
+/**
+ * The list shown before "hub, or individually?".
+ *
+ * It printed `basename(path)`, which is not unique. A real Flutter project
+ * scanned as five repos of which two pairs shared a name, at different depths,
+ * with nothing on screen to tell them apart — and that list is exactly what
+ * someone reads to decide whether to merge them all into one knowledge graph.
+ *
+ * A colliding name gets its path relative to the scanned root; the rest stay
+ * short, so the ordinary case reads no differently than it did.
+ */
+/**
+ * How an agent was found — and the answer must not be "installed / not
+ * installed", because that is not the question the wizard is asking.
+ *
+ * The probe used to be `agentInstalled`, which looks for the agent's binary.
+ * For Cursor that binary is `cursor-agent`, a separate terminal CLI: someone
+ * running the Cursor *editor* has no such file, and got told Cursor was not
+ * installed while it sat open in front of them. Wiring an agent means writing
+ * an MCP entry, which needs no CLI at all — so the editor's own config
+ * directory counts, and says so.
+ */
+export type AgentPresence = 'cli' | 'config' | 'none';
+
+/** Where each agent keeps its own settings, relative to the user's home. */
+const AGENT_HOME_DIR: Record<string, string> = {
+  claude: '.claude',
+  cursor: '.cursor',
+  codex: '.codex',
+  gemini: '.gemini',
+};
+
+export function agentPresenceHint(presence: AgentPresence, binary: string, home?: string): string {
+  if (presence === 'cli') return `${binary} on your PATH`;
+  // Naming the directory keeps this honest for both halves: Cursor is an editor,
+  // Codex and Gemini are CLIs whose config can exist without the binary.
+  if (presence === 'config') return home ? `config found in ~/${home}` : 'config found on this machine';
+  return 'not detected — wiring it now still works';
+}
+
+/** CLI first, then the agent's own config directory. */
+export async function detectAgentPresence(id: string, root?: string): Promise<AgentPresence> {
+  if (await agentInstalled(id, root)) return 'cli';
+  const dir = AGENT_HOME_DIR[id];
+  if (dir && existsSync(join(homedir(), dir))) return 'config';
+  return 'none';
+}
+
+/**
+ * Which of the discovered repos the hub should cover.
+ *
+ * "All of them, or each on its own" was the only offer, and neither is the
+ * common shape: a folder of five repos is usually three that belong together
+ * and two that do not. Everything is ticked, so Enter still means what it
+ * always did.
+ */
+async function chooseHubRepos(
+  repos: SubProject[],
+  labels: string[],
+  opts: SetupOpts,
+): Promise<SubProject[]> {
+  if (opts.yes) return repos;
+  // Keyed by path: two repos can share a name, which is the whole reason
+  // describeRepos exists.
+  const picked = await askMultiSelect(
+    '\n  Which repos should the hub cover?',
+    repos.map((r, i) => ({ key: r.path, label: labels[i] ?? r.name })),
+    repos.map((r) => r.path),
+  );
+  return repos.filter((r) => picked.includes(r.path));
+}
+
+/**
+ * What was left out of a hub, and how to add it later.
+ *
+ * A hub over five repos when you wanted three used to mean answering
+ * "individually" and setting up five. Now the repos are a checkbox list — and
+ * unchecking one must not quietly cause work to happen to it, so what was
+ * skipped is stated rather than left to be inferred from silence.
+ */
+export function excludedRepoNote(all: readonly string[], chosen: readonly string[]): string | null {
+  const left = all.filter((r) => !chosen.includes(r));
+  if (!left.length) return null;
+  return [
+    `  Not included, and nothing was written in them: ${left.join(', ')}`,
+    '    Add one later by running `baton setup --hub` again from this folder.',
+  ].join('\n');
+}
+
+export function describeRepos(root: string, repos: readonly SubProject[]): string[] {
+  const count = new Map<string, number>();
+  for (const r of repos) count.set(r.name, (count.get(r.name) ?? 0) + 1);
+  return repos.map((r) => {
+    if ((count.get(r.name) ?? 0) < 2) return r.name;
+    // relative() is '' when the root IS the repo, and a root cannot collide
+    // with anything below it — fall back to the name rather than an empty line.
+    return relative(root, r.path) || r.name;
+  });
+}
+
+/**
+ * Pure half of the graphify step, so the policy above is testable without
+ * spawning an installer to find out whether it would have.
+ */
+export function graphifyStep(detection: GraphifyDetection, opts: SetupOpts): GraphifyStep {
+  if (detection.ok) return { kind: 'already' };
+
+  // uv or pipx is here: one command and we are done.
+  const direct = graphifyInstallCommand(detection);
+  if (direct) {
+    const line = `${direct.cmd} ${direct.args.join(' ')}`;
+    return mayInstallSoftware(opts)
+      ? { kind: 'offer', cmd: direct.cmd, args: direct.args, line }
+      : { kind: 'deferred', line };
+  }
+
+  // Neither is here. Bare `pip` is still refused — see graphifyInstallCommand —
+  // but a package manager can install uv, and uv brings its own Python, so the
+  // machine needs no system Python at all. Two argv commands, no shell.
+  const uv = uvInstallCommand(detection);
+  if (!uv) return { kind: 'no-installer', hint: installHint(detection) };
+
+  const line = `${uv.cmd} ${uv.args.join(' ')}`;
+  const then = 'uv tool install graphifyy';
+  return mayInstallSoftware(opts)
+    ? { kind: 'bootstrap-uv', cmd: uv.cmd, args: uv.args, line, then }
+    : { kind: 'deferred', line, then };
+}
+
+/**
+ * Offer to install graphify, and report whether it is usable afterwards.
+ *
+ * This runs BEFORE anything is written, which is the whole point: `kb init`
+ * refuses outright without graphify (src/commands/kb.ts), so an offer made
+ * after it would arrive too late to save the run — the user would have already
+ * watched the knowledge base fail.
+ *
+ * Never blocks. Declining costs the knowledge graph and nothing else: worktrees,
+ * tasks, edit signals, memory, handoff and the dashboard are all graph-free.
+ */
+async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Promise<boolean> {
+  const step = graphifyStep(detection, opts);
+  if (step.kind === 'already') return true; // do not ask about what is already here
+
+  console.log('\n  The knowledge graph needs the `graphify` CLI (Python).');
+
+  if (step.kind === 'no-installer') {
+    console.log(`    Install it yourself when convenient: ${step.hint}`);
+    console.log('    Everything else works without it.');
+    return false;
+  }
+  if (step.kind === 'deferred') {
+    const later = step.then ? `${step.line}, then ${step.then}` : step.line;
+    console.log(`    Not installed under --yes (it installs software). Later: ${later}`);
+    return false;
+  }
+
+  // Nothing installed at all, but a package manager can bootstrap the chain.
+  if (step.kind === 'bootstrap-uv') {
+    console.log(`    uv is not installed either, but \`${step.cmd}\` can install it.`);
+    console.log(`    Two commands: \`${step.line}\`, then \`${step.then}\`.`);
+    console.log('    uv brings its own Python, so nothing else has to be installed.');
+    if (!(await askYesNo('    Install both now?', true))) {
+      console.log(`    Skipped — the graph stays off. Later: ${step.line}, then ${step.then}`);
+      return false;
+    }
+    if (!(await runInstall(step.cmd, step.args, step.line))) return false;
+
+    // Re-probe rather than trusting the exit code: a package manager can
+    // succeed while putting uv somewhere this process's PATH cannot see.
+    const afterUv = await detectGraphify();
+    if (afterUv.ok) { console.log('    ✓ graphify installed.'); return true; }
+    if (!afterUv.uv) {
+      console.log('    ✓ uv installed, but not visible on PATH from here.');
+      console.log(`      Open a new shell, then run: ${step.then}`);
+      return false;
+    }
+    if (!(await runInstall('uv', ['tool', 'install', 'graphifyy'], step.then))) return false;
+    return await confirmGraphify(step.then);
+  }
+  if (!(await askYesNo(`    Install it now with \`${step.line}\`?`, true))) {
+    console.log(`    Skipped — the graph stays off. Later: ${step.line}`);
+    return false;
+  }
+
+  if (!(await runInstall(step.cmd, step.args, step.line))) return false;
+  return await confirmGraphify(step.line);
+}
+
+/**
+ * Run one installer. `false` means it failed and said so.
+ *
+ * Offline, behind a proxy, a broken Python, a locked package manager — none of
+ * it is Baton's problem to solve, and none of it should cost the user the setup
+ * they came for. So a failure is reported and the run continues.
+ */
+async function runInstall(cmd: string, args: string[], line: string): Promise<boolean> {
+  try {
+    await execa(cmd, args, { stdio: 'inherit', timeout: 10 * 60_000 });
+    return true;
+  } catch (e) {
+    console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
+    console.log(`      Setup continues without the graph. Try later: ${line}`);
+    return false;
+  }
+}
+
+/**
+ * Trust the probe, not the exit code: `uv tool install` succeeds while placing
+ * the binary in ~/.local/bin, which is on PATH here only because ensureBinPath()
+ * appended it — and on a stripped PATH it still may not be. Claiming a graph we
+ * cannot actually run would fail later, less legibly.
+ */
+async function confirmGraphify(line: string): Promise<boolean> {
+  if ((await detectGraphify()).ok) {
+    console.log('    ✓ graphify installed.');
+    return true;
+  }
+  console.log('    ✓ installed, but not visible on PATH from here.');
+  console.log(`      Open a new shell and run \`baton kb init\` to finish the graph. (${line})`);
+  return false;
+}
+
+/**
+ * `kb init`, unless graphify is absent — in which case say precisely what is
+ * being skipped and what still works, rather than letting kb init print its own
+ * failure into the middle of a setup that then claims success.
+ */
+async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boolean): Promise<void> {
+  if (graphOk) {
+    await kbInitCmd(target, kbOpts(opts));
+    return;
+  }
+  console.log('\n  · Knowledge base skipped — it needs the graphify CLI.');
+  console.log('    Everything else is set up: worktrees, tasks, edit signals, memory,');
+  console.log('    handoff and the dashboard all work without the graph.');
+  console.log('    Once graphify is installed, finish with:  baton kb init');
+}
+
+/** Offer the bundled skill catalog. Failure here never fails the setup. */
+async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
+  let bundled: { id: string; name: string; description: string }[];
+  try {
+    bundled = (await listSkillStatus(root)).filter((s) => s.source === 'bundled');
+  } catch (e) {
+    // Never silently: this used to `return` with nothing printed, so a broken
+    // catalog cost the user all twelve skills while setup still ended in a tick
+    // — the same green-over-half-done failure the knowledge-graph step had.
+    console.log(`\n  ! could not read the skills catalog (${(e as Error).message.split('\n')[0]})`);
+    console.log('    No skills were installed. `baton skills list` shows what should be there.');
+    return;
+  }
+  if (!bundled.length) return;
+
+  // A list rather than a yes/no: twelve skills is enough that "all or none" is
+  // a poor pair of options. All ticked, so Enter behaves exactly as it did.
+  const chosen = opts.yes
+    ? bundled.map((s) => s.id)
+    : await askMultiSelect(
+        `\n  Install bundled skills into your agents? (${bundled.length} available)`,
+        bundled.map((s) => ({ key: s.id, label: s.name, hint: shorten(s.description) })),
+        bundled.map((s) => s.id),
+      );
+
+  if (!chosen.length) {
+    console.log('    None installed — `baton skills list` shows them whenever you want.');
+    return;
+  }
+
+  let installed = 0;
+  for (const id of chosen) {
+    // One unsupported agent or unwritable dir must not cost the other skills.
+    try {
+      await installSkillEverywhere(root, id);
+      installed++;
+    } catch { /* reported in the count below */ }
+  }
+  console.log(`    ✓ installed ${installed}/${chosen.length} skills`);
+  if (installed < chosen.length) console.log('      (the rest need an agent with a skills directory — `baton skills list`)');
+}
+
+/** One short line beside a skill name; the full text is `baton skills list`. */
+function shorten(text: string, max = 52): string {
+  const line = text.split('\n')[0].trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/** Where `baton` resolves on PATH right now, or null. */
+async function batonOnPath(): Promise<string | null> {
+  try {
+    const { stdout } = await execa(process.platform === 'win32' ? 'where' : 'which', ['baton'], { timeout: 5_000 });
+    return stdout.split(/\r?\n/)[0]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Close an `npx` run by offering the global install, so the next command can be
+ * `baton new "…"` instead of `npx batonhq new "…"`. Skipped entirely for an
+ * already-installed binary, and under --yes, which never installs software.
+ */
+async function offerGlobalInstall(opts: SetupOpts): Promise<void> {
+  if (!mayInstallSoftware(opts)) return;
+  if (!shouldOfferGlobalInstall(process.env, process.argv[1], await batonOnPath())) return;
+
+  console.log('\n  You ran this through npx, so `baton` is not on your PATH yet.');
+  if (!(await askYesNo(`  Install it globally now (npm i -g ${PACKAGE_NAME})?`, true))) {
+    console.log(`    Skipped — every command also works as \`npx ${PACKAGE_NAME} <command>\`.`);
+    return;
+  }
+
+  try {
+    await execa('npm', ['install', '-g', PACKAGE_NAME], { stdio: 'inherit', timeout: 10 * 60_000 });
+    console.log('    ✓ installed — `baton` is on your PATH.');
+  } catch {
+    // Overwhelmingly a permissions error on a root-owned npm prefix. The raw
+    // npm output above says EACCES and little else, so say what to do about it.
+    console.log('    ! global install failed — usually a permissions problem with the npm prefix.');
+    console.log(`      Run it yourself:        npm install -g ${PACKAGE_NAME}`);
+    console.log('      or use a user prefix:   npm config set prefix ~/.npm-global');
+    console.log(`      or skip it entirely:    npx ${PACKAGE_NAME} <command>`);
+  }
+}
+
+/**
  * Wire every agent to the `baton` coordination MCP server so they can see each
  * other's edits/tasks. Project-scoped (claude/cursor) write now; global
  * (codex/gemini) need --yes. Best-effort — never blocks a finished setup.
  */
-async function connectAllAgents(root: string, opts: SetupOpts): Promise<void> {
+async function connectAllAgents(root: string, opts: SetupOpts, agents: string[]): Promise<void> {
+  if (!agents.length) {
+    console.log('\n  No agents wired (you chose none) — `baton connect` does it later.');
+    return;
+  }
   try {
-    const outcomes = await connectAgents(root, DEFAULT_CONNECT_AGENTS, { confirmGlobal: opts.yes });
+    const outcomes = await connectAgents(root, agents, { confirmGlobal: opts.yes });
     console.log('\n  Agents wired to Baton coordination (they can now see each other):');
     for (const o of outcomes) console.log(CONNECT_LINE[o.status](o));
     const deferred = outcomes.filter((o) => o.status === 'needs-confirm');
@@ -147,56 +624,118 @@ async function connectAllAgents(root: string, opts: SetupOpts): Promise<void> {
 
 export async function setupCmd(path: string | undefined, opts: SetupOpts = {}): Promise<void> {
   const root = resolve(path ?? '.');
+  const scan = await preflight(root);
   const t = await classifyTarget(root);
 
+  // Nothing to do — say so before asking a single question about how to do it.
+  if (t.kind === 'empty') {
+    console.error(`\nNothing to set up in ${root}.`);
+    console.error('  Run inside a git repo, or in a folder that contains one or more git repos.');
+    process.exitCode = 1;
+    return;
+  }
+
+  // Before anything is written: `kb init` refuses without graphify, so an offer
+  // made after it would arrive too late to rescue the run.
+  const graphOk = await offerGraphify(scan.graphify, opts);
+
+  const agents = await chooseAgents(opts, scan.presence);
+  const configured = await configureTarget(t, root, opts, agents, graphOk);
+  if (!configured) return; // the user cancelled at the git-init prompt
+
+  // Closing step, once per run rather than once per repo: skills install into a
+  // catalog every repo of a hub shares, so repeating it would ask three times.
+  await offerSkills(configured, opts);
+  await offerGlobalInstall(opts);
+  console.log('');
+}
+
+/**
+ * Run the setup that suits this target. Returns the configured root, or null if
+ * cancelled.
+ *
+ * `empty` is excluded rather than handled: setupCmd has already reported it and
+ * set an exit code, and taking it out of the union here is what lets the
+ * compiler prove this switch is exhaustive — so a future Target variant is a
+ * build error rather than a silent fall-through returning undefined.
+ */
+async function configureTarget(
+  t: Exclude<Target, { kind: 'empty' }>,
+  root: string,
+  opts: SetupOpts,
+  agents: string[],
+  graphOk: boolean,
+): Promise<string | null> {
   switch (t.kind) {
     case 'single-repo':
-      console.log(`✓ ${basename(t.root)} is a git repo — setting up Baton here.`);
-      await kbInitCmd(t.root, kbOpts(opts));
-      return finishSingle(t.root, opts, `${basename(t.root)} is ready`);
+      console.log(`\n✓ ${basename(t.root)} is a git repo — setting up Baton here.`);
+      await initKnowledgeBase(t.root, opts, graphOk);
+      await finishSingle(t.root, opts, `${basename(t.root)} is ready`, agents, graphOk);
+      return t.root;
 
     case 'single-subrepo':
-      console.log(`found one git repo (${t.repo.name}) under ${basename(root)} — setting it up.`);
-      await kbInitCmd(t.repo.path, kbOpts(opts));
-      return finishSingle(t.repo.path, opts, `${t.repo.name} is ready`);
+      console.log(`\nfound one git repo (${t.repo.name}) under ${basename(root)} — setting it up.`);
+      await initKnowledgeBase(t.repo.path, opts, graphOk);
+      await finishSingle(t.repo.path, opts, `${t.repo.name} is ready`, agents, graphOk);
+      return t.repo.path;
 
     case 'bare-project': {
-      console.log(`${basename(root)} has project files but is not a git repo.`);
+      console.log(`\n${basename(root)} has project files but is not a git repo.`);
       const go = opts.yes || opts.hub
         ? 'yes'
         : await askChoice('Initialize a git repo here and set up Baton?',
-            [{ key: 'yes', label: 'Yes — git init here, then set up' }, { key: 'no', label: 'Cancel' }], 'yes');
-      if (go !== 'yes') return void console.log('cancelled.');
+            [
+              { key: 'yes', label: 'Yes, git init here', hint: 'Baton needs a repo to track worktrees and edits' },
+              { key: 'no', label: 'Cancel', hint: 'nothing has been written yet' },
+            ], 'yes');
+      if (go !== 'yes') {
+        console.log('cancelled.');
+        return null;
+      }
       await gitInit(root);
-      await kbInitCmd(root, kbOpts(opts));
-      return finishSingle(root, opts, `${basename(root)} is ready`);
+      await initKnowledgeBase(root, opts, graphOk);
+      await finishSingle(root, opts, `${basename(root)} is ready`, agents, graphOk);
+      return root;
     }
 
     case 'multi-repo': {
-      console.log(`found ${t.repos.length} separate git repos under ${basename(root)}:`);
-      for (const r of t.repos) console.log(`  • ${r.name}`);
+      // One label list for the listing, the picker and the excluded note: they
+      // must agree, and describeRepos disambiguates against the set it is given.
+      const labels = describeRepos(root, t.repos);
+      console.log(`\nfound ${t.repos.length} separate git repos under ${basename(root)}:`);
+      for (const line of labels) console.log(`  • ${line}`);
       const mode = opts.hub ? 'hub' : opts.individual ? 'individual'
         : await askChoice(
             '\nThese look like one project across several servers. How should Baton set them up?',
             [
-              { key: 'hub', label: 'Centralized hub — one merged graph + one dashboard for all (recommended)' },
-              { key: 'individual', label: 'Individually — each repo gets its own Baton setup' },
+              { key: 'hub', label: 'Centralized hub', hint: 'one merged graph + one dashboard — recommended' },
+              { key: 'individual', label: 'Individually', hint: 'a separate knowledge base per repo' },
             ],
             'hub',
           );
-      return mode === 'hub' ? setupHub(root, t.repos, opts) : setupIndividual(t.repos, opts);
+      if (mode === 'hub') {
+        const chosen = await chooseHubRepos(t.repos, labels, opts);
+        if (!chosen.length) {
+          console.log('\n  No repos selected — nothing was written.');
+          return null;
+        }
+        await setupHub(root, chosen, opts, agents, graphOk);
+        const byPath = new Map(t.repos.map((r, i) => [r.path, labels[i]]));
+        const note = excludedRepoNote(labels, chosen.map((r) => byPath.get(r.path) ?? r.name));
+        if (note) console.log(`\n${note}`);
+        return root;
+      }
+      await setupIndividual(t.repos, opts, agents, graphOk);
+      // Skills install into ONE project's catalog; for individual mode the
+      // first repo is the only defensible choice, and they all share the
+      // bundled catalog anyway.
+      return t.repos[0]?.path ?? root;
     }
-
-    case 'empty':
-      console.error(`Nothing to set up in ${root}.`);
-      console.error('  Run inside a git repo, or in a folder that contains one or more git repos.');
-      process.exitCode = 1;
-      return;
   }
 }
 
 /** Centralized hub: make the container root a git repo, then one kb init (merged graph). */
-async function setupHub(root: string, repos: SubProject[], opts: SetupOpts): Promise<void> {
+async function setupHub(root: string, repos: SubProject[], opts: SetupOpts, agents: string[], graphOk: boolean): Promise<void> {
   if (!(await isGitRepo(root))) {
     console.log('\n→ git init (hub root) ...');
     await gitInit(root);
@@ -211,28 +750,25 @@ async function setupHub(root: string, repos: SubProject[], opts: SetupOpts): Pro
       console.log('      git config user.email you@example.com && git config user.name "You"');
     }
   }
-  await kbInitCmd(root, kbOpts(opts));
-  return finishSingle(root, opts, 'centralized hub ready');
+  await initKnowledgeBase(root, opts, graphOk);
+  return finishSingle(root, opts, 'centralized hub ready', agents, graphOk);
 }
 
 /** Per-repo setup: run kb init inside each repo; suggest a port per repo. */
-async function setupIndividual(repos: SubProject[], opts: SetupOpts): Promise<void> {
+async function setupIndividual(repos: SubProject[], opts: SetupOpts, agents: string[], graphOk: boolean): Promise<void> {
   const used = new Set<number>();
   const built: { path: string; port: number }[] = [];
   for (const r of repos) {
     console.log(`\n=== ${r.name} ===`);
-    await kbInitCmd(r.path, kbOpts(opts));
+    await initKnowledgeBase(r.path, opts, graphOk);
     built.push({ path: r.path, port: await nextFreePort(7077, used) }); // skip taken ports
   }
-  if ((await chooseUseMode(opts)) === 'dashboard') {
-    console.log('\n✓ all repos set up. Start each daemon, then add the ports as connections (top-left → Add connection…):');
-    for (const b of built) console.log(`    cd ${b.path} && baton serve -p ${b.port} --write`);
-  } else {
-    console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP — no dashboard needed.');
-  }
+  console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP already.');
+  console.log('  To watch them, start each daemon and add the ports as connections (top-left → Add connection…):');
+  for (const b of built) console.log(`    cd ${b.path} && baton serve -p ${b.port} --write`);
   for (const b of built) {
     console.log(`\n  [${basename(b.path)}]`);
-    await connectAllAgents(b.path, opts);
+    await connectAllAgents(b.path, opts, agents);
   }
 }
 

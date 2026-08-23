@@ -14,7 +14,7 @@
 
 <sub>In this repo: <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/README.md">Documentation</a> · <a href="docs/cli-reference.md">CLI reference</a> · <a href="docs/architecture.md">Architecture</a></sub>
 
-[![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-AGPL--3.0-blue) ![node](https://img.shields.io/badge/node-%E2%89%A520-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5)
+[![npm](https://img.shields.io/npm/v/batonhq?color=cb3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/batonhq) [![CI](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshan001/Baton-Multi-Agent-/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-AGPL--3.0-blue) ![node](https://img.shields.io/badge/node-%E2%89%A524-339933) ![deps](https://img.shields.io/badge/daemon-zero--dependency-8957e5) ![telemetry](https://img.shields.io/badge/telemetry-none-2F6B4F)
 
 </div>
 
@@ -54,19 +54,41 @@ Do the expensive thinking where it's powerful (or included in your plan); do the
 > which port), run every command itself, and leave you a personalized
 > `GETTING_STARTED.md` in your project when it's done.
 
-Requires **Node ≥ 24**, **git**, and [**uv**](https://docs.astral.sh/uv/) (for the graphify knowledge graph). See [docs/installation.md](docs/installation.md) for details.
+Requires **Node ≥ 24** and **git**. Run this in any repo:
 
 ```bash
-git clone https://github.com/Rakshan001/Baton-Multi-Agent-.git baton && cd baton
+npx batonhq setup
+```
 
-npm install && npm install --prefix web   # CLI/daemon + dashboard deps
-npm run build && npm run build --prefix web
-uv tool install graphifyy                 # the graphify CLI (code graphs)
-npm link                                  # optional: puts `baton` on your PATH
+It scans the folder, then asks a handful of arrow-key questions — one repo or a hub over several, which agents you use, whether to turn on the knowledge graph. Each option carries a note explaining it, and Enter takes the recommendation. Then:
 
-baton kb init        # index the repo into a knowledge graph + wire up agents
+```bash
 baton serve --write  # daemon + dashboard → http://localhost:7077
 ```
+
+<details>
+<summary>Installing it permanently, and the optional knowledge graph</summary>
+
+```bash
+npm install -g batonhq     # `baton` on your PATH (setup offers this at the end)
+```
+
+Those two — `npx` or a global install — are the ways that work. **Never
+`npm i batonhq` inside a project**: Baton is a CLI, nothing imports it, and as a
+dependency it makes every `npm install` in that project rebuild the whole tree,
+native modules and all.
+
+The knowledge graph needs one extra tool, the Python [`graphify`](https://pypi.org/project/graphifyy/) CLI:
+
+```bash
+uv tool install graphifyy  # or pipx install graphifyy
+```
+
+Setup offers to install it for you and **never blocks on it** — without it you lose the graph, and worktrees, tasks, edit signals, memory, handoff and the dashboard all still work. See [docs/installation.md](docs/installation.md).
+
+The npm package is **`batonhq`**; the command is **`baton`**. (Unrelated packages named `baton`, `baton-cli` and `create-baton` belong to other projects.)
+
+</details>
 
 Then create an isolated session and point an agent at it:
 
@@ -94,6 +116,62 @@ baton new "fix the checkout crash" --project api-server   # or pick it in the da
 | 🐛 | **Bug recurrence** | `baton bugs "<symptom>"` — was this fixed before, and did a later change re-break it? Composes recorded fixes (memory) with commit history to name the **suspect commits**. Zero new storage. |
 | 🔀 | **Agent routing** | [`baton route`](docs/agent-routing.md) picks the right agent per task from committed rules (deterministic, no LLM) — and [handoff](docs/session-handoff.md) prefers the **least-loaded** available agent. |
 | 🧭 | **MCP tools** | [`baton mcp`](docs/mcp-tools.md) exposes coordination tools (`check_files`, `who_touched`, `recall_memory`, …) to every agent over MCP. |
+
+## When you'd reach for it
+
+Five situations Baton is built for. Each is one command.
+
+**Your good agent is rate-limited, and you still have work to do.**
+Plan on the agent that reasons well, execute on the one that's cheap or still has quota. The brief carries the objective, plan, checklist, touched files, git state and a cost estimate — not a transcript dump.
+```bash
+baton pass fix-checkout --to cursor     # → HANDOFF.md
+baton take fix-checkout                 # on the other agent
+```
+
+**Two agents just edited the same file.**
+Every task gets its own worktree and branch, so they physically cannot collide. Before an agent touches a shared file, it asks — and gets told who's in there and what they're doing.
+```bash
+baton new "refactor auth"               # isolated worktree + branch
+baton signals                           # who is editing what, right now
+```
+
+**A session died mid-task** — context ran out, the window closed, you went home.
+The next session picks up from a written brief instead of re-deriving everything.
+```bash
+baton resume fix-checkout
+```
+
+**An agent is new to the repo and starts grepping.**
+It reads a queryable graph and a `CODEBASE.md` map instead — roughly 300× cheaper than reading the files it would otherwise open to orient.
+```bash
+baton kb init && baton orient
+```
+
+**One product, several repos** (api, web, mobile, infra).
+Point setup at the folder holding them: one merged graph, one dashboard, tasks that name their sub-project.
+```bash
+npx batonhq setup                       # detects the repos, offers the hub
+baton new "fix the checkout crash" --project api
+```
+
+**Bonus — "didn't we already fix this?"**
+Composes recorded fixes with commit history to name the commits that likely re-broke it.
+```bash
+baton bugs "checkout 500s on empty cart"
+```
+
+## Your code stays on your machine
+
+Baton is a local tool. It is worth being precise about this rather than asking you to take it on faith:
+
+- **No telemetry, no analytics, no account.** There is no tracking code in the source — nothing to opt out of, because there is nothing to opt into.
+- **Solo mode makes zero outbound requests.** The daemon binds `127.0.0.1` and is unreachable from outside your machine. Your code, graph, memory and tasks live in `.baton/` in your own repo.
+- **No install scripts.** `npm i -g batonhq` runs no `postinstall`, so nothing executes on install. It works fine under `npm i --ignore-scripts`.
+- **Team mode is opt-in and metadata-only.** Networking happens only after *you* run `baton host set <url>` to link machines. Even then, what crosses the wire is coordination metadata — task slug, agent name, which paths are being edited — **never file contents**. `baton serve --host` likewise binds a public interface only when you explicitly ask it to.
+- **Two commands fetch a URL, and both are ones you typed.** `baton join <url>` reads a workspace manifest from a host you name, and `baton skills import <url>` downloads a skill you point it at. Neither runs on its own, and neither uploads anything.
+- **Your agents still talk to their own vendors.** Claude Code, Cursor and the rest send your code to Anthropic, OpenAI and so on exactly as they always did. Baton neither adds to that nor can prevent it — it coordinates the agents, it does not sit between them and their APIs.
+
+Everything above is checkable: the outbound calls are in [`src/host-link.ts`](src/host-link.ts), [`src/pipeline-claims.ts`](src/pipeline-claims.ts) and [`src/remote-claims.ts`](src/remote-claims.ts), all gated on a host link you configured. See [docs/security.md](docs/security.md).
 
 ## The dashboard
 
