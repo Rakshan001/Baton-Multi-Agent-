@@ -503,6 +503,9 @@ export async function uninstallSkill(root: string, id: string, agent: string): P
 }
 
 const MAX_IMPORT_BYTES = 256 * 1024;
+/** Caps for a restored skill, mirroring the ones the GitHub fetch applies. */
+const MAX_BUNDLE_FILES = 200;
+const MAX_BUNDLE_SKILL_BYTES = 8 * 1024 * 1024;
 /** How deep a skill directory may nest before we stop walking it. */
 const SKILL_DIR_MAX_DEPTH = 4;
 const IMPORT_FETCH_TIMEOUT_MS = 10_000;
@@ -930,12 +933,30 @@ export async function exportSkillFile(root: string, id: string): Promise<{ id: s
   return { id, text: skill.raw };
 }
 
-export const SKILL_BUNDLE_VERSION = 1;
+/**
+ * 2 adds `files` so a directory-shaped skill survives the round trip.
+ *
+ * Bumped rather than added silently: a v2 bundle restored by a Baton that only
+ * knows v1 would drop every companion file and hand back a skill whose SKILL.md
+ * tells the agent to run a script that is not there. Refusing loudly beats
+ * restoring lossily. v1 bundles are still read — nothing a user exported
+ * before today stops working.
+ */
+export const SKILL_BUNDLE_VERSION = 2;
+const READABLE_BUNDLE_VERSIONS = new Set([1, 2]);
 
 export interface SkillBundle {
   version: number;
   exportedAt: string;
-  skills: { id: string; name: string; description: string; content: string }[];
+  skills: {
+    id: string;
+    name: string;
+    description: string;
+    /** SKILL.md, verbatim. */
+    content: string;
+    /** Companions, skill-relative. Absent for a flat single-file skill. */
+    files?: { rel: string; content: string }[];
+  }[];
 }
 
 /** Every skill the user owns, as one restorable file. Bundled ones are excluded. */
@@ -946,7 +967,11 @@ export async function exportSkills(root: string): Promise<SkillBundle> {
   const skills: SkillBundle['skills'] = [];
   for (const s of await loadCatalog(root)) {
     if (!isUserSkill(s.source) || !s.raw) continue;
-    skills.push({ id: s.id, name: s.name, description: s.description, content: s.raw });
+    // A backup that drops 69 of a skill's 70 files is not a backup.
+    skills.push({
+      id: s.id, name: s.name, description: s.description, content: s.raw,
+      ...(s.references.length ? { files: s.references.map((r) => ({ rel: r.rel, content: r.content })) } : {}),
+    });
   }
   return { version: SKILL_BUNDLE_VERSION, exportedAt: new Date().toISOString(), skills };
 }
@@ -954,6 +979,41 @@ export async function exportSkills(root: string): Promise<SkillBundle> {
 export interface BundleImportResult {
   imported: string[];
   skipped: { id: string; why: string }[];
+}
+
+/**
+ * Vet the companion files in a bundle before any of them reach disk.
+ *
+ * A bundle arrives as a file from wherever — a colleague, a download, a backup
+ * of unknown age — so its `files` array gets the same treatment a fetched repo
+ * tree gets. saveSkillFolder refuses paths that escape the skill directory on
+ * its own; this catches the rest (wrong types, absolute paths, a runaway count)
+ * with a message naming the skill, so a bad entry is skipped and reported
+ * rather than throwing the whole restore.
+ */
+function sanitizeBundleFiles(raw: unknown, who: string): { rel: string; content: string }[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new SkillImportError(`${who} has a malformed file list`);
+  if (raw.length > MAX_BUNDLE_FILES) {
+    throw new SkillImportError(`${who} carries ${raw.length} files — the limit is ${MAX_BUNDLE_FILES}`);
+  }
+  const out: { rel: string; content: string }[] = [];
+  let total = 0;
+  for (const f of raw) {
+    const rel = typeof (f as { rel?: unknown })?.rel === 'string' ? (f as { rel: string }).rel : '';
+    const content = typeof (f as { content?: unknown })?.content === 'string' ? (f as { content: string }).content : null;
+    if (!rel || content === null) throw new SkillImportError(`${who} has a malformed entry in its file list`);
+    if (/^SKILL\.md$/i.test(rel)) continue;                       // the main file is carried separately
+    if (rel.startsWith('/') || /^[A-Za-z]:/.test(rel) || rel.split(/[/\\]/).includes('..')) {
+      throw new SkillImportError(`${who} wants to write outside its folder (${rel})`);
+    }
+    total += Buffer.byteLength(content);
+    if (total > MAX_BUNDLE_SKILL_BYTES) {
+      throw new SkillImportError(`${who} is over the ${MAX_BUNDLE_SKILL_BYTES / 1024 / 1024}MB limit`);
+    }
+    out.push({ rel, content });
+  }
+  return out;
 }
 
 /**
@@ -970,8 +1030,8 @@ export async function importSkillBundle(root: string, raw: unknown, opts: { repl
   if (!b || typeof b !== 'object' || !Array.isArray(b.skills)) {
     throw new SkillImportError('that file is not a Baton skills bundle');
   }
-  if (b.version !== SKILL_BUNDLE_VERSION) {
-    throw new SkillImportError(`bundle version ${String(b.version)} — this Baton reads version ${SKILL_BUNDLE_VERSION}`);
+  if (typeof b.version !== 'number' || !READABLE_BUNDLE_VERSIONS.has(b.version)) {
+    throw new SkillImportError(`bundle version ${String(b.version)} — this Baton reads ${[...READABLE_BUNDLE_VERSIONS].join(' and ')}`);
   }
   const result: BundleImportResult = { imported: [], skipped: [] };
   for (const entry of b.skills) {
@@ -979,7 +1039,15 @@ export async function importSkillBundle(root: string, raw: unknown, opts: { repl
     try {
       if (typeof entry?.content !== 'string') throw new SkillImportError('no content');
       assertUsableSkillText(entry.content, `'${id || 'a skill'}'`);
-      const saved = await saveSkill(entry.content, id || 'imported-skill', { id, replace: opts.replace });
+      // The bundle is a file someone can hand you, so its companion list is
+      // untrusted input in exactly the way a fetched repo's is.
+      const files = sanitizeBundleFiles(entry.files, id || 'a skill');
+      const saved = files.length
+        ? await saveSkillFolder(
+            [{ rel: 'SKILL.md', content: entry.content }, ...files],
+            id || 'imported-skill', { id, replace: opts.replace },
+          )
+        : await saveSkill(entry.content, id || 'imported-skill', { id, replace: opts.replace });
       result.imported.push(saved.id);
     } catch (e) {
       result.skipped.push({ id: id || '(unnamed)', why: (e as Error).message });
