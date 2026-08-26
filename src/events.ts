@@ -39,6 +39,10 @@ export type BatonEvent =
   | { type: 'handoff.created'; slug: string; toAgent: string }
   | { type: 'agent.connected'; agent: string }
   | { type: 'skill.installed'; skill: string; agent: string }
+  /** A skill entered or left the user's library. Distinct from skill.installed,
+   *  which is about wiring an existing skill into one agent. */
+  | { type: 'skill.imported'; skill: string }
+  | { type: 'skill.removed'; skill: string }
   | { type: 'junk.cleaned'; count: number }
   /** A code review was recorded. Per-axis counts only — the axes are separate
    *  by design, so no combined total rides on the event. */

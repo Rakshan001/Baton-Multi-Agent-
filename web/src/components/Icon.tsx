@@ -49,6 +49,8 @@ export const ICON_PATHS = {
   panelRight: "M4 4.5h16a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1ZM15 4.5v15",
   terminal: "M5 6l5 5-5 5M12 17h7",
   zap: "M13 3 5 13h6l-1 8 8-10h-6l1-8Z",
+  star: "M12 3.5l2.6 5.3 5.9.9-4.25 4.15 1 5.85L12 16.9l-5.25 2.8 1-5.85L3.5 9.7l5.9-.9L12 3.5Z",
+  starFilled: "M12 3.5l2.6 5.3 5.9.9-4.25 4.15 1 5.85L12 16.9l-5.25 2.8 1-5.85L3.5 9.7l5.9-.9L12 3.5Z",
   dot: "M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0",
   clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 7v5l3.5 2",
   filter: "M3 5h18l-7 8v6l-4 2v-8L3 5Z",
@@ -81,7 +83,8 @@ export function Icon({
 }) {
   const d = ICON_PATHS[name];
   if (!d) return null;
-  const filledDot = name === "dot";
+  // A star reads as on/off by fill, not by shape — same path, two states.
+  const filledDot = name === "dot" || name === "starFilled";
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} style={style}
       fill={filledDot ? "currentColor" : fill} stroke={filledDot ? "none" : "currentColor"}

@@ -45,8 +45,11 @@ import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
 import {
-  importSkill, installSkill, installSkillEverywhere, listSkillStatus, resolveSkillRoot, uninstallSkill,
+  importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, resolveSkillRoot, uninstallSkill,
+  uploadSkill, removeSkill, exportSkillFile, exportSkills, importSkillBundle, bookmarkSkill, executableFiles,
+  danglingReferences,
   SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
+  SkillExistsError, SkillExportRefused,
 } from './skills/install.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
@@ -2331,18 +2334,110 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     }, origin);
   }
 
+  // GET /api/skills/export — every skill the USER owns, as one restorable
+  // bundle. Literal path, so it is matched before the :id routes below.
+  if (method === 'GET' && path === '/api/skills/export') {
+    const bundle = await exportSkills(root);
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Content-Disposition': 'attachment; filename="baton-skills.json"',
+      'Access-Control-Allow-Origin': origin,
+      'Vary': 'Origin',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify(bundle, null, 2));
+    return;
+  }
+
   // POST /api/skills/import — add a skill from a path or http(s) URL (write-gated)
-  if (method === 'POST' && path === '/api/skills/import') {
+  // POST /api/skills/upload — add one from bytes the browser read (write-gated)
+  if (method === 'POST' && (path === '/api/skills/import' || path === '/api/skills/upload')) {
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
-    const body = await readJsonBody<{ source?: string }>(req);
+    const body = await readJsonBody<{ source?: string; filename?: string; content?: string; id?: string; replace?: boolean }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
     try {
-      const s = await importSkill(root, body.source ?? '');
+      let s: Awaited<ReturnType<typeof uploadSkill>>;
+      let extraSkipped: string[] = [];
+      if (path === '/api/skills/upload') {
+        s = await uploadSkill(root, { filename: body.filename ?? '', content: body.content ?? '', id: body.id, replace: body.replace });
+      } else {
+        // NOT `res` — that is the HTTP response two lines down.
+        const imported = await importSkillFromSource(root, body.source ?? '', { id: body.id, replace: body.replace });
+        // A repo holding several skills is a question, not a failure: 300 so the
+        // client can render the list instead of guessing which one was meant.
+        if (imported.choices) {
+          return send(res, 300, { error: 'that repo holds more than one skill — pick one', choices: imported.choices }, origin);
+        }
+        s = imported.skill!;
+        extraSkipped = imported.skipped ?? [];
+      }
       // Strip reference content / raw; expose only what the catalog listing carries.
       const skill = { id: s.id, name: s.name, description: s.description, tags: s.tags, produces: s.produces, body: s.body, source: s.source, references: s.references.map((r) => r.rel) };
-      return send(res, 201, { skill }, origin);
+      bus.publish({ type: 'skill.imported', skill: s.id });
+      // Not an error — the skill is stored and usable. Surfaced so the agent
+      // hunting for a missing checklist is a known limitation, not a mystery.
+      // Only the ones that really did NOT come along: a skill fetched as a whole
+      // folder brings its references, and warning about a file that is sitting
+      // right there would train people to ignore the warning.
+      const have = new Set(s.references.map((r) => r.rel));
+      // Executable companions are consent-relevant: Baton never runs them, but
+      // the skill will tell the agent to, so the user should see them named
+      // before they install it anywhere.
+      const runnable = executableFiles(s.references);
+      const warnings = [
+        ...danglingReferences(s.body).filter((r) => !have.has(r)),
+        ...(runnable.length
+          ? [`Ships ${runnable.length} runnable file${runnable.length === 1 ? '' : 's'} the agent may execute: ${runnable.slice(0, 6).join(', ')}${runnable.length > 6 ? ', …' : ''}`]
+          : []),
+        ...extraSkipped,
+      ];
+      return send(res, 201, { skill, ...(warnings.length ? { warnings } : {}) }, origin);
+    } catch (e) {
+      // 409 rather than 400: the client can recover by re-sending with
+      // replace:true, and only a distinct status makes that offer possible.
+      if (e instanceof SkillExistsError) return send(res, 409, { error: e.message, id: e.id, canReplace: true }, origin);
+      if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // POST /api/skills/import-bundle — restore an exported library (write-gated)
+  if (method === 'POST' && path === '/api/skills/import-bundle') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const body = await readJsonBody<{ bundle?: unknown; replace?: boolean }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    try {
+      const result = await importSkillBundle(root, body.bundle, { replace: body.replace });
+      for (const id of result.imported) bus.publish({ type: 'skill.imported', skill: id });
+      return send(res, 200, result, origin);
     } catch (e) {
       if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // GET /api/skills/:id/file — download one skill's markdown. Bundled skills
+  // are refused: they ship in the package, so there is nothing to hand back.
+  const skf = path.match(/^\/api\/skills\/([^/]+)\/file$/);
+  if (method === 'GET' && skf) {
+    const id = decodeURIComponent(skf[1]);
+    try {
+      const { text } = await exportSkillFile(root, id);
+      // The id is slugified on every write path, but this becomes a filename in
+      // a header, so it is re-restricted here rather than trusted in transit.
+      const safe = id.replace(/[^a-z0-9._-]/gi, '-');
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${safe}.md"`,
+        'Access-Control-Allow-Origin': origin,
+        'Vary': 'Origin',
+        'Cache-Control': 'no-store',
+      });
+      res.end(text);
+      return;
+    } catch (e) {
+      if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
+      if (e instanceof SkillExportRefused) return send(res, 403, { error: e.message }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
     }
   }
@@ -2377,6 +2472,39 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     } catch (e) {
       if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
       if (e instanceof SkillAgentUnsupportedError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // POST /api/skills/:id/bookmark — pin or unpin a skill (write-gated).
+  const skb = path.match(/^\/api\/skills\/([^/]+)\/bookmark$/);
+  if (method === 'POST' && skb) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const id = decodeURIComponent(skb[1]);
+    const body = await readJsonBody<{ on?: boolean }>(req);
+    if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    try {
+      return send(res, 200, await bookmarkSkill(root, id, body.on !== false), origin);
+    } catch (e) {
+      if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // DELETE /api/skills/:id — remove a skill the user owns, from the catalog AND
+  // from every agent it was wired into. Bundled skills are refused (403).
+  // Declared after the /install matcher so the two cannot overlap.
+  const skd = path.match(/^\/api\/skills\/([^/]+)$/);
+  if (method === 'DELETE' && skd) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const id = decodeURIComponent(skd[1]);
+    try {
+      const result = await removeSkill(root, id);
+      bus.publish({ type: 'skill.removed', skill: id });
+      return send(res, 200, result, origin);
+    } catch (e) {
+      if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
+      if (e instanceof SkillImportError) return send(res, 403, { error: e.message }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
     }
   }

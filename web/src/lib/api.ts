@@ -44,6 +44,8 @@ export type ApiErrorCode =
   | "MERGE_FAILED"
   | "BAD_REQUEST"
   | "CONFLICT"
+  /** A repo held several skills and none was named — details.choices lists them. */
+  | "AMBIGUOUS"
   | "SERVER";
 
 export class ApiError extends Error {
@@ -301,6 +303,8 @@ class BatonClient {
       if (res.status === 403) throw new ApiError("READ_ONLY", msg, 403, body);
       if (res.status === 400) throw new ApiError("BAD_REQUEST", msg, 400, body);
       if (res.status === 409) throw new ApiError("CONFLICT", msg, 409, body);
+      // 300: not a failure — the daemon needs to know WHICH skill in that repo.
+      if (res.status === 300) throw new ApiError("AMBIGUOUS", msg, 300, body);
       throw new ApiError("SERVER", msg, res.status, body);
     }
     return (await res.json()) as T;
@@ -625,18 +629,42 @@ class BatonClient {
     this.emit();
     return r;
   }
-  async importSkill(source: string): Promise<SkillStatus> {
+  async importSkill(source: string, opts: { id?: string; replace?: boolean } = {}): Promise<SkillStatus> {
+    const fallback = source.split(/[/\\]/).pop()?.replace(/\.(md|mdc|markdown|txt)$/i, "") || "imported-skill";
+    return this.saveSkill("/api/skills/import", { source, ...opts }, opts.id ?? fallback, `Imported from ${source}.`);
+  }
+
+  /**
+   * Add a skill from a file the user picked in the browser.
+   *
+   * The text is read client-side and posted as JSON rather than multipart: a
+   * 256KB markdown file fits the daemon's existing body cap, and a multipart
+   * parser would be a dependency in a daemon that deliberately has none.
+   */
+  async uploadSkill(input: { filename: string; content: string; id?: string; replace?: boolean }): Promise<SkillStatus> {
+    const fallback = input.id ?? input.filename.replace(/\.(md|mdc|markdown|txt)$/i, "");
+    return this.saveSkill("/api/skills/upload", input, fallback, `Uploaded from ${input.filename}.`);
+  }
+
+  /** One write path for import and upload, so demo and real behave alike for both. */
+  private async saveSkill(path: string, body: unknown, fallbackId: string, demoBody: string): Promise<SkillStatus> {
     this.assertWrite();
     if (this.demo) {
       await this.demoGate(220);
-      const id = this.slugify(source.split(/[/\\]/).pop()?.replace(/\.(md|mdc|txt)$/i, "") || "imported-skill");
+      const id = this.slugify(fallbackId || "imported-skill");
+      const existing = (this.demoSkills ?? [...DEMO_SKILLS]).find((s) => s.id === id);
+      // The demo must reproduce the refusals too, or the showcase teaches a
+      // flow that the real daemon then rejects.
+      if (existing?.source === "bundled") throw new ApiError("BAD_REQUEST", `'${id}' is a Baton built-in — pick another shortcut`);
+      if (existing && !(body as { replace?: boolean }).replace) throw new ApiError("CONFLICT", `you already have a skill called '${id}'`);
       const skill: SkillStatus = {
         id, name: id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        description: "Imported skill (demo preview).", tags: [], produces: [], body: `# ${id}\n\nImported from ${source}.\n`,
-        source: "imported", references: [],
+        description: "Your skill (demo preview).", tags: [], produces: [], body: `# ${id}\n\n${demoBody}\n`,
+        source: "global", references: [], bookmarked: false,
         installs: [
           { agent: "claude", rel: `.claude/skills/${id}/SKILL.md`, installed: false },
           { agent: "cursor", rel: `.cursor/rules/${id}.mdc`, installed: false },
+          { agent: "antigravity", rel: `.agents/skills/${id}/SKILL.md`, installed: false },
         ],
       };
       this.demoSkills = [...(this.demoSkills ?? [...DEMO_SKILLS]).filter((s) => s.id !== id), skill];
@@ -645,9 +673,61 @@ class BatonClient {
     }
     // The daemon returns the parsed skill without per-agent install state; the
     // screen refetches the catalog right after, which fills installs in.
-    const r = await this.request<{ skill: Omit<SkillStatus, "installs"> }>("/api/skills/import", { method: "POST", body: JSON.stringify({ source }) });
+    const r = await this.request<{ skill: Omit<SkillStatus, "installs"> }>(path, { method: "POST", body: JSON.stringify(body) });
     this.emit();
     return { ...r.skill, installs: [] };
+  }
+
+  /** Pin or unpin a skill. Bookmarks live with the library (machine-wide), not
+   *  in this browser, so they survive a cleared cache and show in the CLI too. */
+  async bookmarkSkill(id: string, on: boolean): Promise<{ id: string; bookmarked: boolean }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(90);
+      // A NEW array with a NEW row, not a mutation: getSkills returns
+      // this.demoSkills by reference, so re-assigning the same array leaves
+      // React's setState comparing a value to itself — it bails, and the star
+      // never flips even though the data changed.
+      const all = this.demoSkills ?? (JSON.parse(JSON.stringify(DEMO_SKILLS)) as SkillStatus[]);
+      this.demoSkills = all.map((s) => (s.id === id ? { ...s, bookmarked: on } : s));
+      this.emit();
+      return { id, bookmarked: on };
+    }
+    const r = await this.request<{ id: string; bookmarked: boolean }>(
+      `/api/skills/${encodeURIComponent(id)}/bookmark`, { method: "POST", body: JSON.stringify({ on }) });
+    this.emit();
+    return r;
+  }
+
+  /** Delete a skill of the user's own — from the catalog and every agent. */
+  async removeSkill(id: string): Promise<{ removed: boolean; unwired: string[] }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(180);
+      const all = this.demoSkills ?? [...DEMO_SKILLS];
+      const found = all.find((s) => s.id === id);
+      if (found && found.source === "bundled") {
+        throw new ApiError("BAD_REQUEST", ` is a Baton built-in — it ships with the package and can't be deleted`);
+      }
+      this.demoSkills = all.filter((s) => s.id !== id);
+      this.emit();
+      return { removed: !!found, unwired: [] };
+    }
+    const r = await this.request<{ removed: boolean; unwired: string[] }>(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+    this.emit();
+    return r;
+  }
+
+  /**
+   * Download URLs. Returned rather than fetched, because the browser's own
+   * navigation handles Content-Disposition — reading the body into JS just to
+   * re-offer it as a blob would be more code doing the same thing worse.
+   */
+  skillFileUrl(id: string): string {
+    return `${this.baseUrl}/api/skills/${encodeURIComponent(id)}/file`;
+  }
+  skillsExportUrl(): string {
+    return `${this.baseUrl}/api/skills/export`;
   }
 
   /* ---- interactive terminals (tmux-backed, src/terminals.ts) ---- */

@@ -54,3 +54,24 @@ export function AgentFilter({ agents, value, onChange }: { agents: AgentId[]; va
     </div>
   );
 }
+
+/**
+ * A mono, letter-spaced micro-label — the Skills screen's one structural device.
+ *
+ * Used only where it labels a genuinely different KIND of information (what a
+ * skill is, what it leaves behind, what it ships, which agents hold it). Not
+ * decoration: if two blocks would carry the same label, they should be one
+ * block instead.
+ */
+export function Label({ children, tone }: { children: ReactNode; tone?: "accent" | "quiet" }) {
+  return (
+    <span style={{
+      fontFamily: "var(--font-mono)", fontSize: 9.5, letterSpacing: "0.11em", textTransform: "uppercase",
+      fontWeight: "var(--fw-semibold)", lineHeight: 1.4,
+      color: tone === "accent" ? "var(--clean-text)" : "var(--text-quaternary)",
+    }}>{children}</span>
+  );
+}
+
+/** Hairline that fills the remaining space on a label row. */
+export const rule: React.CSSProperties = { flex: 1, height: 1, background: "var(--border-subtle)" };
