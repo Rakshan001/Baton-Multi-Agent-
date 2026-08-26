@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Metadata } from "next";
 import { C, Callout, DocHeader, DocPager, DocSection, DocTable, LI, P, UL } from "@/components/docs-ui";
 

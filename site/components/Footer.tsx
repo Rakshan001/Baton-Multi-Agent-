@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from "next/link";
 import { REPO_URL, DOCS_URL, LICENSE_URL } from "./site";
 

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Single source of truth for the docs sidebar, the prev/next pager, and the
 // sitemap. Adding a page here wires it into all three — there is no second list
 // to forget.

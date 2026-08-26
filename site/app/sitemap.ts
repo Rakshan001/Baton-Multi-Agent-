@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { MetadataRoute } from "next";
 import { DOCS_ORDER } from "@/components/docs-nav";
 import { SITE_URL } from "@/lib/site-url";

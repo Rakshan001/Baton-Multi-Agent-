@@ -12,7 +12,8 @@
     "prepack": "node scripts/prepack.mjs",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "lint:license": "node scripts/license-headers.mjs"
   },
   "keywords": [
     "ai",

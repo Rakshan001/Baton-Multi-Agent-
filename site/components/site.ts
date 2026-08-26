@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Shared, single-source-of-truth constants for the Baton marketing site.
 // Copy here is grounded in the real CLI / API surface — do not invent flags.
 

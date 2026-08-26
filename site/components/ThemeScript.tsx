@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Stamps the resolved theme onto <html> before the first paint, so a light-mode
  * visitor never sees a black flash (and vice versa).

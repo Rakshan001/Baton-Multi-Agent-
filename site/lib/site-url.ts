@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Single source of truth for the site's public origin.
 // Precedence: explicit NEXT_PUBLIC_SITE_URL → Vercel's production URL →
 // Vercel's per-deployment URL → local dev. Vercel injects its URLs without

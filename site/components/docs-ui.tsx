@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Rakshan Shetty
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Presentational primitives shared by every docs page. Keeping them here means
 // a page file is almost entirely content — the prose rhythm is defined once.
 

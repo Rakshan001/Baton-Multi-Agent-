@@ -32,6 +32,14 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      # Attribution is a licence term here, not a style rule: NOTICE invokes
+      # AGPL-3.0 section 7(b) to require these headers survive downstream, and a
+      # header that was never written cannot be preserved. Runs before any
+      # install because it needs none, and a gap is far cheaper to catch here
+      # than in a fork we cannot see.
+      - name: Check licence headers
+        run: node scripts/license-headers.mjs
+
       # Both workspaces are installed and built BEFORE the suite runs, because
       # the root suite reaches into web/ in two ways that a root-only job cannot
       # satisfy:
