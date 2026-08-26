@@ -56,7 +56,7 @@ import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
 import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
-import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd, skillsRemoveCmd, skillsExportCmd, skillsRestoreCmd, skillsBookmarkCmd } from './commands/skills.js';
+import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd, skillsRemoveCmd, skillsExportCmd, skillsRestoreCmd, skillsBookmarkCmd, skillsUpdateCmd } from './commands/skills.js';
 import { bugsCmd } from './commands/bugs.js';
 import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
 import { dispatchCmd, planApproveCmd, type DispatchOpts } from './commands/dispatch.js';
@@ -416,6 +416,14 @@ skills
   .description('DELETE one of your own skills for good — export it first if you might want it back')
   .action((id: string, opts: { yes?: boolean }) => run(() => skillsRemoveCmd(id, opts)));
 
+
+skills
+  .command('update')
+  .argument('[id]', 'the skill to re-fetch; omit with --all')
+  .option('--all', 'update every skill of yours that came from a URL')
+  .option('--force', 'overwrite local edits')
+  .description('re-fetch a skill from where it came from (refuses if you have edited it)')
+  .action((id: string | undefined, opts: { all?: boolean; force?: boolean }) => run(() => skillsUpdateCmd(id, opts)));
 skills
   .command('bookmark')
   .argument('<id>', 'skill id (see `baton skills list`)')

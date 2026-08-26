@@ -44,6 +44,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { bundledSkills, type SkillDef, type SkillSource } from './catalog.js';
 import { loadBookmarks, setBookmark } from './bookmarks.js';
+import { clearOrigin, getOrigin, hashSkillFiles, setOrigin } from './origins.js';
 import { gitExcludeLocal, gitUnexcludeLocal } from '../git.js';
 import { fetchGitHubSkill, parseGitHubUrl, parseSkillSource,
   type RemoteSkillFile, type SkillCandidate } from './github.js';
@@ -825,7 +826,11 @@ export async function importSkillFromSource(
   if (!parsedSource) return { skill: await importSkill(root, input, opts) };
 
   const gh = parseGitHubUrl(parsedSource.url);
-  if (!gh) return { skill: await importSkill(root, parsedSource.url, opts) };
+  if (!gh) {
+    const skill = await importSkill(root, parsedSource.url, opts);
+    await recordOrigin(skill, { url: parsedSource.url });
+    return { skill };
+  }
 
   const wanted = opts.id || parsedSource.skill;
   const res = await fetchGitHubSkill(gh, wanted, fetchSkillText, MAX_IMPORT_BYTES);
@@ -836,7 +841,112 @@ export async function importSkillFromSource(
   const skill = only
     ? await saveSkill(res.skill.files[0].content, res.skill.id, opts)
     : await saveSkillFolder(res.skill.files, res.skill.id, opts);
+  // Recorded only once the bytes are safely on disk, so a failed import never
+  // leaves an origin pointing at a skill that is not there. The hash is of what
+  // was WRITTEN (SKILL.md normalised to the id), not of what was fetched —
+  // otherwise every skill would read as locally edited the moment it landed.
+  await recordOrigin(skill, { url: parsedSource.url, ref: gh.ref, skill: wanted });
   return { skill, skipped: res.skill.skipped, origin: res.skill.origin };
+}
+
+/**
+ * Note where a skill came from, hashing exactly what landed on disk.
+ *
+ * Bookkeeping must never sink an import that otherwise worked, so a failure
+ * here is swallowed: the cost is one skill without an update button, which is
+ * strictly better than an import that reports failure after writing the files.
+ */
+async function recordOrigin(
+  skill: SkillDef,
+  where: { url: string; ref?: string; skill?: string },
+): Promise<void> {
+  try {
+    await setOrigin(skill.id, {
+      url: where.url,
+      ...(where.ref ? { ref: where.ref } : {}),
+      ...(where.skill ? { skill: where.skill } : {}),
+      fetchedAt: new Date().toISOString(),
+      contentHash: hashSkillFiles(skillFileList(skill)),
+    });
+  } catch { /* an unwritable origins file must not fail the import */ }
+}
+
+/** A skill as a flat file list — the form the hash and the writers both want. */
+function skillFileList(skill: SkillDef): { rel: string; content: string }[] {
+  return [
+    { rel: 'SKILL.md', content: skill.raw ?? skill.body },
+    ...skill.references.map((r) => ({ rel: r.rel, content: r.content })),
+  ];
+}
+
+export class SkillLocallyEditedError extends Error {
+  constructor(public id: string) {
+    super(`'${id}' has local edits — updating would overwrite them`);
+    this.name = 'SkillLocallyEditedError';
+  }
+}
+
+export interface UpdateSkillResult {
+  id: string;
+  /** No origin recorded: added before provenance existed, or uploaded by hand. */
+  status: 'updated' | 'already-current' | 'no-origin';
+  /** Files that differ from the copy you had. Empty when already current. */
+  changed?: string[];
+  origin?: string;
+}
+
+/**
+ * Re-fetch a skill from where it came from.
+ *
+ * Refuses by default when the local copy no longer matches what was written at
+ * import: people tune skills, and silently replacing an edited file is the one
+ * behaviour that would make this feature something users learn to fear. `force`
+ * is the deliberate override.
+ */
+export async function updateSkill(
+  root: string,
+  id: string,
+  opts: { force?: boolean } = {},
+): Promise<UpdateSkillResult> {
+  const skill = await findSkill(root, id);
+  if (!skill) throw new SkillNotFoundError(id);
+  if (!isUserSkill(skill.source)) {
+    throw new SkillImportError(`'${id}' is a Baton built-in — it updates when Baton does`);
+  }
+  const origin = await getOrigin(id);
+  if (!origin) return { id, status: 'no-origin' };
+
+  const before = skillFileList(skill);
+  if (!opts.force && hashSkillFiles(before) !== origin.contentHash) {
+    throw new SkillLocallyEditedError(id);
+  }
+
+  const gh = parseGitHubUrl(origin.url);
+  const fetched = gh
+    ? await fetchGitHubSkill(
+        { ...gh, ...(origin.ref ? { ref: origin.ref } : {}) },
+        origin.skill ?? id, fetchSkillText, MAX_IMPORT_BYTES,
+      )
+    : { skill: { id, files: [{ rel: 'SKILL.md', content: await fetchSkillText(origin.url) }], skipped: [], origin: origin.url } };
+  // A repo that grew a second skill since the import must not silently swap it.
+  if ('choices' in fetched) throw new SkillImportError(`'${id}' now matches ${fetched.choices.length} skills in that repo — re-add it by name`);
+
+  const after = fetched.skill.files;
+  if (hashSkillFiles(after) === hashSkillFiles(before)) {
+    return { id, status: 'already-current', changed: [], origin: fetched.skill.origin };
+  }
+
+  const wasBefore = new Map(before.map((f) => [f.rel, f.content]));
+  const changed = [
+    ...after.filter((f) => wasBefore.get(f.rel) !== f.content).map((f) => f.rel),
+    ...before.filter((f) => !after.some((a) => a.rel === f.rel)).map((f) => `${f.rel} (removed)`),
+  ].sort();
+
+  const saved = after.length === 1
+    ? await saveSkill(after[0].content, id, { id, replace: true })
+    : await saveSkillFolder(after, id, { id, replace: true });
+  await recordOrigin(saved, { url: origin.url, ref: origin.ref, skill: origin.skill });
+  return { id, status: 'updated', changed, origin: fetched.skill.origin };
 }
 
 export interface UploadSkillInput {
@@ -907,6 +1017,9 @@ export async function removeSkill(root: string, id: string): Promise<{ removed: 
   // Drop the bookmark too. A pin pointing at a skill the user just deleted is
   // the one stale id that IS worth clearing, because we are already writing.
   await setBookmark(id, false).catch(() => undefined);
+  // Same reasoning: an origin pointing at a skill the user just deleted is a
+  // stale entry we are already in a position to clear.
+  await clearOrigin(id).catch(() => undefined);
   return { removed: true, source: skill.source, unwired };
 }
 
