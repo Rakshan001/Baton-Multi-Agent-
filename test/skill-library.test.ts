@@ -344,3 +344,67 @@ describe('removeSkill', () => {
     await expect(removeSkill(repo, 'nope')).rejects.toThrow(SkillNotFoundError);
   });
 });
+
+describe('bundle round trip with a directory-shaped skill', () => {
+  /** Lay a <id>/SKILL.md skill on disk, the shape a GitHub fetch produces. */
+  const putFolder = async (id: string, files: { rel: string; content: string }[]) => {
+    for (const f of files) {
+      const dest = join(globalSkillsDir(), id, f.rel);
+      await mkdir(join(dest, '..'), { recursive: true });
+      await writeFile(dest, f.content, 'utf-8');
+    }
+  };
+
+  const MULTI = [
+    { rel: 'SKILL.md', content: '---\nname: multi\ndescription: "A skill that brings its own tools along for the ride."\n---\n\n# Multi\n' },
+    { rel: 'references/rules.md', content: '# rules\n' },
+    { rel: 'scripts/run.py', content: 'print("hi")\n' },
+  ];
+
+  it('carries every companion file out and back', async () => {
+    await putFolder('multi', MULTI);
+
+    const bundle = await exportSkills(repo);
+    const entry = bundle.skills.find((s) => s.id === 'multi')!;
+    expect(bundle.version).toBe(SKILL_BUNDLE_VERSION);
+    expect(entry.files?.map((f) => f.rel).sort()).toEqual(['references/rules.md', 'scripts/run.py']);
+
+    await removeSkill(repo, 'multi');
+    expect((await loadCatalog(repo)).some((s) => s.id === 'multi')).toBe(false);
+
+    const back = await importSkillBundle(repo, bundle, {});
+    expect(back.imported).toContain('multi');
+
+    const restored = (await loadCatalog(repo)).find((s) => s.id === 'multi')!;
+    expect(restored.references.map((r) => r.rel).sort()).toEqual(['references/rules.md', 'scripts/run.py']);
+    expect(restored.references.find((r) => r.rel === 'scripts/run.py')!.content).toBe('print("hi")\n');
+  });
+
+  it('still restores a version 1 bundle, which has no file list', async () => {
+    const v1 = {
+      version: 1, exportedAt: new Date().toISOString(),
+      skills: [{ id: 'oldie', name: 'Oldie', description: 'from before', content: '---\nname: oldie\n---\n\n# Oldie\n' }],
+    };
+    const r = await importSkillBundle(repo, v1, {});
+    expect(r.imported).toContain('oldie');
+  });
+
+  it('refuses a companion path that would escape the skill folder', async () => {
+    const evil = {
+      version: 2, exportedAt: new Date().toISOString(),
+      skills: [{
+        id: 'evil', name: 'Evil', description: 'x', content: '---\nname: evil\n---\n\n# Evil\n',
+        files: [{ rel: '../../.ssh/authorized_keys', content: 'ssh-rsa AAAA' }],
+      }],
+    };
+    const r = await importSkillBundle(repo, evil, {});
+    expect(r.imported).toEqual([]);
+    expect(r.skipped[0].why).toMatch(/outside its folder/);
+    expect(existsSync(join(home, '.ssh', 'authorized_keys'))).toBe(false);
+  });
+
+  it('refuses a bundle version it cannot read', async () => {
+    await expect(importSkillBundle(repo, { version: 99, exportedAt: '', skills: [] }, {}))
+      .rejects.toThrow(/reads 1 and 2/);
+  });
+});
