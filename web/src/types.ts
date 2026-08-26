@@ -588,6 +588,17 @@ export interface SkillInstallState {
   installed: boolean;
 }
 
+/**
+ * Where a skill came from, which decides what may be done to it.
+ * `bundled` ships in the package — never exported, never deleted.
+ * `global` (~/.baton/skills, every project) and `imported` (legacy, this repo
+ * only) are the user's own; the dashboard groups both as "Your skills".
+ */
+export type SkillSource = "bundled" | "global" | "imported";
+
+/** True for a skill the user owns — exportable and deletable. */
+export const isUserSkill = (s: SkillSource): boolean => s === "global" || s === "imported";
+
 /** One catalog entry — GET /api/skills (src/skills). */
 export interface SkillStatus {
   id: string;
@@ -596,12 +607,14 @@ export interface SkillStatus {
   tags: string[];
   produces: string[];
   body: string;
-  source: "bundled" | "imported";
+  source: SkillSource;
   /** 3-line human explainer (what / how / win); absent for imported skills. */
   explain?: { what: string; how: string; win: string };
   /** Relative paths of the skill's reference files (content omitted); [] for single-file skills. */
   references: string[];
   installs: SkillInstallState[];
+  /** Pinned by the user — sorts to the top of its band. */
+  bookmarked: boolean;
 }
 
 /** POST /api/skills/:id/install result. */

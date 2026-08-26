@@ -231,6 +231,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["plain-language interview", "structure pattern choice", "scaffolded project", ".gitleaks.toml + pre-commit hook", "push protection + CI backstop", ".env.example", "STRUCTURE.md (humans)", "AGENTS.md (agents)", "planted-secret drill proof", "ranked repair plan (mid-phase)"],
     body: BASIC_SETUP_BODY,
     source: "bundled",
+    bookmarked: false,
     references: [
       "references/interview.md", "references/patterns.md", "references/security.md",
       "references/stacks.md", "references/audit.md", "references/verification.md",
@@ -249,6 +250,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["reproduction", "blast-radius audit", "root-cause analysis", "approved plan", "regression re-verify", "bugfix report", "auto-commit (never pushes)"],
     body: BUG_FIX_BODY,
     source: "bundled",
+    bookmarked: false,
     references: ["references/blast-radius-checklist.md", "references/report-template.md", "references/status-template.json"],
     installs: [
       { agent: "claude", rel: ".claude/skills/bug-fix/SKILL.md", installed: true },
@@ -263,6 +265,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["targeted reads", "minimal diffs", "lower token cost", "compaction"],
     body: TOKEN_BODY,
     source: "bundled",
+    bookmarked: false,
     references: ["references/token-budget-cheatsheet.md"],
     installs: [
       { agent: "claude", rel: ".claude/skills/token-efficient-coding/SKILL.md", installed: false },
@@ -277,6 +280,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["atomic commits", "isolated worktree", "conventional messages", "bisectable history"],
     body: TRACE_BODY,
     source: "bundled",
+    bookmarked: false,
     references: ["references/commit-conventions.md"],
     installs: [
       { agent: "claude", rel: ".claude/skills/traceable-changes/SKILL.md", installed: false },
@@ -291,6 +295,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["recall-before-explore", "externalized state", "durable facts", "handoff brief"],
     body: MEMORY_BODY,
     source: "bundled",
+    bookmarked: false,
     references: ["references/recall-save-patterns.md"],
     installs: [
       { agent: "claude", rel: ".claude/skills/memory-light/SKILL.md", installed: false },
@@ -305,6 +310,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["re-read diff", "symbol-existence check", "build/test/lint run", "independent skeptic re-check"],
     body: VERIFY_BODY,
     source: "bundled",
+    bookmarked: false,
     references: ["references/verification-checklist.md"],
     installs: [
       { agent: "claude", rel: ".claude/skills/verify-before-done/SKILL.md", installed: false },
@@ -319,6 +325,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["pinned fixed point", "standards findings", "spec findings", "security findings", "refuted-first verification", "routed next steps", "durable review record (.baton/reviews)"],
     body: CODE_REVIEW_BODY,
     source: "bundled",
+    bookmarked: false,
     references: ["references/security-baseline.md", "references/smell-baseline.md"],
     installs: [
       { agent: "claude", rel: ".claude/skills/code-review/SKILL.md", installed: false },
@@ -333,6 +340,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["CODEBASE.md", "knowledge graph"],
     body: MAP_BODY,
     source: "bundled",
+    bookmarked: false,
     references: [],
     installs: [
       { agent: "claude", rel: ".claude/skills/map-codebase/SKILL.md", installed: false },
@@ -347,6 +355,7 @@ export const DEMO_SKILLS: SkillStatus[] = [
     produces: ["worktree", "knowledge graph", "memory"],
     body: REFACTOR_BODY,
     source: "bundled",
+    bookmarked: false,
     references: [],
     installs: [
       { agent: "claude", rel: ".claude/skills/safe-refactor/SKILL.md", installed: false },
@@ -405,6 +414,47 @@ const DEMO_EXPLAIN: Record<string, SkillStatus["explain"]> = {
     win: "Refactors land without breaking the caller you forgot existed.",
   },
 };
+/**
+ * Skills the demo user "uploaded" — without these the showcase cannot render
+ * the Your-skills / Baton-skills split at all, and the upload, download and
+ * delete controls have nothing to point at. One `global` (the machine-wide
+ * library, which is what upload produces) and one legacy `imported`, so the
+ * "this project only" chip is exercised too.
+ */
+const DEMO_USER_SKILLS: SkillStatus[] = [
+  {
+    id: "deploy-checklist",
+    name: "deploy-checklist",
+    description: "Our release ritual: migrations dry-run, feature flags defaulted off, staging smoke test, then tag and announce in #releases.",
+    tags: ["deploy", "release", "checklist", "migration", "staging"],
+    produces: ["pre-flight checklist", "tagged release", "announcement draft"],
+    body: "---\nname: deploy-checklist\ndescription: Our release ritual.\n---\n\n# Deploy checklist\n\n1. Dry-run migrations against a staging snapshot.\n2. Confirm every new flag defaults to off.\n3. Smoke-test the three critical paths.\n4. Tag, then announce in #releases.\n",
+    source: "global",
+    bookmarked: false,
+    references: [],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/deploy-checklist/SKILL.md", installed: true },
+      { agent: "cursor", rel: ".cursor/rules/deploy-checklist.mdc", installed: false },
+    ],
+  },
+  {
+    id: "api-conventions",
+    name: "api-conventions",
+    description: "How this service shapes its endpoints: snake_case bodies, cursor pagination, RFC 7807 problem details, and never a 200 with an error inside it.",
+    tags: ["api", "rest", "conventions", "pagination", "errors"],
+    produces: ["consistent endpoints", "problem-details errors"],
+    body: "---\nname: api-conventions\ndescription: How this service shapes its endpoints.\n---\n\n# API conventions\n\n- Bodies are snake_case, always.\n- Paginate with cursors, never offsets.\n- Errors are RFC 7807 problem details.\n- Never return 200 with an error inside it.\n",
+    source: "imported",
+    bookmarked: false,
+    references: [],
+    installs: [
+      { agent: "claude", rel: ".claude/skills/api-conventions/SKILL.md", installed: false },
+      { agent: "cursor", rel: ".cursor/rules/api-conventions.mdc", installed: false },
+    ],
+  },
+];
+DEMO_SKILLS.push(...DEMO_USER_SKILLS);
+
 for (const s of DEMO_SKILLS) s.explain = DEMO_EXPLAIN[s.id];
 // Keep demo installs in sync with SKILL_AGENTS (antigravity landed in W4).
 for (const s of DEMO_SKILLS) {

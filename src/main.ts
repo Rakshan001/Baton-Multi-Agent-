@@ -56,7 +56,7 @@ import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
 import { orientCmd } from './commands/orient.js';
 import { progressCmd } from './commands/progress.js';
-import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd } from './commands/skills.js';
+import { skillsListCmd, skillsInstallCmd, skillsUninstallCmd, skillsImportCmd, skillsRemoveCmd, skillsExportCmd, skillsRestoreCmd, skillsBookmarkCmd } from './commands/skills.js';
 import { bugsCmd } from './commands/bugs.js';
 import { planApplyCmd, planCheckCmd, PLANS_DIR } from './commands/plan.js';
 import { dispatchCmd, planApproveCmd, type DispatchOpts } from './commands/dispatch.js';
@@ -379,7 +379,7 @@ memory
 
 const skills = program
   .command('skills')
-  .description('reusable agent skills: install the bundled playbooks into your agents');
+  .description('reusable agent skills: Baton\'s bundled playbooks plus your own library in ~/.baton/skills');
 
 skills
   .command('list', { isDefault: true })
@@ -397,15 +397,44 @@ skills
 skills
   .command('uninstall')
   .argument('<id>', 'skill id')
-  .option('--agent <agent>', 'remove from just one agent (default: all)')
-  .description('remove an installed skill from your agents')
+  .option('--agent <agent>', 'unwire from just one agent (default: all)')
+  .description('unwire a skill from your agents — the skill stays in your library')
   .action((id: string, opts: { agent?: string }) => run(() => skillsUninstallCmd(id, opts)));
 
 skills
   .command('import')
   .argument('<source>', 'a file path or http(s) URL to a SKILL.md')
-  .description('import a skill from a path or URL into the catalog')
-  .action((source: string) => run(() => skillsImportCmd(source)));
+  .option('--as <shortcut>', 'the shortcut agents invoke it by (default: its frontmatter name)')
+  .option('--replace', 'overwrite a skill of yours that already has this shortcut')
+  .description('add a skill from a path or URL to your library (~/.baton/skills)')
+  .action((source: string, opts: { as?: string; replace?: boolean }) => run(() => skillsImportCmd(source, opts)));
+
+skills
+  .command('remove')
+  .argument('<id>', 'skill id (see `baton skills list`)')
+  .option('--yes', 'skip the confirmation (required when not run from a terminal)')
+  .description('DELETE one of your own skills for good — export it first if you might want it back')
+  .action((id: string, opts: { yes?: boolean }) => run(() => skillsRemoveCmd(id, opts)));
+
+skills
+  .command('bookmark')
+  .argument('<id>', 'skill id (see `baton skills list`)')
+  .option('--remove', 'unpin it instead')
+  .description('pin a skill to the top of the list')
+  .action((id: string, opts: { remove?: boolean }) => run(() => skillsBookmarkCmd(id, opts)));
+
+skills
+  .command('export')
+  .option('--out <file>', 'write to a file instead of stdout')
+  .description("export your own skills as one restorable bundle (Baton's bundled skills are not included)")
+  .action((opts: { out?: string }) => run(() => skillsExportCmd(opts)));
+
+skills
+  .command('restore')
+  .argument('<file>', 'a bundle written by `baton skills export`')
+  .option('--replace', 'overwrite skills you already have')
+  .description('restore an exported skill library onto this machine')
+  .action((file: string, opts: { replace?: boolean }) => run(() => skillsRestoreCmd(file, opts)));
 
 program
   .command('bugs')

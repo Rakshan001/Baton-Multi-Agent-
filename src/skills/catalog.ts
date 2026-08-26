@@ -39,6 +39,17 @@ export interface SkillExplain {
   win: string;
 }
 
+/**
+ * Where a skill came from, which decides what may be done to it.
+ *
+ * 'bundled' ships inside the npm package: read-only, never exported (exporting
+ * it would just re-download what npm already delivered) and never deleted.
+ * 'global' and 'imported' are the user's own — both exportable and deletable;
+ * they differ only in reach, and the dashboard groups them together as
+ * "Your skills".
+ */
+export type SkillSource = 'bundled' | 'global' | 'imported';
+
 export interface SkillDef {
   id: string;
   /** Display name. */
@@ -53,7 +64,7 @@ export interface SkillDef {
   body: string;
   /** Supporting files installed alongside the skill (loaded on demand by the agent). */
   references: SkillReference[];
-  source: 'bundled' | 'imported';
+  source: SkillSource;
   /** 3-line human explainer (what / how / win) for the UI. Bundled skills carry
    *  one; imported skills fall back to their description. */
   explain?: SkillExplain;

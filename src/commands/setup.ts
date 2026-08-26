@@ -25,7 +25,7 @@ import { askMultiSelect, askYesNo, shouldOfferGlobalInstall } from './setup-prom
 import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, type GraphifyDetection } from '../kb/graphify.js';
 import { agentInstalled } from '../agents/roster.js';
 import { AGENTS } from '../agents/registry.js';
-import { installSkillEverywhere, listSkillStatus } from '../skills/install.js';
+import { installSkillEverywhere, listSkillStatus, isUserSkill } from '../skills/install.js';
 import { PACKAGE_NAME } from '../version.js';
 
 /** Options shared with `kb init`, plus the setup-mode flags. */
@@ -512,11 +512,21 @@ async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boole
   console.log('    Once graphify is installed, finish with:  baton kb init');
 }
 
-/** Offer the bundled skill catalog. Failure here never fails the setup. */
+/**
+ * Offer the skill catalog — Baton's bundled skills AND the user's own library.
+ *
+ * The library half is the point: skills uploaded in one project live in
+ * ~/.baton/skills, and this is the moment a brand-new project either inherits
+ * them or silently does not. It used to filter to `source === 'bundled'`, so
+ * setting up project #2 quietly offered Baton's skills and none of the user's.
+ */
 async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
   let bundled: { id: string; name: string; description: string }[];
+  let mine: { id: string; name: string; description: string }[] = [];
   try {
-    bundled = (await listSkillStatus(root)).filter((s) => s.source === 'bundled');
+    const all = await listSkillStatus(root);
+    bundled = all.filter((s) => s.source === 'bundled');
+    mine = all.filter((s) => isUserSkill(s.source));
   } catch (e) {
     // Never silently: this used to `return` with nothing printed, so a broken
     // catalog cost the user all twelve skills while setup still ended in a tick
@@ -525,16 +535,27 @@ async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
     console.log('    No skills were installed. `baton skills list` shows what should be there.');
     return;
   }
-  if (!bundled.length) return;
+  // The user's own skills come FIRST: on a new project they are the ones the
+  // person is looking for, and the ones they would notice missing.
+  const offered = [...mine, ...bundled];
+  if (!offered.length) return;
+
+  const label = mine.length
+    ? `\n  Install skills into your agents? (${mine.length} of yours, ${bundled.length} from Baton)`
+    : `\n  Install bundled skills into your agents? (${bundled.length} available)`;
 
   // A list rather than a yes/no: twelve skills is enough that "all or none" is
   // a poor pair of options. All ticked, so Enter behaves exactly as it did.
   const chosen = opts.yes
-    ? bundled.map((s) => s.id)
+    ? offered.map((s) => s.id)
     : await askMultiSelect(
-        `\n  Install bundled skills into your agents? (${bundled.length} available)`,
-        bundled.map((s) => ({ key: s.id, label: s.name, hint: shorten(s.description) })),
-        bundled.map((s) => s.id),
+        label,
+        offered.map((s) => ({
+          key: s.id,
+          label: s.name,
+          hint: shorten(mine.some((m) => m.id === s.id) ? `(yours) ${s.description}` : s.description),
+        })),
+        offered.map((s) => s.id),
       );
 
   if (!chosen.length) {
