@@ -700,6 +700,19 @@ class BatonClient {
   }
 
   /** Delete a skill of the user's own — from the catalog and every agent. */
+  /** Re-fetch a skill from its recorded origin. Throws CONFLICT when the local
+   *  copy has been edited, so the caller can offer to overwrite. */
+  async updateSkill(id: string, force = false): Promise<{ id: string; status: "updated" | "already-current" | "no-origin"; changed?: string[]; origin?: string }> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(300);
+      return { id, status: "already-current", changed: [] };
+    }
+    return this.request(`/api/skills/${encodeURIComponent(id)}/update`, {
+      method: "POST", body: JSON.stringify({ force }),
+    });
+  }
+
   async removeSkill(id: string): Promise<{ removed: boolean; unwired: string[] }> {
     this.assertWrite();
     if (this.demo) {

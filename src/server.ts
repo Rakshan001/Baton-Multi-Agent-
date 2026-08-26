@@ -47,6 +47,7 @@ import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
 import {
   importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, resolveSkillRoot, uninstallSkill,
   uploadSkill, removeSkill, exportSkillFile, exportSkills, importSkillBundle, bookmarkSkill, executableFiles,
+  updateSkill, SkillLocallyEditedError,
   danglingReferences,
   SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
   SkillExistsError, SkillExportRefused,
@@ -2396,6 +2397,27 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       // 409 rather than 400: the client can recover by re-sending with
       // replace:true, and only a distinct status makes that offer possible.
       if (e instanceof SkillExistsError) return send(res, 409, { error: e.message, id: e.id, canReplace: true }, origin);
+      if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
+      return send(res, 500, { error: (e as Error).message }, origin);
+    }
+  }
+
+  // POST /api/skills/:id/update — re-fetch from the recorded origin (write-gated)
+  if (method === 'POST' && /^\/api\/skills\/[^/]+\/update$/.test(path)) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const id = decodeURIComponent(path.split('/')[3]);
+    const body = await readJsonBody<{ force?: boolean }>(req) ?? {};
+    try {
+      const r = await updateSkill(root, id, { force: body.force });
+      if (r.status === 'updated') bus.publish({ type: 'skill.imported', skill: id });
+      return send(res, 200, r, origin);
+    } catch (e) {
+      // 409, not 400: the client can recover by re-sending with force, and only
+      // a distinct status lets it offer that rather than just reporting failure.
+      if (e instanceof SkillLocallyEditedError) {
+        return send(res, 409, { error: e.message, id: e.id, canForce: true }, origin);
+      }
+      if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
       if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
     }

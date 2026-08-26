@@ -12,10 +12,12 @@
    surface, and reading one playbook should not cost you your place
    in the list or your search.
    ============================================================ */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { AgentGlyph, getAgent } from "../lib/registry";
-import { BatonAPI } from "../lib/api";
+import { ApiError, BatonAPI } from "../lib/api";
+import { showToast } from "../lib/toast";
+import { ConfirmDialog } from "../components/primitives";
 import { Label, rule } from "./shared";
 import { isUserSkill, type SkillStatus } from "../types";
 
@@ -42,6 +44,37 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
   onBookmark: (on: boolean) => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const [updating, setUpdating] = useState(false);
+  const [confirmForce, setConfirmForce] = useState(false);
+
+  /**
+   * Re-fetch from the recorded origin.
+   *
+   * A skill nobody fetched (a hand upload) has no source, which is an ordinary
+   * answer rather than a failure. A local edit is refused, and the refusal
+   * offers to overwrite — asked at the moment it matters rather than guessed.
+   */
+  const doUpdate = async (force: boolean) => {
+    setUpdating(true);
+    try {
+      const r = await BatonAPI.updateSkill(skill.id, force);
+      if (r.status === "no-origin") {
+        showToast({ kind: "warn", title: "Nothing to update from", desc: `${skill.id} was uploaded rather than fetched from a URL, so there is no source to re-read.` });
+      } else if (r.status === "already-current") {
+        showToast({ kind: "ok", title: `${skill.id} is already current` });
+      } else {
+        const n = r.changed?.length ?? 0;
+        showToast({ kind: "ok", title: `Updated ${skill.id}`, desc: n ? `${n} file${n === 1 ? "" : "s"} changed.` : undefined });
+        onChanged();
+      }
+    } catch (e) {
+      const err = e as ApiError;
+      if (err.code === "CONFLICT") setConfirmForce(true);
+      else showToast({ kind: "error", title: "Couldn't update that skill", desc: (e as Error).message });
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   // Escape closes, and focus moves into the dialog so a keyboard user is not
   // left tabbing through the list behind it.
@@ -82,6 +115,14 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
             style={{ flex: "none", color: skill.bookmarked ? "var(--dirty-text)" : undefined }}>
             <Icon name={skill.bookmarked ? "starFilled" : "star"} size={14} />
           </button>
+          {mine && writeEnabled && (
+            <button className="btn btn-icon fr" disabled={updating} data-tip-side="bottom"
+              aria-label={`Re-fetch ${skill.id} from where it came from`}
+              data-tip={updating ? "Checking…" : "Re-fetch from source"}
+              onClick={() => void doUpdate(false)} style={{ flex: "none" }}>
+              <Icon name="refresh" size={13} />
+            </button>
+          )}
           {mine && (
             <a className="btn btn-icon fr" href={BatonAPI.skillFileUrl(skill.id)} download={`${skill.id}.md`}
               aria-label={`Download ${skill.id}.md`} data-tip-side="bottom" data-tip="Download this skill's markdown"
@@ -197,6 +238,15 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
           </div>
         </div>
       </div>
+
+      {/* Overwriting someone's own edits is the one thing this feature must
+          never do quietly, so it is asked for explicitly. */}
+      <ConfirmDialog
+        open={confirmForce} onClose={() => setConfirmForce(false)}
+        onConfirm={() => { setConfirmForce(false); void doUpdate(true); }}
+        tone="warn" icon="refresh" confirmLabel="Overwrite my edits"
+        title={`Replace your edits to "${skill.id}"?`}
+        body="You have changed this skill since it was fetched. Updating replaces every file with the version from its source, and nothing here can bring your changes back." />
     </div>
   );
 }

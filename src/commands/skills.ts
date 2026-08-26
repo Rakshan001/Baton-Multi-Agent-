@@ -12,8 +12,9 @@ import { askYesNo } from './setup-prompts.js';
 import {
   listSkillStatus, installSkill, installSkillEverywhere, uninstallSkill, importSkill,
   removeSkill, exportSkills, importSkillBundle, globalSkillsDir, isUserSkill, danglingReferences,
-  findSkill, bookmarkSkill,
+  findSkill, bookmarkSkill, updateSkill, loadCatalog,
   SKILL_AGENTS, SkillNotFoundError, SkillAgentUnsupportedError, SkillImportError, SkillExistsError,
+  SkillLocallyEditedError,
 } from '../skills/install.js';
 
 export async function skillsListCmd(): Promise<void> {
@@ -130,6 +131,61 @@ export async function skillsRemoveCmd(id: string, opts: { yes?: boolean } = {}):
 }
 
 /** Pin a skill to the top of the list, or unpin it with --remove. */
+/**
+ * Re-fetch skills from where they came from.
+ *
+ * Refuses on local edits by default rather than silently replacing them: people
+ * tune the skills they use most, and a command that eats those edits is one
+ * they stop running. `--force` is the deliberate override, and the refusal
+ * names the flag so the way forward is visible from the error itself.
+ */
+export async function skillsUpdateCmd(id: string | undefined, opts: { force?: boolean; all?: boolean } = {}): Promise<void> {
+  const root = await activeBatonRoot();
+  try {
+    const targets = opts.all
+      ? (await loadCatalog(root)).filter((s) => isUserSkill(s.source)).map((s) => s.id)
+      : id ? [id] : [];
+    if (!targets.length) {
+      console.error(opts.all ? 'you have no skills of your own to update' : 'pass a skill id, or --all');
+      process.exitCode = 1;
+      return;
+    }
+    let updated = 0, current = 0, blocked = 0, unknown = 0;
+    for (const target of targets) {
+      try {
+        const r = await updateSkill(root, target, { force: opts.force });
+        if (r.status === 'updated') {
+          updated++;
+          console.log(`✓ ${target} — updated from ${r.origin ?? 'its source'}`);
+          for (const f of (r.changed ?? []).slice(0, 8)) console.log(`    ${f}`);
+          if ((r.changed ?? []).length > 8) console.log(`    …and ${(r.changed ?? []).length - 8} more`);
+        } else if (r.status === 'already-current') {
+          current++;
+          if (!opts.all) console.log(`· ${target} is already current`);
+        } else {
+          unknown++;
+          // Not a failure: an uploaded file has no source to go back to.
+          if (!opts.all) console.log(`· ${target} was not fetched from a URL, so there is nothing to update from`);
+        }
+      } catch (e) {
+        if (e instanceof SkillLocallyEditedError) {
+          blocked++;
+          console.error(`✗ ${target} has local edits — re-run with --force to overwrite them`);
+        } else {
+          blocked++;
+          console.error(`✗ ${target} — ${(e as Error).message}`);
+        }
+      }
+    }
+    if (opts.all) {
+      console.log(`\n${updated} updated · ${current} already current · ${unknown} with no source · ${blocked} skipped`);
+    }
+    if (blocked) process.exitCode = 1;
+  } catch (e) {
+    fail(e);
+  }
+}
+
 export async function skillsBookmarkCmd(id: string, opts: { remove?: boolean } = {}): Promise<void> {
   const root = await activeBatonRoot();
   try {
