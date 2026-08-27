@@ -710,6 +710,32 @@ async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boole
  * them or silently does not. It used to filter to `source === 'bundled'`, so
  * setting up project #2 quietly offered Baton's skills and none of the user's.
  */
+/**
+ * The skills ticked by default at setup.
+ *
+ * Everything used to be ticked, which was a fair default at twelve and a bad one
+ * at thirty-three: pressing Enter installed the whole catalog into every agent,
+ * including thirteen frontend design skills someone writing a Go service will
+ * never open. A skill an agent loads but does not need is not free — it is
+ * surface area in the agent's config and one more thing to scroll past.
+ *
+ * These two are the floor rather than a taste: `bug-fix` is the pipeline for the
+ * thing every project eventually needs, and `lean-code` is the restraint that
+ * keeps the rest of the catalog from being over-applied. Everything else is one
+ * keypress away in the same list, and `baton skills install <id>` afterwards.
+ */
+export const RECOMMENDED_SKILLS = ['bug-fix', 'lean-code'] as const;
+
+/**
+ * Pre-ticked rows: the recommended pair, and only the ones actually present.
+ * Filtering against the catalog keeps a renamed or removed skill from silently
+ * pre-selecting nothing while the list still claims a recommendation.
+ */
+export function recommendedSkillIds(available: readonly { id: string }[]): string[] {
+  const have = new Set(available.map((s) => s.id));
+  return RECOMMENDED_SKILLS.filter((id) => have.has(id));
+}
+
 async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
   let bundled: { id: string; name: string; description: string }[];
   let mine: { id: string; name: string; description: string }[] = [];
@@ -730,14 +756,21 @@ async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
   const offered = [...mine, ...bundled];
   if (!offered.length) return;
 
+  const recommended = recommendedSkillIds(offered);
+
+  // Say what is ticked and that the rest are right here — a short default with
+  // no explanation reads as "Baton only has two skills".
   const label = mine.length
     ? `\n  Install skills into your agents? (${mine.length} of yours, ${bundled.length} from Baton)`
-    : `\n  Install bundled skills into your agents? (${bundled.length} available)`;
+      + `\n  ${recommended.length} recommended and ticked — space to add any of the others`
+    : `\n  Install bundled skills into your agents? (${bundled.length} available)`
+      + `\n  ${recommended.length} recommended and ticked — space to add any of the others`;
 
-  // A list rather than a yes/no: twelve skills is enough that "all or none" is
-  // a poor pair of options. All ticked, so Enter behaves exactly as it did.
+  // --yes gets the same pair rather than the whole catalog: nobody is present to
+  // untick, so the unattended path is exactly where installing thirty-three
+  // skills into every agent does the most damage.
   const chosen = opts.yes
-    ? offered.map((s) => s.id)
+    ? recommended
     : await askMultiSelect(
         label,
         offered.map((s) => ({
@@ -745,7 +778,7 @@ async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
           label: s.name,
           hint: shorten(mine.some((m) => m.id === s.id) ? `(yours) ${s.description}` : s.description),
         })),
-        offered.map((s) => s.id),
+        recommended,
       );
 
   if (!chosen.length) {
@@ -762,6 +795,9 @@ async function offerSkills(root: string, opts: SetupOpts): Promise<void> {
     } catch { /* reported in the count below */ }
   }
   console.log(`    ✓ installed ${installed}/${chosen.length} skills`);
+  if (installed < offered.length) {
+    console.log(`      ${offered.length - installed} more available — \`baton skills install <id>\`, or see them with \`baton skills list\``);
+  }
   if (installed < chosen.length) console.log('      (the rest need an agent with a skills directory — `baton skills list`)');
 }
 

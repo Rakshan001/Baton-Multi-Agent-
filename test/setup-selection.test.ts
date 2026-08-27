@@ -16,7 +16,8 @@
  * 3. Twelve bundled skills were all-or-nothing.
  */
 import { describe, it, expect } from 'vitest';
-import { agentPresenceHint, excludedRepoNote, type AgentPresence } from '../src/commands/setup.js';
+import { agentPresenceHint, excludedRepoNote, type AgentPresence, RECOMMENDED_SKILLS, recommendedSkillIds } from '../src/commands/setup.js';
+import { bundledSkills } from '../src/skills/catalog.js';
 
 describe('agentPresenceHint', () => {
   it('names the binary it actually found', () => {
@@ -71,5 +72,52 @@ describe('excludedRepoNote', () => {
 
   it('says nothing when nothing was found to exclude', () => {
     expect(excludedRepoNote([], [])).toBeNull();
+  });
+});
+
+/**
+ * 4. Setup ticked every skill. Fine at twelve; at thirty-three it installed the
+ *    whole catalog — thirteen frontend design skills included — into every agent
+ *    on a bare Enter, and `--yes` did it with nobody present to untick.
+ *
+ *    The default is now a floor, not a taste: the debugging pipeline every
+ *    project eventually needs, and the restraint that stops the rest being
+ *    over-applied. These tests pin the pair, and — because six skills were
+ *    renamed in one pass — pin that the pair still resolves against the real
+ *    catalog. A recommendation naming an id nothing answers to is a silent
+ *    default of nothing.
+ */
+describe('setup: which skills are ticked by default', () => {
+  it('recommends exactly bug-fix and lean-code', () => {
+    expect([...RECOMMENDED_SKILLS]).toEqual(['bug-fix', 'lean-code']);
+  });
+
+  it('every recommended id exists in the bundled catalog', async () => {
+    const ids = new Set((await bundledSkills()).map((s) => s.id));
+    for (const id of RECOMMENDED_SKILLS) {
+      expect(ids.has(id), `recommended skill '${id}' is not in the catalog — a rename broke the default`).toBe(true);
+    }
+  });
+
+  it('ticks only the recommended pair, not the catalog', async () => {
+    const all = await bundledSkills();
+    const ticked = recommendedSkillIds(all);
+    expect(ticked).toEqual(['bug-fix', 'lean-code']);
+    // The regression this guards is "ticked === offered" creeping back.
+    expect(ticked.length).toBeLessThan(all.length);
+  });
+
+  it('drops a recommendation the catalog does not offer, rather than inventing it', () => {
+    expect(recommendedSkillIds([{ id: 'lean-code' }])).toEqual(['lean-code']);
+    expect(recommendedSkillIds([])).toEqual([]);
+  });
+
+  it('leaves the rest of the catalog opt-in', async () => {
+    const all = await bundledSkills();
+    const ticked = new Set(recommendedSkillIds(all));
+    const optIn = all.filter((s) => !ticked.has(s.id));
+    // Everything else must still be reachable — offered in the list, not hidden.
+    expect(optIn.length).toBe(all.length - 2);
+    expect(optIn.some((s) => s.category === 'frontend')).toBe(true);
   });
 });
