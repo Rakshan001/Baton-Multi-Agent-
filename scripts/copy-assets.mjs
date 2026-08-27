@@ -6,9 +6,15 @@
  * (src/skills/bundled → dist/skills/bundled), which the daemon reads at runtime
  * and which `package.json` "files" ships to npm via dist/.
  *
+ * The destination is wiped first. cpSync overlays rather than mirrors, so a skill
+ * renamed or deleted in src/ would otherwise linger in dist/ forever — and since
+ * package.json ships dist/, that ghost reaches npm as a second, stale copy of a
+ * skill under its old id. Each destination here is generated wholly from its
+ * source, so removing it before the copy is safe.
+ *
  * Zero-dependency (node:fs only), cross-platform (fs.cpSync).
  */
-import { cpSync, existsSync } from 'node:fs';
+import { cpSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -19,6 +25,7 @@ const pairs = [
 
 for (const [from, to] of pairs) {
   if (!existsSync(from)) continue;
+  rmSync(to, { recursive: true, force: true });
   cpSync(from, to, { recursive: true });
   console.log(`copied ${from} → ${to}`);
 }
