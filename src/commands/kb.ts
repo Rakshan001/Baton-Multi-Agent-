@@ -151,8 +151,13 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
 
   const det = await detectGraphify();
   if (!det.ok) {
+    // `baton setup` first, because it RUNS the steps instead of printing them.
+    // Handing someone two commands fails in a specific and common way: the
+    // first installs uv, and the second cannot find it, because the installer
+    // updated the environment of every future shell but not this one.
     console.error('The knowledge graph is not set up on this machine yet.');
-    console.error(`  set it up: ${installHint(det)}`);
+    console.error('  let Baton do it:   baton setup');
+    console.error(`  or do it yourself: ${installHint(det)}`);
     console.error('  then re-run: baton kb init');
     process.exitCode = 1;
     return;
