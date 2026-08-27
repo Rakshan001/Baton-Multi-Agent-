@@ -515,6 +515,9 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
  * it is Baton's problem to solve, and none of it should cost the user the setup
  * they came for. So a failure is reported and the run continues.
  */
+/** Astral's installer is ~50KB; this is a bound, not a measurement. */
+const MAX_INSTALLER_BYTES = 512 * 1024;
+
 /**
  * Download Astral's uv installer and run it.
  *
@@ -544,8 +547,18 @@ async function runUvInstallerScript(url: string): Promise<boolean> {
       console.log(`    ! the download was redirected off HTTPS (${res.url}). Nothing was run.`);
       return false;
     }
+    // Checked BEFORE reading: res.text() buffers the whole response, so a size
+    // check afterwards has already paid the memory. A server can lie about the
+    // header, but this URL is a pinned HTTPS constant — anyone able to lie here
+    // already controls the host, and buffering is then the least of it. So the
+    // cheap honest-case guard, not a streaming reader.
+    const declared = Number(res.headers.get('content-length') ?? 0);
+    if (declared > MAX_INSTALLER_BYTES) {
+      console.log(`    ! the installer download is unexpectedly large (${declared} bytes). Nothing was run.`);
+      return false;
+    }
     const body = await res.text();
-    if (!body.trimStart().startsWith('#!') || body.length > 512 * 1024) {
+    if (!body.trimStart().startsWith('#!') || body.length > MAX_INSTALLER_BYTES) {
       console.log('    ! that download does not look like the installer. Nothing was run.');
       console.log(`      Check ${url} in a browser before trying again.`);
       return false;
