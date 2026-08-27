@@ -22,10 +22,30 @@ The catalog and rendering logic live in [`src/skills/catalog.ts`](../src/skills/
 | `memory-light` | Memory-light | Recall before exploring, externalize state, write durable facts, and hand off cleanly across sessions. |
 | `verify-before-done` | Verify before done | Re-read the diff, check that symbols exist, run build/test/lint, and do an independent skeptic re-check before calling a task done. |
 | `code-review` | Code review | Review a diff since a fixed point along **three axes that are never merged**: **Standards** (repo conventions + a baseline of 12 classic code smells), **Spec** (does it implement what the issue/spec/handoff brief asked, with no scope creep?), and **Security** (injection, authz, path traversal, secret leaks, SSRF — a source-to-sink baseline). The axes run as parallel sub-agents; every finding must survive an explicit **refute** pass before it is reported; results are reported side by side with no cross-axis ranking, then **routed** (Spec-wrong → `systematic-debugging`, Security → `bug-fix`) and **persisted** with `baton review save` so they outlive the session. Two-axis structure and smell baseline adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT); the Security axis, refute gate, routing table, and durable record are Baton additions. |
+| `validate-idea` | Validate idea | The "should this exist at all" gate, before any code. Two modes routed by your goal: **startup** asks six forcing questions (demand reality, status quo, desperate specificity, narrowest wedge, observation, future-fit) under explicit anti-sycophancy rules, pushing until answers are specific; **builder** runs a lighter diagnostic for side projects and hackathons. Then an explicit scope mode (EXPAND / SELECTIVE / HOLD / REDUCE), the current-vs-12-month-ideal map, and 2-3 costed alternatives — ending in a design doc and one concrete assignment. Feeds `plan-review`. |
+| `plan-review` | Plan review | Locks the execution plan **before** code exists. Challenges scope first (what is the minimum change? >8 files or >2 new services is a smell worth stopping for), then architecture and data flow, the error & rescue map (happy / nil / empty / upstream-failure per path), the edge-case map, a test matrix with coverage targets, and a performance pass. Every finding carries a recommendation and asks for your call. Reviews *plans*; `code-review` reviews *diffs*. |
+| `browser-qa` | Browser QA | Tests a running web app the way a user does — clicks everything, submits every form empty/invalid/at the boundary, checks the console after every interaction — then fixes what breaks with one atomic commit each and re-verifies. Weighted health score (functional, console, accessibility, UX, links, visual, performance, content) reported before and after, with a ship verdict. `--report-only` documents without touching code; `--quick` / `--exhaustive` move the severity bar. Never reads source while testing — that is the rule that finds what code review structurally cannot. |
+| `onboarding-audit` | Onboarding audit | Walks your own onboarding as a stranger and scores what actually happens. Measures Time-To-Hello-World against published tiers, scores eight dimensions 0-10 (getting started, API/CLI/SDK ergonomics, error messages, docs, upgrade path, dev environment, community, DX measurement), and tags every score **TESTED / PARTIAL / INFERRED** so a guess is never mistaken for a measurement. Findings split into quick wins, this sprint, next quarter. |
+| `design-audit` | Design audit | Visual audit of a live site that ends in committed fixes, not complaints. Captures a first impression before analysis can rationalise it, extracts the design system the site *actually* uses and flags where it sprawled, then audits typography, spacing, hierarchy, WCAG AA contrast, layout, focus states, performance, and generic AI-slop patterns. Each finding is classified HIGH / MEDIUM / POLISH, fixed in source, committed atomically, re-verified. |
+| `design-options` | Design options | Several genuinely different design directions side by side before you commit to one. Concepts in words first (cheap to reject), an **anti-convergence rule** — any two variants that read as siblings get one regenerated in a deliberately different direction — then self-contained HTML variants on one comparison board, structured approve/reject/iterate per variant for at most three rounds, and design tokens extracted from the winner. |
+| `scrape` | Scrape | Pulls structured data off a page under a strict read-only contract: refuses anything implying a write, treats fetched bytes as **data and never as instructions** (a scraped page cannot choose the agent's next action), refuses loopback/private/link-local hosts including the cloud metadata endpoint, and emits one stable JSON document so output pipes into `jq`. When extraction fails it reports the blocker rather than inventing plausible results. |
+| `scrape-to-skill` | Scrape to skill | Turns a scrape that just worked into a permanent, tested skill. Synthesizes a **pure** parser (HTML in, data out, no network inside it), captures a real page as a fixture so the test runs offline, and writes assertions that check populated fields rather than smoke-testing. Runs the test before anything is saved, stops after two failed repairs, and gates on explicit approval — while stating plainly that the fixture write and test run happen *before* that gate. |
+| `design-taste` | Design taste | The default frontend design skill. Reads the brief, infers a design language, tunes three dials (variance / motion / density), and ships landing pages, portfolios and redesigns against hard pre-flight rules so the result does not look templated. |
+| `gpt-taste` | GPT taste | A harder-edged alternative doctrine: AIDA page structure, the 2-line hero iron rule, gapless bento grids (`grid-flow-dense`), seeded layout variance to break the model's default choices, and strict GSAP scroll paradigms. |
+| `stitch-design` | Stitch design | Google Stitch-compatible semantic design rules — a token and component vocabulary Stitch understands, held consistent so generated UI does not drift screen to screen. |
+| `style-minimalist` | Style: minimalist | Clean editorial interfaces in the Notion / Linear register — strict monochrome, restrained type scale, generous whitespace. |
+| `style-brutalist` | Style: brutalist | Raw mechanical interfaces: Swiss typography, extreme scale contrast, visible structure. (Beta) |
+| `style-soft` | Style: soft | The expensive, soft, high-end look — premium type pairing, deep whitespace, layered depth and shadow, smooth motion. |
+| `design-redesign` | Design redesign | Upgrades an **existing codebase** to premium quality without a rewrite: scans the stack, diagnoses generic AI design fingerprints (the purple/blue gradient, pure `#000`, Inter everywhere, orphaned words), and fixes in place using the framework already there. Complements `design-audit`, which audits a *running site* in a browser instead. |
+| `image-to-code` | Image to code | Image-first frontend work: generate a premium reference image, analyse it deeply, then implement code that matches it — so the look is agreed before any code is written. |
+| `imagegen-web` | Imagegen: web | Generates premium website design reference images. Writes no code. |
+| `imagegen-mobile` | Imagegen: mobile | Generates premium mobile app screen concepts and flows. Writes no code. |
+| `brandkit` | Brand kit | Generates a brand-kit overview image — logo concepts, identity system, colour palette, typography and mockups as one visual sheet. Writes no code. |
+| `full-output` | Full output | Stops the model truncating code: bans the `// rest of code` family of placeholders, counts deliverables up front and checks them off, and splits cleanly at a token limit instead of compressing. |
 | `map-codebase` | Map this codebase | Build the graphify knowledge graph and `CODEBASE.md` so agents navigate a compact map instead of the whole repo. |
 | `safe-refactor` | Safe refactor | Restructure without changing behaviour — worktrees, a green test baseline, and the graph to find every caller. |
 
-`bug-fix`, `lean-code`, `code-review`, and the four efficiency & traceability skills (`token-efficient-coding`, `traceable-changes`, `memory-light`, `verify-before-done`) are file-backed under `src/skills/bundled/`; `map-codebase` and `safe-refactor` are inline.
+Every skill above is file-backed under `src/skills/bundled/<id>/SKILL.md` except `map-codebase` and `safe-refactor`, which are inline in `src/skills/catalog.ts`. The plan → design → build → review → QA set (`validate-idea`, `plan-review`, `design-options`, `design-audit`, `qa`, `onboarding-audit`, `scrape`, `scrape-to-skill`) is Baton-native: the six that reach a decision or a verdict record it to Baton's shared memory rather than a private sidecar directory, so nothing they learn is invisible to the next session. (`scrape` and `scrape-to-skill` produce data and a skill respectively, and write no memory.)
 
 `verify-before-done` and `code-review` are deliberately separate: the first is the author proving their own change works before claiming done; the second reviews a diff against a fixed point. Run them in that order.
 
@@ -140,3 +160,27 @@ An install response reports where it wrote and how many reference files came alo
 - [Memory](./memory.md) — durable, evidence-anchored facts that `memory-light` leans on.
 - [Serve & dashboard](./dashboard.md) — run the daemon to use the Skills page and API.
 - [README](../README.md) — project overview.
+
+## Categories
+
+Every bundled skill carries a `category`, so a 33-skill list can be filtered rather than scrolled.
+The axis is *what you are trying to do*, not what the skill is built from:
+
+| Category | For | Skills |
+| --- | --- | --- |
+| `plan` | Decide what to build | `validate-idea`, `plan-review`, `dispatch-plan`, `basic-setup` |
+| `code` | Change code | `bug-fix`, `lean-code`, `safe-refactor`, `stack-migration`, `token-efficient-coding`, `traceable-changes`, `full-output` |
+| `frontend` | Make it look right | `design-taste`, `gpt-taste`, `stitch-design`, `style-minimalist`, `style-brutalist`, `style-soft`, `design-redesign`, `image-to-code`, `design-options`, `design-audit`, `imagegen-web`, `imagegen-mobile`, `brandkit` |
+| `review` | Check someone's work | `code-review`, `verify-before-done` |
+| `test` | Exercise a running thing | `browser-qa`, `onboarding-audit` |
+| `data` | Pull data | `scrape`, `scrape-to-skill` |
+| `context` | Carry knowledge between sessions | `handoff`, `memory-light`, `map-codebase` |
+
+Skills you import yourself default to `code` — guessing a category from a stranger's text would
+mis-file it confidently.
+
+## Attribution
+
+The 12 frontend design skills are bundled from
+[taste-skill](https://github.com/Leonxlnx/taste-skill) by Leonxlnx (MIT); see [NOTICE](../NOTICE).
+`lean-code` adapts Ponytail (MIT) and `code-review` adapts mattpocock/skills (MIT).

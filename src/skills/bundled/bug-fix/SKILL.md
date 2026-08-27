@@ -269,6 +269,13 @@ cheapest experiment that can kill each one.*
 7. **Name the root cause in one sentence** before designing any fix. Can't? You haven't found
    it — loop back with the next hypothesis.
 
+**3-strike rule on hypotheses → ask for evidence, don't guess again.** If 3 tested hypotheses
+have all been eliminated, you are out of evidence, not out of ideas. ⛔ STOP forming hypothesis
+#4 from the same information and ask the user for what you cannot see: the failing logs, the
+environment/config that differs, the exact reproduction they used, or when it last worked. A
+fourth guess drawn from an exhausted evidence pool is how symptom-fixing starts. This is
+cheaper than it feels — one question beats an hour of speculative instrumentation.
+
 **If 3+ fix attempts have failed → STOP. This is not another failed hypothesis — it's likely the WRONG
 ARCHITECTURE.** The tell: each fix reveals new coupling/shared state elsewhere, or each fix needs
 "massive refactoring", or each fix spawns a new symptom in a different place. Do **not** attempt fix #4.

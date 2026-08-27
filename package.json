@@ -1,6 +1,6 @@
 {
   "name": "batonhq",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Hand a unit of coding work from one AI agent to another — plan on your expensive agent, pass the baton to your cheap one.",
   "type": "module",
   "bin": {

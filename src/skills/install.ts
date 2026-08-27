@@ -42,7 +42,7 @@ import { mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { bundledSkills, type SkillDef, type SkillSource } from './catalog.js';
+import { bundledSkills, type SkillCategory, type SkillDef, type SkillSource } from './catalog.js';
 import { loadBookmarks, setBookmark } from './bookmarks.js';
 import { clearOrigin, getOrigin, hashSkillFiles, setOrigin } from './origins.js';
 import { gitExcludeLocal, gitUnexcludeLocal } from '../git.js';
@@ -82,6 +82,8 @@ export interface SkillStatus {
   produces: string[];
   body: string;
   source: SkillSource;
+  /** What the skill is for — the axis the Skills screen filters on. */
+  category: SkillCategory;
   /** 3-line human explainer (what / how / win); absent for imported skills. */
   explain?: { what: string; how: string; win: string };
   /** Relative paths of the skill's reference files (content omitted). */
@@ -251,6 +253,9 @@ export function parseSkillMarkdown(text: string, fallbackId: string): SkillDef {
     description: description || firstHeadingOrLine(content) || 'Imported skill.',
     tags: [],
     produces: [],
+    // A skill the user brought in says nothing about what it is for, and guessing
+    // from its text would mis-file it confidently. 'code' is the honest default.
+    category: 'code',
     body: content.trim() + '\n',
     references: [],
     source: 'imported',
@@ -409,6 +414,7 @@ export async function listSkillStatus(root: string): Promise<SkillStatus[]> {
     produces: skill.produces,
     body: skill.body,
     source: skill.source,
+    category: skill.category,
     explain: skill.explain,
     references: skill.references.map((r) => r.rel),
     bookmarked: bookmarked.has(skill.id),

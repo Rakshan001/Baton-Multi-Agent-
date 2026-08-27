@@ -99,3 +99,15 @@ Rover
   License: Apache-2.0
   Adapted: concept only, no code — invoking agent CLIs headlessly with a
   prompt (one-shot print/exec modes) for src/spawn.ts.
+
+taste-skill
+  https://github.com/Leonxlnx/taste-skill
+  Copyright (c) 2026 Leonxlnx
+  License: MIT
+  Bundled: 12 skill bodies included substantially verbatim as Baton bundled
+  skills — design-taste, gpt-taste, stitch-design, style-minimalist,
+  style-brutalist, style-soft, design-redesign, image-to-code, imagegen-web,
+  imagegen-mobile, brandkit, full-output. Baton's changes are limited to the
+  frontmatter `name:` (renamed to Baton's skill-id convention), catalog
+  metadata, and an attribution footer. The upstream taste-skill-v1 is not
+  bundled: its author documents it as superseded by design-taste.

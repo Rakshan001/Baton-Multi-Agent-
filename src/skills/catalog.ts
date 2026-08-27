@@ -50,6 +50,41 @@ export interface SkillExplain {
  */
 export type SkillSource = 'bundled' | 'global' | 'imported';
 
+/**
+ * What a skill is *for*, so 30+ skills can be filtered instead of scrolled.
+ *
+ * Deliberately coarse — a taxonomy with a category per skill sorts nothing. The
+ * test is what a person is trying to do when they open the list: decide what to
+ * build ('plan'), change code ('code'), make it look right ('frontend'), check
+ * someone's work ('review'), exercise a running thing ('test'), pull data
+ * ('data'), or carry knowledge between sessions ('context').
+ */
+export type SkillCategory =
+  | 'plan' | 'code' | 'frontend' | 'review' | 'test' | 'data' | 'context';
+
+/** Category per bundled skill. Imported skills fall back to 'code'. */
+const CATEGORY: Record<string, SkillCategory> = {
+  // decide what to build
+  'validate-idea': 'plan', 'plan-review': 'plan', 'dispatch-plan': 'plan', 'basic-setup': 'plan',
+  // change code
+  'bug-fix': 'code', 'lean-code': 'code', 'safe-refactor': 'code', 'stack-migration': 'code',
+  'token-efficient-coding': 'code', 'traceable-changes': 'code', 'full-output': 'code',
+  // make it look right
+  'design-taste': 'frontend', 'gpt-taste': 'frontend', 'stitch-design': 'frontend',
+  'style-minimalist': 'frontend', 'style-brutalist': 'frontend', 'style-soft': 'frontend',
+  'design-redesign': 'frontend', 'image-to-code': 'frontend', 'design-options': 'frontend',
+  'design-audit': 'frontend', 'imagegen-web': 'frontend', 'imagegen-mobile': 'frontend',
+  brandkit: 'frontend',
+  // check someone's work
+  'code-review': 'review', 'verify-before-done': 'review',
+  // exercise a running thing
+  'browser-qa': 'test', 'onboarding-audit': 'test',
+  // pull data
+  scrape: 'data', 'scrape-to-skill': 'data',
+  // carry knowledge between sessions
+  handoff: 'context', 'memory-light': 'context', 'map-codebase': 'context',
+};
+
 export interface SkillDef {
   id: string;
   /** Display name. */
@@ -65,6 +100,8 @@ export interface SkillDef {
   /** Supporting files installed alongside the skill (loaded on demand by the agent). */
   references: SkillReference[];
   source: SkillSource;
+  /** What the skill is for — the axis the Skills screen filters on. */
+  category: SkillCategory;
   /** 3-line human explainer (what / how / win) for the UI. Bundled skills carry
    *  one; imported skills fall back to their description. */
   explain?: SkillExplain;
@@ -129,6 +166,86 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
   'stack-migration': {
     tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'cursor', 'codex', 'antigravity', 'handoff'],
     produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)', 'parallel fan-out plan + per-phase HANDOFF briefs'],
+  },
+  'validate-idea': {
+    tags: ['plan', 'planning', 'product', 'brainstorm', 'idea', 'validate', 'discovery', 'scope', 'ambition', 'wedge', 'demand', 'startup', 'design doc', 'forcing questions', 'diagnostic', 'alternatives'],
+    produces: ['goal-routed diagnostic', 'six forcing questions', 'scope mode decision', '2-3 costed alternatives', 'design doc', 'one concrete assignment'],
+  },
+  'plan-review': {
+    tags: ['plan', 'planning', 'architecture', 'review', 'design', 'data flow', 'error handling', 'edge cases', 'test matrix', 'coverage', 'performance', 'scope', 'complexity', 'pre-implementation'],
+    produces: ['scope challenge', 'architecture + data-flow map', 'error & rescue map', 'edge-case map', 'test matrix', 'performance pass', 'eng review verdict'],
+  },
+  'browser-qa': {
+    tags: ['qa', 'test', 'testing', 'bugs', 'browser', 'web app', 'quality', 'health score', 'accessibility', 'console', 'forms', 'regression', 'smoke', 'ship', 'verify'],
+    produces: ['explored page map', 'evidenced issue list', 'weighted health score', 'atomic fix commits', 'before/after score', 'ship verdict', 'regression baseline'],
+  },
+  'onboarding-audit': {
+    tags: ['dx', 'developer experience', 'onboarding', 'tthw', 'quickstart', 'docs', 'documentation', 'cli', 'sdk', 'api', 'error messages', 'adoption', 'audit', 'scorecard'],
+    produces: ['measured TTHW', '8-dimension scorecard', 'evidence tags (TESTED/PARTIAL/INFERRED)', 'quick wins', 'sprint + quarter backlog'],
+  },
+  'design-audit': {
+    tags: ['design', 'visual', 'audit', 'ui', 'typography', 'spacing', 'hierarchy', 'contrast', 'wcag', 'accessibility', 'responsive', 'polish', 'ai slop', 'frontend', 'css'],
+    produces: ['first impression', 'extracted design system', 'per-page findings', 'severity classification', 'atomic fix commits', 'design audit verdict'],
+  },
+  'design-options': {
+    tags: ['design', 'ui', 'ux', 'variants', 'options', 'mockup', 'explore', 'brainstorm', 'visual', 'comparison', 'prototype', 'html', 'tokens', 'frontend'],
+    produces: ['named concepts', 'self-contained HTML variants', 'comparison board', 'per-variant feedback', 'approved design', 'design tokens'],
+  },
+  scrape: {
+    tags: ['scrape', 'web', 'extract', 'data', 'json', 'fetch', 'parse', 'html', 'read-only', 'metadata', 'json-ld', 'table', 'links'],
+    produces: ['one JSON document', 'stable field shape', 'honest blocker report', 'scrape-to-skill handoff'],
+  },
+  'scrape-to-skill': {
+    tags: ['skill', 'codify', 'permanent', 'reusable', 'scrape', 'parser', 'fixture', 'test', 'library', 'automation', 'import'],
+    produces: ['pure parser', 'captured HTML fixture', 'a test that can fail', 'approval gate', 'skill in your library'],
+  },
+  'design-taste': {
+    tags: ['design', 'frontend', 'ui', 'taste', 'landing page', 'portfolio', 'gsap', 'motion', 'typography', 'layout', 'anti-slop', 'premium', 'css', 'tailwind'],
+    produces: ['brief inference', 'design-system map', 'variance / motion / density dials', 'pre-flight hard-rule check', 'shipped page'],
+  },
+  'gpt-taste': {
+    tags: ['design', 'frontend', 'ui', 'gsap', 'motion', 'awwwards', 'hero', 'bento', 'grid', 'typography', 'scrolltrigger', 'aida', 'premium'],
+    produces: ['AIDA page structure', 'hero architecture', 'gapless bento grid', 'GSAP scroll paradigms', 'seeded layout variance'],
+  },
+  'stitch-design': {
+    tags: ['design', 'frontend', 'ui', 'stitch', 'google stitch', 'semantic', 'tokens', 'components', 'generation'],
+    produces: ['semantic design rules', 'token vocabulary', 'Stitch-compatible output'],
+  },
+  'style-minimalist': {
+    tags: ['design', 'frontend', 'ui', 'minimalist', 'editorial', 'monochrome', 'notion', 'linear', 'whitespace', 'clean', 'style'],
+    produces: ['monochrome palette', 'editorial type scale', 'restrained layout'],
+  },
+  'style-brutalist': {
+    tags: ['design', 'frontend', 'ui', 'brutalist', 'swiss', 'typography', 'contrast', 'raw', 'industrial', 'style'],
+    produces: ['Swiss type system', 'extreme scale contrast', 'raw structural layout'],
+  },
+  'style-soft': {
+    tags: ['design', 'frontend', 'ui', 'soft', 'premium', 'depth', 'shadow', 'whitespace', 'animation', 'expensive', 'style'],
+    produces: ['premium type pairing', 'depth and shadow system', 'smooth motion'],
+  },
+  'design-redesign': {
+    tags: ['design', 'frontend', 'redesign', 'upgrade', 'audit', 'refresh', 'ai slop', 'legacy', 'css', 'tailwind', 'existing project'],
+    produces: ['stack scan', 'AI-fingerprint diagnosis', 'in-place design upgrade'],
+  },
+  'image-to-code': {
+    tags: ['design', 'frontend', 'image', 'reference', 'analysis', 'implementation', 'visual', 'mockup', 'ui'],
+    produces: ['reference image', 'deep visual analysis', 'matching implementation'],
+  },
+  'imagegen-web': {
+    tags: ['design', 'image generation', 'reference', 'website', 'concept', 'visual', 'mockup', 'no code'],
+    produces: ['website reference images'],
+  },
+  'imagegen-mobile': {
+    tags: ['design', 'image generation', 'mobile', 'app', 'screens', 'flows', 'concept', 'visual', 'no code'],
+    produces: ['mobile screen concepts', 'flow concepts'],
+  },
+  brandkit: {
+    tags: ['design', 'brand', 'identity', 'logo', 'palette', 'typography', 'mockup', 'image generation', 'no code'],
+    produces: ['logo concepts', 'identity system', 'colour palette', 'type system', 'mockups'],
+  },
+  'full-output': {
+    tags: ['output', 'completeness', 'truncation', 'placeholder', 'laziness', 'code generation', 'exhaustive', 'coding'],
+    produces: ['complete files', 'deliverable count check', 'clean token-limit splits'],
   },
 };
 
@@ -201,6 +318,106 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     how: 'Green test baseline → isolated worktree → small steps → graph-checked callers.',
     win: 'Refactors land without breaking the caller you forgot existed.',
   },
+  'validate-idea': {
+    what: 'The "should this exist at all" gate, run before a line of code.',
+    how: 'Six forcing questions with anti-sycophancy rules, an explicit scope mode, then 2-3 costed alternatives.',
+    win: 'You find out the premise is wrong in an hour instead of a quarter.',
+  },
+  'plan-review': {
+    what: 'Locks the execution plan before any code exists.',
+    how: 'Challenge scope → architecture → error/rescue map → edge cases → test matrix → performance → verdict.',
+    win: 'Architecture problems surface while they still cost a conversation, not a rewrite.',
+  },
+  'browser-qa': {
+    what: 'Tests the running app like a user, then fixes what breaks.',
+    how: 'Click everything, break every form, watch the console — then one atomic commit per fix and re-verify.',
+    win: 'Finds breakage code review structurally cannot see; --report-only when someone else fixes.',
+  },
+  'onboarding-audit': {
+    what: 'Walks your own onboarding as a stranger and scores what actually happens.',
+    how: 'Times Time-To-Hello-World, scores 8 dimensions, tags each TESTED / PARTIAL / INFERRED.',
+    win: 'You learn why adoption stalls before you announce, not from the tracker after.',
+  },
+  'design-audit': {
+    what: 'Visual audit of a live site that ends in committed fixes, not complaints.',
+    how: 'First impression → design-system extraction → per-page checklist → fix → atomic commit.',
+    win: 'Contrast, focus states and design sprawl get fixed, not just filed.',
+  },
+  'design-options': {
+    what: 'Shows several genuinely different design directions before you commit to one.',
+    how: 'Concepts in words first, an anti-convergence rule, HTML variants on one comparison board.',
+    win: 'You choose from real options instead of iterating on the first idea anyone had.',
+  },
+  scrape: {
+    what: 'Pulls structured data off a page under a strict read-only contract.',
+    how: 'One-line intent → refuse anything mutating → extract → one stable JSON document on stdout.',
+    win: 'Pipeable output, and a real blocker report instead of invented results when it fails.',
+  },
+  'scrape-to-skill': {
+    what: 'Turns a scrape that just worked into a permanent, tested skill.',
+    how: 'Pure parser + captured fixture + a test that can fail → approval gate → baton skills import.',
+    win: 'The next run executes a proven parser, and the fixture proves it still works.',
+  },
+  'design-taste': {
+    what: 'The default frontend design skill — pages that do not look templated.',
+    how: 'Infer the brief, map a design system, tune variance / motion / density, then ship against hard pre-flight rules.',
+    win: 'Landing pages and portfolios that read as designed, not generated.',
+  },
+  'gpt-taste': {
+    what: 'An opinionated Awwwards-level doctrine for premium, motion-rich pages.',
+    how: 'AIDA structure, the 2-line hero rule, gapless bento grids, seeded variance, strict GSAP scroll paradigms.',
+    win: 'Breaks the layouts a model reaches for by default, deterministically.',
+  },
+  'stitch-design': {
+    what: 'Google Stitch-compatible semantic rules for AI UI generation.',
+    how: 'A semantic token and component vocabulary Stitch understands, held consistent across every screen.',
+    win: 'Generated UI stays coherent instead of drifting screen to screen.',
+  },
+  'style-minimalist': {
+    what: 'Clean editorial interfaces in the Notion / Linear register.',
+    how: 'Strict monochrome palette, restrained type scale, generous whitespace, no decorative colour.',
+    win: 'Calm, dense, professional UI that ages well.',
+  },
+  'style-brutalist': {
+    what: 'Raw mechanical interfaces with Swiss typography. (Beta)',
+    how: 'Extreme scale contrast, visible structure, hard edges, a deliberate refusal of softness.',
+    win: 'A distinctive look nobody mistakes for a template.',
+  },
+  'style-soft': {
+    what: 'The expensive, soft, high-end look.',
+    how: 'Premium type pairing, deep whitespace, layered depth and shadow, smooth motion.',
+    win: 'Interfaces that read as considered and costly rather than default.',
+  },
+  'design-redesign': {
+    what: 'Upgrades an existing codebase to premium quality without a rewrite.',
+    how: 'Scan the stack, diagnose generic AI design fingerprints, fix in place using the framework already there.',
+    win: 'Kills the purple-gradient, Inter-everywhere look without breaking what works.',
+  },
+  'image-to-code': {
+    what: 'Image-first frontend work: generate a reference, then build to match it.',
+    how: 'Produce a premium reference image, analyse it deeply, then implement code that matches what it shows.',
+    win: 'You agree on the look before any code gets written.',
+  },
+  'imagegen-web': {
+    what: 'Generates premium website design reference images. Writes no code.',
+    how: 'Produces reference imagery to direct or approve a look before implementation starts.',
+    win: 'Design direction settled visually, without spending a build to find out.',
+  },
+  'imagegen-mobile': {
+    what: 'Generates premium mobile app screen concepts and flows. Writes no code.',
+    how: 'Produces screen and flow concepts as images so a mobile direction can be judged early.',
+    win: 'See the app before building it.',
+  },
+  brandkit: {
+    what: 'Generates a brand-kit overview — identity, palette, type, mockups.',
+    how: 'Logo concepts, an identity system, colour and typography, and mockups rendered as one visual sheet.',
+    win: 'A brand direction you can react to in a single look.',
+  },
+  'full-output': {
+    what: 'Stops the model truncating code with placeholder comments.',
+    how: 'Bans the "rest of code" family, counts deliverables up front, and splits cleanly at token limits.',
+    win: 'You get the whole file, not a skeleton you have to finish yourself.',
+  },
 };
 
 /* ---- inline single-file skills (short, no references) ---- */
@@ -258,6 +475,7 @@ const INLINE_SKILLS: SkillDef[] = [
     body: MAP_BODY,
     references: [],
     source: 'bundled',
+    category: 'context',
     explain: SKILL_EXPLAIN['map-codebase'],
   },
   {
@@ -269,6 +487,7 @@ const INLINE_SKILLS: SkillDef[] = [
     body: REFACTOR_BODY,
     references: [],
     source: 'bundled',
+    category: 'code',
     explain: SKILL_EXPLAIN['safe-refactor'],
   },
 ];
@@ -318,6 +537,7 @@ async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
     body: parsed.content.trim() + '\n',
     references,
     source: 'bundled',
+    category: CATEGORY[id] ?? 'code',
     explain: SKILL_EXPLAIN[id],
     raw: nameMatchesId ? raw : undefined,
   };

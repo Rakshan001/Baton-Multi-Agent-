@@ -143,10 +143,60 @@ confirm — defaulting to "refuted" when uncertain. Drop what doesn't survive. R
 with their citation intact. This is the same ≥95% skeptic-corroborated gate the `bug-fix` skill
 uses, applied to review findings.
 
+#### Score what survives, and quote the line that proves it
+
+Refuting is binary; triage is not. Give every survivor a confidence score, because a reader who
+can't tell a verified bug from a pattern-match treats the whole report as noise:
+
+| Score | Meaning | What happens to it |
+| --- | --- | --- |
+| 9-10 | Verified by reading the code. The bug is demonstrated. | Report normally |
+| 7-8 | Strong pattern match, very likely correct. | Report normally |
+| 5-6 | Plausible; could be a false positive. | Report with the caveat stated |
+| 3-4 | Suspicious but probably fine. | Appendix only |
+| 1-2 | Speculation. | Suppress — unless it is a P0 security class |
+
+⛔ **Pre-emit quote gate.** Before any finding is reported, quote the specific line that
+motivates it. **If you cannot quote the motivating line, you have not verified it — force the
+confidence to 4 and drop it out of the main report.** This single rule is what keeps a review
+from filling up with confident-sounding findings nobody can act on.
+
+Format every finding so the score travels with it:
+
+```
+[P1] (confidence 9/10) src/server.ts:412 — <one line> → <quoted code>
+```
+
+When you persist at step 9, put the score **on the first line of `detail`** — `ReviewFinding` has
+no `confidence` field, so a top-level `confidence` key is dropped without warning by
+`baton review save`; and `baton review show` prints only `detail`'s first line, so a score on any
+later line is invisible in the one view people actually read. `detail` is truncated at 800 chars.
+A 9/10 and a 5/6 must not reach the next agent looking identical.
+
 ### 7. Aggregate
 
-Present each live axis under its own heading — `## Standards`, `## Spec`, `## Security` — verbatim
-or lightly cleaned. **Do not merge or rerank.** Note any skipped axis and why, and any partial
+Open with the scope check — one line, stated before any finding, and **informational only**: it
+never blocks the review, it tells the reader whether the diff is even the right diff.
+
+```
+Scope: CLEAN | DRIFT DETECTED | REQUIREMENTS MISSING
+Intent:    <what was asked for, one line — from the spec, issue, PR body or handoff brief only>
+Delivered: <what the diff actually does, one line>
+```
+
+DRIFT → list the out-of-scope changes. MISSING → list the unaddressed requirements. A diff that
+does something other than what was asked is worth knowing *before* reading twenty style notes on
+it — the Spec axis finds the same drift per-hunk, but only this line puts it where a reader sees
+it first.
+
+⛔ **No spec means no scope verdict either.** Intent must come from a real external statement —
+the spec, the issue, the PR body, a handoff brief. Commit messages written by the same author as
+the diff are not independent evidence of intent. With nothing external, emit
+`Scope: N/A — no spec available` and move on. Deriving `REQUIREMENTS MISSING` from the branch's
+own commit messages is the requirement-inventing this skill forbids at step 2.
+
+Then present each live axis under its own heading — `## Standards`, `## Spec`, `## Security` —
+verbatim or lightly cleaned. **Do not merge or rerank.** Note any skipped axis and why, and any partial
 coverage. Close with one line: findings per axis, and the worst issue *within* each axis. Do not
 name a single winner across axes — that is exactly the reranking the separation prevents.
 
@@ -181,7 +231,7 @@ baton review save <slug> <<'JSON'
       "file": "src/auth/session.ts",
       "line": 42,
       "source": "baseline: Duplicated Code",
-      "detail": "same 9-line parse appears in middleware.ts:88",
+      "detail": "confidence 9/10 — same 9-line parse appears in middleware.ts:88",
       "hard": false,
       "route": "fix-directly"
     }
@@ -228,7 +278,8 @@ re-review reorders the list. Two behaviours worth knowing:
 
 - Reviewing "the branch" without pinning what it's being compared against.
 - Merging the axes into one ranked list — the failure this skill exists to prevent.
-- Reporting findings nobody tried to refute.
+- Reporting findings nobody tried to refute, or promoting one whose motivating line you cannot quote.
+- Emitting a scope verdict derived from the diff's own commit messages when no external spec exists.
 - Inventing spec requirements because no spec was found.
 - Reporting formatting the linter already fixes, or pre-existing issues the diff merely moved.
 - Filing baseline smells as hard violations, or flagging a smell the repo's own standards endorse.
@@ -243,7 +294,9 @@ re-review reorders the list. Two behaviours worth knowing:
 - [ ] Spec located, or its absence explicitly reported.
 - [ ] Security sources located; security baseline passed to the sub-agent in full.
 - [ ] Axes ran in parallel, in isolated contexts.
-- [ ] Every reported finding survived an explicit attempt to refute it.
+- [ ] Every reported finding survived an explicit attempt to refute it, carries a confidence
+      score, and quotes the line that motivates it.
+- [ ] Scope line emitted — or `N/A` recorded because no external spec exists.
 - [ ] Findings reported under separate headings, each citing a standard, a named smell, a quoted
       spec line, or a named vulnerability class.
 - [ ] No cross-axis ranking or combined verdict; skipped axes and partial coverage stated.

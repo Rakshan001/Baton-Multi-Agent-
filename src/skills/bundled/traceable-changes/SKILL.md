@@ -37,7 +37,10 @@ KEEP DIFFS REVIEWABLE → LEAVE A TRAIL → REVERT IS A FIRST-CLASS OPTION
 6. **Revert is normal, not failure.** A small atomic commit can be reverted cleanly. If a change
    turns out wrong, `git revert <sha>` beats a risky manual unwind.
 7. **Never force-push shared history** and never amend a commit another agent may have based work
-   on — it destroys traceability.
+   on — it destroys traceability. ⛔ **And never push at all unless you were asked.** Committing is
+   local and reversible; pushing publishes to everyone sharing the branch. Ask about push and PR
+   together and let the user name the base branch — the rule `bug-fix` holds at the end of its
+   pipeline, and it applies to every agent that commits.
 
 > **Adapt to the project.** Use this repo's branch naming, commit convention, and remote. Items
 > marked *(optional)* are skipped if the project doesn't have that tooling.
