@@ -105,7 +105,7 @@ function MemberCard({ m, teams, canAct, writeEnabled, onWarn, onDisconnect, onRe
           {!revoked && <Dot online={m.online} />}
           <span style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>{m.name}</span>
           {/* Two people can pick the same display name; the id is the identity. */}
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--text-quaternary)" }}>{m.id}</span>
+          <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>{m.id}</span>
           <RoleBadge role={m.role} revoked={revoked} />
           {!m.registered && (
             <span className="tag" style={{ color: "var(--text-tertiary)" }} data-tip="Reporting from this machine over loopback — no member record, no token needed.">
@@ -152,7 +152,7 @@ function MemberCard({ m, teams, canAct, writeEnabled, onWarn, onDisconnect, onRe
               <div key={w.id} style={{ display: "flex", alignItems: "baseline", gap: 7, fontSize: "var(--fs-12)", color: "var(--dirty-text)", background: "var(--dirty-soft)", border: "1px solid var(--dirty-border)", borderRadius: "var(--r-sm)", padding: "5px 8px" }}>
                 <Icon name="alertTriangle" size={12} style={{ flex: "none", position: "relative", top: 2 }} />
                 <span style={{ flex: 1, minWidth: 0 }}>{w.message}</span>
-                <span style={{ flex: "none", fontSize: 10.5, color: "var(--text-quaternary)" }}>sent {ago(w.at)}</span>
+                <span style={{ flex: "none", fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>sent {ago(w.at)}</span>
               </div>
             ))}
           </div>
@@ -234,11 +234,11 @@ function ClaimGroup({ g, canAct, writeEnabled, onClear }: {
           : <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--accent)", flex: "none", margin: "0 3px" }} />}
         <div style={{ minWidth: 0, flex: 1 }}>
           <span className="mono" style={{ fontSize: "var(--fs-12)", color: conflict ? "var(--conflict-text)" : "var(--text-secondary)" }}>{basename(g.relPath)}</span>
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--text-quaternary)", marginLeft: 7 }}>{dirname(g.relPath)}</span>
+          <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", marginLeft: 7 }}>{dirname(g.relPath)}</span>
         </div>
         {g.projectId && <span className="tag" style={{ flex: "none" }}>{g.projectId}</span>}
         {conflict && (
-          <span style={{ flex: "none", fontSize: 10, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 7px", borderRadius: 99 }}
+          <span style={{ flex: "none", fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 7px", borderRadius: 99 }}
             data-tip="Same file, same branch, two members. Nothing is blocked — decide between you who takes it.">
             same branch
           </span>
@@ -260,7 +260,7 @@ function ClaimGroup({ g, canAct, writeEnabled, onClear }: {
             <div key={`${c.memberId}-${c.relPath}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
               <AgentBadge id={(c.agent as AgentId) ?? null} size="sm" showLabel={false} />
               <span style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", flex: "none" }}>{c.memberName}</span>
-              {c.branch && <span className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)", flex: "none" }}>{c.branch}</span>}
+              {c.branch && <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", flex: "none" }}>{c.branch}</span>}
               <span style={{ fontSize: 11, color: stale ? "var(--dirty-text)" : "var(--text-quaternary)", flex: 1, minWidth: 0 }}
                 data-tip={stale ? "Held a long time — if their agent crashed mid-edit, the claim lingers until it expires." : undefined}>
                 held {ago(c.openedAt)}{stale ? " · looks stale" : ""}

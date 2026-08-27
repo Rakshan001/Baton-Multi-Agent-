@@ -263,7 +263,7 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
           <button key={p.id} className="fr" style={chipStyle(p.id === activeId)} onClick={() => setProjectId(p.id)}>
             <Icon name={p.id === "merged" ? "share" : "folder"} size={12} />
             {p.name}
-            {p.building && <span className="mono" style={{ fontSize: 9, opacity: 0.8 }}>building…</span>}
+            {p.building && <span className="mono" style={{ fontSize: "var(--text-micro)", opacity: 0.8 }}>building…</span>}
           </button>
         ))}
         <span className="vdivider" style={{ height: 18 }} />
@@ -283,7 +283,7 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
                   data-tip={`${c.count} node${c.count === 1 ? "" : "s"} — click to isolate`} aria-pressed={on}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 5, height: 22, padding: "0 8px",
-                    borderRadius: 99, cursor: "pointer", fontSize: 10.5,
+                    borderRadius: 99, cursor: "pointer", fontSize: "var(--text-micro)",
                     border: `1px solid ${on ? "var(--text-primary)" : "var(--border-default)"}`,
                     background: on ? "var(--bg-active)" : "var(--bg-surface)",
                     color: on ? "var(--text-primary)" : "var(--text-secondary)",
@@ -296,7 +296,7 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
             })}
             {communities.length > 10 && (
               <span className="mono" data-tip="Smaller communities — zoom the canvas to explore them"
-                style={{ fontSize: 10.5, color: "var(--text-quaternary)", padding: "0 4px" }}>+{communities.length - 10}</span>
+                style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", padding: "0 4px" }}>+{communities.length - 10}</span>
             )}
           </div>
         )}
@@ -361,7 +361,7 @@ export function KnowledgeGraphScreen({ writeEnabled }: { writeEnabled: boolean }
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
                     <Icon name="arrowRight" size={11} style={{ color: "var(--text-quaternary)", flex: "none", transform: nb.dir === "in" ? "rotate(180deg)" : "none" }} />
                     <span style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nb.node.label}</span>
-                    <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", flex: "none" }}>{nb.relation}</span>
+                    <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", flex: "none" }}>{nb.relation}</span>
                   </button>
                 ))}
                 {inspectorNeighbors.length > 60 && (

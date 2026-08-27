@@ -186,7 +186,7 @@ export function DiffViewer({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{taskTitle}</span>
-              {BatonAPI.demo && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="Demo mode — this diff is illustrative.">Preview</span>}
+              {BatonAPI.demo && <span style={{ fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="Demo mode — this diff is illustrative.">Preview</span>}
             </div>
             <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
               <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <DiffStat add={totals.add} del={totals.del} size="sm" />
@@ -221,11 +221,11 @@ export function DiffViewer({
                     <button key={file.path} className="fr" onClick={() => setActive(i)} aria-current={on} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", borderRadius: "var(--r-sm)", border: "none", cursor: "pointer", textAlign: "left", background: on ? "var(--bg-active)" : "transparent", marginBottom: 1 }}
                       onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = "var(--bg-hover)"; }}
                       onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}>
-                      <span style={{ width: 16, height: 16, flex: "none", borderRadius: 4, display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, color: st.c, background: st.soft }} data-tip={st.tip}>{st.glyph}</span>
+                      <span style={{ width: 16, height: 16, flex: "none", borderRadius: 4, display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", fontWeight: 700, color: st.c, background: st.soft }} data-tip={st.tip}>{st.glyph}</span>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ display: "block", fontSize: "var(--fs-12)", color: on ? "var(--text-primary)" : "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}>{file.path}</span>
                       </span>
-                      <span className="mono" style={{ fontSize: 10, color: "var(--text-quaternary)", flex: "none" }}>+{file.add}</span>
+                      <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", flex: "none" }}>+{file.add}</span>
                     </button>
                   );
                 })}
@@ -240,7 +240,7 @@ export function DiffViewer({
 
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--code-bg)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderBottom: "1px solid var(--border-subtle)", flex: "none", background: "var(--bg-surface)" }}>
-                <span style={{ width: 16, height: 16, flex: "none", borderRadius: 4, display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, color: FILE_STATUS[f.status].c, background: FILE_STATUS[f.status].soft }}>{FILE_STATUS[f.status].glyph}</span>
+                <span style={{ width: 16, height: 16, flex: "none", borderRadius: 4, display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", fontWeight: 700, color: FILE_STATUS[f.status].c, background: FILE_STATUS[f.status].soft }}>{FILE_STATUS[f.status].glyph}</span>
                 <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</span>
                 <DiffStat add={f.add} del={f.del} size="sm" />
                 <CopyButton value={f.path} iconOnly className="btn btn-sm btn-ghost" title="Copy path" />

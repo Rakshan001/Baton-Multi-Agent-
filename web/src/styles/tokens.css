@@ -257,3 +257,74 @@
   --diff-del-gutter: rgba(220, 38, 38, 0.14);
   --diff-del-mark: #dc2626;
 }
+
+/* ============================================================
+   SEMANTIC LAYER (2026-08 refinement)
+   ------------------------------------------------------------
+   The primitive scales above were never consumed: an audit found
+   720 hardcoded spacing values and 137 hardcoded font sizes in
+   .tsx against ZERO uses of --sp-*. Spacing landed on every
+   integer 0-24 (84x 6px, 53x 9px, 50x 7px) instead of a rhythm,
+   and 71 labels sat at 9-10px, under the legibility floor.
+
+   These semantic tokens give components one intent-named thing
+   to reach for. Primitives above are kept as-is so nothing that
+   already references them breaks.
+   ============================================================ */
+:root {
+  /* ---- Type: 8 steps, intent-named. Floor is 11px. ---- */
+  --text-micro: 11px;   /* eyebrows, badge counts — smallest permitted */
+  --text-xs: 12px;      /* dense meta, chips */
+  --text-sm: 13px;      /* dense body — the dashboard default */
+  --text-base: 14px;    /* comfortable body, buttons */
+  --text-lg: 16px;      /* section lead */
+  --text-xl: 20px;      /* card + panel titles */
+  --text-2xl: 26px;     /* screen titles */
+  --text-3xl: 32px;     /* hero readings */
+
+  /* ---- Rhythm: 4px grid, no off-grid steps ---- */
+  --gap-hair: 2px;   /* icon-to-glyph optical only */
+  --gap-xs: 4px;
+  --gap-sm: 8px;
+  --gap-md: 12px;
+  --gap-lg: 16px;
+  --gap-xl: 24px;
+  --gap-2xl: 32px;
+  --gap-3xl: 48px;
+
+  /* ---- Component density ---- */
+  --pad-card: 16px;
+  --pad-card-lg: 24px;
+  --pad-row: 12px;
+  --control-h-sm: 28px;
+  --control-h: 32px;
+  --control-h-lg: 40px;
+  --touch-min: 44px;   /* WCAG 2.5.8 floor for pointer targets */
+
+  /* ---- Measure ---- */
+  --measure: 68ch;     /* readable line length cap for prose */
+}
+
+/* ---- Elevation ladder: stacked offsets + inset hairline ring.
+        A single heavy drop reads cheap; layered small offsets with a
+        crisp 1px ring is what makes a card sit ON the page. ---- */
+:root, :root[data-theme="dark"] {
+  --elev-1: inset 0 0 0 1px rgba(255,255,255,0.055);
+  --elev-2: 0 1px 2px rgba(0,0,0,0.40), inset 0 0 0 1px rgba(255,255,255,0.06);
+  --elev-3: 0 2px 4px rgba(0,0,0,0.34), 0 8px 16px -8px rgba(0,0,0,0.45),
+            inset 0 0 0 1px rgba(255,255,255,0.07);
+  --elev-4: 0 2px 4px rgba(0,0,0,0.34), 0 12px 24px -6px rgba(0,0,0,0.50),
+            inset 0 0 0 1px rgba(255,255,255,0.08);
+  --elev-5: 0 1px 2px rgba(0,0,0,0.35), 0 12px 24px -6px rgba(0,0,0,0.50),
+            0 32px 48px -12px rgba(0,0,0,0.60), inset 0 0 0 1px rgba(255,255,255,0.10);
+}
+:root[data-theme="light"] {
+  --elev-1: inset 0 0 0 1px rgba(13,18,28,0.08);
+  --elev-2: 0 1px 2px rgba(16,24,40,0.06), inset 0 0 0 1px rgba(13,18,28,0.08);
+  --elev-3: 0 2px 4px rgba(16,24,40,0.06), 0 8px 16px -8px rgba(16,24,40,0.10),
+            inset 0 0 0 1px rgba(13,18,28,0.08);
+  --elev-4: 0 2px 4px rgba(16,24,40,0.06), 0 12px 24px -6px rgba(16,24,40,0.12),
+            inset 0 0 0 1px rgba(13,18,28,0.09);
+  --elev-5: 0 1px 2px rgba(16,24,40,0.05), 0 12px 24px -6px rgba(16,24,40,0.12),
+            0 32px 48px -12px rgba(16,24,40,0.16), inset 0 0 0 1px rgba(13,18,28,0.10);
+}

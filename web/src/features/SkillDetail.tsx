@@ -179,7 +179,7 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
             <div style={{ display: "flex", flexDirection: "column", gap: 7, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                 <Label>Playbook</Label>
-                <span className="mono" style={{ fontSize: 9.5, color: "var(--text-quaternary)" }}>
+                <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>
                   {(skill.body.length / 1024).toFixed(1)} KB
                 </span>
                 <span style={rule} />
@@ -207,8 +207,8 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
                       {getAgent(i.agent).short}
                     </span>
                     {i.installed
-                      ? <span className="mono" data-tip-side="bottom" data-tip={i.rel} style={{ fontSize: 9.5, color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.rel}</span>
-                      : <span style={{ fontSize: 9.5, color: "var(--text-quaternary)" }}>not installed</span>}
+                      ? <span className="mono" data-tip-side="bottom" data-tip={i.rel} style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.rel}</span>
+                      : <span style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>not installed</span>}
                   </div>
                 ))}
                 {installed.length === 0 && writeEnabled && (
@@ -230,7 +230,7 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
 
             {skill.references.length > 0 && (
               <Facet title={`Ships ${skill.references.length} file${skill.references.length === 1 ? "" : "s"}`}>
-                <div className="mono" style={{ fontSize: 10.5, lineHeight: 1.8, color: "var(--text-tertiary)", wordBreak: "break-word" }}>
+                <div className="mono" style={{ fontSize: "var(--text-micro)", lineHeight: 1.8, color: "var(--text-tertiary)", wordBreak: "break-word" }}>
                   {skill.references.map((r) => r.replace(/^references\//, "")).join("  ·  ")}
                 </div>
               </Facet>

@@ -153,7 +153,7 @@ function TeamRow({ team, count, canWrite, knownProjects, onChanged, onDelete }: 
       ) : (
         <>
           <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>{team.name}</span>
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--text-quaternary)" }}>{team.id}</span>
+          <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>{team.id}</span>
           <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
             {count} member{count === 1 ? "" : "s"}
           </span>

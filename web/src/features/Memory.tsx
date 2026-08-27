@@ -301,14 +301,14 @@ export function MemoryScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
 function FilterPills({ label, value, onChange, options }: { label: string; value: string | null; onChange: (v: string | null) => void; options: { id: string; label: string; color?: string; count?: number }[] }) {
   return (
     <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
-      <span style={{ fontSize: 10.5, color: "var(--text-quaternary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
       {options.map((o) => {
         const on = value === o.id;
         return (
           <button key={o.id} className="chip fr" aria-pressed={on} onClick={() => onChange(on ? null : o.id)}
             style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, background: on ? "var(--accent-soft)" : "var(--bg-surface-2)", borderColor: on ? "var(--accent-border)" : "var(--border-default)", color: on ? "var(--accent-text)" : "var(--text-secondary)", opacity: o.count === 0 ? 0.55 : 1 }}>
             {o.color && <span style={{ width: 6, height: 6, borderRadius: 99, background: o.color }} />}{o.label}
-            {o.count !== undefined && <span className="mono" style={{ fontSize: 10, color: on ? "var(--accent-text)" : "var(--text-quaternary)" }}>{o.count}</span>}
+            {o.count !== undefined && <span className="mono" style={{ fontSize: "var(--text-micro)", color: on ? "var(--accent-text)" : "var(--text-quaternary)" }}>{o.count}</span>}
           </button>
         );
       })}
@@ -346,7 +346,7 @@ function FactCard({ f, writeEnabled, onDelete, projectLabel, selected, onToggle,
             <span style={{ width: 6, height: 6, borderRadius: 99, background: fr.color }} /> {fr.label}
             {f.commitsBehind ? <span style={{ color: "var(--text-quaternary)", fontWeight: 400 }}> · {f.commitsBehind} commits old</span> : null}
           </span>
-          <span className="mono" style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-quaternary)" }}>{f.id}</span>
+          <span className="mono" style={{ marginLeft: "auto", fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>{f.id}</span>
           {writeEnabled && (
             <button className="btn btn-ghost btn-icon fr" onClick={() => onDelete(f.id)} aria-label={`Delete ${f.id}`} data-tip="Delete this fact" style={{ width: 26, height: 26 }}>
               <Icon name="trash" size={13} />
@@ -403,7 +403,7 @@ function StoragePanel() {
               <div style={{ width: `${(r.bytes / max) * 100}%`, height: "100%", background: r.color, borderRadius: 99 }} />
             </div>
             <div className="mono" style={{ width: 92, flex: "none", textAlign: "right", fontSize: "var(--fs-12)", color: "var(--text-primary)" }}>{fmtBytes(r.bytes)}</div>
-            <div style={{ width: 64, flex: "none", fontSize: 10.5, color: "var(--text-quaternary)" }}>{r.note}</div>
+            <div style={{ width: 64, flex: "none", fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>{r.note}</div>
           </div>
         ))}
       </div>

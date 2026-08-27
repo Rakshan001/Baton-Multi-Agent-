@@ -21,7 +21,7 @@ import type { ScenarioName } from "../lib/demoData";
 
 function Section({ label }: { label: string }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", padding: "10px 0 0" }}>
+    <div style={{ fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", padding: "10px 0 0" }}>
       {label}
     </div>
   );
@@ -34,7 +34,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
         <span style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", color: "var(--text-secondary)" }}>{label}</span>
         {children}
       </div>
-      {hint && <span style={{ fontSize: 10.5, color: "var(--text-quaternary)", lineHeight: 1.4 }}>{hint}</span>}
+      {hint && <span style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", lineHeight: 1.4 }}>{hint}</span>}
     </div>
   );
 }
@@ -99,6 +99,9 @@ export function TweaksPanel({ prefs, scenario, setScenario, demo, setDemo }: {
         onClick={() => setOpen((o) => !o)}
         aria-label="Tweaks" aria-expanded={open}
         data-tip="Tweaks — demo data & appearance" data-tip-side="left"
+        /* fab-bottom lifts this clear of the bottom tab bar at <=860px; a
+           viewport-fixed bottom:16 landed it on top of the last tab. */
+        className="fab-bottom"
         style={{
           position: "fixed", right: 16, bottom: 16, width: 40, height: 40, borderRadius: 99,
           display: open ? "none" : "grid", placeItems: "center", cursor: "pointer",
@@ -111,8 +114,8 @@ export function TweaksPanel({ prefs, scenario, setScenario, demo, setDemo }: {
       </button>
 
       {open && (
-        <div ref={panelRef} role="dialog" aria-label="Tweaks" style={{
-          position: "fixed", right: 16, bottom: 16, width: 282, maxHeight: "calc(100vh - 32px)",
+        <div ref={panelRef} role="dialog" aria-label="Tweaks" className="fab-bottom" style={{
+          position: "fixed", right: 16, bottom: 16, width: "min(282px, calc(100vw - 32px))", maxHeight: "calc(100vh - 32px)",
           display: "flex", flexDirection: "column", background: "var(--bg-elevated)",
           border: "1px solid var(--border-strong)", borderRadius: "var(--r-lg)", boxShadow: "var(--shadow-xl)",
           overflow: "hidden", zIndex: "var(--z-tweaks)" as unknown as number, animation: "scale-in var(--dur-2) var(--ease-out)",

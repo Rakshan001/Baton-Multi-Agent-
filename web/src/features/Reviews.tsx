@@ -77,7 +77,7 @@ function FindingCard({ f, axis, writeEnabled, busy, onFix, onDismiss }: {
         </span>
         {f.hard && (
           <span className="mono" data-tip="A documented-standard breach, not a judgement call — the only kind that may be hard" style={{
-            flex: "none", fontSize: 10, textTransform: "uppercase", letterSpacing: "var(--ls-wide)", padding: "1px 6px",
+            flex: "none", fontSize: "var(--text-micro)", textTransform: "uppercase", letterSpacing: "var(--ls-wide)", padding: "1px 6px",
             borderRadius: 5, color: "var(--conflict)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)",
           }}>hard</span>
         )}
@@ -102,7 +102,7 @@ function FindingCard({ f, axis, writeEnabled, busy, onFix, onDismiss }: {
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         {f.route && (
-          <span className="mono" style={{ fontSize: 10, padding: "1px 6px", borderRadius: 5, color: meta.color, background: meta.soft, border: "1px solid var(--border-subtle)" }}>
+          <span className="mono" style={{ fontSize: "var(--text-micro)", padding: "1px 6px", borderRadius: 5, color: meta.color, background: meta.soft, border: "1px solid var(--border-subtle)" }}>
             {ROUTE_LABEL[f.route] ?? f.route}
           </span>
         )}

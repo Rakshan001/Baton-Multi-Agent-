@@ -324,7 +324,7 @@ export function Switch({ checked, onChange, label, id }: { checked: boolean; onC
 export function ComingSoon({ children, tip }: { children?: ReactNode; tip?: string }) {
   return (
     <span data-tip={tip || "Not available yet — Baton doesn't expose this from the API today."} style={{
-      display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: "var(--fw-semibold)",
+      display: "inline-flex", alignItems: "center", gap: 5, fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)",
       letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)",
       background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px",
     }}>{children || "Coming soon"}</span>

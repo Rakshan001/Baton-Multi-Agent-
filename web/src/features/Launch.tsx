@@ -160,7 +160,7 @@ export function LaunchSession({
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <h2 style={{ margin: 0, fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)" }}>Launch session</h2>
-              {!willStart && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="The worktree is created for real; tick 'Start headless' below (write mode) to also run the agent for real.">Preview</span>}
+              {!willStart && <span style={{ fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="The worktree is created for real; tick 'Start headless' below (write mode) to also run the agent for real.">Preview</span>}
             </div>
             <p style={{ margin: "3px 0 0", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>Spin up an isolated worktree + branch for an agent.</p>
           </div>

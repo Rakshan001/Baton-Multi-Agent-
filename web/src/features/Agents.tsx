@@ -146,7 +146,7 @@ function AgentCard({
                     <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", marginTop: 3, wordBreak: "break-all" }}>{confirm.path}</div>
                   </div>
                   {confirm.preview && (
-                    <pre className="mono" style={{ margin: 0, maxHeight: 120, overflow: "auto", fontSize: 10.5, color: "var(--text-tertiary)", background: "var(--bg-base)", padding: 8, borderRadius: 6 }}>{confirm.preview}</pre>
+                    <pre className="mono" style={{ margin: 0, maxHeight: 120, overflow: "auto", fontSize: "var(--text-micro)", color: "var(--text-tertiary)", background: "var(--bg-base)", padding: 8, borderRadius: 6 }}>{confirm.preview}</pre>
                   )}
                   <div style={{ display: "flex", gap: 6 }}>
                     <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => connect(true)}>Write file</button>
@@ -174,7 +174,7 @@ function AgentCard({
                 <div key={s.slug} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)" }}>
                   <span style={{ width: 6, height: 6, borderRadius: 99, background: color, flex: "none", animation: "pulse-dot 2s var(--ease-in-out) infinite" }} data-tip={s.kind} />
                   <button className="fr" onClick={() => onOpen(s.slug)} style={{ flex: 1, minWidth: 0, border: "none", background: "none", cursor: "pointer", textAlign: "left", fontSize: "var(--fs-12)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</button>
-                  <span className="mono" style={{ fontSize: 10, color: "var(--text-quaternary)", flex: "none" }}>{s.kind}</span>
+                  <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", flex: "none" }}>{s.kind}</span>
                   <button className="btn btn-sm fr" data-tip="Hand off this session to another agent" onClick={() => onHandoff(s.slug)} style={{ flex: "none", height: 22, padding: "0 8px", fontSize: 11 }}>Hand off</button>
                 </div>
               ))}

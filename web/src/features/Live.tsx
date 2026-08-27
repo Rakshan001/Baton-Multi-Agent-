@@ -62,7 +62,7 @@ function RailChild({ s, color, currentSlug, onPick }: {
       {s.agent ? <LiveDot color={cd.color} size={6} /> : <span style={{ width: 6, height: 6, borderRadius: 99, background: cd.color, flex: "none" }} />}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "var(--fs-12)", fontWeight: on ? "var(--fw-semibold)" : "var(--fw-medium)", color: on ? "var(--text-primary)" : "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.task}</div>
-        <div className="mono" style={{ fontSize: 10, color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</div>
+        <div className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</div>
       </div>
     </button>
   );
@@ -88,12 +88,12 @@ function RailFolder({ id, color, glyph, label, items, idleGroup, currentSlug, on
           {idleGroup ? <Icon name="bot" size={12} style={{ color: "var(--idle)" }} /> : glyph}
         </span>
         <span style={{ flex: 1, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        <span className="mono" style={{ fontSize: 10, color: "var(--text-secondary)", background: "var(--bg-surface-2)", borderRadius: 99, padding: "1px 7px", border: "1px solid var(--border-subtle)", flex: "none" }}>{items.length}</span>
+        <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-secondary)", background: "var(--bg-surface-2)", borderRadius: 99, padding: "1px 7px", border: "1px solid var(--border-subtle)", flex: "none" }}>{items.length}</span>
       </button>
       {isOpen && (
         <div style={{ position: "relative", marginLeft: 17, paddingLeft: 11, borderLeft: "1px solid var(--border-subtle)", marginTop: 1 }}>
           {items.length > 1 && !idleGroup && (
-            <div style={{ fontSize: 10, color: "var(--text-quaternary)", padding: "2px 0 4px 2px", letterSpacing: "var(--ls-snug)" }}>{items.length} parallel sessions</div>
+            <div style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", padding: "2px 0 4px 2px", letterSpacing: "var(--ls-snug)" }}>{items.length} parallel sessions</div>
           )}
           {items.map((s) => <RailChild key={s.slug} s={s} color={color} currentSlug={currentSlug} onPick={onPick} />)}
         </div>
@@ -324,7 +324,7 @@ export function LiveSession({
           const m = LIVE_EV[e.t] || LIVE_EV.read;
           return (
             <div key={i} style={{ display: "flex", gap: 9, alignItems: "baseline", padding: "2px 0", animation: "fade-up 0.25s var(--ease-out)" }}>
-              <span className="mono" style={{ fontSize: 10.5, color: "var(--text-quaternary)", flex: "none", width: 30, textAlign: "right", userSelect: "none" }}>{new Date(e.at).toLocaleTimeString([], { minute: "2-digit", second: "2-digit" })}</span>
+              <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", flex: "none", width: 30, textAlign: "right", userSelect: "none" }}>{new Date(e.at).toLocaleTimeString([], { minute: "2-digit", second: "2-digit" })}</span>
               <span style={{ width: 14, flex: "none", display: "grid", placeItems: "center", color: m.c, marginTop: 1 }}>{m.term ? <span className="mono" style={{ fontSize: 12 }}>{e.t === "cmd" ? "$" : "›"}</span> : m.icon ? <Icon name={m.icon} size={12} /> : null}</span>
               <span className={m.term ? "mono" : ""} style={{ flex: 1, minWidth: 0, fontSize: m.term ? 12 : "var(--fs-12)", color: m.c, fontStyle: m.italic ? "italic" : "normal", lineHeight: 1.5, wordBreak: "break-word" }}>
                 {e.text}
@@ -406,7 +406,7 @@ export function LiveSession({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task?.task || slug}</span>
-              {demo && <span style={{ fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px", flex: "none" }} data-tip="Demo mode — this stream is illustrative. Real sessions stream the daemon's live events.">Preview</span>}
+              {demo && <span style={{ fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px", flex: "none" }} data-tip="Demo mode — this stream is illustrative. Real sessions stream the daemon's live events.">Preview</span>}
             </div>
             <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
               <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <span data-tip="Time since you opened this view — not the session's age" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="clock" size={11} /> watching {mm}:{ss}</span>

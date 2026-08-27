@@ -137,12 +137,16 @@ function SettingsBlock({ title, desc, children }: { title: string; desc?: string
 }
 function SettingRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "13px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)" }}>{label}</div>
-        {hint && <div style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", marginTop: 2, textWrap: "pretty" }}>{hint}</div>}
+    /* flexWrap + a 200px basis on the text column: the control is flex:none,
+       so without these the label absorbed every pixel of a narrow viewport and
+       collapsed into a 52px-wide, 134px-tall ribbon of single words. Now the
+       control drops to its own line instead of crushing the text. */
+    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "var(--gap-md)", padding: "var(--pad-row) var(--pad-card)", borderBottom: "1px solid var(--border-subtle)" }}>
+      <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+        <div style={{ fontSize: "var(--text-sm)", fontWeight: "var(--fw-medium)" }}>{label}</div>
+        {hint && <div style={{ fontSize: "var(--text-xs)", color: "var(--text-tertiary)", marginTop: 2, textWrap: "pretty" }}>{hint}</div>}
       </div>
-      <div style={{ flex: "none" }}>{children}</div>
+      <div style={{ flex: "none", marginLeft: "auto" }}>{children}</div>
     </div>
   );
 }
@@ -225,7 +229,7 @@ function ConnectionSettings({ prefs }: { prefs: Prefs }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)" }}>Write actions</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: prefs.writeEnabled ? "var(--clean-text)" : "var(--text-tertiary)", background: prefs.writeEnabled ? "var(--clean-soft)" : "var(--bg-surface-2)", border: `1px solid ${prefs.writeEnabled ? "var(--clean-border)" : "var(--border-default)"}`, borderRadius: 99, padding: "2px 7px" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: prefs.writeEnabled ? "var(--clean-text)" : "var(--text-tertiary)", background: prefs.writeEnabled ? "var(--clean-soft)" : "var(--bg-surface-2)", border: `1px solid ${prefs.writeEnabled ? "var(--clean-border)" : "var(--border-default)"}`, borderRadius: 99, padding: "2px 7px" }}>
                 {prefs.writeEnabled ? "Live" : "Read-only"}
               </span>
             </div>

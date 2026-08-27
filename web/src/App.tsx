@@ -142,7 +142,7 @@ function ProjectSwitcher({ project, onProject, demo, connections, onConnectionsC
         background: open ? "var(--bg-active)" : "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", cursor: "pointer", color: "var(--text-primary)", fontFamily: "inherit" }}
         onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--border-default)")}
         onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border-subtle)")}>
-        <span style={{ width: 14, height: 14, borderRadius: 4, background: project.color, flex: "none", display: "grid", placeItems: "center", color: "#fff", fontSize: 9, fontWeight: 800 }}>{project.name[0]?.toUpperCase()}</span>
+        <span style={{ width: 14, height: 14, borderRadius: 4, background: project.color, flex: "none", display: "grid", placeItems: "center", color: "#fff", fontSize: "var(--text-micro)", fontWeight: 800 }}>{project.name[0]?.toUpperCase()}</span>
         <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>{project.name}</span>
         <span style={{ color: "var(--text-quaternary)" }}>/</span>
         <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>{project.branch}</span>
@@ -171,10 +171,10 @@ function ProjectSwitcher({ project, onProject, demo, connections, onConnectionsC
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", color: on ? "var(--accent-text)" : "var(--text-primary)" }}>{p.name}</span>
-                      {p.live && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--clean-text)", background: "var(--clean-soft)", border: "1px solid var(--clean-border)", borderRadius: 99, padding: "1px 5px" }}>live</span>}
-                      {p.offline && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, padding: "1px 5px" }}>unreachable</span>}
+                      {p.live && <span style={{ fontSize: "var(--text-micro)", fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--clean-text)", background: "var(--clean-soft)", border: "1px solid var(--clean-border)", borderRadius: 99, padding: "1px 5px" }}>live</span>}
+                      {p.offline && <span style={{ fontSize: "var(--text-micro)", fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, padding: "1px 5px" }}>unreachable</span>}
                     </div>
-                    <div className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.sub}</div>
+                    <div className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.sub}</div>
                   </div>
                   {on && <Icon name="check" size={15} style={{ color: "var(--accent)", flex: "none" }} />}
                 </button>
@@ -309,7 +309,10 @@ function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, on
       {!isMobile && <ProjectSwitcher project={project} onProject={onProject} demo={demo} connections={connections} onConnectionsChange={onConnectionsChange} />}
       {!isMobile && <span className="vdivider" style={{ height: 24, margin: "0 2px" }} />}
       {!isMobile && <StatStrip counts={counts} navigate={navigate} />}
-      {isMobile && navLabel && <span style={{ fontSize: "var(--fs-15)", fontWeight: "var(--fw-semibold)", marginLeft: 2, letterSpacing: "var(--ls-snug)" }}>{navLabel}</span>}
+      {/* truncate + min0: the title is the flexible element in this row, so it
+          gives way to the action cluster instead of wrapping to a second line
+          and doubling the bar's height. */}
+      {isMobile && navLabel && <span className="truncate" style={{ fontSize: "var(--text-lg)", fontWeight: "var(--fw-semibold)", marginLeft: 2, letterSpacing: "var(--ls-snug)", flex: "1 1 auto" }}>{navLabel}</span>}
       <div style={{ flex: 1 }} />
 
       <button className="btn btn-primary fr" onClick={() => onLaunch(null)} data-tip={isMobile ? "Launch session" : undefined} aria-label="Launch session" style={{ height: 32, padding: isMobile ? 0 : "0 12px 0 10px", width: isMobile ? 32 : "auto", flex: "none" }}>
@@ -376,28 +379,55 @@ function Sidebar({ route, navigate, counts, project }: { route: string; navigate
         <span style={{ width: 24, height: 24, borderRadius: 6, background: project.color, flex: "none", display: "grid", placeItems: "center", color: "#fff", fontSize: 11, fontWeight: 800 }}>{project.name[0]}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.name}</div>
-          <div className="mono" data-tip={project.path} style={{ fontSize: 10, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.path}</div>
+          <div className="mono" data-tip={project.path} style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.path}</div>
         </div>
       </div>
     </nav>
   );
 }
 
-function BottomTabBar({ route, navigate, counts }: { route: string; navigate: (id: string) => void; counts: Counts }) {
+/** The four routes that earn a permanent thumb-reachable slot. Everything
+ *  else lives behind "More", which opens the existing MobileNavDrawer.
+ *
+ *  All 12 NAV items used to render here with flex:1. Twelve targets need
+ *  433px of content; a 390px phone gave them 390. Because the <nav> was
+ *  overflow-x:visible inside a body that is overflow:clip, the tail didn't
+ *  scroll — "Settings" simply sat past the right edge, unreachable. The
+ *  survivors were 25-54px wide against a 44px touch floor. */
+const PRIMARY_TABS = ["home", "activity", "pipeline", "conflicts"] as const;
+
+function BottomTabBar({ route, navigate, counts, onMore, moreOpen }: {
+  route: string; navigate: (id: string) => void; counts: Counts;
+  onMore: () => void; moreOpen: boolean;
+}) {
+  const tabs = PRIMARY_TABS.map((id) => NAV.find((n) => n.id === id)!);
+  // A route reached through the drawer keeps "More" lit, so the bar never
+  // shows an empty selection.
+  const inDrawer = !PRIMARY_TABS.includes(route as (typeof PRIMARY_TABS)[number]);
+
   return (
-    <nav aria-label="Primary" style={{ flex: "none", display: "flex", borderTop: "1px solid var(--border-default)", background: "var(--bg-surface)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      {NAV.map((n) => {
-        const active = route === n.id; const badge = n.id === "conflicts" && counts.conflicts > 0 ? counts.conflicts : null;
+    <nav aria-label="Primary" className="bottom-nav">
+      {tabs.map((n) => {
+        const active = route === n.id;
+        const badge = n.id === "conflicts" && counts.conflicts > 0 ? counts.conflicts : null;
         return (
-          <button key={n.id} className="fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "9px 0 10px", minHeight: 56, border: "none", background: "transparent", cursor: "pointer", position: "relative", color: active ? "var(--accent-text)" : "var(--text-tertiary)" }}>
-            <span style={{ position: "relative" }}>
+          <button key={n.id} className="bottom-nav-item fr" onClick={() => navigate(n.id)}
+            aria-current={active ? "page" : undefined}>
+            <span style={{ position: "relative", display: "flex" }}>
               <Icon name={n.icon} size={20} />
-              {badge && <span style={{ position: "absolute", top: -4, right: -7, fontSize: 9, fontWeight: 700, color: "#fff", background: "var(--conflict-strong)", borderRadius: 99, minWidth: 14, height: 14, display: "grid", placeItems: "center", padding: "0 3px" }}>{badge}</span>}
+              {badge && <span aria-hidden="true" style={{ position: "absolute", top: -4, right: -7, fontSize: "var(--text-micro)", fontWeight: 700, color: "#fff", background: "var(--conflict-strong)", borderRadius: 99, minWidth: 16, height: 16, display: "grid", placeItems: "center", padding: "0 4px" }}>{badge}</span>}
             </span>
-            <span style={{ fontSize: 10, fontWeight: "var(--fw-medium)" }}>{n.label.replace("Command ", "")}</span>
+            <span className="bottom-nav-label">{n.label.replace("Command ", "")}</span>
+            {badge && <span className="sr-only">{`${badge} conflicts`}</span>}
           </button>
         );
       })}
+      <button className="bottom-nav-item fr" onClick={onMore}
+        aria-expanded={moreOpen} aria-haspopup="dialog"
+        aria-current={inDrawer ? "page" : undefined}>
+        <span style={{ display: "flex" }}><Icon name="moreH" size={20} /></span>
+        <span className="bottom-nav-label">More</span>
+      </button>
     </nav>
   );
 }
@@ -609,7 +639,8 @@ export default function App() {
           <div key={route} style={{ flex: 1, minHeight: 0, animation: "route-in var(--dur-2) var(--ease-out)" }}>{screen}</div>
         </main>
       </div>
-      {isMobile && <BottomTabBar route={route} navigate={navigate} counts={counts} />}
+      {isMobile && <BottomTabBar route={route} navigate={navigate} counts={counts}
+        onMore={() => setNavOpen(true)} moreOpen={navOpen} />}
       <MobileNavDrawer open={navOpen} onClose={() => setNavOpen(false)} route={route} navigate={navigate} />
 
       {selected && <DetailSheet slug={selected} onClose={() => setSelected(null)} writeEnabled={prefs.writeEnabled} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />}

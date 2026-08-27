@@ -56,7 +56,7 @@ function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
                   ? <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
                   : <span style={{ width: 7, height: 7, borderRadius: 99, background: done ? "var(--text-quaternary)" : "var(--accent)", flex: "none", margin: "0 3px" }} />}
                 <span className="mono" style={{ fontSize: "var(--fs-12)", color: warn ? "var(--conflict-text)" : "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.path}</span>
-                {warn && <span style={{ flex: "none", fontSize: 10, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 7px", borderRadius: 99 }}>{s.holders.filter((h) => h.state !== "settled").length} agents</span>}
+                {warn && <span style={{ flex: "none", fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 7px", borderRadius: 99 }}>{s.holders.filter((h) => h.state !== "settled").length} agents</span>}
               </div>
               {/* who is editing it, and what they're doing right now */}
               <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 5, paddingLeft: 21 }}>
@@ -64,14 +64,14 @@ function LiveSignals({ onOpen }: { onOpen: (slug: string) => void }) {
                   <div key={`${h.slug}-${i}`} style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
                     <button className="fr" onClick={() => onOpen(h.slug)} data-tip="Open session" style={{ display: "inline-flex", alignItems: "center", gap: 5, border: "none", background: "none", cursor: "pointer", padding: 0, flex: "none" }}>
                       <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
-                      <span className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
+                      <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
                     </button>
                     {h.state === "settled"
                       ? <span style={{ fontSize: 11, color: "var(--text-quaternary)", fontStyle: "italic", flex: 1 }}>finished editing</span>
                       : h.note
                         ? <span style={{ fontSize: 11.5, color: "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} data-tip={h.note}>{h.note}</span>
                         : <span style={{ fontSize: 11, color: "var(--text-quaternary)", fontStyle: "italic", flex: 1 }}>editing…</span>}
-                    {(h.settledAt ?? h.lastEditAt) && <span style={{ fontSize: 10, color: "var(--text-quaternary)", flex: "none" }}>{timeAgo(new Date(h.settledAt ?? h.lastEditAt).getTime())}</span>}
+                    {(h.settledAt ?? h.lastEditAt) && <span style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", flex: "none" }}>{timeAgo(new Date(h.settledAt ?? h.lastEditAt).getTime())}</span>}
                   </div>
                 ))}
               </div>
@@ -124,7 +124,7 @@ export function ConflictsScreen({ status, onOpen }: { status: PollState<StatusRo
                       <th key={s.slug} style={{ padding: "10px 8px", borderBottom: "1px solid var(--border-default)", minWidth: 76 }}>
                         <button className="fr" onClick={() => onOpen(s.slug)} data-tip={`${s.task}\n${s.slug}`} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer", width: "100%" }}>
                           <AgentBadge id={s.agent} size="sm" showLabel={false} />
-                          <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</span>
+                          <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</span>
                         </button>
                       </th>
                     ))}
@@ -140,9 +140,9 @@ export function ConflictsScreen({ status, onOpen }: { status: PollState<StatusRo
                             {risk && <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />}
                             <div style={{ minWidth: 0 }}>
                               <div className="mono" style={{ fontSize: "var(--fs-12)", color: risk ? "var(--conflict-text)" : "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{basename(f)}</div>
-                              <div className="mono" style={{ fontSize: 10, color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dirname(f)}</div>
+                              <div className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dirname(f)}</div>
                             </div>
-                            {risk && <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 6px", borderRadius: 99 }}>×{touched.length}</span>}
+                            {risk && <span style={{ marginLeft: "auto", fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "color-mix(in srgb, var(--conflict) 16%, transparent)", padding: "1px 6px", borderRadius: 99 }}>×{touched.length}</span>}
                           </div>
                         </td>
                         {cols.map((s) => {

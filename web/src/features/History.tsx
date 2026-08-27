@@ -35,7 +35,7 @@ function ReportBlock({ slug }: { slug: string }) {
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
         {report.files.slice(0, 16).map((f) => (
-          <span key={f} className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "2px 7px" }}>{f}</span>
+          <span key={f} className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-secondary)", background: "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "2px 7px" }}>{f}</span>
         ))}
         {report.files.length > 16 && <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>+{report.files.length - 16} more</span>}
       </div>

@@ -269,12 +269,12 @@ export function HandoffDialog({
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", display: "flex", alignItems: "center", gap: 6 }}>
                         {a.short}
-                        {load && <span style={{ fontSize: 9.5, fontWeight: "var(--fw-semibold)", color: loadN === 0 ? "var(--clean-text)" : "var(--dirty-text)" }} data-tip={loadN === 0 ? "No active tasks — free to take this" : `${loadN} task${loadN === 1 ? "" : "s"} in progress`}>{loadN === 0 ? "idle" : `${loadN} active`}</span>}
+                        {load && <span style={{ fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", color: loadN === 0 ? "var(--clean-text)" : "var(--dirty-text)" }} data-tip={loadN === 0 ? "No active tasks — free to take this" : `${loadN} task${loadN === 1 ? "" : "s"} in progress`}>{loadN === 0 ? "idle" : `${loadN} active`}</span>}
                       </span>
                       {recommended
-                        ? <span style={{ fontSize: 9.5, color: "var(--accent-text)", display: "block" }} data-tip={load?.reason}>recommended · lightest load</span>
+                        ? <span style={{ fontSize: "var(--text-micro)", color: "var(--accent-text)", display: "block" }} data-tip={load?.reason}>recommended · lightest load</span>
                         : suggested && (
-                          <span style={{ fontSize: 9.5, color: "var(--text-tertiary)", display: "block" }}
+                          <span style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", display: "block" }}
                             data-tip={suggestion ? suggestionWhy(suggestion) : undefined}>
                             fits the task{suggestion?.matched.length ? ` · '${suggestion.matched[0]}'` : ""}
                           </span>

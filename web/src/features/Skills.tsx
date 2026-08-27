@@ -33,6 +33,17 @@ import { ls } from "../lib/storage";
 import { SkillDetail } from "./SkillDetail";
 import { isUserSkill, type SkillAgent, type SkillStatus } from "../types";
 
+/** One track definition for the skill card grid, shared by the loading
+ *  skeleton and the loaded grid. They previously disagreed — minmax(360px)
+ *  gap 14 while loading vs minmax(380px) gap 12 after — so the column count
+ *  could change the moment data arrived and the whole grid jumped. */
+const SKILL_GRID: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 340px), 1fr))",
+  gap: "var(--gap-lg)",
+  alignItems: "start",
+};
+
 /** Where users can find more skills to download. Ours will replace it later. */
 const SKILL_DIRECTORY_URL = "https://www.skills.sh/";
 
@@ -332,7 +343,7 @@ function AuthoringPrompt({ open, onToggle, boxRef }: {
       </div>
       {open && (
         <div style={{ padding: "0 12px 12px" }}>
-          <pre className="mono" style={{ margin: 0, padding: "11px 13px", background: "var(--bg-base)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", fontSize: 10.5, lineHeight: 1.6, color: "var(--text-tertiary)", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 260, overflow: "auto" }}>
+          <pre className="mono" style={{ margin: 0, padding: "11px 13px", background: "var(--bg-base)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", fontSize: "var(--text-micro)", lineHeight: 1.6, color: "var(--text-tertiary)", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 260, overflow: "auto" }}>
             {SKILL_AUTHORING_PROMPT}
           </pre>
         </div>
@@ -736,7 +747,7 @@ function Segmented<T extends string>({ value, onChange, options, label }: {
             style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 24, padding: "0 9px", border: "none", borderRadius: 5, cursor: "pointer", fontSize: "var(--fs-12)", fontWeight: on ? "var(--fw-semibold)" : "var(--fw-medium)", fontFamily: "inherit", background: on ? "var(--bg-surface)" : "transparent", color: on ? "var(--text-primary)" : "var(--text-tertiary)", boxShadow: on ? "0 1px 2px rgba(0,0,0,.16)" : "none" }}>
             {o.label}
             {o.count !== undefined && (
-              <span className="mono" style={{ fontSize: 9.5, color: on ? "var(--text-tertiary)" : "var(--text-quaternary)" }}>{o.count}</span>
+              <span className="mono" style={{ fontSize: "var(--text-micro)", color: on ? "var(--text-tertiary)" : "var(--text-quaternary)" }}>{o.count}</span>
             )}
           </button>
         );
@@ -788,7 +799,7 @@ function SkillRow({ s, writeEnabled, onChanged, onOpen }: {
       </span>
 
       {!mine && (
-        <span className="skill-row-src" style={{ flex: "none", fontSize: 9.5, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)" }}>
+        <span className="skill-row-src" style={{ flex: "none", fontSize: "var(--text-micro)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)" }}>
           Baton
         </span>
       )}
@@ -806,7 +817,7 @@ function SkillRow({ s, writeEnabled, onChanged, onOpen }: {
         ))}
       </span>
 
-      <span className="mono" style={{ flex: "none", width: 26, textAlign: "right", fontSize: 9.5, color: installed ? "var(--clean-text, var(--accent-text))" : "var(--text-quaternary)" }}>
+      <span className="mono" style={{ flex: "none", width: 26, textAlign: "right", fontSize: "var(--text-micro)", color: installed ? "var(--clean-text, var(--accent-text))" : "var(--text-quaternary)" }}>
         {installed}/{s.installs.length}
       </span>
     </div>
@@ -960,7 +971,7 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
           <ErrorState title="Couldn't load the skill catalog" desc={(skills.error as Error).message}
             command="baton serve" onRetry={skills.refetch} retrying={skills.isFetching} />
         ) : skills.isLoading && !(skills.data ?? []).length ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14, alignItems: "start" }}>
+          <div style={SKILL_GRID}>
             {[0, 1, 2, 3].map((i) => <CardSkeleton key={i} />)}
           </div>
         ) : list.length === 0 ? (
@@ -1111,11 +1122,11 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span className="mono" style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", color: "var(--text-primary)" }}>{p.name}</span>
-                    <span className="mono" style={{ fontSize: 9.5, color: "var(--text-quaternary)", marginLeft: "auto" }}>{p.repo}</span>
+                    <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", marginLeft: "auto" }}>{p.repo}</span>
                   </span>
                   <span style={{ fontSize: 11.5, color: "var(--text-tertiary)", lineHeight: 1.45 }}>{p.blurb}</span>
                   {p.heavy && (
-                    <span style={{ display: "flex", gap: 5, alignItems: "flex-start", marginTop: 2, fontSize: 10.5, lineHeight: 1.4, color: "var(--text-quaternary)" }}>
+                    <span style={{ display: "flex", gap: 5, alignItems: "flex-start", marginTop: 2, fontSize: "var(--text-micro)", lineHeight: 1.4, color: "var(--text-quaternary)" }}>
                       <Icon name="layers" size={10} style={{ flex: "none", marginTop: 2 }} />
                       {p.heavy}
                     </span>
@@ -1196,17 +1207,24 @@ function SkillBand({ title, count, hint, skills, view, writeEnabled, onChanged, 
   if (!skills.length && !empty) return null;
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 4 }}>
-        <Label>{title}</Label>
-        {count > 0 && (
-          <span className="mono" style={{ fontSize: 9.5, color: "var(--text-quaternary)", letterSpacing: "0.06em" }}>
-            {String(count).padStart(2, "0")}
-          </span>
-        )}
+      {/* nowrap here shredded the title on a phone: "Your skills" broke across
+          two lines and its count split off. The title is the one thing that
+          must stay whole, so it never shrinks and the row wraps instead. */}
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "var(--gap-sm)", paddingTop: 4 }}>
+        <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: "var(--gap-sm)" }}>
+          <Label>{title}</Label>
+          {count > 0 && (
+            <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", letterSpacing: "0.06em" }}>
+              {String(count).padStart(2, "0")}
+            </span>
+          )}
+        </span>
         {/* Beside the label, not pinned to the far edge: on a wide screen the
-            two were a thousand pixels apart and stopped reading as one thought. */}
+            two were a thousand pixels apart and stopped reading as one thought.
+            Supplementary, so it steps out entirely rather than truncating to
+            an unreadable stub on a phone. */}
         {hint && (
-          <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hint}</span>
+          <span className="hide-sm" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hint}</span>
         )}
         <span style={rule} />
         {/* The add action lives WITH your skills, not only in the screen header.
@@ -1221,7 +1239,7 @@ function SkillBand({ title, count, hint, skills, view, writeEnabled, onChanged, 
             {skills.map((s) => <SkillRow key={s.id} s={s} writeEnabled={writeEnabled} onChanged={onChanged} onOpen={onOpen} />)}
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: 12, alignItems: "start" }}>
+          <div style={SKILL_GRID}>
             {skills.map((s) => <SkillCard key={s.id} s={s} writeEnabled={writeEnabled} onChanged={onChanged} onOpen={onOpen} />)}
           </div>
         )
@@ -1327,7 +1345,7 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
                   whole story. Everything else is answered by which band it is in. */}
               {s.source === "imported" && (
                 <span data-tip="Stored in this repo's .baton/skills, so it is only here. Re-add it to put it in your machine-wide library."
-                  style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--dirty-text)" }}>
+                  style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--dirty-text)" }}>
                   · this project only
                 </span>
               )}
@@ -1389,13 +1407,13 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
               <Label>Ships</Label>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--text-quaternary)" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>
                 {s.references.length} file{s.references.length === 1 ? "" : "s"}
               </span>
               <span style={rule} />
             </div>
             <div className="mono" data-tip="Installed alongside the skill, loaded on demand"
-              style={{ fontSize: 10.5, lineHeight: 1.7, color: "var(--text-tertiary)" }}>
+              style={{ fontSize: "var(--text-micro)", lineHeight: 1.7, color: "var(--text-tertiary)" }}>
               {refsShown.map((r) => r.replace(/^references\//, "")).join("  ·  ")}
             </div>
           </div>
@@ -1405,7 +1423,7 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
           <button
             onClick={() => setExpandChips((v) => !v)}
             data-tip={expandChips ? "Show less" : "Show everything this skill produces and ships"}
-            style={{ alignSelf: "flex-start", padding: 0, background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 9.5, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: "var(--fw-semibold)", color: "var(--accent-text)" }}
+            style={{ alignSelf: "flex-start", padding: 0, background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: "var(--fw-semibold)", color: "var(--accent-text)" }}
           >
             {expandChips ? "Show less" : `+${hiddenChips} more`}
           </button>
@@ -1423,7 +1441,7 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
       <div style={{ padding: "0 18px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <Label tone={allInstalled ? "accent" : undefined}>Wired into</Label>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--text-quaternary)" }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>
             {s.installs.filter((i) => i.installed).length}/{s.installs.length}
           </span>
           <span style={rule} />
@@ -1433,7 +1451,7 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
               disabled={busy !== null}
               data-tip="Install this skill into every writable agent at once"
               onClick={installAll}
-              style={{ flex: "none", padding: 0, background: "none", border: "none", cursor: busy ? "default" : "pointer", fontFamily: "var(--font-mono)", fontSize: 9.5, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: "var(--fw-semibold)", color: "var(--accent-text)" }}
+              style={{ flex: "none", padding: 0, background: "none", border: "none", cursor: busy ? "default" : "pointer", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: "var(--fw-semibold)", color: "var(--accent-text)" }}
             >
               {busy === "all" ? "Installing…" : "Add to all"}
             </button>
@@ -1474,7 +1492,7 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
             );
           })}
           <button className="fr" onClick={() => onOpen(s.id)} data-tip="Full playbook, install paths, and every file it ships"
-            style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5, height: 26, padding: "0 6px", background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 9.5, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: "var(--fw-semibold)", color: "var(--text-tertiary)" }}>
+            style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5, height: 26, padding: "0 6px", background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: "var(--fw-semibold)", color: "var(--text-tertiary)" }}>
             <Icon name="chevronRight" size={12} /> Details
           </button>
         </div>

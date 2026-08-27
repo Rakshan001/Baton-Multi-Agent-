@@ -66,7 +66,7 @@ export function AgentFilter({ agents, value, onChange }: { agents: AgentId[]; va
 export function Label({ children, tone }: { children: ReactNode; tone?: "accent" | "quiet" }) {
   return (
     <span style={{
-      fontFamily: "var(--font-mono)", fontSize: 9.5, letterSpacing: "0.11em", textTransform: "uppercase",
+      fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", letterSpacing: "0.11em", textTransform: "uppercase",
       fontWeight: "var(--fw-semibold)", lineHeight: 1.4,
       color: tone === "accent" ? "var(--clean-text)" : "var(--text-quaternary)",
     }}>{children}</span>

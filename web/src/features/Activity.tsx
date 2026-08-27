@@ -109,7 +109,7 @@ function LiveSignalsSection() {
               {s.holders.slice(0, 3).map((h, i) => (
                 <span key={`${h.slug}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 5 }} data-tip={h.settledAt ? `finished ${timeAgo(new Date(h.settledAt).getTime())}` : h.lastEditAt ? `last edit ${timeAgo(new Date(h.lastEditAt).getTime())}` : undefined}>
                   <AgentBadge id={(h.agent as AgentId) ?? null} size="sm" showLabel={false} />
-                  <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
+                  <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.slug}</span>
                 </span>
               ))}
             </div>
@@ -145,7 +145,7 @@ function ConnectedAgentsSection() {
             <AgentBadge id={(s.agent as AgentId) ?? null} size="sm" showLabel={false} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <div className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</div>
-              {s.root && <div className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortRoot(s.root)}</div>}
+              {s.root && <div className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortRoot(s.root)}</div>}
             </div>
             <span style={{ flex: "none", fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{timeAgo(new Date(s.lastSeen).getTime())}</span>
           </div>
@@ -256,7 +256,7 @@ export function ActivityScreen({
                     <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
                       <span className="stat-num" style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
                         {c.value}
-                        {c.preview && <span data-tip="Illustrative — not from the API" style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "1px 5px" }}>est</span>}
+                        {c.preview && <span data-tip="Illustrative — not from the API" style={{ fontSize: "var(--text-micro)", fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-quaternary)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "1px 5px" }}>est</span>}
                       </span>
                       <span className="stat-label">{c.label}<span style={{ color: "var(--text-quaternary)" }}> · {c.sub}</span></span>
                     </span>
