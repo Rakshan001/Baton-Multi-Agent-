@@ -21,7 +21,7 @@ import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'n
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import matter from 'gray-matter'; // writer only (matter.stringify) — reads go through parseFrontmatter
 import { parseFrontmatter } from './util/frontmatter.js';
-import { git } from './util/exec.js';
+import { git, gitTry } from './util/exec.js';
 import { readAuthor, resolveAuthor, UNKNOWN_AUTHOR } from './identity.js';
 import { escapeRegExp } from './util/regex.js';
 import { rankFacts } from './memory-rank.js';
@@ -336,13 +336,36 @@ export function parseFactFile(raw: string): MemoryFact | null {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Memory was asked for somewhere that is not a git repository.
+ *
+ * Typed, because callers need to tell it apart from a real failure: a read
+ * treats it as "there is nothing here" and returns empty, a write refuses and
+ * says so. The message names the directory and nothing else — the raw git
+ * error reprints the whole hardened argv, which tells an agent (or a user)
+ * nothing they can act on.
+ */
+export class NotAGitRepoError extends Error {
+  constructor(public readonly dir: string) {
+    super(`${dir} is not a git repository — Baton stores memory per repo, so run this inside one`);
+    this.name = 'NotAGitRepoError';
+  }
+}
+
+/**
  * The MAIN repository root, even when called from inside a task worktree
  * (`gitRoot()` would return the worktree). Memory must be shared, so all
  * paths resolve through the git common dir.
+ *
+ * `gitTry`, not `git`: every other `--git-common-dir` call in the codebase
+ * already uses the non-throwing form, and the raw exit-128 dump used to escape
+ * through every public function below — an agent calling `save_memory` over
+ * MCP outside a repo got the hardened argv back instead of a sentence.
  */
 export async function mainRepoRoot(cwd?: string): Promise<string> {
-  const common = await git(['rev-parse', '--git-common-dir'], cwd);
-  const abs = isAbsolute(common) ? common : resolve(cwd ?? process.cwd(), common);
+  const dir = cwd ?? process.cwd();
+  const r = await gitTry(['rev-parse', '--git-common-dir'], cwd);
+  if (!r.ok) throw new NotAGitRepoError(dir);
+  const abs = isAbsolute(r.stdout) ? r.stdout : resolve(dir, r.stdout);
   return dirname(abs);
 }
 
@@ -359,6 +382,22 @@ async function resolveRoot(root: string): Promise<string> {
   const main = await mainRepoRoot(root);
   rootCache.set(root, main);
   return main;
+}
+
+/**
+ * The same resolution for READ paths, which answer "nothing" instead of
+ * throwing. Outside a repo there is genuinely no memory to return, and a
+ * dashboard panel or an MCP recall should render empty rather than surface an
+ * exception. Writes keep using resolveRoot: refusing to save has to be loud,
+ * because the alternative is an agent believing it stored something.
+ */
+async function resolveRootForRead(root: string): Promise<string | null> {
+  try {
+    return await resolveRoot(root);
+  } catch (e) {
+    if (e instanceof NotAGitRepoError) return null;
+    throw e;
+  }
 }
 
 /**
@@ -465,7 +504,8 @@ async function archiveFact(
 
 /** The KB change log, newest first. Drives `baton memory log` (no agent-token cost). */
 export async function readJournal(root: string): Promise<JournalEntry[]> {
-  const mainRoot = await resolveRoot(root);
+  const mainRoot = await resolveRootForRead(root);
+  if (mainRoot === null) return [];
   const file = journalFile(mainRoot);
   if (!existsSync(file)) return [];
   const out: JournalEntry[] = [];
@@ -778,7 +818,8 @@ const behindCache = new Map<string, number | null>();
  *  `projects` (kb sub-projects, paths relative to the main root) enable per-server
  *  scoping in a hub; omit for a plain single-repo (every fact is unscoped). */
 export async function listMemories(root: string, opts: { projects?: ProjectRel[] } = {}): Promise<MemoryStatus[]> {
-  const mainRoot = await resolveRoot(root);
+  const mainRoot = await resolveRootForRead(root);
+  if (mainRoot === null) return [];
   const facts = await listMemoryFacts(mainRoot);
   const projects = opts.projects ?? [];
   let head: string | null = null;
@@ -1202,7 +1243,8 @@ function retentionFile(mainRoot: string): string {
 }
 
 export async function loadRetention(root: string): Promise<RetentionPolicy> {
-  const mainRoot = await resolveRoot(root);
+  const mainRoot = await resolveRootForRead(root);
+  if (mainRoot === null) return {};
   const file = retentionFile(mainRoot);
   if (!existsSync(file)) return {};
   try {
