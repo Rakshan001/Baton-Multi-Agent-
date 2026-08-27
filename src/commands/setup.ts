@@ -462,13 +462,23 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
       console.log(`    Skipped — no knowledge graph. Later: ${step.line}, then ${step.then}`);
       return false;
     }
-    if (!(await runInstall(step.cmd, step.args, step.line))) return false;
+    // Quiet, because the probe below is what decides. A package manager can
+    // fail the request and still leave the machine correct: winget answers
+    // "no applicable upgrade" when uv is ALREADY installed, and reporting that
+    // as a dead end is how a yes could not work on a machine that had uv.
+    const ranOk = await runInstall(step.cmd, step.args, step.line, { quiet: true });
 
-    // Re-probe rather than trusting the exit code: a package manager can
-    // succeed while putting uv somewhere this process's PATH cannot see.
+    // Re-probe rather than trusting the exit code, in both directions: a
+    // package manager can succeed while putting uv somewhere this process's
+    // PATH cannot see, and it can fail while uv sits there already.
     const afterUv = await detectGraphify();
     if (afterUv.ok) { console.log('    ✓ knowledge graph ready.'); return true; }
     if (!afterUv.uv) {
+      if (!ranOk) {
+        console.log(`    ! could not install uv with \`${step.cmd}\`.`);
+        console.log(`      Setup continues without the graph. Try later: ${step.line}, then ${step.then}`);
+        return false;
+      }
       console.log('    ✓ set up, but not visible on PATH from here.');
       console.log(`      Open a new shell, then run: ${step.then}`);
       return false;
@@ -486,13 +496,15 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
       console.log(`    Skipped — no knowledge graph. Later: ${step.hint}, then ${step.then}`);
       return false;
     }
-    if (!(await runUvInstallerScript(step.url, step.shell))) return false;
+    const ranOk = await runUvInstallerScript(step.url, step.shell);
 
     // Same re-probe as the package-manager path: the script can succeed while
-    // putting uv where this process's PATH cannot see it.
+    // putting uv where this process's PATH cannot see it — and uv may already
+    // be present even when the script itself did not finish.
     const afterUv = await detectGraphify();
     if (afterUv.ok) { console.log('    ✓ knowledge graph ready.'); return true; }
     if (!afterUv.uv) {
+      if (!ranOk) return false; // runUvInstallerScript has already said why
       console.log('    ✓ set up, but not visible on PATH from here.');
       console.log(`      Open a new shell, then run: ${step.then}`);
       return false;
@@ -603,13 +615,57 @@ async function runUvInstallerScript(url: string, shell: InstallerShell): Promise
   }
 }
 
-async function runInstall(cmd: string, args: string[], line: string): Promise<boolean> {
+/**
+ * winget's exit code for "the package is already installed and there is no
+ * newer version" — APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE.
+ *
+ * Not an error to us. It is the state we were trying to reach, reported as a
+ * failure because winget was asked to upgrade and had nothing to upgrade.
+ */
+export const WINGET_NO_UPGRADE = 0x8A15002B; // 2316632107
+
+/**
+ * Did the installer leave the machine in the state we wanted, whatever it
+ * thought of the request?
+ *
+ * Normalised to unsigned first. 0x8A15002B is above 2^31, so anything that
+ * round-trips it through a signed 32-bit int hands back -1978335189 — the same
+ * code wearing a minus sign. execa reported the positive form on the machine
+ * this was found on; the normalisation is so a different Node or platform
+ * cannot quietly turn a benign exit back into a fatal one.
+ */
+export function isBenignInstallerExit(code: number | undefined): boolean {
+  if (code === undefined) return false;
+  const unsigned = code < 0 ? code >>> 0 : code;
+  return unsigned === 0 || unsigned === WINGET_NO_UPGRADE;
+}
+
+/**
+ * Run one installer.
+ *
+ * `quiet` suppresses the failure report for callers that are going to PROBE
+ * afterwards and decide for themselves. That is not politeness: a caller which
+ * re-probes can discover the tool is present anyway, and printing "install
+ * failed, setup continues without the graph" immediately before installing the
+ * graph would be a lie told in the right order.
+ *
+ * Offline, behind a proxy, a broken Python, a locked package manager — none of
+ * it is Baton's problem to solve, and none of it should cost the user the setup
+ * they came for. So a failure is reported and the run continues.
+ */
+async function runInstall(
+  cmd: string, args: string[], line: string, opts: { quiet?: boolean } = {},
+): Promise<boolean> {
   try {
     await execa(cmd, args, { stdio: 'inherit', timeout: 10 * 60_000 });
     return true;
   } catch (e) {
-    console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
-    console.log(`      Setup continues without the graph. Try later: ${line}`);
+    const code = (e as { exitCode?: number }).exitCode;
+    if (isBenignInstallerExit(code)) return true; // already installed; nothing to do
+    if (!opts.quiet) {
+      console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
+      console.log(`      Setup continues without the graph. Try later: ${line}`);
+    }
     return false;
   }
 }
