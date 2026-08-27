@@ -56,7 +56,10 @@ export async function detectGraphify(): Promise<GraphifyDetection> {
  * reasons that apply just as much to them, is bad advice. Everything now routes
  * through uv, which brings its own Python and needs no system one at all.
  */
-export function installHint(d: GraphifyDetection): string {
+export function installHint(
+  d: GraphifyDetection,
+  platform: NodeJS.Platform = process.platform,
+): string {
   if (d.uv) return 'uv tool install graphifyy';
   if (d.pipx) return 'pipx install graphifyy';
 
@@ -64,9 +67,11 @@ export function installHint(d: GraphifyDetection): string {
   if (uv) return `${uv.cmd} ${uv.args.join(' ')}   then: uv tool install graphifyy`;
 
   // No package manager. The official installer is a remote script piped into a
-  // shell — fine for a human who chose to run it, not something Baton should
-  // execute on anyone's behalf. So it is printed, and only printed.
-  return 'curl -LsSf https://astral.sh/uv/install.sh | sh   then: uv tool install graphifyy';
+  // shell — fine for a human who chose to run it. Platform-correct: a Windows
+  // user handed `curl … | sh` has been told to run something PowerShell cannot.
+  const script = uvScriptInstall(d, platform);
+  if (script) return `${uvScriptHint(script)}   then: uv tool install graphifyy`;
+  return 'uv tool install graphifyy';
 }
 
 /**
@@ -87,9 +92,15 @@ export function uvInstallCommand(d: GraphifyDetection): { cmd: string; args: str
   return null;
 }
 
-/** Astral's official uv installer, named once so the prompt, the hint and the
- *  download can never drift apart. */
+/** Astral's official uv installers, named once so the prompt, the hint and the
+ *  download can never drift apart. Two, because a POSIX shell script is not
+ *  something a Windows user can run. */
 export const UV_INSTALLER_URL = 'https://astral.sh/uv/install.sh';
+export const UV_INSTALLER_URL_WINDOWS = 'https://astral.sh/uv/install.ps1';
+
+/** How a downloaded installer is executed. Decides the interpreter, the file
+ *  extension it is written with, and the shape it is checked for. */
+export type InstallerShell = 'sh' | 'powershell';
 
 /**
  * The last rung: no uv, no pipx, and no package manager to bootstrap one —
@@ -104,17 +115,29 @@ export const UV_INSTALLER_URL = 'https://astral.sh/uv/install.sh';
  * therefore only reaches for this under `mayInstallSoftware`; under `--yes`
  * there is nobody to ask, so it stays a printed hint.
  *
- * Windows gets null: the script is POSIX-only, and winget already covers that
- * machine one rung up.
+ * Windows reaches this too. winget ships with Windows 10 1709+ and Windows 11
+ * and covers that machine one rung up, but it is genuinely absent on older
+ * builds, on LTSC images, and wherever an administrator has disabled it — and
+ * those users were left with no route at all AND a `curl … | sh` hint that
+ * cannot run in PowerShell. Astral publish a PowerShell installer for exactly
+ * this case.
  */
 export function uvScriptInstall(
   d: GraphifyDetection,
   platform: NodeJS.Platform = process.platform,
-): { url: string } | null {
+): { url: string; shell: InstallerShell } | null {
   if (d.ok || d.uv || d.pipx) return null;   // a working route already exists
   if (d.brew || d.winget) return null;       // a signed package manager beats a script
-  if (platform === 'win32') return null;
-  return { url: UV_INSTALLER_URL };
+  return platform === 'win32'
+    ? { url: UV_INSTALLER_URL_WINDOWS, shell: 'powershell' }
+    : { url: UV_INSTALLER_URL, shell: 'sh' };
+}
+
+/** The same command as a string, for the "do it yourself" hint. */
+export function uvScriptHint(s: { url: string; shell: InstallerShell }): string {
+  return s.shell === 'powershell'
+    ? `powershell -ExecutionPolicy ByPass -c "irm ${s.url} | iex"`
+    : `curl -LsSf ${s.url} | sh`;
 }
 
 /**

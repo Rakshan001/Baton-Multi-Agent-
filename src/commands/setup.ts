@@ -22,7 +22,7 @@ import { askChoice, kbInitCmd } from './kb.js';
 import { connectAgents, type AgentConnectOutcome } from '../agents/connect.js';
 import { DEFAULT_CONNECT_AGENTS } from './connect.js';
 import { askMultiSelect, askYesNo, shouldOfferGlobalInstall } from './setup-prompts.js';
-import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, uvScriptInstall, type GraphifyDetection } from '../kb/graphify.js';
+import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, uvScriptInstall, uvScriptHint, type GraphifyDetection, type InstallerShell } from '../kb/graphify.js';
 import { agentInstalled } from '../agents/roster.js';
 import { AGENTS } from '../agents/registry.js';
 import { installSkillEverywhere, listSkillStatus, isUserSkill } from '../skills/install.js';
@@ -273,7 +273,7 @@ export type GraphifyStep =
   /** Nothing installed, but a package manager can install uv, which installs graphify. */
   | { kind: 'bootstrap-uv'; cmd: string; args: string[]; line: string; then: string }
   /** Not even a package manager: offer Astral's installer script, interactively only. */
-  | { kind: 'script-uv'; url: string; then: string };
+  | { kind: 'script-uv'; url: string; shell: InstallerShell; hint: string; then: string };
 
 /**
  * The list shown before "hub, or individually?".
@@ -408,7 +408,10 @@ export function graphifyStep(
     // URL and decline. Under --yes there is nobody to ask, and it stays a hint.
     const script = uvScriptInstall(detection);
     if (script && mayInstallSoftware(opts) && interactive) {
-      return { kind: 'script-uv', url: script.url, then: 'uv tool install graphifyy' };
+      return {
+        kind: 'script-uv', url: script.url, shell: script.shell,
+        hint: uvScriptHint(script), then: 'uv tool install graphifyy',
+      };
     }
     return { kind: 'no-installer', hint: installHint(detection) };
   }
@@ -480,10 +483,10 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
     console.log(`    Baton would download and run the official installer: ${step.url}`);
     console.log('    It brings its own Python, so nothing else is installed.');
     if (!(await askYesNo('    Set up the knowledge graph now?', true))) {
-      console.log(`    Skipped — no knowledge graph. Later: curl -LsSf ${step.url} | sh, then ${step.then}`);
+      console.log(`    Skipped — no knowledge graph. Later: ${step.hint}, then ${step.then}`);
       return false;
     }
-    if (!(await runUvInstallerScript(step.url))) return false;
+    if (!(await runUvInstallerScript(step.url, step.shell))) return false;
 
     // Same re-probe as the package-manager path: the script can succeed while
     // putting uv where this process's PATH cannot see it.
@@ -519,6 +522,20 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
 const MAX_INSTALLER_BYTES = 512 * 1024;
 
 /**
+ * A sanity check on what came back, NOT a security boundary — real trust here
+ * is HTTPS plus the user having read the URL. What it is actually for is the
+ * captive portal and the error page: a hotel wifi login screen must never be
+ * handed to an interpreter. A shell script announces itself with a shebang;
+ * PowerShell has no such marker, so there the meaningful test is that this is
+ * not markup.
+ */
+export function looksLikeInstaller(body: string, shell: InstallerShell): boolean {
+  const head = body.trimStart();
+  if (!head || head.startsWith('<')) return false; // HTML/XML: a portal or an error
+  return shell === 'powershell' ? true : head.startsWith('#!');
+}
+
+/**
  * Download Astral's uv installer and run it.
  *
  * Written to a file and run as `sh <file>` rather than piped through a shell:
@@ -531,7 +548,7 @@ const MAX_INSTALLER_BYTES = 512 * 1024;
  * login page or an error body must never reach `sh`. Real trust here comes from
  * HTTPS and from the user having read the URL.
  */
-async function runUvInstallerScript(url: string): Promise<boolean> {
+async function runUvInstallerScript(url: string, shell: InstallerShell): Promise<boolean> {
   let dir: string | null = null;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(60_000), redirect: 'follow' });
@@ -558,15 +575,24 @@ async function runUvInstallerScript(url: string): Promise<boolean> {
       return false;
     }
     const body = await res.text();
-    if (!body.trimStart().startsWith('#!') || body.length > MAX_INSTALLER_BYTES) {
+    if (!looksLikeInstaller(body, shell) || body.length > MAX_INSTALLER_BYTES) {
       console.log('    ! that download does not look like the installer. Nothing was run.');
       console.log(`      Check ${url} in a browser before trying again.`);
       return false;
     }
     dir = await mkdtemp(join(tmpdir(), 'baton-uv-'));
-    const file = join(dir, 'install.sh');
+    const ps = shell === 'powershell';
+    const file = join(dir, ps ? 'install.ps1' : 'install.sh');
     await writeFile(file, body, { mode: 0o700 });
-    await execa('sh', [file], { stdio: 'inherit', timeout: 10 * 60_000 });
+    // -NoProfile so a user's profile script is not dragged into this, and
+    // -File so the path is an argument rather than something PowerShell parses.
+    // Bypass is required because a freshly downloaded script is unsigned; it is
+    // scoped to this one process invocation and changes no machine policy.
+    await execa(
+      ps ? 'powershell' : 'sh',
+      ps ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file] : [file],
+      { stdio: 'inherit', timeout: 10 * 60_000 },
+    );
     return true;
   } catch (e) {
     console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
