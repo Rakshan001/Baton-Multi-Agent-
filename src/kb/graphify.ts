@@ -87,6 +87,36 @@ export function uvInstallCommand(d: GraphifyDetection): { cmd: string; args: str
   return null;
 }
 
+/** Astral's official uv installer, named once so the prompt, the hint and the
+ *  download can never drift apart. */
+export const UV_INSTALLER_URL = 'https://astral.sh/uv/install.sh';
+
+/**
+ * The last rung: no uv, no pipx, and no package manager to bootstrap one —
+ * a stock machine, where every route above returns null and the graph used to
+ * be simply unreachable.
+ *
+ * A remote script is a real trust decision, and the rule the two functions
+ * above follow still holds: Baton must not run one on someone's BEHALF. What
+ * changes here is who decides. Offered interactively, with the URL on screen
+ * and a question in front of it, the person running setup is the one choosing —
+ * which is the case the refusal was always meant to leave open. `graphifyStep`
+ * therefore only reaches for this under `mayInstallSoftware`; under `--yes`
+ * there is nobody to ask, so it stays a printed hint.
+ *
+ * Windows gets null: the script is POSIX-only, and winget already covers that
+ * machine one rung up.
+ */
+export function uvScriptInstall(
+  d: GraphifyDetection,
+  platform: NodeJS.Platform = process.platform,
+): { url: string } | null {
+  if (d.ok || d.uv || d.pipx) return null;   // a working route already exists
+  if (d.brew || d.winget) return null;       // a signed package manager beats a script
+  if (platform === 'win32') return null;
+  return { url: UV_INSTALLER_URL };
+}
+
 /**
  * The same guidance as an argv array, for when the user asks `baton setup` to
  * run the install rather than copy it.

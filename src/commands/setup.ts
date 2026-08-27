@@ -10,9 +10,9 @@
  * `baton kb init` stays the low-level command this reuses (src/commands/kb.ts).
  */
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { execa } from 'execa';
 import { gitTry } from '../util/exec.js';
@@ -22,7 +22,7 @@ import { askChoice, kbInitCmd } from './kb.js';
 import { connectAgents, type AgentConnectOutcome } from '../agents/connect.js';
 import { DEFAULT_CONNECT_AGENTS } from './connect.js';
 import { askMultiSelect, askYesNo, shouldOfferGlobalInstall } from './setup-prompts.js';
-import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, type GraphifyDetection } from '../kb/graphify.js';
+import { detectGraphify, graphifyInstallCommand, installHint, uvInstallCommand, uvScriptInstall, type GraphifyDetection } from '../kb/graphify.js';
 import { agentInstalled } from '../agents/roster.js';
 import { AGENTS } from '../agents/registry.js';
 import { installSkillEverywhere, listSkillStatus, isUserSkill } from '../skills/install.js';
@@ -202,8 +202,8 @@ async function preflight(root: string): Promise<{ graphify: GraphifyDetection; a
   console.log(`    ✓ node ${process.versions.node}`);
   console.log(
     graphify.ok
-      ? `    ✓ graphify ${graphify.version ?? ''}`.trimEnd()
-      : '    ✗ graphify — the knowledge graph stays off until it is installed',
+      ? `    ✓ knowledge graph ${graphify.version ?? ''}`.trimEnd()
+      : '    · knowledge graph — not set up yet (optional)',
   );
   console.log(agents.length ? `    ✓ agents found: ${agents.join(', ')}` : '    · no agents detected yet — you can still wire them');
 
@@ -271,7 +271,9 @@ export type GraphifyStep =
   | { kind: 'deferred'; line: string; then?: string }
   | { kind: 'offer'; cmd: string; args: string[]; line: string }
   /** Nothing installed, but a package manager can install uv, which installs graphify. */
-  | { kind: 'bootstrap-uv'; cmd: string; args: string[]; line: string; then: string };
+  | { kind: 'bootstrap-uv'; cmd: string; args: string[]; line: string; then: string }
+  /** Not even a package manager: offer Astral's installer script, interactively only. */
+  | { kind: 'script-uv'; url: string; then: string };
 
 /**
  * The list shown before "hub, or individually?".
@@ -377,7 +379,14 @@ export function describeRepos(root: string, repos: readonly SubProject[]): strin
  * Pure half of the graphify step, so the policy above is testable without
  * spawning an installer to find out whether it would have.
  */
-export function graphifyStep(detection: GraphifyDetection, opts: SetupOpts): GraphifyStep {
+export function graphifyStep(
+  detection: GraphifyDetection,
+  opts: SetupOpts,
+  /** A real terminal on both ends. The script rung needs it: askYesNo returns
+   *  its fallback on EOF, so with stdin redirected a default-yes prompt is not
+   *  consent — it is Baton running a remote script on nobody's say-so. */
+  interactive: boolean = Boolean(process.stdin.isTTY && process.stdout.isTTY),
+): GraphifyStep {
   if (detection.ok) return { kind: 'already' };
 
   // uv or pipx is here: one command and we are done.
@@ -393,7 +402,16 @@ export function graphifyStep(detection: GraphifyDetection, opts: SetupOpts): Gra
   // but a package manager can install uv, and uv brings its own Python, so the
   // machine needs no system Python at all. Two argv commands, no shell.
   const uv = uvInstallCommand(detection);
-  if (!uv) return { kind: 'no-installer', hint: installHint(detection) };
+  if (!uv) {
+    // No package manager either. Astral's own installer is the last route, and
+    // it is a remote script — so it is offered ONLY where a human can read the
+    // URL and decline. Under --yes there is nobody to ask, and it stays a hint.
+    const script = uvScriptInstall(detection);
+    if (script && mayInstallSoftware(opts) && interactive) {
+      return { kind: 'script-uv', url: script.url, then: 'uv tool install graphifyy' };
+    }
+    return { kind: 'no-installer', hint: installHint(detection) };
+  }
 
   const line = `${uv.cmd} ${uv.args.join(' ')}`;
   const then = 'uv tool install graphifyy';
@@ -417,26 +435,28 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
   const step = graphifyStep(detection, opts);
   if (step.kind === 'already') return true; // do not ask about what is already here
 
-  console.log('\n  The knowledge graph needs the `graphify` CLI (Python).');
+  console.log('\n  The knowledge graph maps your code so agents can navigate it');
+  console.log('  instead of reading every file. It is optional.');
 
   if (step.kind === 'no-installer') {
-    console.log(`    Install it yourself when convenient: ${step.hint}`);
+    console.log(`    To set it up later, run: ${step.hint}`);
     console.log('    Everything else works without it.');
     return false;
   }
   if (step.kind === 'deferred') {
     const later = step.then ? `${step.line}, then ${step.then}` : step.line;
-    console.log(`    Not installed under --yes (it installs software). Later: ${later}`);
+    console.log(`    Not set up under --yes (it installs software). Later: ${later}`);
     return false;
   }
 
   // Nothing installed at all, but a package manager can bootstrap the chain.
   if (step.kind === 'bootstrap-uv') {
-    console.log(`    uv is not installed either, but \`${step.cmd}\` can install it.`);
-    console.log(`    Two commands: \`${step.line}\`, then \`${step.then}\`.`);
-    console.log('    uv brings its own Python, so nothing else has to be installed.');
-    if (!(await askYesNo('    Install both now?', true))) {
-      console.log(`    Skipped — the graph stays off. Later: ${step.line}, then ${step.then}`);
+    console.log(`    Baton would set it up with \`${step.cmd}\`, in two steps:`);
+    console.log(`      ${step.line}`);
+    console.log(`      ${step.then}`);
+    console.log('    It brings its own Python, so nothing else is installed.');
+    if (!(await askYesNo('    Set up the knowledge graph now?', true))) {
+      console.log(`    Skipped — no knowledge graph. Later: ${step.line}, then ${step.then}`);
       return false;
     }
     if (!(await runInstall(step.cmd, step.args, step.line))) return false;
@@ -444,17 +464,43 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
     // Re-probe rather than trusting the exit code: a package manager can
     // succeed while putting uv somewhere this process's PATH cannot see.
     const afterUv = await detectGraphify();
-    if (afterUv.ok) { console.log('    ✓ graphify installed.'); return true; }
+    if (afterUv.ok) { console.log('    ✓ knowledge graph ready.'); return true; }
     if (!afterUv.uv) {
-      console.log('    ✓ uv installed, but not visible on PATH from here.');
+      console.log('    ✓ set up, but not visible on PATH from here.');
       console.log(`      Open a new shell, then run: ${step.then}`);
       return false;
     }
     if (!(await runInstall('uv', ['tool', 'install', 'graphifyy'], step.then))) return false;
     return await confirmGraphify(step.then);
   }
-  if (!(await askYesNo(`    Install it now with \`${step.line}\`?`, true))) {
-    console.log(`    Skipped — the graph stays off. Later: ${step.line}`);
+  // No package manager at all. Astral's installer is the only route left, so
+  // the URL goes on screen and the person decides.
+  if (step.kind === 'script-uv') {
+    console.log('    There is no package manager on this machine to set it up with.');
+    console.log(`    Baton would download and run the official installer: ${step.url}`);
+    console.log('    It brings its own Python, so nothing else is installed.');
+    if (!(await askYesNo('    Set up the knowledge graph now?', true))) {
+      console.log(`    Skipped — no knowledge graph. Later: curl -LsSf ${step.url} | sh, then ${step.then}`);
+      return false;
+    }
+    if (!(await runUvInstallerScript(step.url))) return false;
+
+    // Same re-probe as the package-manager path: the script can succeed while
+    // putting uv where this process's PATH cannot see it.
+    const afterUv = await detectGraphify();
+    if (afterUv.ok) { console.log('    ✓ knowledge graph ready.'); return true; }
+    if (!afterUv.uv) {
+      console.log('    ✓ set up, but not visible on PATH from here.');
+      console.log(`      Open a new shell, then run: ${step.then}`);
+      return false;
+    }
+    if (!(await runInstall('uv', ['tool', 'install', 'graphifyy'], step.then))) return false;
+    return await confirmGraphify(step.then);
+  }
+
+  console.log(`    One command sets it up: ${step.line}`);
+  if (!(await askYesNo('    Set up the knowledge graph now?', true))) {
+    console.log(`    Skipped — no knowledge graph. Later: ${step.line}`);
     return false;
   }
 
@@ -469,6 +515,55 @@ async function offerGraphify(detection: GraphifyDetection, opts: SetupOpts): Pro
  * it is Baton's problem to solve, and none of it should cost the user the setup
  * they came for. So a failure is reported and the run continues.
  */
+/**
+ * Download Astral's uv installer and run it.
+ *
+ * Written to a file and run as `sh <file>` rather than piped through a shell:
+ * argv only, so nothing in the response can be read as a shell metacharacter,
+ * and the bytes that execute are bytes we could point at afterwards. It is
+ * still a remote script, and it runs only after an explicit yes to a prompt
+ * that named the URL.
+ *
+ * The shape check is a sanity guard, not a security boundary — a captive-portal
+ * login page or an error body must never reach `sh`. Real trust here comes from
+ * HTTPS and from the user having read the URL.
+ */
+async function runUvInstallerScript(url: string): Promise<boolean> {
+  let dir: string | null = null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000), redirect: 'follow' });
+    if (!res.ok) {
+      console.log(`    ! could not download the installer (HTTP ${res.status}). Nothing was run.`);
+      return false;
+    }
+    // Redirects are followed, and a redirect chain can leave HTTPS. TLS is the
+    // ONLY integrity guarantee this download has — there is no signature to
+    // check — so a chain that ends on plain HTTP is a downgrade, and the bytes
+    // that arrive are whatever the network decided to hand back.
+    if (!res.url.startsWith('https://')) {
+      console.log(`    ! the download was redirected off HTTPS (${res.url}). Nothing was run.`);
+      return false;
+    }
+    const body = await res.text();
+    if (!body.trimStart().startsWith('#!') || body.length > 512 * 1024) {
+      console.log('    ! that download does not look like the installer. Nothing was run.');
+      console.log(`      Check ${url} in a browser before trying again.`);
+      return false;
+    }
+    dir = await mkdtemp(join(tmpdir(), 'baton-uv-'));
+    const file = join(dir, 'install.sh');
+    await writeFile(file, body, { mode: 0o700 });
+    await execa('sh', [file], { stdio: 'inherit', timeout: 10 * 60_000 });
+    return true;
+  } catch (e) {
+    console.log(`    ! install failed: ${(e as Error).message.split('\n')[0]}`);
+    console.log(`      Setup continues without the graph. Try later: curl -LsSf ${url} | sh`);
+    return false;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function runInstall(cmd: string, args: string[], line: string): Promise<boolean> {
   try {
     await execa(cmd, args, { stdio: 'inherit', timeout: 10 * 60_000 });
@@ -488,10 +583,10 @@ async function runInstall(cmd: string, args: string[], line: string): Promise<bo
  */
 async function confirmGraphify(line: string): Promise<boolean> {
   if ((await detectGraphify()).ok) {
-    console.log('    ✓ graphify installed.');
+    console.log('    ✓ knowledge graph ready.');
     return true;
   }
-  console.log('    ✓ installed, but not visible on PATH from here.');
+  console.log('    ✓ set up, but not visible on PATH from here.');
   console.log(`      Open a new shell and run \`baton kb init\` to finish the graph. (${line})`);
   return false;
 }
@@ -506,10 +601,10 @@ async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boole
     await kbInitCmd(target, kbOpts(opts));
     return;
   }
-  console.log('\n  · Knowledge base skipped — it needs the graphify CLI.');
+  console.log('\n  · Knowledge graph skipped.');
   console.log('    Everything else is set up: worktrees, tasks, edit signals, memory,');
   console.log('    handoff and the dashboard all work without the graph.');
-  console.log('    Once graphify is installed, finish with:  baton kb init');
+  console.log('    Once it is set up, finish with:  baton kb init');
 }
 
 /**

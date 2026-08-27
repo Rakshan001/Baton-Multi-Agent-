@@ -151,13 +151,13 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
 
   const det = await detectGraphify();
   if (!det.ok) {
-    console.error('graphify is not installed (knowledge graphs need it).');
-    console.error(`  install: ${installHint(det)}`);
+    console.error('The knowledge graph is not set up on this machine yet.');
+    console.error(`  set it up: ${installHint(det)}`);
     console.error('  then re-run: baton kb init');
     process.exitCode = 1;
     return;
   }
-  console.log(`graphify ${det.version} ✓`);
+  console.log(`knowledge graph ${det.version} ✓`);
   if (!hasLlmBackend()) {
     console.log('no LLM API key detected → AST-only extraction (fast, free; set ANTHROPIC_API_KEY etc. for semantic enrichment)');
   }
@@ -327,7 +327,7 @@ export async function kbImportCmd(source: string, opts: { rebuild?: boolean } = 
       await kbRebuildCmd(undefined, {});
       return;
     }
-    if (!detection.ok) console.log(`  install graphify to refresh: ${installHint(detection)}`);
+    if (!detection.ok) console.log(`  set up the knowledge graph to refresh: ${installHint(detection)}`);
     else console.log('  refresh with: baton kb rebuild');
   } else {
     console.log('✓ knowledge base imported and current');
