@@ -16,6 +16,7 @@
  * repository, never per-worktree — that is the whole point.
  */
 import { createHash } from 'node:crypto';
+import { assessAnchor, claimedFiles } from './memory-repair.js';
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -1096,11 +1097,36 @@ export async function repairMemories(root: string): Promise<RepairResult> {
     // An anchorless fact went stale on commit distance alone (there was never a
     // file to invalidate it). Try to give it the anchors it should have had:
     // real files its own text names. No derivable evidence → review queue.
-    const anchorFiles = f.anchors.files.length > 0 ? f.anchors.files : await deriveFileAnchors(mainRoot, f.fact);
+    const hadAnchors = f.anchors.files.length > 0;
+    const anchorFiles = hadAnchors ? f.anchors.files : await deriveFileAnchors(mainRoot, f.fact);
     let verified = terms.length > 0 && anchorFiles.length > 0;
-    if (verified) {
-      // Haystack: the anchor paths themselves + current contents of every
-      // anchored file. A deleted anchor is unverifiable by definition.
+    if (verified && hadAnchors) {
+      // A fact that HAD anchors went stale because a specific file changed, and
+      // we can recover what it looked like when the fact was saved. So ask the
+      // question that actually matters — did the CHANGE touch what this fact is
+      // about? — instead of the weaker "does its wording still appear anywhere
+      // in the file", which re-anchors `CSRF_GUARD = true` after it has flipped
+      // to `false`: the term survives, the claim does not.
+      for (const a of anchorFiles) {
+        let before: string | null = null;
+        if (f.anchors.commit) {
+          try {
+            before = await git(['show', `${f.anchors.commit}:${a.path}`], mainRoot);
+          } catch { /* path absent at that commit, or history rewritten */ }
+        }
+        let after: string | null = null;
+        try {
+          after = await readFile(join(mainRoot, a.path), 'utf-8');
+        } catch { /* deleted — assessAnchor treats null as unrecoverable */ }
+        if (assessAnchor(f.fact, { path: a.path, before, after }).kind !== 'intact') {
+          verified = false;
+          break;
+        }
+      }
+    } else if (verified) {
+      // Anchors DERIVED from the fact's own text: there is no "before" for a
+      // file this fact was never anchored to, so the survival check is the only
+      // evidence available. It is weaker, and it is applied only here.
       let hay = anchorFiles.map((a) => a.path).join('\n');
       for (const a of anchorFiles) {
         try {
@@ -1146,14 +1172,90 @@ export async function repairMemories(root: string): Promise<RepairResult> {
   return { reanchored, needsReview };
 }
 
-/** Drop stale facts (changed/removed anchors). Returns removed ids. */
-export async function gcMemories(root: string): Promise<string[]> {
+export interface AnchorPruneResult {
+  /** Facts whose anchor list was narrowed. */
+  changed: string[];
+  /** Anchors dropped, as `id -> paths`, so a caller can show the work. */
+  dropped: Record<string, string[]>;
+}
+
+/**
+ * One-time repair for anchors nothing ever claimed.
+ *
+ * Capture used to anchor a fact to every file that happened to be dirty in the
+ * session. Measured on this repo: nine facts carried `.gitignore`, `AGENTS.md`
+ * and `CODEBASE.md` as evidence for claims that mention none of them, so an
+ * unrelated commit read as "this fact may be wrong" — and `gcMemories` would
+ * have deleted them for it.
+ *
+ * Fixing capture does nothing for facts already saved. This drops the anchors a
+ * fact has no textual claim to, using the same matcher capture now uses. The
+ * fact keeps its text, id, author and type; it only stops asserting evidence it
+ * never had. Left anchorless, it ages honestly on commit distance rather than
+ * dying on somebody else's churn.
+ *
+ * NEVER deletes a fact, and `dryRun` reports without writing — a migration over
+ * someone's accumulated knowledge has to be previewable before it runs.
+ */
+export async function pruneUnclaimedAnchors(
+  root: string,
+  opts: { dryRun?: boolean } = {},
+): Promise<AnchorPruneResult> {
+  const mainRoot = await resolveRoot(root);
+  const changed: string[] = [];
+  const dropped: Record<string, string[]> = {};
+
+  for (const f of await listMemoryFacts(mainRoot)) {
+    if (f.anchors.files.length === 0) continue;
+    const paths = f.anchors.files.map((a) => a.path);
+    // `stem: true` — dropping a real anchor is the costly error here.
+    const keep = new Set(claimedFiles(f.fact, paths, { stem: true }));
+    const lose = paths.filter((p) => !keep.has(p));
+    if (lose.length === 0) continue;
+
+    changed.push(f.id);
+    dropped[f.id] = lose;
+    if (opts.dryRun) continue;
+
+    // `commit` is kept: it still records when this fact was true, which is what
+    // the commit-distance aging uses once the file anchors are gone.
+    const updated: MemoryFact = {
+      ...f,
+      anchors: { commit: f.anchors.commit, files: f.anchors.files.filter((a) => keep.has(a.path)) },
+    };
+    const dir = memoryDirFor(mainRoot, f.area ?? areaOf(mainRoot, f.id) ?? 'local');
+    await writeFactFile(dir, f.id, renderFactFile(updated));
+    factCache.delete(join(dir, `${f.id}.md`));
+    await appendJournal(mainRoot, {
+      op: 'reanchor', id: f.id, supersededBy: null,
+      reason: `dropped unclaimed anchors: ${lose.join(', ')}`, at: new Date().toISOString(),
+    });
+  }
+  return { changed, dropped };
+}
+
+/**
+ * Drop stale facts (changed/removed anchors). Returns removed ids.
+ *
+ * Repairs BEFORE pruning, always. gc deletes user knowledge, and a fact whose
+ * anchor merely moved is not a fact that stopped being true — deleting one
+ * because an unrelated line in an anchored file changed is exactly how correct
+ * knowledge disappeared before `repairMemories` was wired in here.
+ *
+ * `dryRun` reports what would go without touching anything, so a caller can put
+ * the list in front of a person first.
+ */
+export async function gcMemories(root: string, opts: { dryRun?: boolean } = {}): Promise<string[]> {
+  // Give every fact its mechanical second chance before anything is removed.
+  try {
+    await repairMemories(root);
+  } catch { /* repair is an optimisation here; gc must still work without it */ }
   const all = await listMemories(root);
   const removed: string[] = [];
   for (const f of all) {
-    if (f.freshness === 'stale') {
-      if (await removeMemory(root, f.id, 'gc: stale anchor')) removed.push(f.id);
-    }
+    if (f.freshness !== 'stale') continue;
+    if (opts.dryRun) { removed.push(f.id); continue; }
+    if (await removeMemory(root, f.id, 'gc: stale anchor')) removed.push(f.id);
   }
   return removed;
 }

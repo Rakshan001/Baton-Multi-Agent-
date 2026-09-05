@@ -429,9 +429,12 @@ describe('recall-time opportunistic repair (ISS-05)', () => {
       type: 'convention',
       files: ['config.ts'],
     });
-    // Edit the anchored file but KEEP every verifiable term (MAX_RETRIES, config.ts):
-    // the file hash changes → the fact goes stale, though what it asserts is still true.
-    await writeFile(join(root, 'config.ts'), '// tuned for prod\nexport const MAX_RETRIES = 5;\n');
+    // Edit the anchored file WITHOUT touching the line the fact is about: the
+    // hash changes → stale, though what it asserts is plainly still true.
+    // (This edit used to also flip 3 → 5. Repair now compares what CHANGED
+    // against what the fact names, and a change ON the named line is not
+    // something it will refresh -- see the strictness test below.)
+    await writeFile(join(root, 'config.ts'), '// tuned for prod\nexport const MAX_RETRIES = 3;\n');
     expect((await listMemories(root))[0].freshness).toBe('stale');
 
     // First recall with no daemon: the opportunistic repair pass heals it in place.
@@ -446,7 +449,7 @@ describe('recall-time opportunistic repair (ISS-05)', () => {
     // The prior test just ran repair → the debounce marker is fresh. Make the
     // (now fresh) fact go stale again; recall must withhold it, proving the
     // repair pass is gated and not paid on every recall.
-    await writeFile(join(root, 'config.ts'), '// unrelated churn\nexport const MAX_RETRIES = 5;\nconst other = 1;\n');
+    await writeFile(join(root, 'config.ts'), '// unrelated churn\nexport const MAX_RETRIES = 3;\nconst other = 1;\n');
     expect((await listMemories(root))[0].freshness).toBe('stale');
 
     const recalled = await recallMemories(root, {});

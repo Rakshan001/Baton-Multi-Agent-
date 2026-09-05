@@ -40,9 +40,12 @@ describe('repairMemories (concurrent passes in one process)', () => {
       files: ['src/server.ts'],
     });
 
-    // Go stale: the anchored file changes but the verifiable term survives, so
-    // both passes will decide this fact is mechanically re-anchorable.
-    await writeFile(join(root, 'src', 'server.ts'), '// hardened\nexport const ORIGIN_GUARD = true;\n');
+    // Go stale on an edit that misses the line the fact is about, so both
+    // passes decide this fact is mechanically re-anchorable. (This used to flip
+    // false → true; repair no longer refreshes a fact when the change lands on
+    // a line the fact names. The subject here is the rename race, not that
+    // judgement.)
+    await writeFile(join(root, 'src', 'server.ts'), '// hardened\nexport const ORIGIN_GUARD = false;\n');
 
     // Two passes at once — exactly what the sweep + the endpoint do.
     const results = await Promise.allSettled([repairMemories(root), repairMemories(root)]);

@@ -136,7 +136,9 @@ describe('auto-capture: handoff decisions become memory facts (M4, zero LLM cost
     expect(captured!.type).toBe('decision');
     expect(captured!.task).toBe('sess-m4');
     expect(captured!.agent).toBe('cursor');
-    expect(captured!.anchors.files.map((a) => a.path)).toContain('src/token.ts');
+    // This decision names no file, so it claims no evidence. It was previously
+    // anchored to src/token.ts only because that file happened to be dirty.
+    expect(captured!.anchors.files).toEqual([]);
   });
 
   it('anchors a decision to the files it MENTIONS, not the whole session (precision beats churn)', async () => {
@@ -154,7 +156,12 @@ describe('auto-capture: handoff decisions become memory facts (M4, zero LLM cost
     expect(paths).not.toContain('src/other.ts');
   });
 
-  it('falls back to the session files when a decision mentions none of them', async () => {
+  it('claims NO evidence when a decision mentions none of the session files', async () => {
+    // This test previously asserted the opposite -- that capture falls back to
+    // the session's dirty files. That fallback was the defect: on this repo it
+    // anchored three unrelated facts to .gitignore, AGENTS.md and CODEBASE.md,
+    // and `baton memory gc` deletes facts whose anchors change. An anchor is a
+    // claim, and a fact that names no file has no claim to make.
     const { listMemories } = await import('../src/memory.js');
     const r = await createSessionHandoff(root, {
       slug: 'sess-m6b', agent: 'claude', title: 'General call',
@@ -162,7 +169,7 @@ describe('auto-capture: handoff decisions become memory facts (M4, zero LLM cost
     });
     expect(r.capturedFacts).toHaveLength(1);
     const fact = (await listMemories(root)).find((f) => f.fact.includes('streaming exports'))!;
-    expect(fact.anchors.files.map((a) => a.path)).toContain('src/token.ts');
+    expect(fact.anchors.files).toEqual([]);
   });
 
   it('skips trivial one-word decisions and secret-looking ones — handoff still succeeds', async () => {

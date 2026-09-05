@@ -21,6 +21,7 @@ import { handoffPath } from './brief.js';
 import { recordHandoff } from '../commands/pass.js';
 import { getSignals } from '../signals.js';
 import { UndurableFactError, saveMemory } from '../memory.js';
+import { claimedFiles } from '../memory-repair.js';
 import { bus } from '../events.js';
 
 /** A brief must stay a brief — cap every agent-supplied list. */
@@ -104,6 +105,29 @@ export function isBatonArtifact(path: string): boolean {
 const CAPTURE_MIN_CHARS = 20;
 
 /**
+ * Which of the session's files a single decision may claim as evidence.
+ *
+ * An anchor is a claim -- "if this file changes, re-check this fact" -- and
+ * `baton memory gc` acts on it by DELETING the fact. So claiming a file the
+ * decision says nothing about is not weak evidence, it is false evidence with
+ * a destructive consequence.
+ *
+ * Measured on this repo on 2026-09-05: three unrelated facts all claimed
+ * `.gitignore`, `AGENTS.md` and `CODEBASE.md`, because capture fell back to the
+ * whole dirty-file set when a decision named no file. Unrelated work touched
+ * `.gitignore` and withheld all three at once -- including one saying the test
+ * suite is timing-sensitive on a loaded machine, which a later session then
+ * re-derived from scratch.
+ *
+ * A fact with NO anchors is the correct outcome for a decision that names no
+ * file. It ages slowly and honestly by commit distance; a wrongly-anchored one
+ * dies suddenly and silently.
+ */
+export function anchorsForDecision(decision: string, sessionFiles: string[]): string[] {
+  return claimedFiles(decision, sessionFiles);
+}
+
+/**
  * M4 — zero-LLM auto-capture: the decisions the agent wrote for the brief are
  * exactly the "things git cannot show", so persist each as an anchored memory
  * fact. Strictly best-effort: validation rejects (secrets, undurable phrasing,
@@ -127,14 +151,13 @@ async function captureDecisions(
   const skipped: Array<{ decision: string; reason: string }> = [];
   for (const d of decisions) {
     if (d.length < CAPTURE_MIN_CHARS) continue;
-    // Precision over coverage: anchor to the files the decision actually
-    // names when it names any — a fact anchored to the whole session's file
-    // set goes stale the moment ANY of them changes (churn, not evidence).
-    const mentioned = anchors.filter((a) => d.includes(a) || d.includes(basename(a)));
+    // Precision over coverage: a decision may only claim the files it names.
+    const mentioned = anchorsForDecision(d, anchors);
     try {
       // saveMemory resolves the MAIN repo from cwd itself (worktree-safe).
+      // No fallback to the session's file set: see anchorsForDecision.
       captured.push((await saveMemory(cwd, {
-        fact: d, type: 'decision', files: mentioned.length ? mentioned : anchors, agent, task: slug,
+        fact: d, type: 'decision', files: mentioned, agent, task: slug,
       })).id);
     } catch (e) {
       // Only the durability gate — it is the sole rejection the agent can act
