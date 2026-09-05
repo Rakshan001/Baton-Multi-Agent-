@@ -159,6 +159,82 @@ Memory also enforces size caps: **1200 chars per fact** and **500 facts** total
 
 Oversized payloads are aborted mid-stream rather than buffered.
 
+## Imported skills: why quoting is not the answer, and what is
+
+Everywhere else, text Baton did not write is **quoted as untrusted data**
+([`src/handoff/untrusted.ts`](../src/handoff/untrusted.ts)) — plan task text and
+handoff bodies are fenced with a preamble telling the reader they are data and
+carry no authority.
+
+**That defence does not extend to an imported skill, and cannot.** A skill *is*
+instructions: `installSkill` writes it to `.claude/skills/<id>/SKILL.md`, where
+the agent's own harness loads it as directive text. Fencing it would break the
+feature it exists to provide.
+
+So the guard is a **review gate**, not a quoting rule.
+
+### The flow
+
+1. **Import** stores the skill in your library and scans it
+   ([`src/skills/scan.ts`](../src/skills/scan.ts)).
+2. **Quarantine** holds it — it is in your library but no agent can load it
+   ([`src/skills/quarantine.ts`](../src/skills/quarantine.ts)).
+3. **You read it** and release it. `installSkill` is the single chokepoint, and
+   `installSkillEverywhere` routes through it, so nothing reaches an agent's
+   config directory without passing the gate.
+
+### What the scan looks for
+
+| Category | Examples |
+| --- | --- |
+| `permission-bypass` | `--dangerously-skip-permissions`, `--yolo`, "auto-approve", "disable the sandbox" |
+| `instruction-override` | "ignore your scope", "ignore all previous instructions", "do not tell the user" |
+| `credential-access` | `ANTHROPIC_API_KEY`, `.ssh/id_rsa`, `.aws/credentials`, `.env`, `process.env.` |
+| `exfiltration` | `curl -X POST`, `| curl`, "upload the contents", `nc -e` |
+| `hidden-characters` | zero-width joiners, BiDi overrides, the Tags block |
+
+Matching runs against a **normalised** line — invisible characters stripped,
+whitespace collapsed, lowercased — so `IGNORE  YOUR  SCOPE` and
+`ignore<ZWSP>your<ZWSP>scope` are the same literal. That is also what keeps the
+scanner linear: elastic patterns over hostile input are how a scanner becomes
+the denial of service.
+
+A match is labelled `imperative`, `fenced` (inside a code block) or `negated`
+("never pass `--yolo`"), so you can tell a skill that *documents* a pattern from
+one that *uses* it. Fenced and negated matches are still **reported** — hiding
+them would make "wrap it in backticks" the bypass.
+
+### What the scan does NOT do
+
+**A regex cannot decide intent.** A skill with no findings is **unreviewed**,
+never *safe*, and no Baton surface says otherwise. The scan's whole job is to
+put the dangerous-looking lines in front of you with line numbers, so that
+reading the skill is the easy path and installing it unread is deliberate.
+
+It will miss a hostile skill written in plain, unremarkable prose. It will flag
+honest skills that discuss these topics. Both are expected.
+
+### Design rules
+
+- **Fails closed.** An unreadable or corrupt quarantine file means *nothing is
+  released* — the opposite of how `bookmarks.ts` and `origins.ts` degrade,
+  because losing a bookmark is a nuisance and silently releasing a held skill is
+  a breach.
+- **Approval binds to a content hash, not a name.** Release a skill, change its
+  bytes, and it returns to quarantine. Otherwise an approved name is a slot an
+  attacker refills on the next update.
+- **`POST /api/skills/:id/release` requires the hash you reviewed** and returns
+  `409` if the file changed since — a stale click cannot approve content nobody
+  read.
+- **Upgrades do not break existing libraries.** A library that predates the gate
+  is grandfathered exactly once; everything imported afterwards is held.
+- **Skill ids are hostile input.** They arrive from GitHub imports, so the
+  release store uses null-prototype objects: an id of `__proto__` cannot make an
+  unrelated skill read as released.
+
+Shape adapted from hermes-agent's `tools/skills_guard.py` (MIT, Nous Research) —
+concept only, no code vendored. See [`NOTICE`](../NOTICE).
+
 ## Agent authentication and permissions
 
 Baton does **not** manage credentials for the agents it launches. When you run

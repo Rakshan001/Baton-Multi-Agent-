@@ -45,6 +45,8 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { bundledSkills, type SkillDef, type SkillSource } from './catalog.js';
 import { summarize, type SkillSummary } from './summary.js';
 import { loadBookmarks, setBookmark } from './bookmarks.js';
+import { isReleased, quarantinePath, releaseSkill, requiresReview } from './quarantine.js';
+import { scanSkill, type ScanFinding } from './scan.js';
 import { clearOrigin, getOrigin, hashSkillFiles, setOrigin } from './origins.js';
 import { gitExcludeLocal, gitUnexcludeLocal } from '../git.js';
 import { fetchGitHubSkill, parseGitHubUrl, parseSkillSource,
@@ -432,10 +434,52 @@ export interface InstallResult {
   excluded: boolean;
 }
 
+/**
+ * A skill is on disk but nobody has reviewed this version of it.
+ *
+ * Thrown rather than silently skipped: installing is an explicit request, and a
+ * request that quietly does nothing is worse than one that refuses out loud.
+ */
+export class SkillQuarantinedError extends Error {
+  constructor(public id: string) {
+    super(`'${id}' has not been reviewed — read it, then release it before installing (an imported skill becomes the agent's own instructions)`);
+    this.name = 'SkillQuarantinedError';
+  }
+}
+
+/**
+ * A library that predates the review gate is treated as already reviewed.
+ *
+ * Someone with twenty imported skills must not upgrade Baton and find all
+ * twenty blocked by a feature they never opted into. The ABSENCE of the
+ * quarantine file is the signal — it exists only once something has been
+ * released — so this runs exactly once, and every skill imported after it goes
+ * through the gate like any other.
+ */
+async function grandfatherExistingLibrary(root: string): Promise<void> {
+  if (existsSync(quarantinePath())) return;
+  for (const skill of await loadCatalog(root)) {
+    if (!requiresReview(skill.source)) continue;
+    await releaseSkill(skill.id, hashSkillFiles(skillFileList(skill)), 'grandfathered (library predates the review gate)');
+  }
+  // Nothing to grandfather: still stamp the file, or a first-ever import would
+  // be waved through by the same absence that protected the old library.
+  if (!existsSync(quarantinePath())) {
+    await releaseSkill('__baton_gate_initialised__', 'none', 'gate initialised');
+  }
+}
+
 export async function installSkill(root: string, id: string, agent: string): Promise<InstallResult> {
   if (!isSkillAgent(agent)) throw new SkillAgentUnsupportedError(agent);
   const skill = await findSkill(root, id);
   if (!skill) throw new SkillNotFoundError(id);
+
+  // The one chokepoint: installSkillEverywhere routes through here too, so a
+  // skill cannot reach an agent's config directory without passing this.
+  if (requiresReview(skill.source)) {
+    await grandfatherExistingLibrary(root);
+    if (!(await isReleased(id, hashSkillFiles(skillFileList(skill))))) throw new SkillQuarantinedError(id);
+  }
   const target = skillTargetFor(agent, id, root)!;
 
   await mkdir(dirname(target.path), { recursive: true });
@@ -795,6 +839,26 @@ export interface ImportFromSourceResult {
   skipped?: string[];
   /** Where it came from, for the confirmation message. */
   origin?: string;
+  /**
+   * What the content scan noticed. Present whenever a skill was stored.
+   *
+   * An EMPTY list means "nothing matched", never "safe" — a regex scan cannot
+   * decide intent. Callers must word it that way.
+   */
+  findings?: ScanFinding[];
+  /** True when this skill is held until a human releases it. */
+  held?: boolean;
+}
+
+/**
+ * Scan a stored skill's own bytes.
+ *
+ * Exported so the review surfaces (HTTP, dashboard) scan exactly what is on
+ * disk rather than trusting a result computed at import time — the file could
+ * have been replaced since.
+ */
+export function scanStoredSkill(skill: SkillDef): ScanFinding[] {
+  return scanSkill(skillFileList(skill));
 }
 
 /**
@@ -812,13 +876,16 @@ export async function importSkillFromSource(
 ): Promise<ImportFromSourceResult> {
   const parsedSource = parseSkillSource(input);
   // No URL in it at all: a local path, which importSkill already handles.
-  if (!parsedSource) return { skill: await importSkill(root, input, opts) };
+  if (!parsedSource) {
+    const skill = await importSkill(root, input, opts);
+    return { skill, findings: scanStoredSkill(skill), held: requiresReview(skill.source) };
+  }
 
   const gh = parseGitHubUrl(parsedSource.url);
   if (!gh) {
     const skill = await importSkill(root, parsedSource.url, opts);
     await recordOrigin(skill, { url: parsedSource.url });
-    return { skill };
+    return { skill, findings: scanStoredSkill(skill), held: requiresReview(skill.source) };
   }
 
   const wanted = opts.id || parsedSource.skill;
@@ -835,7 +902,10 @@ export async function importSkillFromSource(
   // was WRITTEN (SKILL.md normalised to the id), not of what was fetched —
   // otherwise every skill would read as locally edited the moment it landed.
   await recordOrigin(skill, { url: parsedSource.url, ref: gh.ref, skill: wanted });
-  return { skill, skipped: res.skill.skipped, origin: res.skill.origin };
+  return {
+    skill, skipped: res.skill.skipped, origin: res.skill.origin,
+    findings: scanStoredSkill(skill), held: requiresReview(skill.source),
+  };
 }
 
 /**
@@ -858,6 +928,14 @@ async function recordOrigin(
       contentHash: hashSkillFiles(skillFileList(skill)),
     });
   } catch { /* an unwritable origins file must not fail the import */ }
+}
+
+/**
+ * A skill as a flat file list — the form the hash, the writers and the review
+ * surfaces all want. Exported so every one of them hashes the same bytes.
+ */
+export function skillFilesOf(skill: SkillDef): { rel: string; content: string }[] {
+  return skillFileList(skill);
 }
 
 /** A skill as a flat file list — the form the hash and the writers both want. */

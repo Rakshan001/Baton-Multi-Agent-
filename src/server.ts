@@ -45,7 +45,8 @@ import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
 import {
-  importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, resolveSkillRoot, uninstallSkill,
+  importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, loadCatalog,
+  resolveSkillRoot, scanStoredSkill, skillFilesOf, uninstallSkill,
   uploadSkill, removeSkill, exportSkillFile, exportSkills, importSkillBundle, bookmarkSkill, executableFiles,
   updateSkill, SkillLocallyEditedError,
   danglingReferences,
@@ -64,6 +65,8 @@ import { readBrief } from './handoff/brief.js';
 import { listBriefs } from './handoff/resume.js';
 import { orderBriefs } from './handoff/order.js';
 import { resolveBriefBySlug } from './handoff/resolve.js';
+import { isReleased, releaseSkill, requiresReview } from './skills/quarantine.js';
+import { hashSkillFiles } from './skills/origins.js';
 import { getTask, projectOf } from './store.js';
 import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
@@ -2438,6 +2441,59 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       if (e instanceof SkillImportError) return send(res, 400, { error: e.message }, origin);
       return send(res, 500, { error: (e as Error).message }, origin);
     }
+  }
+
+  // GET /api/skills/quarantine — what is held, with the findings and the full
+  // content a reviewer needs. Read-only and available in read-only mode: seeing
+  // what is waiting on you must not require write access.
+  if (method === 'GET' && path === '/api/skills/quarantine') {
+    const held: unknown[] = [];
+    for (const skill of await loadCatalog(root)) {
+      if (!requiresReview(skill.source)) continue;
+      const hash = hashSkillFiles(skillFilesOf(skill));
+      if (await isReleased(skill.id, hash)) continue;
+      held.push({
+        id: skill.id, name: skill.name, description: skill.description, source: skill.source,
+        hash,
+        // The reviewer must be able to read the thing they are approving, on the
+        // same screen as the button. Transported as data; the client renders it
+        // as plain text, never as markup.
+        files: skillFilesOf(skill),
+        findings: scanStoredSkill(skill),
+      });
+    }
+    return send(res, 200, {
+      held,
+      // Wording is part of the contract: a scan that matched nothing has not
+      // established that a skill is safe, and no surface may imply it has.
+      note: 'Scanned, not verified. A content scan cannot decide intent — read the skill before releasing it.',
+    }, origin);
+  }
+
+  // POST /api/skills/:id/release — a human takes responsibility for this exact
+  // content (write-gated). The hash is REQUIRED and must match what is on disk:
+  // approving a name would approve whatever later occupies it, and a stale
+  // click must not approve content the reviewer never saw.
+  const skr = path.match(/^\/api\/skills\/([^/]+)\/release$/);
+  if (method === 'POST' && skr) {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const id = decodeURIComponent(skr[1]);
+    const body = await readJsonBody<{ hash?: unknown; by?: unknown }>(req);
+    const hash = typeof body?.hash === 'string' ? body.hash : '';
+    if (!hash) return send(res, 400, { error: 'release requires the hash of the content you reviewed' }, origin);
+
+    const skill = (await loadCatalog(root)).find((sk) => sk.id === id);
+    if (!skill) return send(res, 404, { error: `no skill '${id}'` }, origin);
+    const actual = hashSkillFiles(skillFilesOf(skill));
+    if (actual !== hash) {
+      return send(res, 409, {
+        error: 'this skill changed since it was shown to you — re-read it before releasing',
+        expected: hash, actual,
+      }, origin);
+    }
+    const by = typeof body?.by === 'string' && body.by.trim() ? body.by.trim() : 'dashboard';
+    await releaseSkill(id, actual, by);
+    return send(res, 200, { id, released: true, hash: actual, by }, origin);
   }
 
   // GET /api/skills/:id/file — download one skill's markdown. Bundled skills
