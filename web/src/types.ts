@@ -599,15 +599,25 @@ export type SkillSource = "bundled" | "global" | "imported";
 /** True for a skill the user owns — exportable and deletable. */
 export const isUserSkill = (s: SkillSource): boolean => s === "global" || s === "imported";
 
-/** One catalog entry — GET /api/skills (src/skills). */
+/**
+ * One catalog entry — GET /api/skills (src/skills).
+ *
+ * Metadata only: **no body**. The bundled set is ~330 KB, so a listing that
+ * carried bodies spent ~58k tokens to render a list of names. Fetch a body from
+ * `GET /api/skills/:id/file` when something actually reads it, and use
+ * `contentSha256` to skip that fetch when your copy is current.
+ */
 export interface SkillStatus {
   id: string;
   name: string;
   description: string;
   tags: string[];
   produces: string[];
-  body: string;
   source: SkillSource;
+  /** Hash of the installed content — changes iff an install would differ. */
+  contentSha256: string;
+  /** Total UTF-8 bytes of body + reference files. */
+  byteSize: number;
   /** 3-line human explainer (what / how / win); absent for imported skills. */
   explain?: { what: string; how: string; win: string };
   /** Relative paths of the skill's reference files (content omitted); [] for single-file skills. */

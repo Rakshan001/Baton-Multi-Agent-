@@ -48,6 +48,23 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
   const [confirmForce, setConfirmForce] = useState(false);
 
   /**
+   * The playbook itself, fetched only once this dialog opens.
+   *
+   * The catalogue listing carries metadata alone — shipping every body to
+   * render a list of names cost ~58k tokens. One skill's body is a few KB, and
+   * this is the only screen that reads one. `null` means still loading.
+   */
+  const [body, setBody] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setBody(null);
+    BatonAPI.skillBody(skill.id)
+      .then((text) => { if (live) setBody(text); })
+      .catch(() => { if (live) setBody("Could not load this skill's playbook."); });
+    return () => { live = false; };
+  }, [skill.id]);
+
+  /**
    * Re-fetch from the recorded origin.
    *
    * A skill nobody fetched (a hand upload) has no source, which is an ordinary
@@ -180,12 +197,12 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
               <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                 <Label>Playbook</Label>
                 <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>
-                  {(skill.body.length / 1024).toFixed(1)} KB
+                  {(skill.byteSize / 1024).toFixed(1)} KB
                 </span>
                 <span style={rule} />
               </div>
               <pre className="mono" style={{ margin: 0, padding: "12px 14px", background: "var(--bg-base)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", fontSize: 11, lineHeight: 1.6, color: "var(--text-secondary)", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 420, overflow: "auto" }}>
-                {skill.body.trim() || "This skill has no body."}
+                {body === null ? "Loading the playbook…" : body.trim() || "This skill has no body."}
               </pre>
             </div>
           </div>

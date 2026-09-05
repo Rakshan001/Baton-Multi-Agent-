@@ -43,6 +43,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { bundledSkills, type SkillDef, type SkillSource } from './catalog.js';
+import { summarize, type SkillSummary } from './summary.js';
 import { loadBookmarks, setBookmark } from './bookmarks.js';
 import { clearOrigin, getOrigin, hashSkillFiles, setOrigin } from './origins.js';
 import { gitExcludeLocal, gitUnexcludeLocal } from '../git.js';
@@ -72,20 +73,16 @@ export interface SkillInstallState {
   installed: boolean;
 }
 
-/** A catalog entry plus where it is (and isn't) installed. Reference *content* is
- *  never serialized here — only the relative paths, to keep the listing light. */
-export interface SkillStatus {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  produces: string[];
-  body: string;
-  source: SkillSource;
-  /** 3-line human explainer (what / how / win); absent for imported skills. */
-  explain?: { what: string; how: string; win: string };
-  /** Relative paths of the skill's reference files (content omitted). */
-  references: string[];
+/**
+ * A catalog entry plus where it is (and isn't) installed.
+ *
+ * This is a {@link SkillSummary} — metadata only. Neither reference *content*
+ * nor the skill **body** is serialized here: the bundled set is ~330 KB, so a
+ * listing that carried bodies spent ~58k tokens to render a list of names.
+ * Fetch a body with {@link findSkill} or `GET /api/skills/:id/file`, and use
+ * `contentSha256` to skip that fetch when your copy is already current.
+ */
+export interface SkillStatus extends SkillSummary {
   installs: SkillInstallState[];
   /** Pinned by the user (src/skills/bookmarks.ts). */
   bookmarked: boolean;
@@ -396,21 +393,13 @@ export async function findSkill(root: string, id: string): Promise<SkillDef | nu
   return (await loadCatalog(root)).find((s) => s.id === id) ?? null;
 }
 
-/** Catalog with per-agent install state. Reference content is dropped here. */
+/** Catalog with per-agent install state. Metadata only — no bodies, no reference content. */
 export async function listSkillStatus(root: string): Promise<SkillStatus[]> {
   const catalog = await loadCatalog(root);
   // Read once for the whole listing, not once per skill.
   const bookmarked = await loadBookmarks();
   return catalog.map((skill) => ({
-    id: skill.id,
-    name: skill.name,
-    description: skill.description,
-    tags: skill.tags,
-    produces: skill.produces,
-    body: skill.body,
-    source: skill.source,
-    explain: skill.explain,
-    references: skill.references.map((r) => r.rel),
+    ...summarize(skill),
     bookmarked: bookmarked.has(skill.id),
     installs: SKILL_AGENTS.map((agent) => {
       const target = skillTargetFor(agent, skill.id, root)!;

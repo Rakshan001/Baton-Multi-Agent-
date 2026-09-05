@@ -579,7 +579,14 @@ function AddSkillPanel({ taken, bundledIds, seedUrl, onAdded, onClose }: {
         landed.add(r.key);
         // A skill whose text points at references/ files that a single .md upload
         // could not carry still works — but the agent will go looking, so say so.
-        const dangling = /references\/[A-Za-z0-9._/-]+\.[A-Za-z0-9]+/.test(s.body);
+        //
+        // Checked against the text we just uploaded, not the catalogue entry:
+        // listings carry no body. A URL import can fetch a whole directory, so
+        // its references arrive with it and there is nothing to warn about.
+        const dangling =
+          r.content !== undefined &&
+          s.references.length === 0 &&
+          /references\/[A-Za-z0-9._/-]+\.[A-Za-z0-9]+/.test(r.content);
         patch(r.key, {
           status: "done", shortcut: s.id, error: undefined,
           warnings: dangling ? ["It mentions references/ files that didn't come with it — agents will go looking for those."] : [],

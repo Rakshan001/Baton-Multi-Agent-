@@ -23,7 +23,7 @@ import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
 import { DEMO_FLEET } from "./fleet";
-import { DEMO_SKILLS } from "./demoSkills";
+import { DEMO_SKILLS, type DemoSkill } from "./demoSkills";
 import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
@@ -657,10 +657,15 @@ class BatonClient {
       // flow that the real daemon then rejects.
       if (existing?.source === "bundled") throw new ApiError("BAD_REQUEST", `'${id}' is a Baton built-in — pick another shortcut`);
       if (existing && !(body as { replace?: boolean }).replace) throw new ApiError("CONFLICT", `you already have a skill called '${id}'`);
-      const skill: SkillStatus = {
+      // A DemoSkill, not a SkillStatus: demo mode has no daemon to fetch a body
+      // from, so the fixture carries one.
+      const text = `# ${id}\n\n${demoBody}\n`;
+      const skill: DemoSkill = {
         id, name: id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        description: "Your skill (demo preview).", tags: [], produces: [], body: `# ${id}\n\n${demoBody}\n`,
+        description: "Your skill (demo preview).", tags: [], produces: [], body: text,
         source: "global", references: [], bookmarked: false,
+        byteSize: new TextEncoder().encode(text).length,
+        contentSha256: "0".repeat(64),
         installs: [
           { agent: "claude", rel: `.claude/skills/${id}/SKILL.md`, installed: false },
           { agent: "cursor", rel: `.cursor/rules/${id}.mdc`, installed: false },
@@ -738,6 +743,29 @@ class BatonClient {
    */
   skillFileUrl(id: string): string {
     return `${this.baseUrl}/api/skills/${encodeURIComponent(id)}/file`;
+  }
+
+  /**
+   * One skill's playbook, fetched on demand.
+   *
+   * The catalogue listing deliberately carries no bodies — the bundled set is
+   * ~330 KB, so shipping them all to render a list of names cost ~58k tokens.
+   * Only the detail view reads a body, and it reads exactly one.
+   */
+  async skillBody(id: string): Promise<string> {
+    if (this.demo) {
+      const skill = DEMO_SKILLS.find((s) => s.id === id);
+      if (!skill) throw new ApiError("NOT_FOUND", `no skill ${id}`, 404, null);
+      return skill.body;
+    }
+    const token = this.token;
+    const res = await fetch(this.skillFileUrl(id), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      throw new ApiError("NOT_FOUND", `could not load ${id}`, res.status, null);
+    }
+    return res.text();
   }
   skillsExportUrl(): string {
     return `${this.baseUrl}/api/skills/export`;
