@@ -62,6 +62,8 @@ import { queryFile } from './history.js';
 import { passTask } from './commands/pass.js';
 import { readBrief } from './handoff/brief.js';
 import { listBriefs } from './handoff/resume.js';
+import { orderBriefs } from './handoff/order.js';
+import { resolveBriefBySlug } from './handoff/resolve.js';
 import { getTask, projectOf } from './store.js';
 import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
 import { loadRouting, suggestRoute } from './routing.js';
@@ -2828,7 +2830,27 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // briefs under .baton/handoffs). Powers the dashboard's copy-to-resume UX.
   if (path === '/api/handoffs' && method === 'GET') {
     const briefs = await listBriefs(root);
-    return send(res, 200, { briefs: briefs.filter((b) => b.status !== 'done') }, origin);
+    // Ordered here, not in the browser: the pipeline is the same answer the
+    // `next_handoff` tool gives an agent, and two implementations would drift.
+    const open = orderBriefs(briefs.filter((b) => b.status !== 'done'));
+    return send(res, 200, { briefs: open }, origin);
+  }
+
+  // POST /api/handoffs/:slug/resolve — close a brief once the work is done
+  // (write-gated). Nothing used to write `status: done`, so briefs accumulated
+  // forever and the pickup list filled with work that had already shipped.
+  const hrm = path.match(/^\/api\/handoffs\/([^/]+)\/resolve$/);
+  if (hrm && method === 'POST') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const slug = decodeURIComponent(hrm[1]);
+    const payload = await readJsonBody<{ by?: unknown; note?: unknown }>(req);
+    const by = typeof payload?.by === 'string' && payload.by.trim() ? payload.by.trim() : 'dashboard';
+    const note = typeof payload?.note === 'string' ? payload.note : undefined;
+    // Same resolution the `resolve_handoff` MCP tool uses — two implementations
+    // of "which brief does this name mean" would eventually disagree.
+    const r = await resolveBriefBySlug(root, slug, { by, note });
+    if (!r.closed) return send(res, 404, { error: r.error ?? `no handoff '${slug}'` }, origin);
+    return send(res, 200, { slug, status: 'done', resolvedBy: by, title: r.title }, origin);
   }
 
   // GET /api/tasks/:slug/suggest-handoff — load-aware target recommendation

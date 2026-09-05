@@ -185,7 +185,11 @@ between two rules — ready to paste or pipe into the receiving agent:
 
 ## 6. Mark it done
 
-When the receiving agent finishes:
+Closing a brief is part of the work, not paperwork after it. Until a brief is
+closed it stays in the pickup list forever, and a list full of shipped work is
+a list nobody reads.
+
+For a **task** brief, from the worktree:
 
 ```bash
 baton done             # or: baton done fix-auth
@@ -198,6 +202,52 @@ This sets the brief status to **done**. Baton then points you at the merge:
 ```
 
 See [worktrees](./quickstart.md) for `baton merge` (squash + archive by default).
+
+For a **session** brief — or from inside any agent — call the
+[`resolve_handoff`](./mcp-tools.md) MCP tool with the slug and a note. The note
+is appended to the brief under a `## Completed` heading rather than replacing
+it: the brief records what was *asked*, the note records what *happened*, and a
+reviewer needs both. Resolving twice replaces the report instead of stacking a
+second one, so an agent retrying after a dropped connection cannot corrupt the
+record.
+
+A good note is written for the reviewer: what shipped, how you know (the tests
+you ran), what you did **not** do, and what is now unblocked.
+
+The dashboard's handoff panel has a **Done** button per brief when the daemon
+runs with `--write`; it posts to `POST /api/handoffs/:slug/resolve` and takes
+the same path.
+
+## 7. The pipeline: which brief comes next
+
+With several briefs open, "which do I paste next?" is the only question that
+matters. Baton answers it the same way in both places — the dashboard panel and
+the `next_handoff` MCP tool read one ordering, computed by the daemon, so they
+cannot disagree.
+
+Two fields drive it, both read from the brief's frontmatter:
+
+| Field | Meaning |
+|---|---|
+| `dependsOn` | Slugs this brief waits on. A dependency that is **not open** counts as satisfied — the usual reason it has no brief is that the work finished |
+| `phase` | The plan phase the brief came from. An explicit phase outranks anything inferred from dependencies |
+
+From those, briefs are assigned a **step**: step 1 is everything you can start
+now, step 2 is everything that only waits on step 1, and so on. Briefs sharing a
+step have nothing between them — hand them to **different agents at the same
+time**. The panel labels these "N in parallel"; `next_handoff` returns them as
+`alsoReady`.
+
+A brief is **ready** when no open brief blocks it. The first ready brief is
+marked `NEXT`. Everything else on the panel is context for that one answer.
+
+**A blocked brief is still copyable.** It is dimmed and shows what it waits on,
+but the button works — you may deliberately work out of order, and a UI that
+refuses is worse than one that warns.
+
+If every remaining brief is blocked, they are waiting on each other in a cycle.
+Baton says so rather than hanging: close one with `resolve_handoff`, or pick one
+up deliberately.
 
 ## Dashboard Handoff dialog
 

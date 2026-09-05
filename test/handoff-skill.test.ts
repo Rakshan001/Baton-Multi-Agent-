@@ -28,16 +28,31 @@ describe('bundled handoff skill — invariants', () => {
       ['pickup command for the next agent', 'baton resume'],
       ['receiving side executes the plan instead of re-planning', 're-plan'],
       ['never store secrets in a brief', 'secrets'],
+      // The relay's missing half: nothing ever closed a brief, so the pickup
+      // list filled with shipped work and stopped meaning anything.
+      ['the tool that asks what to pick up next', 'next_handoff'],
+      ['the tool that closes a finished brief', 'resolve_handoff'],
+      ['closing is what keeps the pickup list honest', 'pick'],
+      ['the completion note is written for a reviewer', 'review'],
     ];
     for (const [why, needle] of required) {
       expect(body.includes(needle), `missing invariant: ${why} (looked for "${needle}")`).toBe(true);
     }
   });
 
+  it('tells the agent what a completion report must contain', async () => {
+    // "Done" with no evidence is the failure this section exists to prevent:
+    // the reviewer cannot tell a verified fix from a hopeful one.
+    const skills = await bundledSkills();
+    const body = skills.find((s) => s.id === 'handoff')!.body.toLowerCase();
+    expect(body).toMatch(/verified|tests? pass|evidence/);
+    expect(body).toMatch(/parallel/);
+  });
+
   it('stays lean — a relay playbook, not a novel', async () => {
     const skills = await bundledSkills();
     const skill = skills.find((s) => s.id === 'handoff')!;
-    expect(skill.raw!.length).toBeLessThanOrEqual(5000);
+    expect(skill.raw!.length).toBeLessThanOrEqual(6000);
     expect(skill.description).not.toContain('\n');
     expect(skill.tags.length).toBeGreaterThan(0);
   });

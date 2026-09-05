@@ -29,6 +29,22 @@ export interface BriefEntry {
   markdown: string;
   /** Body without frontmatter — the resume prompt. */
   body: string;
+  /**
+   * Slugs this brief waits on, from the plan contract's `dependsOn`.
+   *
+   * A dependency naming a brief that is no longer open counts as satisfied —
+   * the usual reason it has no brief is that the work finished.
+   */
+  dependsOn: string[];
+  /** The plan phase this brief came from, when it came from a plan. */
+  phase: string | null;
+}
+
+/** Frontmatter lists arrive as an array, a comma string, or not at all. */
+function strList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+  if (typeof v === 'string') return v.split(',').map((s) => s.trim()).filter(Boolean);
+  return [];
 }
 
 function toEntry(raw: string, path: string, fallback: { slug: string; kind: 'task' | 'session'; title?: string; cwd: string }): BriefEntry | null {
@@ -52,6 +68,8 @@ function toEntry(raw: string, path: string, fallback: { slug: string; kind: 'tas
     cwd: fallback.cwd,
     markdown: raw,
     body: parsed.content.trim(),
+    dependsOn: strList(data.dependsOn),
+    phase: data.phase == null ? null : String(data.phase),
   };
 }
 

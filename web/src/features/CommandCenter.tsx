@@ -107,7 +107,7 @@ export function CommandCenter({
 
         {/* attention + agents strip */}
         <div className="cc-strip" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <HandoffInbox />
+          <HandoffInbox writeEnabled={writeEnabled} />
           {conflicts.length > 0 && (
             <div style={{ flex: "2 1 360px", minWidth: 280, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderLeft: "3px solid var(--conflict)", borderRadius: "var(--r-lg)", padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>

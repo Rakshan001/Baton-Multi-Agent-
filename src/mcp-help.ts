@@ -50,6 +50,13 @@ export const TOOL_HELP = {
     'Claim a task and get the worktree to work in. Work ONLY inside the path it returns — that isolation is what lets other agents run at the same time.',
   complete_task:
     'Finish a task you hold. Commit everything first: uncommitted work is refused, and a task with no commits is never accepted as done. Stopping early is not finishing — use report_blocked or `baton pause`.',
+  // The handoff relay's two ends. Baton had a writer (create_handoff) and no
+  // closer at all, so briefs accumulated forever and the pickup list stopped
+  // meaning anything. These are the pick-up and the hang-up.
+  next_handoff:
+    'Which handoff brief to pick up next: one ready brief with its resume prompt, what can run in parallel beside it, and what is blocked on what. Call at session start and after you close one.',
+  resolve_handoff:
+    'Close a handoff brief you finished, with a short report of what you did for whoever reviews it. Call the moment the work is done — nothing else marks a brief done, so an unclosed brief is offered to the next agent forever.',
   report_blocked:
     'You cannot proceed. Records the reason and keeps the task yours. Reach for this instead of guessing at the blocker, and instead of reporting work you did not do.',
 } as const;
@@ -61,5 +68,8 @@ export const TOOL_HELP = {
  *  once: "do you have a pending task?" is the product, and an agent that cannot
  *  see the pipeline from inside its own session has to be driven by hand. The
  *  situational detail still costs nothing — every answer carries its own next
- *  command. Keep new tools lean; a further raise needs a deliberate edit. */
-export const TOOL_HELP_BUDGET = 2800;
+ *  command. Keep new tools lean; a further raise needs a deliberate edit.
+ *  Raised 2800 → 3200 for next_handoff + resolve_handoff: an agent that cannot
+ *  ask what to pick up, or say that it finished, leaves the relay running on
+ *  copy-paste — which is the manual step this whole feature exists to remove. */
+export const TOOL_HELP_BUDGET = 3200;

@@ -73,6 +73,37 @@ Recall project memory — facts earlier agent sessions learned, evidence-checked
 
 See [memory.md](./memory.md) for how the evidence-anchored memory store works.
 
+### `next_handoff`
+
+Which handoff brief to pick up next. Answers in one call what the dashboard's
+handoff panel shows: the single ready brief with its resume prompt, what can run
+in parallel beside it, and what is blocked on what.
+
+- **Input:** none.
+- **Returns:** `next` (one brief, its `pickup` command, and its body **quoted as
+  untrusted data**), `alsoReady` (briefs for *other* agents to run at the same
+  time), `blocked` (with what each waits on), and `open`.
+- **When to call:** at session start, and after you close a brief.
+
+Only **one** full brief body is ever returned, and it is clipped — the answer is
+a decision, not a listing. See [session-handoff.md](./session-handoff.md) for
+how the ordering is computed.
+
+### `resolve_handoff`
+
+Close a brief you finished. **Nothing else marks a brief done**, so an unclosed
+brief is offered to the next agent forever.
+
+- **Input:**
+  - `slug` — the brief you finished; `next_handoff` names it.
+  - `note` (optional) — what you actually did, for whoever reviews it.
+- **Returns:** what was closed, and the **next ready brief** — closing one
+  usually unblocks another, so one call both ends your work and starts the next.
+- **When to call:** the moment the work is done. If the work *stalled* rather
+  than finished, do not close it — write a fresh brief with `create_handoff`.
+
+The note is appended under a `## Completed` heading, never replacing the brief.
+
 ## Code-graph tools (graphify server)
 
 The daemon owns a **shared pool** of graphify HTTP backends: one process per touched project, lazily started on first query and reaped after 15 minutes idle. Agents never spawn their own graphify processes — they POST to the daemon's proxy route and the daemon fans out to the right backend.

@@ -27,6 +27,9 @@ import { getReport, listReports, reportSummary } from './reports.js';
 import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
 import { createSessionHandoff } from './handoff/session-brief.js';
+import { nextHandoff } from './handoff/next.js';
+import { resolveBriefBySlug } from './handoff/resolve.js';
+import { listBriefs } from './handoff/resume.js';
 import { saveProgress } from './handoff/progress-ledger.js';
 import { snapshotTask } from './commands/snapshot.js';
 import { buildOrientation } from './kb/orient.js';
@@ -429,6 +432,42 @@ export async function startMcpServer(): Promise<void> {
         ...(rows.some((row) => row.preview) ? { tip: 'preview rows are truncated — recall_memory({ ids: [...] }) returns full bodies' } : {}),
         // Repair queue (M3): you are on these files anyway — verifying costs ~nothing.
         ...(r.review ? { reviewRequest: { ...r.review, note: 'This stale fact shares files with your hits. If still true, re-save it with save_memory (fresh anchors); if wrong, ignore it.' } } : {}),
+      });
+    },
+  );
+
+  reg(
+    'next_handoff',
+    { description: TOOL_HELP.next_handoff, inputSchema: {} },
+    async () => asText(nextHandoff(await listBriefs(root))),
+  );
+
+  reg(
+    'resolve_handoff',
+    {
+      description: TOOL_HELP.resolve_handoff,
+      inputSchema: {
+        slug: z.string().describe('The brief you finished, e.g. "sess-p1234" — next_handoff names it'),
+        note: z.string().optional().describe('What you actually did, for whoever reviews it: outcome, what you verified, anything left'),
+      },
+    },
+    async ({ slug, note }) => {
+      const by = process.env.BATON_AGENT?.trim() || selfSlug;
+      const r = await resolveBriefBySlug(root, slug, { by, note });
+      if (!r.closed) {
+        // Not an error to throw at an agent reporting finished work — the brief
+        // may simply have been closed already. Say so, and give it the next move.
+        return asText({ closed: false, reason: r.error, tip: 'Call next_handoff to see what is actually open.' });
+      }
+      const remaining = nextHandoff(await listBriefs(root));
+      return asText({
+        closed: slug,
+        title: r.title,
+        report: r.path,
+        // Closing one brief usually unblocks another. Saying which, here, is
+        // the difference between a relay and a queue somebody has to poll.
+        ...(remaining.next ? { nowReady: remaining.next.slug, pickup: remaining.next.pickup } : {}),
+        open: remaining.open,
       });
     },
   );

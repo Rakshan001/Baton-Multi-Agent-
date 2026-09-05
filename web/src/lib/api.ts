@@ -1096,6 +1096,9 @@ class BatonClient {
     return this.request<HandoffLoadSuggestion>(`/api/tasks/${encodeURIComponent(slug)}/suggest-handoff`);
   }
 
+  /** Briefs closed in this demo session, so the panel behaves like the real one. */
+  private demoResolved = new Set<string>();
+
   /** Open handoff briefs awaiting pickup (task worktrees + session briefs). */
   async getHandoffs(): Promise<HandoffBriefEntry[]> {
     if (this.demo) {
@@ -1119,13 +1122,47 @@ class BatonClient {
         "baton resume sess-cursor-demo",
         "```",
       ].join("\n");
-      return [{
-        slug: "sess-cursor-demo", kind: "session", title: "Fix flaky checkout e2e",
-        status: "ready", from: "cursor", to: "any",
-        created: new Date(Date.now() - 22 * 60_000).toISOString(),
-        path: "/repo/.baton/handoffs/sess-cursor-demo.md", cwd: "/repo",
-        markdown: body, body,
-      }];
+      // Two briefs, one waiting on the other: the demo has to show the
+      // pipeline, because the pipeline is the point of the panel. Closing one
+      // unblocks the next, exactly as it does against a real daemon.
+      const all: HandoffBriefEntry[] = [
+        {
+          slug: "sess-cursor-demo", kind: "session", title: "Fix flaky checkout e2e",
+          status: "ready", from: "cursor", to: "any",
+          created: new Date(Date.now() - 22 * 60_000).toISOString(),
+          path: "/repo/.baton/handoffs/sess-cursor-demo.md", cwd: "/repo",
+          markdown: body, body,
+          dependsOn: [], phase: null, step: 1, parallel: true,
+          ready: true, blockedBy: [], cyclic: false,
+        },
+        {
+          slug: "sess-docs-demo", kind: "session", title: "Document the webhook retry contract",
+          status: "ready", from: "cursor", to: "gemini",
+          created: new Date(Date.now() - 18 * 60_000).toISOString(),
+          path: "/repo/.baton/handoffs/sess-docs-demo.md", cwd: "/repo",
+          markdown: body, body,
+          dependsOn: [], phase: null, step: 1, parallel: true,
+          ready: true, blockedBy: [], cyclic: false,
+        },
+        {
+          slug: "sess-release-demo", kind: "session", title: "Cut the patch release",
+          status: "ready", from: "cursor", to: "claude",
+          created: new Date(Date.now() - 9 * 60_000).toISOString(),
+          path: "/repo/.baton/handoffs/sess-release-demo.md", cwd: "/repo",
+          markdown: body, body,
+          dependsOn: ["sess-cursor-demo"], phase: null, step: 2, parallel: false,
+          ready: false, blockedBy: ["sess-cursor-demo"], cyclic: false,
+        },
+      ];
+      const open = all.filter((b) => !this.demoResolved.has(b.slug));
+      // Re-derive the pipeline over what is left, the way the daemon does:
+      // a dependency that is no longer open no longer blocks.
+      return open.map((b) => {
+        const blockedBy = b.blockedBy.filter((d) => open.some((o) => o.slug === d));
+        const step = blockedBy.length ? b.step : 1;
+        return { ...b, blockedBy, ready: blockedBy.length === 0, step,
+          parallel: open.filter((o) => (o.blockedBy.filter((d) => open.some((x) => x.slug === d)).length ? o.step : 1) === step).length > 1 };
+      });
     }
     try {
       const r = await this.request<{ briefs: HandoffBriefEntry[] }>("/api/handoffs");
@@ -1133,6 +1170,25 @@ class BatonClient {
     } catch {
       return []; // older daemons don't serve this — the inbox just stays hidden
     }
+  }
+
+  /**
+   * Close a finished brief so it leaves the pickup list.
+   *
+   * The same call the `resolve_handoff` MCP tool makes — an agent closes its
+   * own brief; this is the button for work finished outside one.
+   */
+  async resolveHandoff(slug: string, opts: { by?: string; note?: string } = {}): Promise<void> {
+    if (this.demo) {
+      await this.demoGate(120);
+      this.demoResolved.add(slug);
+      return;
+    }
+    this.assertWrite();
+    await this.request(`/api/handoffs/${encodeURIComponent(slug)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ by: opts.by ?? "dashboard", note: opts.note }),
+    });
   }
 
   /* ---- pipeline: phase swimlanes, plan view, cancellation ----

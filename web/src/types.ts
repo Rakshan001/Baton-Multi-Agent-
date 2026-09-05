@@ -412,6 +412,20 @@ export interface HandoffBriefEntry {
   markdown: string;
   /** Body only — the resume prompt to paste into the next agent. */
   body: string;
+  /** Slugs this brief waits on that are still open. */
+  dependsOn: string[];
+  /** The plan phase this brief came from, when it came from a plan. */
+  phase: string | null;
+  /** 1-based pipeline position. Briefs sharing a step can run at the same time. */
+  step: number;
+  /** Another open brief shares this step. */
+  parallel: boolean;
+  /** Nothing open is holding this up — safe to paste now. */
+  ready: boolean;
+  /** Open briefs this one waits on. */
+  blockedBy: string[];
+  /** Sits in a dependency cycle; can never become ready on its own. */
+  cyclic: boolean;
 }
 
 /** A connected agent with no task worktree — GET /api/sessions (presence layer).

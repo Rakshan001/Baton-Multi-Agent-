@@ -15,6 +15,7 @@ const EXPECTED_TOOLS = [
   'list_tasks', 'report_progress', 'touch_files', 'save_memory', 'recall_memory',
   'create_handoff', 'search_history', 'save_progress',
   'my_tasks', 'take_task', 'complete_task', 'report_blocked',
+  'next_handoff', 'resolve_handoff',
 ] as const;
 
 describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
@@ -25,10 +26,10 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
   it('stays inside the total budget (the whole point of T1)', () => {
     const total = Object.values(TOOL_HELP).reduce((n, d) => n + d.length, 0);
     expect(total).toBeLessThanOrEqual(TOOL_HELP_BUDGET);
-    // 17 tools now — the four pipeline tools joined in phase 4, the one raise
-    // this budget has taken for a feature rather than for a convenience.
+    // 19 tools now. Two raises so far, both for a feature rather than a
+    // convenience: the pipeline tools, then the handoff relay's two ends.
     // Raising it again needs a deliberate edit — keep every new tool lean.
-    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(2800);
+    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(3200);
   });
 
   it('keeps every tool description individually lean', () => {
@@ -63,5 +64,13 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
     // The two failures the gate exists to catch, named where the agent reads them.
     expect(TOOL_HELP.complete_task).toMatch(/commit/i);
     expect(TOOL_HELP.report_blocked).toMatch(/instead of/i);
+    // The relay's other end. next_handoff has to read as the answer to "what
+    // now?", or the agent goes hunting through the handoff directory instead.
+    expect(TOOL_HELP.next_handoff).toMatch(/next|pick up/i);
+    expect(TOOL_HELP.next_handoff).toMatch(/blocked|parallel/i);
+    // resolve_handoff is the step that was missing entirely: without the
+    // trigger, briefs stay open forever and the pickup list stops being honest.
+    expect(TOOL_HELP.resolve_handoff).toMatch(/finish|done|complete/i);
+    expect(TOOL_HELP.resolve_handoff).toMatch(/report|what you did/i);
   });
 });
