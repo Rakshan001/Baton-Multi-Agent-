@@ -31,9 +31,10 @@ were received under; relicensing does not reach backwards.
 
 Source for the version you are running: https://github.com/Rakshan001/Baton-Multi-Agent-
 
-This product adapts logic from the following open-source projects. No source
-files were copied verbatim; their approaches were reimplemented for Baton's
-local, git-only use. Attribution is provided here in good faith.
+This product adapts logic from the following open-source projects. Apart from
+the bundled skill content listed under INCLUDED VERBATIM below, no source files
+were copied verbatim; their approaches were reimplemented for Baton's local,
+git-only use. Attribution is provided here in good faith.
 
 -------------------------------------------------------------------------------
 handler.dev — Launchable.ai
@@ -99,3 +100,20 @@ Rover
   License: Apache-2.0
   Adapted: concept only, no code — invoking agent CLIs headlessly with a
   prompt (one-shot print/exec modes) for src/spawn.ts.
+
+-------------------------------------------------------------------------------
+INCLUDED VERBATIM — third-party content shipped as-is, under its own licence
+
+The files below are not Baton's work and are not covered by the AGPL terms
+above. They are redistributed under the licence named for each, whose full
+permission notice ships alongside the files.
+
+prompt-master — Nidhin Joseph Nelson
+  https://github.com/nidhinjs/prompt-master
+  License: MIT — Copyright (c) 2026 Nidhin Joseph Nelson
+  Included: the bundled `prompt-master` skill, vendored at upstream version
+            1.8.0 — src/skills/bundled/prompt-master/SKILL.md and
+            references/{templates.md,patterns.md}. Baton's only change to
+            SKILL.md is an appended "With Baton" section plus the attribution
+            footer, offered under the same MIT terms. Permission notice:
+            src/skills/bundled/prompt-master/NOTICE.

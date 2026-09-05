@@ -126,6 +126,10 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     tags: ['plan', 'dispatch', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'assign', 'assignee', 'routing', 'phase', 'scope', 'split', 'delegate', 'antigravity', 'codex', 'cursor', 'approve', 'orchestrate', 'coordinate'],
     produces: ['a validated plan file', 'phase + dependency layout', 'per-task scope and acceptance criteria', 'an approval a human gives', 'parallel worktrees'],
   },
+  'prompt-master': {
+    tags: ['prompt', 'prompt engineering', 'prompt master', 'write a prompt', 'improve prompt', 'rewrite prompt', 'fix prompt', 'system prompt', 'few-shot', 'role assignment', 'grounding', 'hallucination', 'token efficiency', 'decompiler', 'claude code', 'cursor', 'windsurf', 'cline', 'codex', 'devin', 'copilot', 'antigravity', 'gpt', 'gemini', 'grok', 'llama', 'qwen', 'deepseek', 'ollama', 'midjourney', 'dall-e', 'stable diffusion', 'comfyui', 'sora', 'runway', 'kling', 'elevenlabs', 'meshy', 'v0', 'bolt', 'lovable', 'perplexity', 'zapier', 'n8n', 'image ai', 'video ai', 'voice ai'],
+    produces: ['target-tool routing', 'one paste-ready prompt', 'intent extraction (9 dimensions)', 'diagnostic fixes (37 patterns)', 'grounding + scope locks', 'agentic stop conditions'],
+  },
   'stack-migration': {
     tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'cursor', 'codex', 'antigravity', 'handoff'],
     produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)', 'parallel fan-out plan + per-phase HANDOFF briefs'],
@@ -195,6 +199,11 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     what: 'Builds the repo map every other skill navigates by.',
     how: '`baton kb rebuild` → knowledge graph + CODEBASE.md, served to agents over MCP.',
     win: 'Orienting costs hundreds of tokens instead of hundreds of thousands.',
+  },
+  'prompt-master': {
+    what: 'Turns a rough idea into a paste-ready prompt tuned for the exact tool you are aiming at.',
+    how: 'Extracts intent across 9 dimensions, routes to that tool\u2019s own template, then audits 37 credit-killing patterns.',
+    win: 'The prompt works on the first paste \u2014 no re-prompt loop quietly burning tokens.',
   },
   'safe-refactor': {
     what: 'Restructure code without changing behavior.',
