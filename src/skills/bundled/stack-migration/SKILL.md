@@ -19,6 +19,8 @@ description: >-
   codebase", "rewrite in <stack>", "/stack-migration", or asks to move a project to another
   language/framework/runtime — including running the migration IN PARALLEL across multiple agents
   (Claude / Cursor / Codex / Antigravity) coordinated via baton worktrees + the coordination MCP.
+  NOT for splitting one app into two deployables while the source app KEEPS running and keeps its
+  stack (e.g. Next.js → Next.js + NestJS) — that is the monolith-split skill.
 ---
 
 # Stack Migration Skill (portable, phase-by-phase, resumable)

@@ -68,6 +68,7 @@ const CATEGORY: Record<string, SkillCategory> = {
   'validate-idea': 'plan', 'plan-review': 'plan', 'dispatch-plan': 'plan', 'basic-setup': 'plan',
   // change code
   'bug-fix': 'code', 'lean-code': 'code', 'safe-refactor': 'code', 'stack-migration': 'code',
+  'monolith-split': 'code',
   'token-efficient-coding': 'code', 'traceable-changes': 'code', 'full-output': 'code',
   // make it look right
   'design-taste': 'frontend', 'gpt-taste': 'frontend', 'stitch-design': 'frontend',
@@ -166,6 +167,10 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
   'stack-migration': {
     tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'cursor', 'codex', 'antigravity', 'handoff'],
     produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)', 'parallel fan-out plan + per-phase HANDOFF briefs'],
+  },
+  'monolith-split': {
+    tags: ['split', 'separate', 'extract', 'decouple', 'monolith', 'microservice', 'service', 'backend', 'frontend', 'api', 'next.js', 'nextjs', 'nestjs', 'fastify', 'express', 'fastapi', 'go', 'spring', 'django', 'rails', 'monorepo', 'boundary', 'network boundary', 'contract', 'strangler', 'proxy', 'feature flag', 'checkpoint', 'rollback', 'cutover', 'parity', 'authorization', 'cors', 'serialization', 'transaction', 'resumable', 'ledger'],
+    produces: ['plain-language split interview', 'STAYS/MOVES/SHARED classification', '17-category seam inventory', 'golden-master capture', 'SPLIT.md ledger', 'reversible checkpoints (flag + tag + revert line)', 'proven-no-op CP-0 + rollback drill', 'differential parity (flag off vs on)', '95% skeptic gate', 'auto-commit per checkpoint (never pushes)'],
   },
   'validate-idea': {
     tags: ['plan', 'planning', 'product', 'brainstorm', 'idea', 'validate', 'discovery', 'scope', 'ambition', 'wedge', 'demand', 'startup', 'design doc', 'forcing questions', 'diagnostic', 'alternatives'],
@@ -307,6 +312,11 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     what: 'Migrate a codebase to another stack (Angular→Next.js, etc.) feature-by-feature without losing parity.',
     how: 'Inventory → ordered phases → migrate one at ≥95% checked parity; fans out across agents; resumes from MIGRATION.md.',
     win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature or duplicate code.',
+  },
+  'monolith-split': {
+    what: 'Split one codebase into an app + its own backend service, without the running app ever breaking.',
+    how: 'Plain-language interview → seam inventory → golden master → reversible checkpoints (flag + tag) at ≥95% parity.',
+    win: 'A function call becomes a network boundary without losing an authz check, a transaction, or a field.',
   },
   'map-codebase': {
     what: 'Builds the repo map every other skill navigates by.',
