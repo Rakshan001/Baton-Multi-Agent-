@@ -16,13 +16,13 @@
     "@xterm/xterm": "^6.0.0",
     "force-graph": "^1.51.4",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react-dom": "^19.3.0",
     "react-router-dom": "^7.18.2"
   },
   "devDependencies": {
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.0",
     "jsdom": "^30.0.1",
     "typescript": "^7.0.2",
