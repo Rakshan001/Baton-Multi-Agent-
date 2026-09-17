@@ -55,6 +55,7 @@ import {
 } from './skills/install.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
+import { collectWorktrees } from './worktrees.js';
 import { StatusPoller } from './poller.js';
 import { checkFiles, getSignals, isWatcherActive, liveSessions, SIGNAL_WINDOW_MIN, SignalTracker } from './signals.js';
 import { holderProjects } from './conflicts.js';
@@ -2130,6 +2131,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   if (method === 'GET' && path === '/api/status') return send(res, 200, await statusRows(root), origin);
+  /*
+   * GET /api/worktrees — every worktree, and whether its holder is still there.
+   *
+   * `/api/status` answers "what changed in each task's checkout". This answers
+   * the question no route answers today: which worktrees exist at all (git's
+   * own list, not tasks.json), who claimed each one, whether that claimer is a
+   * live process or a memory, and how much work would die with the disk. See
+   * src/worktrees.ts for the evidence ladder and the cost accounting.
+   *
+   * Read-only and deliberately not write-gated: somebody looking for work that
+   * has gone quiet must be able to see it from a daemon that cannot touch
+   * anything. It rides `statusRows`, so it shares the poller's scan rather than
+   * starting its own.
+   */
+  if (method === 'GET' && path === '/api/worktrees') {
+    return send(res, 200, await collectWorktrees(root, { status: () => statusRows(root) }), origin);
+  }
   // GET /api/sessions — connected agents with no task worktree (presence layer)
   if (method === 'GET' && path === '/api/sessions') return send(res, 200, await collectPresence(root), origin);
   if (method === 'GET' && path === '/api/agents/root') {

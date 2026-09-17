@@ -10,10 +10,30 @@
  */
 import { collectStatus, type StatusRow } from './board.js';
 import { branchCommits } from './git.js';
+import { livenessProbe } from './liveness.js';
+import { isStalled, type PipelineTask } from './pipeline.js';
 import { loadTasks } from './store.js';
 import { bus } from './events.js';
+import { enteredRisk, snapshotWip } from './wip-snapshot.js';
 
 const INTERVAL_MS = 2000;
+
+/**
+ * How often the tick may go looking for a STALLED holder (as opposed to a
+ * departed one, which is an edge the diff below already sees for free).
+ *
+ * `isStalled` needs `livenessProbe`, and that walks each worktree for mtimes
+ * (`src/liveness.ts:33-37`) — far too much to do on a 2s tick. A stall is 45
+ * minutes old by definition (`STALL_GRACE_MS`), so looking once a minute loses
+ * nothing and costs ~1/30th as much.
+ */
+const STALL_SCAN_MS = 60_000;
+
+/** What a WIP snapshot would capture, cheaply. Same numbers ⇒ same work ⇒ the
+ *  ref we already wrote still describes it, so don't spend git on it again. */
+function wipSignature(row: StatusRow): string {
+  return `${row.status}:${row.filesChanged}:${row.insertions}:${row.deletions}`;
+}
 
 export class StatusPoller {
   private root: string;
@@ -22,6 +42,10 @@ export class StatusPoller {
   private prev: StatusRow[] | null = null;
   private prevAt = 0;
   private running = false;
+  /** slug → the signature last written to `refs/baton/wip/<slug>`. */
+  private wipSigs = new Map<string, string>();
+  private wipBusy = false;
+  private lastStallScan = 0;
 
   constructor(root: string) {
     this.root = root;
@@ -84,10 +108,79 @@ export class StatusPoller {
         }
         if (row.ahead > before.ahead) void this.publishNewCommits(row.slug, row.ahead - before.ahead);
       }
+      // Side effects belong on the tick path and nowhere else: this WRITES a
+      // git ref, so it must never be reachable from a GET handler. Fire and
+      // forget — a snapshot runs git plumbing and can take seconds, and the
+      // board must not wait on it.
+      void this.snapshotAtRisk(rows, prev);
     } catch {
       // transient git failure — try again next tick
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * Save the uncommitted work in any worktree that just stopped being looked
+   * after — see `src/wip-snapshot.ts` for what lands in the ref and why.
+   *
+   * Two ways in, both of them edges rather than levels:
+   *   - the holder disappeared while the worktree is dirty (`enteredRisk`),
+   *     free of charge from the diff the tick already computed; and
+   *   - the holder is still attached but has shown no sign of life past the
+   *     stall grace — the only case needing real work, hence STALL_SCAN_MS.
+   *
+   * A signature per slug keeps a worktree that sits stalled for hours from
+   * re-running git every minute for a ref that already says the same thing.
+   */
+  private async snapshotAtRisk(rows: StatusRow[], prev: StatusRow[]): Promise<void> {
+    if (this.wipBusy) return; // never stack snapshots behind a slow one
+    const now = Date.now();
+    const prevBySlug = new Map(prev.map((r) => [r.slug, r]));
+    const due: string[] = [];
+    const maybeStalled: StatusRow[] = [];
+    const scanStalls = now - this.lastStallScan >= STALL_SCAN_MS;
+
+    for (const row of rows) {
+      if (row.status === 'clean') {
+        this.wipSigs.delete(row.slug); // committed or reverted — start fresh
+        continue;
+      }
+      if (row.status === 'missing') continue; // nothing left on disk to read
+      if (this.wipSigs.get(row.slug) === wipSignature(row)) continue;
+      const before = prevBySlug.get(row.slug);
+      if (!before) continue; // first sighting is a baseline, not a transition
+      if (enteredRisk(before, row)) due.push(row.slug);
+      else if (scanStalls) maybeStalled.push(row);
+    }
+    if (scanStalls) this.lastStallScan = now;
+    if (due.length === 0 && maybeStalled.length === 0) return;
+
+    this.wipBusy = true;
+    try {
+      const tasks = await loadTasks(this.root);
+      if (maybeStalled.length > 0) {
+        const stalledSlugs = new Set(maybeStalled.map((r) => r.slug));
+        const liveness = livenessProbe(this.root);
+        for (const t of tasks) {
+          if (!stalledSlugs.has(t.slug)) continue;
+          if (isStalled(t as PipelineTask, { now, livenessOf: liveness })) due.push(t.slug);
+        }
+      }
+      const rowBySlug = new Map(rows.map((r) => [r.slug, r]));
+      for (const slug of due) {
+        const task = tasks.find((t) => t.slug === slug);
+        const row = rowBySlug.get(slug);
+        if (!task?.worktreePath || !row) continue;
+        const snap = await snapshotWip(slug, task.worktreePath);
+        // Only a written ref earns the skip: a failed snapshot should be
+        // retried the next time this worktree comes up, not marked done.
+        if (snap) this.wipSigs.set(slug, wipSignature(row));
+      }
+    } catch {
+      // best-effort, exactly like the rest of the tick
+    } finally {
+      this.wipBusy = false;
     }
   }
 

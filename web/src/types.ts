@@ -24,7 +24,7 @@ export type Status = "clean" | "dirty" | "conflict" | "missing";
 export type RepoState = "clean" | "merging" | "rebasing" | "cherry-picking" | "reverting";
 
 /** Derived board column (lib/derive.ts). */
-export type ColumnId = "idle" | "active" | "dirty" | "conflict" | "ready";
+export type ColumnId = "idle" | "active" | "dirty" | "conflict" | "ready" | "stopped";
 
 /** A commit on a task branch (src/git.ts CommitInfo — `files` omitted on /status & /history). */
 export interface CommitInfo {

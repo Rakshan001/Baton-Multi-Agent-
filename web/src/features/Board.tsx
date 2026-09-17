@@ -85,7 +85,11 @@ export function Board({
   }, [sessions]);
 
   const grouped = useMemo(() => {
-    const g: Record<ColumnId, StatusRow[]> = { idle: [], active: [], dirty: [], conflict: [], ready: [] };
+    // Seeded from COLUMN_DEFS, not hand-listed: a literal here silently went
+    // stale the moment a column was added, and `g[deriveColumn(s)].push` on a
+    // missing key throws at runtime rather than failing the build.
+    const g = COLUMN_DEFS.reduce((acc, c) => { acc[c.id] = []; return acc; },
+      {} as Record<ColumnId, StatusRow[]>);
     (sessions || []).forEach((s) => { if (!merging[s.slug]) g[deriveColumn(s)].push(s); });
     (Object.keys(g) as ColumnId[]).forEach((k) => (g[k] = orderSessions(g[k], priority[k])));
     return g;
