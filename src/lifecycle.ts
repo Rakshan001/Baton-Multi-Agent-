@@ -16,6 +16,7 @@
  * contributor record intact. Only `done` writes done.
  */
 import { blockers, eligibleFor, isContributor, isStalled, isTerminal, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
+import type { BatonEvent } from './events.js';
 import type { Task } from './store.js';
 
 export interface Who {
@@ -349,6 +350,84 @@ export function reject(tasks: readonly Task[], slug: string, who: Who, notes: st
     reviewedBy: { actor: who.agent, at: now, verdict: 'reject', notes: notes.trim() },
   };
   return { ok: true, tasks: replace(tasks, next), task: next };
+}
+
+/**
+ * The same five transitions, read back out of two snapshots of `tasks.json`.
+ *
+ * Every verb above publishes its event in the process that ran it. That covers
+ * the daemon's own HTTP writes and nothing else: `baton pause` is a separate
+ * process, and so is the stdio MCP server (`src/mcp.ts:675`), so their
+ * `bus.publish` reaches no dashboard. The one thing the daemon already observes
+ * across processes is the store file itself — `src/watch.ts:105-107` watches
+ * `.baton/tasks.json` and resyncs its fs watchers on every write.
+ *
+ * This is the missing half of that observer: hand it the list it last read and
+ * the list it just read, and it gets the lifecycle events without a socket, a
+ * polling thread or any second IPC channel. Kept pure and here, beside the
+ * transitions it mirrors, so the two definitions of "what a pause looks like"
+ * sit in one file and cannot drift apart.
+ *
+ * NOT WIRED YET — `src/watch.ts` is outside this task's scope. See the task
+ * report: activating it is one call in that existing watcher.
+ *
+ * Deliberately silent about tasks that appeared or vanished: `task.created` and
+ * `task.removed` already own those, and a re-announced creation would make a
+ * fresh queue look like five claims.
+ */
+export function lifecycleEventsBetween(before: readonly Task[], after: readonly Task[]): BatonEvent[] {
+  const prior = new Map(before.map((t) => [t.slug, t]));
+  const events: BatonEvent[] = [];
+
+  for (const now of after) {
+    const was = prior.get(now.slug);
+    if (!was) continue;
+
+    const from = was.claimedBy?.agent;
+    const to = now.claimedBy?.agent;
+    const wasState = stateOf(was);
+    const nowState = stateOf(now);
+
+    if (wasState === nowState) {
+      // Same state, different holder, still in flight: that is a takeover —
+      // the only transition that does not move the task between states.
+      if (nowState === 'active' && to && from && to !== from) {
+        events.push({ type: 'task.takenover', slug: now.slug, agent: to, from });
+      }
+      continue;
+    }
+
+    // Only the reason typed THIS time. `pause` and `block` both preserve an
+    // older `stoppedReason`, so echoing an unchanged one would attribute a
+    // previous session's words to this transition.
+    const reason = now.stoppedReason && now.stoppedReason !== was.stoppedReason ? now.stoppedReason : undefined;
+
+    switch (nowState) {
+      case 'claimed':
+        if (to) events.push({ type: 'task.claimed', slug: now.slug, agent: to, by: to });
+        break;
+      case 'active':
+        // A holder swap that also changed state is still an adoption, not a
+        // fresh start — `takeover` leaves the state alone, but `take --resume`
+        // on a paused task goes queued → active under a new agent.
+        if (to && from && to !== from) events.push({ type: 'task.takenover', slug: now.slug, agent: to, from });
+        else if (to) events.push({ type: 'task.activated', slug: now.slug, agent: to });
+        break;
+      case 'blocked':
+        if (to) events.push({ type: 'task.blocked', slug: now.slug, agent: to, reason: now.stoppedReason ?? '' });
+        break;
+      case 'queued':
+        // Ownership dropped while the work is unfinished: a hand-back. The
+        // agent named is the one who let go, since there is no holder after.
+        if (from && (wasState === 'active' || wasState === 'claimed' || wasState === 'blocked')) {
+          events.push({ type: 'task.paused', slug: now.slug, agent: from, ...(reason ? { reason } : {}) });
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return events;
 }
 
 /** Pick the task an idle agent should start: lowest phase first, then declared

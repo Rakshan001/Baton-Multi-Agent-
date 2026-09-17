@@ -77,6 +77,25 @@ export type BatonEvent =
      caller said about itself. */
   | { type: 'task.claimed'; slug: string; agent: string; by: string }
   | { type: 'task.unclaimed'; slug: string; by: string }
+  /* --- the rest of the lifecycle (src/lifecycle.ts) ---
+     `task.claimed` above already covered one transition; these are its four
+     siblings, and until now none of them was announced at all — a dashboard
+     open while someone paused a task learned about it on its next poll.
+
+     Separate types rather than one `task.lifecycle` with a verb, because
+     `task.claimed`/`task.unclaimed` are already shaped this way and a mixed
+     vocabulary for one subsystem is worse than either convention alone.
+
+     `agent` is the holder AFTER the transition, so `task.takenover` names the
+     adopter and `from` names whoever was displaced — a client that showed only
+     one of the two could not say what happened to the previous session.
+     `task.paused` carries the reason only when one was given: `pause` keeps an
+     existing `stoppedReason` when none is passed, so an absent field here means
+     "nobody said why now", not "nothing is recorded". */
+  | { type: 'task.activated'; slug: string; agent: string }
+  | { type: 'task.paused'; slug: string; agent: string; reason?: string }
+  | { type: 'task.blocked'; slug: string; agent: string; reason: string }
+  | { type: 'task.takenover'; slug: string; agent: string; from?: string }
   /* Cancellation (§8). Carries the whole set rather than one event per slug:
      cancelling a phase is ONE decision, and fanning it out as N events would
      let a client render half a cancellation if the stream dropped mid-burst.

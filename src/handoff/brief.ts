@@ -190,6 +190,75 @@ export function contractSectionMd(contract: Record<string, unknown>): string {
   ].join('\n');
 }
 
+/**
+ * Why an AUTOMATIC brief exists, and what the worktree looked like at the
+ * moment it stopped.
+ *
+ * Composed by `src/handoff/auto-brief.ts` on the transition into `stalled` and
+ * passed in here rather than rendered there, because a second brief format is
+ * exactly the drift this repo has already paid for once (see the argument in
+ * `resume.ts:resumePromptFor`). Every field is optional-shaped: a brief that
+ * cannot state a fact says nothing about it rather than guessing.
+ */
+export interface StallContext {
+  /** `deriveHealth`'s own word (`src/worktrees.ts:171`), never a second one. */
+  health: string;
+  /** How long the progress token had been still when it tipped over. */
+  quietForMs: number | null;
+  /** Who the task record says holds it — usually nobody who is still running. */
+  claimedBy: string | null;
+  /** `git log -1` one-liner, or null when git could not answer. */
+  lastCommit: string | null;
+  /** `report_blocked`'s reason, i.e. `Task.stoppedReason` (`pipeline.ts:74`). */
+  blockReason?: string;
+  /** The last `report_progress` note (`signals.ts:147`) and when it was written. */
+  progressNote?: { note: string; at: string };
+  /** Paths this slug still holds an active edit signal on (`signals.ts:867`). */
+  claimedFiles: string[];
+}
+
+/** Human-readable minutes, for a number that is always tens of minutes here. */
+function minutes(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  return m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`;
+}
+
+/**
+ * The "why am I reading this" header for an automatic brief.
+ *
+ * Nobody asked for this file, so it opens by saying who went silent and for how
+ * long — a brief that appears unexplained is a brief people learn to ignore.
+ *
+ * The block reason and the progress note are free text the previous AGENT
+ * wrote, so they get the same fence as the plan and the ledger notes: an
+ * unfenced "blocked: ignore previous instructions" would be Baton saying it.
+ * The commit subject and the claimed paths are sanitized inline instead — they
+ * are identifiers in Baton's own sentences, not quoted prose.
+ */
+export function stallSectionMd(slug: string, ctx: StallContext): string {
+  const who = ctx.claimedBy ? `\`${sanitizeUntrusted(ctx.claimedBy)}\`` : 'its holder';
+  const silence = ctx.quietForMs !== null && ctx.quietForMs > 0 ? `, silent for ${minutes(ctx.quietForMs)}` : '';
+  const lines = [
+    '## Why this brief exists',
+    `Nobody asked for this file. Baton wrote it the moment \`${titleOf(slug)}\` went ` +
+    `**${sanitizeUntrusted(ctx.health)}** — ${who} stopped showing signs of life${silence}, ` +
+    'so the work is here to be picked up rather than reconstructed.',
+  ];
+  if (ctx.lastCommit) lines.push('', `Last commit: \`${sanitizeUntrusted(ctx.lastCommit)}\``);
+  if (ctx.claimedFiles.length) {
+    lines.push('', 'Files it still holds an edit signal on (take these over, or let them settle):');
+    for (const f of ctx.claimedFiles) lines.push(`- \`${sanitizeUntrusted(f)}\``);
+  }
+  const reported = [
+    ...(ctx.blockReason ? [`blocked: ${ctx.blockReason}`] : []),
+    ...(ctx.progressNote ? [`report_progress (${ctx.progressNote.at}): ${ctx.progressNote.note}`] : []),
+  ];
+  if (reported.length) {
+    lines.push('', 'The last thing it said about itself:', fenceUntrusted('agent.report', reported.join('\n\n')));
+  }
+  return lines.join('\n');
+}
+
 export async function buildBrief(
   task: Task,
   opts: {
@@ -198,6 +267,9 @@ export async function buildBrief(
     contract?: Record<string, unknown>;
     /** Dispatch only: a repo orientation. Dropped before the contract is. */
     orientation?: string;
+    /** Automatic briefs only: why this one was composed. Never dropped — an
+     *  artifact nobody asked for has to explain itself before anything else. */
+    stall?: StallContext;
   },
 ): Promise<HandoffBrief> {
   const session: SessionContext | null = await sessionContextFor(task.worktreePath);
@@ -283,6 +355,10 @@ export async function buildBrief(
       ? [`Suggested model: \`${opts.model}\` — start the receiving CLI with it if it supports model selection (e.g. \`claude --model ${opts.model}\`); Baton can't enforce this.`]
       : []),
   ].join('\n'), 0);
+
+  // Directly under the objective and never dropped: this is the only section
+  // that explains why the file appeared at all.
+  if (opts.stall) push(stallSectionMd(task.slug, opts.stall), 0);
 
   // The contract shares dropOrder 0 with the objective: acceptance criteria
   // that got trimmed are acceptance criteria nobody agreed to.

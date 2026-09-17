@@ -17,6 +17,7 @@ import { ArbiterRefused, claimUpstream, isTeamMode, releaseUpstream } from '../p
 import { batonDir, isMaterialized, loadTasks, mutateTasks, type Task } from '../store.js';
 import { activate, claim, releaseClaim, takeover, type Outcome, type Who } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
+import { bus } from '../events.js';
 import { join } from 'node:path';
 
 export interface ClaimResult {
@@ -123,6 +124,7 @@ export async function claimTask(
     // solo claim is. `claim()` is deliberately NOT re-run locally: it would find
     // the row already held (by us) and refuse. One writer means one write.
     const task = await recordGrant(root, upstream.task);
+    announceClaim(slug, who, adoptedFrom);
     return materialize(root, slug, who, task, adoptedFrom);
   }
 
@@ -147,7 +149,28 @@ export async function claimTask(
     return { tasks: out.ok ? out.tasks : null, result: out };
   });
   const task = unwrap(won);
+  announceClaim(slug, who, adoptedFrom);
   return materialize(root, slug, who, task, adoptedFrom);
+}
+
+/**
+ * Say on the bus that ownership moved.
+ *
+ * Here rather than at the three callers because this is the ONE claim path in
+ * the product — CLI `baton take`, MCP `take_task` and the dispatcher all come
+ * through `claimTask`, so one publish covers all three and there is no way to
+ * add a fourth entry point that silently forgets to announce itself.
+ *
+ * Adoption is a different event, not a claim with a flag: "claude claimed this"
+ * and "claude took this off cursor" are different things to show a human, and
+ * only the second one means somebody's session was displaced.
+ *
+ * In a CLI or MCP process this bus has no subscribers and the call is a no-op
+ * — see `lifecycleEventsBetween` in src/lifecycle.ts for the cross-process half.
+ */
+function announceClaim(slug: string, who: Who, adoptedFrom: string | undefined): void {
+  if (adoptedFrom !== undefined) bus.publish({ type: 'task.takenover', slug, agent: who.agent, from: adoptedFrom });
+  else bus.publish({ type: 'task.claimed', slug, agent: who.agent, by: who.agent });
 }
 
 /**
@@ -174,7 +197,11 @@ async function materialize(
       });
       return { tasks: out.ok ? out.tasks : null, result: out };
     });
-    return { task: unwrap(active), materialized: false, adoptedFrom };
+    const resumed = unwrap(active);
+    // Published after unwrap, never before: a refusal throws, and an event for a
+    // transition that did not happen is worse than no event at all.
+    bus.publish({ type: 'task.activated', slug, agent: who.agent });
+    return { task: resumed, materialized: false, adoptedFrom };
   }
 
   // Step 2 — build it. Slow, and deliberately OUTSIDE the lock.
@@ -204,7 +231,9 @@ async function materialize(
       const out = activate(tasks, slug, who, { branch, worktreePath, baseBranch, baseCommit, repoRoot: repo });
       return { tasks: out.ok ? out.tasks : null, result: out };
     });
-    return { task: unwrap(active), materialized: true, adoptedFrom };
+    const started = unwrap(active);
+    bus.publish({ type: 'task.activated', slug, agent: who.agent });
+    return { task: started, materialized: true, adoptedFrom };
   } catch (e) {
     // Put it back. The agent sees the git error and the task stays startable by
     // anyone, rather than becoming a row nobody can reach.

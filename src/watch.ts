@@ -11,7 +11,8 @@
 import { watch, statSync, type FSWatcher } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { bus } from './events.js';
-import { batonDir, loadTasks } from './store.js';
+import { lifecycleEventsBetween } from './lifecycle.js';
+import { batonDir, loadTasks, type Task } from './store.js';
 import { gitTry } from './util/exec.js';
 import { loadKb } from './kb/state.js';
 import { registerWatchedRoot, unregisterWatchedRoot, watchedRoots } from './signals.js';
@@ -83,6 +84,9 @@ export class WorktreeWatcher {
   private unsubs: Array<() => void> = [];
   /** Non-task checkout slug → path currently registered in the watched_roots table. */
   private checkouts = new Map<string, string>();
+  /** Last tasks.json we saw, for deriving cross-process lifecycle transitions.
+   *  `null` until the first resync — see announceLifecycle. */
+  private lastTasks: readonly Task[] | null = null;
   /** Cached checkout probe (kb + git), reused for CHECKOUT_PROBE_TTL_MS. */
   private checkoutProbe: { at: number; value: Map<string, string> | null } | null = null;
 
@@ -112,6 +116,34 @@ export class WorktreeWatcher {
     }
   }
 
+  /**
+   * Turn a change in tasks.json into lifecycle events.
+   *
+   * The same reasoning as the fs watch above, one level up: a CLI `baton pause`
+   * runs in ANOTHER PROCESS, so the `bus.publish` in src/commands/pause.ts
+   * reaches nobody here, and a dashboard holding an SSE stream learns about the
+   * pause only on its next poll. The store file is the one thing both processes
+   * share, so the daemon derives from it what it could not be told.
+   *
+   * This does NOT replace the publishes at the call sites. They cover the
+   * in-process path with no filesystem round trip, exactly as `task.created`
+   * already works both ways here. The cost of that is a duplicate event for a
+   * daemon-origin write, which is harmless: every consumer refetches, and the
+   * SSE client already tolerates double-triggering on `task.created`.
+   *
+   * The snapshot updates on EVERY resync, including the daemon's own writes —
+   * otherwise the next CLI change would diff against a stale list and replay
+   * transitions that were already announced.
+   */
+  private announceLifecycle(tasks: readonly Task[]): void {
+    const before = this.lastTasks;
+    this.lastTasks = tasks.map((t) => structuredClone(t));
+    // First resync has no baseline. Publishing the whole board as fresh
+    // transitions on daemon start would be a lie about when they happened.
+    if (before === null) return;
+    for (const event of lifecycleEventsBetween(before, tasks)) bus.publish(event);
+  }
+
   /** resync() for fire-and-forget callers (bus/fs-watch callbacks): a rejection
    *  there is an unhandledRejection — daemon exit — so it must never propagate. */
   private safeResync(): void {
@@ -127,8 +159,12 @@ export class WorktreeWatcher {
    * watched_roots registry (which read-time reconcile + agent attribution lean
    * on) in step with the checkout watchers we actually hold.
    */
-  private async resync(): Promise<void> {
+  /** Reconcile watchers with the store now. Public because it is a real
+   *  operation, not a test hook: anything that knows tasks.json changed can
+   *  ask for the reconcile rather than wait for the fs event. */
+  async resync(): Promise<void> {
     const tasks = await loadTasks(this.root);
+    this.announceLifecycle(tasks);
     const probed = await this.checkoutRoots();
     // A null probe means "couldn't positively determine" (git spawn failure, kb
     // momentarily unreadable). Keep the checkouts we already hold rather than

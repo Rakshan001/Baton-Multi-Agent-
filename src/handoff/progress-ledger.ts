@@ -139,6 +139,76 @@ export async function loadProgress(root: string, slug: string): Promise<Progress
 }
 
 /**
+ * Is this slug safe to turn into a path under `.baton/progress`?
+ *
+ * `safeSlug` above SANITIZES — it is the right thing for a writer, which has a
+ * slug from the task store and wants a filename. It is the wrong thing for a
+ * reader whose slug arrived in an HTTP path: sanitizing `../../.baton/host`
+ * silently reads a DIFFERENT, plausible-looking ledger instead of refusing, so
+ * the caller is answered confidently about a worktree they never named.
+ *
+ * So the HTTP surface asks this question first and refuses, exactly as the
+ * plan-markdown route reasons at `src/server.ts:1741` — a traversal there is
+ * not a bad render, it is `..%2f..%2f.baton%2fhost` reading a live token.
+ *
+ * The grammar is checked BEFORE anything is joined, never normalized-and-hoped.
+ * Dots are excluded outright, so `..` cannot be spelled at all and containment
+ * has nothing left to argue about; the 80-char ceiling matches `safeSlug`'s
+ * own truncation so an accepted slug always round-trips to itself.
+ */
+export function isSafeProgressSlug(slug: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(slug);
+}
+
+/**
+ * The ledger as an HTTP client reads it — always present, even when empty.
+ *
+ * `loadProgress` returns null for "never written", which is right for
+ * `buildBrief` (it has a git fallback to fall back TO). A route cannot pass
+ * that null on as a 404: "this worktree has said nothing" and "this worktree
+ * does not exist" are different facts, and a client that cannot tell them apart
+ * shows a silent agent and a typo identically. So the absent case is a real
+ * answer with `hasLedger:false`, and every optional field is an explicit null
+ * rather than a missing key — a UI reading `flagged` must never have to guess
+ * whether `undefined` means "not flagged" or "field not served".
+ */
+export interface ProgressView {
+  slug: string;
+  /** False when nothing was ever checkpointed for this slug. */
+  hasLedger: boolean;
+  plan: TodoItem[];
+  notes: string[];
+  next: string | null;
+  filesEdited: string[];
+  stamp: DiffStamp | null;
+  /** The overclaim marker, VERBATIM. Never filtered, softened or dropped: an
+   *  agent claiming progress it cannot evidence is the one thing a human
+   *  reviewing stuck work most needs to see. */
+  flagged: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * Read-only. No side effects, no git, no writes — safe on a daemon started
+ * without `--write`, which is what somebody reaches for when they have found
+ * stuck work and are afraid to touch it.
+ */
+export async function progressView(root: string, slug: string): Promise<ProgressView> {
+  const led = await loadProgress(root, slug).catch(() => null);
+  return {
+    slug,
+    hasLedger: led !== null,
+    plan: led?.plan ?? [],
+    notes: led?.notes ?? [],
+    next: led?.next ?? null,
+    filesEdited: led?.filesEdited ?? [],
+    stamp: led?.stamp ?? null,
+    flagged: led?.flagged ?? null,
+    updatedAt: led ? led.updatedAt : null,
+  };
+}
+
+/**
  * Merge a patch into the existing ledger: plan/notes/next present in the patch
  * REPLACE (the agent sends its full current view); filesEdited UNION with prior
  * (accumulate). Written atomically (tmp + rename) so concurrent MCP calls can't

@@ -15,6 +15,8 @@ import { isStalled, type PipelineTask } from './pipeline.js';
 import { loadTasks } from './store.js';
 import { bus } from './events.js';
 import { enteredRisk, snapshotWip } from './wip-snapshot.js';
+import { stallBriefComposer, type StallBriefComposer } from './handoff/auto-brief.js';
+import { collectWorktrees } from './worktrees.js';
 
 const INTERVAL_MS = 2000;
 
@@ -46,9 +48,19 @@ export class StatusPoller {
   private wipSigs = new Map<string, string>();
   private wipBusy = false;
   private lastStallScan = 0;
+  private readonly writeEnabled: boolean;
+  /** Holds the stall EDGE map itself, so it must outlive a tick. */
+  private stallBriefs: StallBriefComposer | null = null;
+  private briefBusy = false;
 
-  constructor(root: string) {
+  /**
+   * `writeEnabled` mirrors the daemon's `--write` flag. It gates the stall
+   * brief, which writes a HANDOFF.md INTO someone's worktree — a read-only
+   * daemon must not leave files behind in a repo it was told not to touch.
+   */
+  constructor(root: string, writeEnabled = false) {
     this.root = root;
+    this.writeEnabled = writeEnabled;
   }
 
   /**
@@ -113,10 +125,38 @@ export class StatusPoller {
       // forget — a snapshot runs git plumbing and can take seconds, and the
       // board must not wait on it.
       void this.snapshotAtRisk(rows, prev);
+      void this.composeStallBriefs(rows);
     } catch {
       // transient git failure — try again next tick
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * Compose a handoff brief for any worktree that just entered `stalled`.
+   *
+   * Why here: this WRITES a HANDOFF.md into a worktree, so like the snapshot
+   * above it belongs on the tick path and must never be reachable from a GET
+   * handler. `--write` gates it because a read-only daemon must not leave files
+   * behind in a repo it was told not to touch.
+   *
+   * `collectWorktrees` rides this poller's own rows, so deciding who is stalled
+   * costs no extra `collectStatus` fan-out. The composer owns the edge map, so
+   * a worktree SITTING stalled re-composes nothing — see src/handoff/auto-brief.ts.
+   */
+  private async composeStallBriefs(rows: StatusRow[]): Promise<void> {
+    if (!this.writeEnabled || this.briefBusy) return;
+    this.briefBusy = true;
+    try {
+      this.stallBriefs ??= stallBriefComposer(this.root);
+      const worktrees = await collectWorktrees(this.root, { status: () => Promise.resolve(rows) });
+      await this.stallBriefs.onWorktrees(worktrees);
+    } catch {
+      // A brief is a convenience, never the reason a tick fails. The stall is
+      // still visible in /api/worktrees either way.
+    } finally {
+      this.briefBusy = false;
     }
   }
 

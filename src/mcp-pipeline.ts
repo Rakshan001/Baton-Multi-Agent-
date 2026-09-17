@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { asText } from './mcp-format.js';
 import { TOOL_HELP } from './mcp-help.js';
 import { loadTasks, type Task } from './store.js';
+import { bus } from './events.js';
 import { branchCommits, worktreeStatus } from './git.js';
 import type { DiffStamp } from './handoff/progress-ledger.js';
 import { blockers, eligibleFor, integrationHold, isTerminal, phaseOf, reviewableBy, stateOf, takeable } from './pipeline.js';
@@ -320,17 +321,21 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
       const { reason, slug } = args as { reason: string; slug?: string };
       const who = await caller();
 
-      type Blocked = { ok: true; slug: string } | { ok: false; message: string };
+      type Blocked = { ok: true; slug: string; reason: string } | { ok: false; message: string };
       const out = await mutateTasks<Blocked>(root, (tasks) => {
         const found = resolveOwn(tasks, who, slug);
         if ('error' in found) return { tasks: null, result: { ok: false as const, message: found.error } };
         const r = block(tasks, found.task.slug, who, reason ?? '', new Date().toISOString());
         return r.ok
-          ? { tasks: r.tasks, result: { ok: true as const, slug: r.task.slug } }
+          ? { tasks: r.tasks, result: { ok: true as const, slug: r.task.slug, reason: r.task.stoppedReason ?? '' } }
           : { tasks: null, result: { ok: false as const, message: r.refusal.message } };
       });
 
       if (!out.ok) return asText({ blocked: false, refused: out.message });
+      // Published only past the refusal check, and outside the mutation: a
+      // `mutateTasks` callback can be re-run against freshly read state, and an
+      // event emitted from inside one would be emitted again with it.
+      bus.publish({ type: 'task.blocked', slug: out.slug, agent: who.agent, reason: out.reason });
       return asText({
         blocked: true,
         slug: out.slug,

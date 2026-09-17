@@ -40,6 +40,14 @@ const EVENT_TYPES = new Set([
   // whole roster — a screen that redrew a poll interval later would look like
   // it had ignored the click.
   "team.changed",
+  // Task lifecycle (src/events.ts). A frame whose type is missing here is
+  // dropped silently, which is indistinguishable from never being published —
+  // "task.cancelled" was in exactly that state, so cancelling from the Pipeline
+  // screen waited for the next poll despite the dashboard having caused it.
+  // The rest are the pause/block/claim/activate/takeover set, which is what
+  // makes a CLI or MCP stop show up while a dashboard is open.
+  "task.claimed", "task.unclaimed", "task.cancelled",
+  "task.activated", "task.paused", "task.blocked", "task.takenover",
 ]);
 
 export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {

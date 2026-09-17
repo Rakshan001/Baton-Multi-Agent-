@@ -79,6 +79,8 @@ import { enrollmentFor } from './endpoints/enrollment.js';
 import { loadProviderPolicy, resolveProviderMode, setUserProviderMode } from './endpoints/policy.js';
 import { endpointViaFor, reachesKind, knownAgentIds } from './endpoints/reach.js';
 import { loadEndpointsConfig } from './endpoints/config.js';
+import { pauseWorktree, takeoverWorktree } from './endpoints/worktrees.js';
+import { isSafeProgressSlug, progressView } from './handoff/progress-ledger.js';
 import { detectTar, importKb, stageForExport } from './kb/transfer.js';
 import { BATON_VERSION, SOURCE_URL } from './version.js';
 import { usageForRepo } from './usage.js';
@@ -2148,6 +2150,48 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (method === 'GET' && path === '/api/worktrees') {
     return send(res, 200, await collectWorktrees(root, { status: () => statusRows(root) }), origin);
   }
+  /*
+   * GET /api/worktrees/:slug/progress — what the agent SAID it was doing.
+   *
+   * `/api/worktrees` can say a worktree has been quiet for 34 minutes; only the
+   * progress ledger (`src/handoff/progress-ledger.ts:42`, written by MCP
+   * `save_progress`) can say what it was doing when it went quiet. Until now
+   * `buildBrief` was its only reader (`src/handoff/brief.ts:207`).
+   *
+   * Read-only and not write-gated, for the same reason as the read above.
+   * Mutating requests are covered by the central Origin gate; a GET needs none,
+   * and per-endpoint copies are the drift docs/decisions.md forbids.
+   *
+   * The slug becomes a filename, so its grammar is checked before anything is
+   * joined — see `isSafeProgressSlug`, and the traversal note at line 1741.
+   * An unknown slug is NOT a 404: "said nothing" and "does not exist" are
+   * different facts and must not collapse into one status code.
+   */
+  const wp = path.match(/^\/api\/worktrees\/([^/]+)\/progress$/);
+  if (wp && method === 'GET') {
+    const slug = decodeURIComponent(wp[1]!);
+    if (!isSafeProgressSlug(slug)) {
+      return send(res, 400, { error: 'bad slug', hint: 'letters, digits, dash and underscore only' }, origin);
+    }
+    return send(res, 200, await progressView(root, slug), origin);
+  }
+  /*
+   * POST /api/worktrees/:slug/takeover|pause — the two verbs that make the read
+   * above actionable. Handlers live in src/endpoints/worktrees.ts; this is only
+   * the dispatch and the write gate, which stays here beside every other write
+   * so all of them are refused by the one `read-only` error. The anti-CSRF
+   * Origin gate above already covers them — no per-endpoint check.
+   */
+  const wv = path.match(/^\/api\/worktrees\/([^/]+)\/(takeover|pause)$/);
+  if (wv && method === 'POST') {
+    if (!opts.writeEnabled) return denyReadOnly(res, origin);
+    const slug = decodeURIComponent(wv[1]!);
+    const body = await readJsonBody<Record<string, unknown>>(req);
+    const reply = wv[2] === 'takeover'
+      ? await takeoverWorktree(root, slug, body)
+      : await pauseWorktree(root, slug, body);
+    return send(res, reply.status, reply.body, origin);
+  }
   // GET /api/sessions — connected agents with no task worktree (presence layer)
   if (method === 'GET' && path === '/api/sessions') return send(res, 200, await collectPresence(root), origin);
   if (method === 'GET' && path === '/api/agents/root') {
@@ -2995,7 +3039,7 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
 
-  poller = new StatusPoller(root);
+  poller = new StatusPoller(root, opts.writeEnabled === true);
   const watcher = new WorktreeWatcher(root);
   await watcher.start();
   new SignalTracker(root).start();

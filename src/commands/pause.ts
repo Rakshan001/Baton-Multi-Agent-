@@ -13,6 +13,7 @@ import { activeBatonRoot, getTask, mutateTasks } from '../store.js';
 import { block, pause, type Outcome } from '../lifecycle.js';
 import { resolveAgentId, resolveSessionSlug } from '../identity.js';
 import { resolveTask } from './pass.js';
+import { bus } from '../events.js';
 
 async function resolveSlug(root: string, slug: string | undefined): Promise<string | null> {
   if (slug) return (await getTask(root, slug)) ? slug : null;
@@ -44,6 +45,11 @@ export async function pauseCmd(slug: string | undefined, opts: { reason?: string
   report(out, (t) => {
     console.log(`✓ ${t.slug} handed back — queued, not done.`);
     console.log(`  The worktree and branch are untouched: ${t.worktreePath}`);
+    // Inside `report`, so it fires only on the success branch — a refusal
+    // changed nothing and must not look like a hand-back on the dashboard.
+    // Only the reason typed just now: `pause` keeps an older `stoppedReason`,
+    // and re-broadcasting it would attribute another session's words to this stop.
+    bus.publish({ type: 'task.paused', slug: t.slug, agent: who.agent, ...(opts.reason ? { reason: opts.reason } : {}) });
     if (t.stoppedReason) console.log(`  reason: ${t.stoppedReason}`);
     console.log(`  Anyone can continue it with: baton take ${t.slug}`);
   });
@@ -67,6 +73,9 @@ export async function blockCmd(slug: string | undefined, reason: string): Promis
   report(out, (t) => {
     // Owned, not returned to the pool: the next agent would hit the same wall.
     console.log(`⊘ ${t.slug} blocked — still yours, waiting on a person.`);
+    // `block` refuses an empty reason, so the stored one is always the one
+    // this caller just gave — no hedging needed here, unlike `pause` above.
+    bus.publish({ type: 'task.blocked', slug: t.slug, agent: who.agent, reason: t.stoppedReason ?? reason });
     console.log(`  ${t.stoppedReason}`);
     console.log('  It shows on `baton ls` and `baton next` until someone resolves it.');
   });
