@@ -81,7 +81,7 @@ import { ScreenHeader } from "./shared";
 import { DiffViewer } from "./Diff";
 import { HandoffDialog } from "./Handoff";
 import { LiveSession } from "./Live";
-import type { HandoffBriefEntry, PipelineView, StatusRow, WorktreeRow } from "../types";
+import type { HandoffBriefEntry, Meta, PipelineView, StatusRow, WorktreeRow } from "../types";
 
 /** Defined once, at module scope: React Flow re-creates its internal node
  *  renderers whenever this object's identity changes, which on a polling
@@ -170,6 +170,26 @@ export function WorktreesScreen({
   const briefs = usePoll<HandoffBriefEntry[]>(
     () => BatonAPI.getHandoffs(),
     { interval: 30000, enabled: selected !== null },
+  );
+  /*
+   * WHERE THE MERGE TARGET COMES FROM, and why it is a fetch rather than a
+   * constant.
+   *
+   * `baton merge` lands the branch on `currentBranch(gitRepo)`
+   * (src/commands/merge.ts:104) — the branch the DAEMON is sitting on, with no
+   * reference to the task's own base. GET /api/meta is the one committed route
+   * that reports it (`branch`, src/server.ts:2218, the same `currentBranch`
+   * call), so the panel's Merge button reads it from there and refuses when it
+   * is absent. features/Board.tsx writes the word "main" into its own merge
+   * dialog; on a canvas of a dozen worktrees that guess would be a dialog
+   * naming a branch the merge may not use.
+   *
+   * 60 s and selection-gated: a branch does not change often, and one more
+   * request on an idle canvas is one this screen does not need.
+   */
+  const meta = usePoll<Meta>(
+    () => BatonAPI.getMeta(),
+    { interval: 60000, enabled: selected !== null },
   );
 
   /* ---- the three dialogs the panel hands off to ---------------------
@@ -428,6 +448,7 @@ export function WorktreesScreen({
       row={selectedRow}
       pipeline={pipeline.data}
       briefs={briefs.data}
+      meta={meta.data}
       writeEnabled={writeEnabled}
       onClose={() => setSelected(null)}
       // A write changed what the read-model says, so re-read it now rather

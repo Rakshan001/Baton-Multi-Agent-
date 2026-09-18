@@ -62,8 +62,13 @@ export interface PanelBrief {
   markdown: string;
 }
 
-/** The only shape section 2 needs out of the pipeline read-model. */
+/** The only shape section 2 and the merge gate need out of the pipeline
+ *  read-model. `integrationHold` is the phase barrier's own answer
+ *  (src/pipeline-view.ts:167 — the number `integrationHold()` returned), and it
+ *  is read here rather than fetched again because the panel already joins
+ *  worktree to pipeline task by slug. */
 export interface PanelPipeline {
+  integrationHold: number | null;
   lanes: ReadonlyArray<{ tasks: ReadonlyArray<{ slug: string; blocker: string | null }> }>;
 }
 
@@ -315,6 +320,172 @@ export function inspectGate(row: WorktreeRow): ActionGate {
   }
   if (row.orphan || row.state === null) return { enabled: false, tip: ORPHAN_TIP };
   return { enabled: true };
+}
+
+/* ---------- Merge: the one button here that can land work somewhere ---
+
+   WHY THIS GATE IS LONGER THAN THE OTHERS, AND WHY IT CARRIES ITS TARGET.
+
+   `mergeTaskBranch` merges into `currentBranch(gitRepo)`
+   (src/commands/merge.ts:104) and makes no reference to the task's own base
+   branch. On a canvas showing a dozen worktrees at once, a button labelled
+   just "Merge" therefore lands work on whatever branch the hub repo happens
+   to be sitting on — which the person clicking cannot see from here. So the
+   gate carries the TARGET with it, read from GET /api/meta (`branch`,
+   src/server.ts:2218, which is the same `currentBranch(root)` call the merge
+   will make), and when the daemon cannot name that branch the button refuses
+   instead. There is deliberately no fallback to "main": features/Board.tsx
+   hard-codes that word in its own merge dialog, and a dialog naming a branch
+   the merge will not use is worse than one that admits it does not know.
+
+   WHY EVERY UNKNOWN REFUSES. `repoState`, `filesChanged`, `ahead` and
+   `behind` are all nullable because git can fail to answer, and "git did not
+   answer" is not "the worktree is clean". Each null below withholds the
+   button and names the fact that is missing, the same rule the rest of this
+   file keeps.
+
+   WHAT THIS GATE DOES NOT DO is decide the merge is SAFE. It decides the
+   BUTTON is meaningful. The merge itself stays the daemon's, and a merge that
+   hits conflicts comes back 409 carrying its own file list. */
+
+/** The only fields the merge gate reads out of GET /api/meta. Narrowed for the
+ *  reason stated above `PanelBrief`: a fixture spelling out the whole of `Meta`
+ *  would pin a shape this module does not use. */
+export interface PanelMeta {
+  /** The branch the daemon's root repo is on — null when the root is not a git
+   *  repo at all, which is a hub. */
+  branch: string | null;
+  /** True when the root is a multi-repo hub, where the branch a merge lands on
+   *  belongs to the SUB-PROJECT's repo (`task.repoRoot`,
+   *  src/commands/merge.ts:100) and is therefore not the one `/api/meta`
+   *  reports. */
+  hub?: boolean;
+}
+
+export const MERGE_NO_TASK_TIP =
+  "No task owns this worktree, so there is no task branch to merge. Adopt it with `baton adopt` first.";
+
+/**
+ * What the Merge button may do — and, when it may not, the sentence saying so.
+ *
+ * `target` and `commits` are only present on the enabled arm on purpose: the
+ * confirmation has to name both, and a shape where they were optional
+ * everywhere would let a dialog render "merge into undefined".
+ */
+export type MergeGate =
+  | {
+      enabled: true;
+      /** The branch the daemon says it is on: where this merge lands. */
+      target: string;
+      /** Commits this branch would bring over. 0 is a real answer. */
+      commits: number;
+      /** Commits the target has that this branch does not. */
+      behind: number;
+      tip?: undefined;
+      refused?: undefined;
+    }
+  | {
+      enabled: false;
+      tip: string;
+      /**
+       * True when something REFUSES this merge — the phase barrier, a sentence
+       * the pipeline issued, an unresolved conflict, a target that cannot be
+       * named — rather than the work simply not being finished yet. The
+       * wording is identical either way; this only decides whether the panel
+       * says it out loud instead of leaving it in a tooltip on a disabled
+       * button, which is easy to never see.
+       */
+      refused: boolean;
+      target?: undefined;
+      commits?: undefined;
+      behind?: undefined;
+    };
+
+/**
+ * Merge is offered only for a worktree that is clean, conflict-free, whose
+ * task the record says is done, and whose phase barrier is not holding — with
+ * the branch it would land on read from the daemon.
+ *
+ * ON "done OR APPROVED": `done` is the only one of those two this screen can
+ * evidence. The review verdict the pipeline keeps
+ * (src/pipeline.ts:80 — `reviewedBy.verdict: 'approve' | 'reject'`) is NOT
+ * carried into the read-model the dashboard is served: `LaneTask`
+ * (src/pipeline-view.ts:35-60) has no such field, and neither does
+ * `WorktreeRow`. So "approved" is a fact nothing served here can corroborate,
+ * and an approval nobody can evidence is exactly what must not open this
+ * button. A `review` task therefore gets a refusal that says which fact is
+ * missing rather than a silent no.
+ */
+export function mergeGate(
+  row: WorktreeRow,
+  pipeline: PanelPipeline | null,
+  meta: PanelMeta | null,
+  writeEnabled: boolean,
+): MergeGate {
+  const no = (tip: string, refused = false): MergeGate => ({ enabled: false, tip, refused });
+
+  if (!writeEnabled) return no(READ_ONLY_TIP);
+  if (row.orphan || row.state === null) return no(MERGE_NO_TASK_TIP);
+  if (!row.branch) return no(`'${row.slug}' has no branch recorded, so there is nothing to merge.`);
+
+  /* 1 — the task record has to say the work is finished. See the note above. */
+  if (row.state !== "done") {
+    return no(row.state === "review"
+      ? `'${row.slug}' is awaiting review. Merge opens once the task record says done — nothing served to this screen reports a review verdict, and an approval this screen cannot evidence is not one.`
+      : `'${row.slug}' is ${row.state}. Merge is offered for work the task record says is done.`);
+  }
+
+  /* 2 — the phase barrier, which REFUSES rather than warns. */
+  if (!pipeline) return no("Reading the pipeline — the phase barrier has not answered yet, and an unanswered barrier is not a cleared one.");
+  // Verbatim, when the pipeline has a sentence for this slug at all. It
+  // normally will not: `blockers()` skips terminal states
+  // (src/pipeline.ts:283), so a done task carries none — which is exactly why
+  // the hold below has to be read off the view's own `integrationHold`.
+  const blocker = blockerFor(pipeline, row.slug);
+  if (blocker) return no(blocker, true);
+  const held = pipeline.integrationHold;
+  if (held !== null) {
+    // A worktree with no phase cannot be placed either side of the barrier,
+    // and the barrier exists because branches that were never combined can
+    // each be correct and still not compose (src/pipeline.ts:136-152).
+    if (row.phase === null) {
+      return no(`Phase ${held} is finished but has not landed, and this worktree records no phase — so nothing here can say which side of the barrier it is on. Run \`baton integrate\` first.`, true);
+    }
+    if (row.phase > held) {
+      return no(`Phase ${row.phase} is held: phase ${held} is finished but has not landed, so its branches have never been combined. Run \`baton integrate\` before merging this.`, true);
+    }
+    // phase <= held: merging one of the held phase's own branches is what
+    // CLEARS the barrier, so it is not refused by it.
+  }
+
+  /* 3 — the target branch, from the daemon or not at all. */
+  if (!meta) return no("The daemon has not said which branch it is on, so there is no target to name. Refusing rather than guessing where this would land.", true);
+  if (meta.hub) {
+    return no(`This root is a multi-repo hub, so the merge lands on the sub-project repo's branch — which \`/api/meta\` does not report. Merge from inside that repo: \`baton merge ${row.slug}\`.`, true);
+  }
+  if (!meta.branch) {
+    return no("The daemon reports no current branch, so this cannot name where the merge would land. Refusing rather than guessing.", true);
+  }
+
+  /* 4 — clean and conflict-free, with every unknown refusing. */
+  if (row.health === "missing") return no("The worktree directory is gone from disk — there is nothing left to merge.");
+  if (row.health === "conflict") {
+    return no(`'${row.slug}' has unresolved conflicts in its worktree. Resolve them there and commit before merging.`, true);
+  }
+  if (row.health === "unknown") return no("Nothing is known about this worktree's git state, and not knowing is not the same as clean.");
+  if (row.repoState === null) return no("Git did not answer what state this worktree is in, and not knowing is not the same as clean.");
+  if (row.repoState !== "clean") {
+    return no(`A ${row.repoState} operation is half-finished in this worktree. Finish or abort it before merging.`, true);
+  }
+  if (row.filesChanged === null) return no("Git did not answer how many files changed here, and not knowing is not the same as clean.");
+  if (row.filesChanged > 0) {
+    return no(`${row.filesChanged} uncommitted file${row.filesChanged === 1 ? "" : "s"} in this worktree. A merge would leave ${row.filesChanged === 1 ? "it" : "them"} behind — commit first.`);
+  }
+  if (row.ahead === null || row.behind === null) {
+    return no("Git did not answer how far this branch is ahead or behind, so the number of commits this would land is unknown.");
+  }
+
+  return { enabled: true, target: meta.branch, commits: row.ahead, behind: row.behind };
 }
 
 /* ---------- Copy prompt ---------------------------------------------- */

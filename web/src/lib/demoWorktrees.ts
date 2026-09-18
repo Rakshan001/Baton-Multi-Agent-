@@ -275,6 +275,41 @@ export function demoPausePatch(): Partial<WorktreeRow> {
   return { state: "queued", claimedBy: null, agent: null, holderRunning: false };
 }
 
+/* ---------- merge (wt-merge-from-node) ----------
+
+   THE DEMO MUST NOT TEACH THAT A MERGE ALWAYS WORKS, and it must not
+   invent refusals the daemon does not have either. The merge route
+   (`POST /api/tasks/:slug/merge`, src/server.ts:2989) has exactly three
+   answers: 200 with `{ into, branch, squashed, archivedRef }`, 404 for an
+   unknown slug, and 409 carrying the conflicting files. In particular it
+   checks NOTHING about phase or doneness — that is the whole reason the
+   button gates itself in components/flow/panel.ts before it is ever
+   clicked. So these two reproduce the daemon's own two failures and
+   nothing else. */
+
+/** Would the real merge route refuse this row? Its own sentence if so. */
+export function demoMergeRefusal(row: WorktreeRow): string | null {
+  if (row.orphan || row.state === null) return `No task '${row.slug}'.`;
+  // The 409 arm, in the wording lib/api.ts already gives a merge that halts
+  // (`mergeTask`), so the dashboard has one sentence for it and not two.
+  if (row.health === "conflict") {
+    return `Merge halted on conflicts: ${row.worktreePath.split("/").pop()}/…`;
+  }
+  return null;
+}
+
+/**
+ * The patch a merge leaves on the row.
+ *
+ * `baton merge` KEEPS the worktree — it prints "remove the worktree with:
+ * baton rm <slug>" afterwards (src/commands/merge.ts:mergeCmd) — so the row
+ * must not vanish here. What actually changes is that the branch's commits are
+ * now on the base: nothing is ahead of it any more, and nothing is behind it.
+ */
+export function demoMergePatch(): Partial<WorktreeRow> {
+  return { ahead: 0, behind: 0 };
+}
+
 /* ---------- the progress ledger (GET /api/worktrees/:slug/progress) ----------
 
    `hasLedger: false` is a REAL ANSWER and the daemon fights to keep it one

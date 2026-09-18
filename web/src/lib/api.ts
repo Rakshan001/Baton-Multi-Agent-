@@ -28,8 +28,8 @@ import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
-  applyDemoOverlay, demoPausePatch, demoPauseRefusal, demoTakeoverPatch, demoTakeoverRefusal,
-  demoWorktreeProgress, demoWorktrees,
+  applyDemoOverlay, demoMergePatch, demoMergeRefusal, demoPausePatch, demoPauseRefusal,
+  demoTakeoverPatch, demoTakeoverRefusal, demoWorktreeProgress, demoWorktrees,
 } from "./demoWorktrees";
 import type { WorktreeProgress } from "../components/flow/panel";
 import { demoDiscardRefusal, demoDoctorReport } from "./demoRecover";
@@ -546,6 +546,86 @@ class BatonClient {
       method: "POST",
       body: JSON.stringify({ reason: opts.reason, agent: opts.agent }),
     });
+  }
+
+  /** Overlay to put back if a merge fails — see `mergeWorktree`. */
+  private mergeUndo = new Map<string, Partial<WorktreeRow> | null>();
+
+  /**
+   * Merge a worktree's branch into the branch the daemon is on.
+   *
+   * POSTs the committed route `POST /api/tasks/:slug/merge`
+   * (src/server.ts:2989), which takes `{ squash, archive }` and answers 200
+   * with `{ merged, into, branch, squashed, archivedRef }`, 404 for an unknown
+   * slug, or 409 carrying the conflicting files.
+   *
+   * SEPARATE FROM `mergeTask`, deliberately, and it is one line of difference
+   * that matters: `mergeTask` follows a successful merge with
+   * `DELETE /api/tasks/:slug?force=true` so the session board stops showing a
+   * shipped card. `baton merge` itself does not — it prints "remove the
+   * worktree with: baton rm <slug>" and leaves it (src/commands/merge.ts).
+   * A Merge button on the worktree canvas that silently deleted the worktree
+   * would be doing something its own confirmation never named, on the one
+   * screen built for not losing work. Both call the same route.
+   *
+   * `into` comes back from the daemon, so the caller can report where the work
+   * actually landed rather than where it expected it to.
+   */
+  async mergeWorktree(
+    slug: string,
+    opts: { squash?: boolean; archive?: boolean } = {},
+  ): Promise<{ into: string; branch: string; squashed: boolean; archivedRef: string | null }> {
+    this.assertWrite();
+    // Snapshot the overlay this slug had BEFORE the write, so a failure can put
+    // it back exactly — the optimistic-write-plus-rollback flow
+    // features/Board.tsx:111-125 uses for its own merge.
+    this.mergeUndo.set(slug, this.demoWorktreePatches.get(slug) ?? null);
+    if (this.demo) {
+      await this.demoGate(240);
+      const row = this.demoRow(slug);
+      if (!row) throw new ApiError("NOT_FOUND", `No task '${slug}'.`, 404);
+      const refusal = demoMergeRefusal(row);
+      if (refusal) throw new ApiError("MERGE_FAILED", refusal, 409);
+      this.demoPatch(slug, demoMergePatch());
+      return {
+        // The demo's target is the demo project's branch, which is what its
+        // `/api/meta` reports — so switching project switches the branch the
+        // panel names, exactly as it would against a real daemon.
+        into: this.activeProject().branch,
+        branch: row.branch ?? `baton/${slug}`,
+        squashed: opts.squash !== false,
+        archivedRef: opts.archive !== false ? `refs/baton/archive/${slug}` : null,
+      };
+    }
+    try {
+      const r = await this.request<{ into: string; branch: string; squashed: boolean; archivedRef: string | null }>(
+        `/api/tasks/${encodeURIComponent(slug)}/merge`,
+        { method: "POST", body: JSON.stringify({ squash: opts.squash !== false, archive: opts.archive !== false }) },
+      );
+      this.emit();
+      return r;
+    } catch (e) {
+      // The 409's file list, in the one sentence this client already uses for a
+      // halted merge (`mergeTask` above) rather than a second wording for it.
+      if (e instanceof ApiError && e.status === 409) {
+        const conflicts = (e.details as { conflicts?: { path: string }[] })?.conflicts;
+        const files = conflicts?.map((c) => c.path).join(", ");
+        throw new ApiError("MERGE_FAILED", files ? `Merge halted on conflicts: ${files}` : e.message, 409, e.details);
+      }
+      throw e;
+    }
+  }
+
+  /** Undo an optimistic merge overlay after the write failed, and make every
+   *  screen re-read the daemon rather than trust what the click implied. */
+  rollbackWorktree(slug: string) {
+    const before = this.mergeUndo.get(slug);
+    if (before !== undefined) {
+      if (before === null) this.demoWorktreePatches.delete(slug);
+      else this.demoWorktreePatches.set(slug, before);
+      this.mergeUndo.delete(slug);
+    }
+    this.emit();
   }
   async getStatus(): Promise<StatusRow[]> {
     if (this.demo) {

@@ -11,9 +11,10 @@
    ============================================================ */
 import { describe, expect, it } from "vitest";
 import {
-  PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, handoffGate, inspectGate,
-  pauseGate, pickupCommand, planProgress, progressHeadline, resolveCopyPrompt, takeoverGate,
-  whoFacts, workInFlightFacts, type PanelBrief, type PanelPipeline, type WorktreeProgress,
+  MERGE_NO_TASK_TIP, PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, handoffGate,
+  inspectGate, mergeGate, pauseGate, pickupCommand, planProgress, progressHeadline,
+  resolveCopyPrompt, takeoverGate, whoFacts, workInFlightFacts, type PanelBrief,
+  type PanelMeta, type PanelPipeline, type WorktreeProgress,
 } from "./panel";
 import type { WorktreeRow } from "../../types";
 
@@ -63,12 +64,32 @@ function ledger(o: Partial<WorktreeProgress> = {}): WorktreeProgress {
   };
 }
 
-const pipelineWith = (slug: string, blocker: string | null): PanelPipeline => ({
+const pipelineWith = (
+  slug: string,
+  blocker: string | null,
+  integrationHold: number | null = null,
+): PanelPipeline => ({
+  integrationHold,
   lanes: [
     { tasks: [] },
     { tasks: [{ slug, blocker }] },
   ],
 });
+
+/* A pipeline with nothing to say about this slug — the normal case for a task
+   the record already calls done, because `blockers()` skips terminal states
+   (src/pipeline.ts:283). */
+const quietPipeline = (integrationHold: number | null = null): PanelPipeline =>
+  ({ integrationHold, lanes: [{ tasks: [] }] });
+
+/** A worktree that satisfies every merge condition, so each test below can
+ *  break exactly one of them and nothing else. */
+const mergeable = (o: Partial<WorktreeRow> = {}): WorktreeRow => row({
+  slug: "design-the-schema", state: "done", health: "ok", repoState: "clean",
+  filesChanged: 0, ahead: 3, behind: 0, phase: 1, ...o,
+});
+
+const META: PanelMeta = { branch: "main" };
 
 /* ---------- 1. the order IS the spec ----------------------------------- */
 
@@ -294,5 +315,173 @@ describe("inspectGate", () => {
   it("refuses when there is genuinely nothing left to read", () => {
     expect(inspectGate(row({ slug: "s", health: "missing" })).enabled).toBe(false);
     expect(inspectGate(row({ slug: "s", orphan: true, state: null })).enabled).toBe(false);
+  });
+});
+
+
+/* ---------- 8. Merge, the one action that can land work -------------- */
+
+describe("mergeGate — the target branch", () => {
+  it("NAMES the branch the daemon reports, and never assumes main", () => {
+    // The whole point of the task: `baton merge` lands on
+    // currentBranch(gitRepo) (src/commands/merge.ts:104), so the button has to
+    // carry whatever /api/meta said — here a release branch, not "main".
+    const g = mergeGate(mergeable(), quietPipeline(), { branch: "release/24.4" }, true);
+    expect(g.enabled).toBe(true);
+    expect(g.target).toBe("release/24.4");
+    expect(g.commits).toBe(3);
+  });
+
+  it("refuses when meta has not arrived — there is no target to name", () => {
+    const g = mergeGate(mergeable(), quietPipeline(), null, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+    // And it must not have silently fallen back to a branch name.
+    expect(g.tip).not.toContain("main");
+  });
+
+  it("refuses when the daemon reports no branch at all", () => {
+    const g = mergeGate(mergeable(), quietPipeline(), { branch: null }, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+  });
+
+  it("refuses in a hub, where the branch it would land on is not the one meta reports", () => {
+    // In a hub the merge runs in `task.repoRoot`, not the hub root
+    // (src/commands/merge.ts:100), so /api/meta's branch is the wrong answer
+    // even when it is a string.
+    const g = mergeGate(mergeable(), quietPipeline(), { branch: "main", hub: true }, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+    expect(g.tip).toContain("baton merge design-the-schema");
+  });
+});
+
+describe("mergeGate — when it is offered at all", () => {
+  it("is offered only for work the task record calls done", () => {
+    for (const state of ["queued", "claimed", "active", "paused", "blocked", "review"] as const) {
+      expect(mergeGate(mergeable({ state }), quietPipeline(), META, true).enabled).toBe(false);
+    }
+    expect(mergeGate(mergeable({ state: "done" }), quietPipeline(), META, true).enabled).toBe(true);
+  });
+
+  it("says WHY a task in review is not mergeable — no approval reaches this screen", () => {
+    // `reviewedBy.verdict` (src/pipeline.ts:80) is not carried into LaneTask or
+    // WorktreeRow, so "approved" is a fact nothing served here can evidence.
+    // The refusal has to say that rather than imply the review failed.
+    const g = mergeGate(mergeable({ state: "review" }), quietPipeline(), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.tip).toContain("review verdict");
+  });
+
+  it("refuses a worktree no task owns", () => {
+    const g = mergeGate(mergeable({ orphan: true, state: null }), quietPipeline(), META, true);
+    expect(g).toEqual({ enabled: false, tip: MERGE_NO_TASK_TIP, refused: false });
+  });
+
+  it("is write-gated with the tooltip this app already uses", () => {
+    expect(mergeGate(mergeable(), quietPipeline(), META, false))
+      .toEqual({ enabled: false, tip: READ_ONLY_TIP, refused: false });
+  });
+});
+
+describe("mergeGate — clean and conflict-free", () => {
+  it("refuses uncommitted work, because a merge would leave it behind", () => {
+    const g = mergeGate(mergeable({ filesChanged: 4 }), quietPipeline(), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.tip).toContain("4 uncommitted files");
+  });
+
+  it("refuses unresolved conflicts out loud", () => {
+    const g = mergeGate(mergeable({ health: "conflict" }), quietPipeline(), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+  });
+
+  it("refuses a half-finished git operation, naming it", () => {
+    const g = mergeGate(mergeable({ repoState: "rebasing", health: "rebasing" }), quietPipeline(), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+    expect(g.tip).toContain("rebasing");
+  });
+
+  it("refuses a worktree whose directory is gone", () => {
+    expect(mergeGate(mergeable({ health: "missing" }), quietPipeline(), META, true).enabled).toBe(false);
+  });
+
+  it("offers a done branch with nothing ahead, and reports the count honestly as 0", () => {
+    // Zero is a real answer, not a reason to hide the button: the confirmation
+    // says the merge would land nothing, which is the truth.
+    const g = mergeGate(mergeable({ ahead: 0 }), quietPipeline(), META, true);
+    expect(g.enabled).toBe(true);
+    expect(g.commits).toBe(0);
+  });
+
+  it("carries `behind` through, so the confirmation can warn it may halt", () => {
+    const g = mergeGate(mergeable({ behind: 5 }), quietPipeline(), META, true);
+    expect(g.enabled).toBe(true);
+    expect(g.behind).toBe(5);
+  });
+});
+
+describe("mergeGate — absence of evidence is not evidence of safety", () => {
+  // Every nullable git fact on the row. Not one of them may read as "clean".
+  it("treats every unknown as a reason NOT to offer the merge", () => {
+    const unknowns: Array<Partial<WorktreeRow>> = [
+      { repoState: null },
+      { filesChanged: null },
+      { ahead: null },
+      { behind: null },
+      { health: "unknown" },
+      { branch: null },
+    ];
+    for (const u of unknowns) {
+      const g = mergeGate(mergeable(u), quietPipeline(), META, true);
+      expect(g.enabled, `unknown ${JSON.stringify(u)} must not be mergeable`).toBe(false);
+      expect(g.tip).toBeTruthy();
+    }
+  });
+
+  it("does not offer a merge while the pipeline is still being read", () => {
+    // An unanswered phase barrier is not a cleared one.
+    expect(mergeGate(mergeable(), null, META, true).enabled).toBe(false);
+  });
+});
+
+describe("mergeGate — the phase barrier REFUSES", () => {
+  it("refuses a phase above the hold, naming both phases and the command", () => {
+    // integrationHold exists to stop exactly this: phase 1's branches are
+    // finished but have never been combined, so landing phase 3 on top of a
+    // base that is missing phase 1 surfaces later as a conflict nobody can
+    // attribute (src/pipeline.ts:136-152).
+    const g = mergeGate(mergeable({ phase: 3 }), quietPipeline(1), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+    expect(g.tip).toContain("phase 1");
+    expect(g.tip).toContain("baton integrate");
+  });
+
+  it("still offers a branch OF the held phase — merging it is what clears the hold", () => {
+    const g = mergeGate(mergeable({ phase: 1 }), quietPipeline(1), META, true);
+    expect(g.enabled).toBe(true);
+  });
+
+  it("refuses when the hold is on and the worktree records no phase", () => {
+    // Nothing here can place it either side of the barrier, so it is not
+    // placed on the safe side by default.
+    const g = mergeGate(mergeable({ phase: null }), quietPipeline(2), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.refused).toBe(true);
+  });
+
+  it("renders the pipeline's own sentence VERBATIM when it has one", () => {
+    // Normally a done task carries no blocker (blockers() skips terminal
+    // states), but if the daemon ever issues one for this slug it is passed
+    // through untouched rather than reworded — the rule the whole panel keeps.
+    const said = "phase 3 locked — phase 1 is finished but not integrated (baton integrate)";
+    const g = mergeGate(mergeable({ phase: 3 }), pipelineWith("design-the-schema", said, 1), META, true);
+    expect(g.enabled).toBe(false);
+    expect(g.tip).toBe(said);
+    expect(g.refused).toBe(true);
   });
 });

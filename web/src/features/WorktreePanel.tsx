@@ -45,8 +45,8 @@ import { healthBorder } from "../components/flow/encoding";
 import { useNodeMotion } from "../components/flow/useNodeMotion";
 import {
   PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, handoffGate, inspectGate,
-  pauseGate, progressHeadline, resolveCopyPrompt, takeoverGate, whoFacts,
-  workInFlightFacts, type PanelSection, type WorktreeProgress,
+  mergeGate, pauseGate, progressHeadline, resolveCopyPrompt, takeoverGate, whoFacts,
+  workInFlightFacts, type PanelMeta, type PanelSection, type WorktreeProgress,
 } from "../components/flow/panel";
 import { usePoll } from "../hooks/usePoll";
 import { ApiError, BatonAPI, failureReason } from "../lib/api";
@@ -139,6 +139,14 @@ export interface WorktreePanelProps {
   pipeline: PipelineView | null;
   /** Open handoff briefs — what Copy prompt copies when one exists. */
   briefs: HandoffBriefEntry[] | null;
+  /**
+   * What GET /api/meta says about the daemon's own repo. This is where the
+   * merge TARGET comes from, and there is no fallback: `baton merge` lands on
+   * `currentBranch(gitRepo)` (src/commands/merge.ts:104), so a panel that
+   * guessed the branch would name one thing and do another. Null while it
+   * loads, or when the read failed — and Merge refuses on null.
+   */
+  meta: PanelMeta | null;
   writeEnabled: boolean;
   onClose: () => void;
   /** Refetch the worktree list: a write has changed what it says. */
@@ -151,7 +159,7 @@ export interface WorktreePanelProps {
 }
 
 export function WorktreePanel(props: WorktreePanelProps) {
-  const { row, pipeline, briefs, writeEnabled, onClose, onRefresh, headingId } = props;
+  const { row, pipeline, briefs, meta, writeEnabled, onClose, onRefresh, headingId } = props;
   const health = HEALTH_META[row.health] ?? HEALTH_META.unknown;
   const mayAnimate = useNodeMotion();
 
@@ -171,7 +179,7 @@ export function WorktreePanel(props: WorktreePanelProps) {
   );
 
   /* ---- writes ------------------------------------------------------- */
-  const [dialog, setDialog] = useState<"takeover" | "pause" | null>(null);
+  const [dialog, setDialog] = useState<"takeover" | "pause" | "merge" | null>(null);
   const [agent, setAgent] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -206,6 +214,49 @@ export function WorktreePanel(props: WorktreePanelProps) {
   const paws = pauseGate(row, writeEnabled);
   const handoff = handoffGate(row, writeEnabled);
   const inspect = inspectGate(row);
+  const merge = mergeGate(row, pipeline, meta, writeEnabled);
+
+  /* ---- merge: optimistic, and rolled back OUT LOUD if it fails -------
+   * The shape of features/Board.tsx:111-125, not a second pattern: mark it
+   * landed before the request so the panel is not silent for a second, and on
+   * failure put the optimistic write back, tell the client to drop its overlay
+   * and re-read the daemon, and say in the toast that nothing landed. A merge
+   * that failed while the UI still claims it succeeded is the one outcome this
+   * screen cannot afford.
+   *
+   * `landed` carries the slug it belongs to and is rendered only for a
+   * matching row: selecting a different worktree re-renders this same
+   * component rather than remounting it, so without that check a "landed on
+   * main" line would survive under another worktree's name.
+   */
+  const [landed, setLanded] = useState<{ slug: string; into: string; archivedRef: string | null } | null>(null);
+  const doMerge = async () => {
+    if (!merge.enabled) return;
+    const into = merge.target;
+    setBusy(true);
+    setRefusal(null);
+    setLanded({ slug: row.slug, into, archivedRef: null }); // optimistic
+    try {
+      const r = await BatonAPI.mergeWorktree(row.slug);
+      // `r.into` is the branch the DAEMON merged into, which is the only
+      // authority on where the work actually went.
+      setLanded({ slug: row.slug, into: r.into, archivedRef: r.archivedRef });
+      setDialog(null);
+      showToast({
+        kind: "ok", title: `Merged into ${r.into}`, desc: r.branch, mono: true,
+      });
+      onRefresh();
+    } catch (e) {
+      setLanded(null);                  // roll the optimistic write back
+      BatonAPI.rollbackWorktree(row.slug);
+      const said = failureReason(e);
+      setRefusal(said);
+      showToast({ kind: "error", title: "Merge failed — nothing landed, rolled back", desc: said });
+      if (!(e instanceof ApiError)) setDialog(null);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const who = whoFacts(row);
   const work = workInFlightFacts(row);
@@ -414,6 +465,20 @@ export function WorktreePanel(props: WorktreePanelProps) {
       <Section key="actions">
         <SectionTitle>Actions</SectionTitle>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {/* MERGE NAMES ITS TARGET IN THE LABEL, not just in the dialog. From
+              a canvas showing a dozen worktrees, "Merge" alone does not say
+              where — and where is the whole question (flow/panel.ts:mergeGate).
+              When the gate could not name a branch the label stays a bare
+              "Merge" and the button is disabled, because a label naming a
+              branch the merge will not use is worse than no branch at all. */}
+          <GatedButton gate={merge} className={merge.enabled ? "btn btn-sm btn-primary fr" : "btn btn-sm fr"}
+            busy={busy && dialog === "merge"}
+            onClick={() => { setRefusal(null); setDialog("merge"); }}>
+            <Icon name="gitMerge" size={12} />
+            {merge.enabled
+              ? <>Merge into <span className="mono">{merge.target}</span></>
+              : "Merge"}
+          </GatedButton>
           <GatedButton gate={takeover} className="btn btn-sm btn-primary fr"
             onClick={() => { setAgent(""); setRefusal(null); setDialog("takeover"); }}>
             <Icon name="cornerUpRight" size={12} /> Take over
@@ -435,6 +500,33 @@ export function WorktreePanel(props: WorktreePanelProps) {
           <CopyButton value={copyPrompt.text} label={copyPrompt.label}
             className="btn btn-sm" title={copyPrompt.tip} />
         </div>
+        {/* A REFUSAL IS SAID OUT LOUD, not warned about and not left in a
+            tooltip on a disabled button. `refused` is set for the phase
+            barrier, an unresolved conflict, a half-finished git operation and
+            a target that cannot be named — the cases where somebody is about
+            to go looking for the reason. The sentence is the gate's, and where
+            the pipeline issued one it is the pipeline's, verbatim. */}
+        {!merge.enabled && merge.refused && (
+          <p role="status" style={{
+            margin: 0, padding: "8px 10px", borderRadius: "var(--r-sm)",
+            background: "var(--dirty-soft)", border: "1px solid var(--dirty-border)",
+            color: "var(--dirty-text)", fontSize: "var(--fs-12)", lineHeight: "var(--lh-snug)",
+            animation: mayAnimate ? "fade-in var(--dur-2) ease-out" : "none",
+          }}>
+            <strong style={{ fontWeight: "var(--fw-semibold)" }}>Merge refused: </strong>{merge.tip}
+          </p>
+        )}
+        {landed?.slug === row.slug && (
+          <p role="status" style={{
+            margin: 0, fontSize: "var(--fs-11)", color: "var(--clean-text)",
+            lineHeight: "var(--lh-snug)",
+            animation: mayAnimate ? "fade-in var(--dur-2) ease-out" : "none",
+          }}>
+            Landed on <span className="mono">{landed.into}</span>. The worktree is still
+            here — <span className="mono">baton rm {row.slug}</span> removes it.
+            {landed.archivedRef && <> History preserved at <span className="mono">{landed.archivedRef}</span>.</>}
+          </p>
+        )}
         {copyPrompt.kind === "pickup" && (
           <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", lineHeight: "var(--lh-snug)" }}>
             No open handoff brief for this worktree, so there is no prompt to copy.
@@ -466,6 +558,59 @@ export function WorktreePanel(props: WorktreePanelProps) {
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {PANEL_SECTION_ORDER.map((id) => sections[id])}
       </div>
+
+      {/* THE CONFIRMATION NAMES THE CONSEQUENCE IN MONO — the convention
+          features/Board.tsx:304 and features/Recover.tsx already follow. What
+          is different here is that the target branch is READ, not written into
+          the copy: Board's dialog says the word "main" literally, and on this
+          canvas that would be a sentence about a branch the merge may not be
+          on. Both numbers below come from the daemon: the branch from
+          /api/meta, the commit count from the worktree row's `ahead`. */}
+      <ConfirmDialog
+        open={dialog === "merge" && merge.enabled}
+        onClose={() => { if (!busy) setDialog(null); }}
+        onConfirm={() => { void doMerge(); }}
+        busy={busy}
+        tone={merge.enabled && merge.behind > 0 ? "warn" : "default"}
+        icon="gitMerge"
+        title={merge.enabled ? `Merge into ${merge.target}?` : "Merge"}
+        confirmLabel="Merge branch"
+        body={merge.enabled && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+            <span>
+              Squash <span className="mono" style={{ color: "var(--text-primary)" }}>{merge.commits}</span>{" "}
+              commit{merge.commits === 1 ? "" : "s"} from{" "}
+              <span className="mono" style={{ color: "var(--text-primary)" }}>{row.branch}</span>{" "}
+              into <span className="mono" style={{ color: "var(--text-primary)" }}>{merge.target}</span>.
+            </span>
+            <span style={{ color: "var(--text-tertiary)" }}>
+              {/* Not a flourish: the branch this lands on is the one the DAEMON
+                  is standing on, not the task's own base. Someone reading a
+                  canvas of a dozen worktrees cannot see that from here, so it
+                  is said. */}
+              That is the branch the daemon reports it is on — not this task&apos;s
+              base branch. Full history is kept at{" "}
+              <span className="mono">refs/baton/archive/{row.slug}</span>, and the
+              worktree is left in place.
+            </span>
+            {merge.commits === 0 && (
+              <span style={{ color: "var(--text-tertiary)" }}>
+                This branch has no commits{" "}
+                <span className="mono">{merge.target}</span> does not already have, so
+                the merge would land nothing.
+              </span>
+            )}
+            {merge.behind > 0 && (
+              <span style={{ color: "var(--dirty-text)" }}>
+                It is {merge.behind} commit{merge.behind === 1 ? "" : "s"} behind{" "}
+                <span className="mono">{merge.target}</span>, so the merge may halt on
+                conflicts — in which case nothing lands and the panel says so.
+              </span>
+            )}
+            {refusal && <span style={{ color: "var(--conflict-text)" }}>{refusal}</span>}
+          </div>
+        )}
+      />
 
       <ConfirmDialog
         open={dialog === "takeover"}
