@@ -47,9 +47,9 @@ import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
 import {
   importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, loadCatalog,
   resolveSkillRoot, scanStoredSkill, skillFilesOf, uninstallSkill,
-  uploadSkill, removeSkill, exportSkillFile, exportSkills, importSkillBundle, bookmarkSkill, executableFiles,
+  uploadSkill, removeSkill, exportSkillFile, exportSkills, importSkillBundle, bookmarkSkill,
   updateSkill, SkillLocallyEditedError,
-  danglingReferences,
+  importWarnings,
   SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
   SkillExistsError, SkillExportRefused,
 } from './skills/install.js';
@@ -2444,21 +2444,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       bus.publish({ type: 'skill.imported', skill: s.id });
       // Not an error — the skill is stored and usable. Surfaced so the agent
       // hunting for a missing checklist is a known limitation, not a mystery.
-      // Only the ones that really did NOT come along: a skill fetched as a whole
-      // folder brings its references, and warning about a file that is sitting
-      // right there would train people to ignore the warning.
-      const have = new Set(s.references.map((r) => r.rel));
-      // Executable companions are consent-relevant: Baton never runs them, but
-      // the skill will tell the agent to, so the user should see them named
-      // before they install it anywhere.
-      const runnable = executableFiles(s.references);
-      const warnings = [
-        ...danglingReferences(s.body).filter((r) => !have.has(r)),
-        ...(runnable.length
-          ? [`Ships ${runnable.length} runnable file${runnable.length === 1 ? '' : 's'} the agent may execute: ${runnable.slice(0, 6).join(', ')}${runnable.length > 6 ? ', …' : ''}`]
-          : []),
-        ...extraSkipped,
-      ];
+      // Shared with the CLI, which was building a different (and wrong) list.
+      const warnings = importWarnings(s, extraSkipped);
       return send(res, 201, { skill, ...(warnings.length ? { warnings } : {}) }, origin);
     } catch (e) {
       // 409 rather than 400: the client can recover by re-sending with

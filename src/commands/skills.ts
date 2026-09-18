@@ -10,11 +10,12 @@ import { resolve } from 'node:path';
 import { activeBatonRoot } from '../store.js';
 import { askYesNo } from './setup-prompts.js';
 import {
-  listSkillStatus, installSkill, installSkillEverywhere, uninstallSkill, importSkill,
-  removeSkill, exportSkills, importSkillBundle, globalSkillsDir, isUserSkill, danglingReferences,
+  listSkillStatus, installSkill, installSkillEverywhere, uninstallSkill, importSkillFromSource,
+  removeSkill, exportSkills, importSkillBundle, globalSkillsDir, isUserSkill, importWarnings,
+  storedSkillPath,
   findSkill, bookmarkSkill, updateSkill, loadCatalog,
   SKILL_AGENTS, SkillNotFoundError, SkillAgentUnsupportedError, SkillImportError, SkillExistsError,
-  SkillLocallyEditedError,
+  SkillLocallyEditedError, SkillQuarantinedError,
 } from '../skills/install.js';
 
 export async function skillsListCmd(): Promise<void> {
@@ -75,14 +76,44 @@ export async function skillsUninstallCmd(id: string, opts: { agent?: string } = 
   }
 }
 
+/**
+ * Add a skill from a path, a raw URL, or a GitHub repo.
+ *
+ * Routed through `importSkillFromSource` — the same front door the dashboard
+ * uses — rather than the raw single-file `importSkill`. When it called the
+ * latter, a GitHub URL was never recognised as a repo: Baton fetched
+ * github.com's own web page, so `.../brag` failed at the 256KB cap and
+ * `.../tree/main/skills/brag` "succeeded", storing 230KB of `<!DOCTYPE html>`
+ * as a skill. Everything else here — the origin, the scan, the review hold —
+ * is surfaced for the same reason: the dashboard already showed it, and a
+ * terminal user was being told strictly less about what just landed on disk.
+ */
 export async function skillsImportCmd(source: string, opts: { as?: string; replace?: boolean } = {}): Promise<void> {
   const root = await activeBatonRoot();
   try {
-    const s = await importSkill(root, source, { id: opts.as, replace: opts.replace });
+    const r = await importSkillFromSource(root, source, { id: opts.as, replace: opts.replace });
+    // A repo holding several skills is a question, not a failure — but it IS
+    // an unfinished command, so it exits non-zero for whatever called us.
+    if (r.choices) {
+      console.error(`✗ that repo holds ${r.choices.length} skills — name the one you want with --as <id>:`);
+      for (const c of r.choices) console.error(`    --as ${c.id || '(none — paste the folder URL instead)'}  ${c.dir || '(repo root)'}`);
+      process.exitCode = 1;
+      return;
+    }
+    const s = r.skill!;
     console.log(`✓ imported ${s.id} — ${s.description.slice(0, 80)}`);
+    if (r.origin) console.log(`  from ${r.origin}`);
     console.log(`  saved to ${globalSkillsDir()} — it is in every project on this machine`);
-    for (const r of danglingReferences(s.body)) console.log(`  ! this skill mentions ${r}, which did not come with it`);
-    console.log(`  install it with: baton skills install ${s.id}`);
+    for (const w of importWarnings(s, r.skipped)) console.log(`  ! ${w}`);
+    // An empty list means "nothing matched", never "safe" — a regex scan cannot
+    // decide intent, so it is worded as what was noticed, not as a verdict.
+    for (const f of r.findings ?? []) console.log(`  ⚠ ${f.file}:${f.line} ${f.category} — ${f.excerpt}`);
+    if (r.held) {
+      console.log(`  held for review — an imported skill becomes the agent's own instructions.`);
+      console.log(`  read it at ${storedSkillPath(s.id) ?? globalSkillsDir()}, then release it: baton serve → Skills → Release`);
+    } else {
+      console.log(`  install it with: baton skills install ${s.id}`);
+    }
   } catch (e) {
     fail(e);
   }
@@ -247,6 +278,16 @@ function otherAgents(): string {
 function fail(e: unknown): void {
   if (e instanceof SkillExistsError) {
     console.error(`✗ ${e.message} — pick another shortcut with --as <name>, or overwrite it with --replace`);
+    process.exitCode = 1;
+    return;
+  }
+  // Released only from the dashboard — deliberately, because releasing binds a
+  // human to a content hash they were shown. Naming the route matters: without
+  // it this refusal fell through to a raw stack trace and left the reader with
+  // "release it" and nowhere to do so.
+  if (e instanceof SkillQuarantinedError) {
+    console.error(`✗ ${e.message}`);
+    console.error(`  read ${storedSkillPath(e.id) ?? globalSkillsDir()}, then: baton serve → Skills → Release`);
     process.exitCode = 1;
     return;
   }

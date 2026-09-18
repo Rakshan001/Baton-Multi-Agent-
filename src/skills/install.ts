@@ -670,6 +670,35 @@ function assertUsableSkillText(text: string, what: string): void {
   }
   if (!text.trim()) throw new SkillImportError(`${what} is empty`);
   if (text.includes('\0')) throw new SkillImportError(`${what} is not text — a skill is a markdown file`);
+  if (looksLikeWebPage(text)) {
+    throw new SkillImportError(`${what} is a web page, not a skill — that URL served HTML rather than a SKILL.md`);
+  }
+}
+
+/**
+ * A markup DOCUMENT, as opposed to markdown that happens to contain a tag.
+ *
+ * Anchored deliberately. A real SKILL.md opens with `---` or a heading; this
+ * repo's own README opens `<div align="center">`, and a skill is allowed to do
+ * the same, so only the shapes a *server* hands back are matched: an HTML page,
+ * an XHTML page, or the XML error body S3 and friends return.
+ */
+const MARKUP_DOCUMENT = /^(?:<!doctype\s+html|<html[\s>]|<\?xml[\s?])/i;
+
+/**
+ * Did a fetch bring back a web page instead of a skill?
+ *
+ * Pointing an importer at a URL is how you end up storing a login wall, a
+ * rate-limit notice, or — the case this was written for — GitHub's own repo
+ * page, 230KB of `<!DOCTYPE html>` that installed cleanly and gave an agent a
+ * rendered web page as its instructions.
+ *
+ * A BACKSTOP, not a boundary: it recognises well-formed documents only, and
+ * says nothing about a 200-status JSON or plain-text body. The real defence is
+ * resolving the URL properly in the first place (see `importSkillFromSource`).
+ */
+export function looksLikeWebPage(text: string): boolean {
+  return MARKUP_DOCUMENT.test(text.replace(/^﻿/, '').trimStart());
 }
 
 /** Extensions that are code a coding agent will plausibly RUN, not prose it reads. */
@@ -702,6 +731,45 @@ export function danglingReferences(text: string): string[] {
   return [...found].slice(0, 10);
 }
 
+const MAX_LISTED_SKIPPED = 5;
+
+/**
+ * Everything worth saying about a skill that just landed — none of it an error.
+ *
+ * Shared by the HTTP route and the CLI because they had drifted: the route
+ * filtered dangling references against the ones that actually arrived and named
+ * the runnable companions, while the CLI did neither. That was survivable only
+ * while the CLI could import a single file; the moment it could fetch a whole
+ * folder, its unfiltered list would have warned about `references/audio.md`
+ * while `references/audio.md` sat right there on disk — which is how people
+ * learn to ignore warnings.
+ *
+ * `skipped` is a parameter rather than a field because the upload path has no
+ * fetch behind it and therefore nothing to skip.
+ */
+export function importWarnings(
+  skill: { body: string; references: { rel: string }[] },
+  skipped: readonly string[] = [],
+): string[] {
+  // Only the ones that really did NOT come along.
+  const have = new Set(skill.references.map((r) => r.rel));
+  // Executable companions are consent-relevant: Baton never runs them, but the
+  // skill will tell the agent to, so the user should see them named before
+  // they install it anywhere.
+  const runnable = executableFiles(skill.references);
+  return [
+    ...danglingReferences(skill.body).filter((r) => !have.has(r)),
+    ...(runnable.length
+      ? [`Ships ${runnable.length} runnable file${runnable.length === 1 ? '' : 's'} the agent may execute: ${runnable.slice(0, 6).join(', ')}${runnable.length > 6 ? ', …' : ''}`]
+      : []),
+    // One skill can skip hundreds of binaries — a 16MB skill with an audio
+    // library skipped 265. Naming every one buries the two lines above it.
+    ...(skipped.length > MAX_LISTED_SKIPPED + 1
+      ? [...skipped.slice(0, MAX_LISTED_SKIPPED), `and ${skipped.length - MAX_LISTED_SKIPPED} more`]
+      : skipped),
+  ];
+}
+
 /**
  * The one write path for every user skill, whatever door it came in by.
  *
@@ -710,6 +778,14 @@ export function danglingReferences(text: string): string[] {
  * apart between them.
  */
 async function saveSkill(text: string, fallbackId: string, opts: SaveSkillOpts): Promise<SkillDef> {
+  // The chokepoint, not just the outer doors. The doors validate too — with
+  // better wording, and before doing any work — but two paths reach here
+  // without passing one: a GitHub folder holding only SKILL.md, and
+  // `updateSkill` re-fetching a raw URL. That second one is how a skill that
+  // imported fine gets OVERWRITTEN months later by a login wall the domain
+  // started serving, with `✓ updated` printed over it.
+  assertUsableSkillText(text, 'that skill');
+  // Draw the line BEFORE this skill exists: whatever is in the library now
   const parsed = parseSkillMarkdown(text, fallbackId);
   // An explicit shortcut always wins over whatever the file declared: the user
   // saw the field and typed in it. Re-slugified rather than trusted, because it
@@ -774,10 +850,27 @@ export async function importSkill(root: string, source: string, opts: SaveSkillO
   return saveSkill(text, fallbackId, opts);
 }
 
+/**
+ * Where a stored skill actually lives, or null if it is not stored.
+ *
+ * Both shapes are real — `<id>/SKILL.md` for a skill that brought companions,
+ * a flat `<id>.md` for one that did not — so anything that tells a human "go
+ * read this before you trust it" has to ask rather than assume. Guessing
+ * `<id>/` names a directory that does not exist for every single-file skill,
+ * which sends the reader to a missing path at exactly the moment the review
+ * gate is asking them to read the thing.
+ */
+export function storedSkillPath(id: string): string | null {
+  const dir = globalSkillsDir();
+  const folder = join(dir, id, 'SKILL.md');
+  if (existsSync(folder)) return folder;
+  const flat = join(dir, `${id}.md`);
+  return existsSync(flat) ? flat : null;
+}
+
 /** Is this shortcut already taken in the user's library, in either shape? */
 function skillIsStored(id: string): boolean {
-  const dir = globalSkillsDir();
-  return existsSync(join(dir, `${id}.md`)) || existsSync(join(dir, id, 'SKILL.md'));
+  return storedSkillPath(id) !== null;
 }
 
 /**
