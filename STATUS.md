@@ -1276,20 +1276,17 @@ arrived with them).
 
 **What is NOT done, and would be wrong to read as done.**
 
-- **`list_worktrees` (the MCP tool) is complete in the working tree and
-  deliberately uncommitted.** `test/mcp-help.test.ts`'s `EXPECTED_TOOLS`
-  assertion is entangled with an unrelated uncommitted `suggest_skills` change
-  — both tools are added to the same array, and that file's budget accounting
-  moved from chars to bytes in the same WIP — so committing the worktree tool
-  alone would either break the test or drag in someone else's change. It lands
-  with, or after, that change. `src/mcp.ts`, `src/mcp-help.ts` and
-  `test/mcp-worktrees.test.ts` hold it; `docs/mcp-tools.md` documents it in one
-  contiguous block that can be held back with it.
-- **`RecoverScreen` is exported and nothing routes it.** `web/src/App.tsx` was
-  out of `wt-recover`'s scope, so the screen is dead code until one line lands
-  in the shell's screen switch
-  (`case "recover": return <RecoverScreen writeEnabled={prefs.writeEnabled} />;`)
-  plus a `NAV` entry. `WorktreesScreen` *is* routed.
+- **`docs/mcp-tools.md`'s `list_worktrees` section is written but uncommitted.**
+  The tool itself shipped, measured against the committed tool set:
+  `TOOL_HELP_BUDGET` is 3362 chars for 20 tools. The doc block is held only
+  because that file has unrelated uncommitted edits; nothing depends on it.
+  One thing to reconcile when the `suggest_skills` change lands: it moves the
+  budget's unit from chars to bytes and adds a 21st tool, so both the number
+  and `test/mcp-worktrees.test.ts`'s unit assertion move with it.
+- **`src/mcp.ts` does not use `quoted()` where its sibling code does.** That
+  helper is not exported at HEAD, so the one refusal that echoes a rejected
+  filter value uses `JSON.stringify` instead. Fold it into `quoted` when that
+  helper lands, so untrusted text has one escape path rather than two.
 - **wip snapshots are only half reachable.** `GET /api/worktrees` serves
   `wipRef` for a task whose directory is gone — the case that matters most —
   but `GET /api/doctor` exposes no `refs/baton/wip/*` refs at all, and
@@ -1326,9 +1323,6 @@ arrived with them).
   git reports `/private/var/…` is filed as an orphan nobody owns.
   `collectWorktrees` works around it with a `realpath`-based `samePath` and
   re-filters the audit's output; `GET /api/doctor` still has the bug.
-- `web/src/features/Pipeline.tsx:70` animates a keyframe named `pulse`, and
-  `web/src/styles/base.css:77` defines `pulse-dot`. There is no `pulse`, so that
-  active-state dot has never moved.
 - A task reaching `done` with zero files changed, or far faster than any prior
   task, should be flagged `suspicious-completion` and routed to review. It
   attacks "the user thinks it is complete" from the opposite side — the agent

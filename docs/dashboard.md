@@ -319,11 +319,6 @@ safety feature into a secret-exfiltration feature.
 
 ### Recover: the same audit, read as work to rescue
 
-**Not yet reachable.** `App.tsx` was outside this change's scope, so the screen
-is built and nothing routes it — it needs one line in the shell's screen switch
-before anybody can open it. What follows describes what lands when that line
-does.
-
 `GET /api/doctor` already found orphaned worktrees, stale task records and
 `baton/*` branches nobody owns. [`src/cleanup.ts`](../src/cleanup.ts) frames all
 of it as **junk to delete**, which is right for `baton clean`, whose job is to
