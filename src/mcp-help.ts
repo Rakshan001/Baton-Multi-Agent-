@@ -59,6 +59,17 @@ export const TOOL_HELP = {
     'Close a handoff brief you finished, with a short report of what you did for whoever reviews it. Call the moment the work is done — nothing else marks a brief done, so an unclosed brief is offered to the next agent forever.',
   report_blocked:
     'You cannot proceed. Records the reason and keeps the task yours. Reach for this instead of guessing at the blocker, and instead of reporting work you did not do.',
+  // The only way an agent learns that another worktree EXISTS. Everything else
+  // Baton tells an agent is about FILES (`check_files`, `list_signals`); a
+  // sibling that stopped mid-task is invisible until someone reads the
+  // dashboard, and agents do not read the dashboard.
+  //
+  // The four liveness names are spelled out on purpose. `health` is a
+  // vocabulary the agent has to ACT on — `abandoned` means "take this over",
+  // `quiet` means "leave it alone" — and a value it has to ask about costs more
+  // than the twenty-odd bytes of naming it here.
+  list_worktrees:
+    'Every Baton worktree: branch, holder, state, health (working|quiet|stalled|abandoned) and quiet time; yours is marked mine. Call before assuming a sibling is still working, or before redoing their work.',
 } as const;
 
 /** Hard total budget (chars) across all descriptions — the T1 regression lock.
@@ -71,5 +82,15 @@ export const TOOL_HELP = {
  *  command. Keep new tools lean; a further raise needs a deliberate edit.
  *  Raised 2800 → 3200 for next_handoff + resolve_handoff: an agent that cannot
  *  ask what to pick up, or say that it finished, leaves the relay running on
- *  copy-paste — which is the manual step this whole feature exists to remove. */
-export const TOOL_HELP_BUDGET = 3200;
+ *  copy-paste — which is the manual step this whole feature exists to remove.
+ *  Raised 3200 → 3362 for list_worktrees, the 20th tool: it is the only way an
+ *  agent learns that a SIBLING worktree exists at all. Everything else Baton
+ *  tells an agent is about files, so a sibling that stopped mid-task was
+ *  invisible from inside a session. Sits exactly on the measured total, with no
+ *  slack — a further raise needs a deliberate edit. */
+export const TOOL_HELP_BUDGET = 3362;
+
+/** The tool's ONE argument. A schema is paid for by every agent in every
+ *  session whether or not the tool is ever called, so there is no pagination,
+ *  no sort, no field selector and no verbosity flag — just this. */
+export const WORKTREES_FILTER_HELP = 'Show only this health; default all';

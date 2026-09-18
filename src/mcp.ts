@@ -16,6 +16,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { realpathSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { collectStatus } from './board.js';
 import { detectParentAgent } from './agents.js';
 import { gitRoot } from './git.js';
@@ -34,12 +36,154 @@ import { saveProgress } from './handoff/progress-ledger.js';
 import { snapshotTask } from './commands/snapshot.js';
 import { buildOrientation } from './kb/orient.js';
 import { asText, capList } from './mcp-format.js';
-import { TOOL_HELP } from './mcp-help.js';
+import { TOOL_HELP, WORKTREES_FILTER_HELP } from './mcp-help.js';
+import { collectWorktrees, type WorktreeHealth, type WorktreeRow } from './worktrees.js';
 
 /** who_touched can span a file's whole history — cap what an agent is served. */
 const WHO_TOUCHED_CAP = 20;
 /** A busy hub can hold hundreds of live signals — cap what one answer serves. */
 const SIGNALS_CAP = 30;
+/* ------------------------------------------------------------------ */
+/* list_worktrees — the projection of the worktree read-model            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The health vocabulary as a runtime value, because a refusal has to be able to
+ * name it.
+ *
+ * `WorktreeHealth` (worktrees.ts) is a type and erases at build time, and the
+ * one thing this list must never do is drift from it: a filter validated
+ * against a stale copy would refuse a health the read-model genuinely derives.
+ * The two lines below make that a COMPILE error in both directions —
+ * `satisfies` rejects a name that is not a health, and `_healthsAreComplete`
+ * rejects a health that is missing here. Nothing about the health LADDER is
+ * duplicated; deriving health remains `deriveHealth`'s job and only its job.
+ */
+export const WORKTREE_HEALTHS = [
+  'working', 'quiet', 'stalled', 'abandoned',
+  'ok', 'dirty', 'conflict', 'rebasing', 'missing', 'orphan-disk', 'unknown',
+] as const satisfies readonly WorktreeHealth[];
+
+type MissingHealth = Exclude<WorktreeHealth, (typeof WORKTREE_HEALTHS)[number]>;
+// Wrapped in a tuple on purpose: a bare `MissingHealth extends never` is a
+// distributive conditional and evaluates to `never` when the list IS complete,
+// which would fail exactly when nothing is wrong.
+const _healthsAreComplete: [MissingHealth] extends [never] ? true : MissingHealth = true;
+void _healthsAreComplete;
+
+/** One worktree as an agent is served it. A strict subset of `WorktreeRow` —
+ *  what a sibling agent needs to decide "leave it alone" or "take it over". */
+export interface WorktreeBrief {
+  slug: string;
+  branch: string | null;
+  state: string | null;
+  /** Straight from `deriveHealth`. Never rewritten here — see `worktreeBrief`. */
+  health: WorktreeHealth;
+  /** Who holds it: the task record's claim, else the process actually detected. */
+  holder: string | null;
+  /** The fact nothing else in the product states: claimed, but is anyone there? */
+  holderRunning: boolean;
+  quietForMs: number | null;
+  /** Present only on the caller's own worktree. */
+  mine?: true;
+}
+
+/**
+ * Path identity as the filesystem sees it, not as the string looks — the same
+ * hazard `worktrees.ts:samePath` documents. `git worktree list` reports
+ * `/private/var/...` on macOS while a shell's `cwd` reports `/var/...`, so a
+ * string compare decides an agent standing inside its own worktree is standing
+ * nowhere. Falls back to `resolve` for a path that is gone (health `missing`).
+ */
+function realPath(p: string): string {
+  try { return realpathSync.native(p); } catch { return resolve(p); }
+}
+
+/** Containment by path SEGMENT, not by prefix: `/wt/a-two` starts with `/wt/a`
+ *  and is a different worktree. */
+function contains(dir: string, p: string): boolean {
+  return p === dir || p.startsWith(dir.endsWith(sep) ? dir : dir + sep);
+}
+
+/**
+ * Which row is the caller's own.
+ *
+ * `cwd` first, and it wins: where the process actually stands is a physical
+ * fact, and an agent that `cd`-ed into a worktree is working in THAT one
+ * whatever its `BATON_SLUG` says. A subdirectory counts — agents stand in
+ * `src/`, not at the worktree root — and the deepest match wins, so a worktree
+ * nested inside another is not credited to its parent.
+ *
+ * `BATON_SLUG` is the fallback for the ordinary hub case: an agent invoked at
+ * the repo root holds a task whose worktree is elsewhere on disk.
+ *
+ * Exported for test/mcp-worktrees.test.ts.
+ */
+export function ownWorktreeSlug(
+  rows: readonly Pick<WorktreeRow, 'slug' | 'worktreePath'>[],
+  cwd: string,
+  taskSlug?: string,
+): string | null {
+  const here = realPath(cwd);
+  let best: { slug: string; len: number } | null = null;
+  for (const r of rows) {
+    const wt = realPath(r.worktreePath);
+    if (!contains(wt, here)) continue;
+    if (!best || wt.length > best.len) best = { slug: r.slug, len: wt.length };
+  }
+  if (best) return best.slug;
+  if (taskSlug && rows.some((r) => r.slug === taskSlug)) return taskSlug;
+  return null;
+}
+
+/**
+ * Rows → the answer. Pure, so the projection is testable without a daemon.
+ *
+ * `health` is COPIED, never recomputed. There is exactly one definition of it
+ * in this codebase (`worktrees.ts:deriveHealth`) and this function is not
+ * allowed to become a second one — in particular `unknown` travels through
+ * untouched. The read-model fails closed on purpose, and softening that here
+ * ("probably fine") would launder dead work into looking fresh one layer
+ * further out, which is the reported bug.
+ *
+ * An unrecognised filter is REFUSED rather than resolved to nothing: "no
+ * worktrees matched" and "you typed a health that does not exist" read
+ * identically as an empty list, and the first of those is the most dangerous
+ * answer this tool can give.
+ *
+ * Exported for test/mcp-worktrees.test.ts.
+ */
+export function worktreeBrief(
+  rows: readonly WorktreeRow[],
+  opts: { cwd: string; taskSlug?: string; filter?: string },
+): { worktrees: WorktreeBrief[]; mine: string | null } | { refused: string } {
+  const asked = opts.filter?.trim().toLowerCase();
+  let health: WorktreeHealth | null = null;
+  if (asked) {
+    const match = WORKTREE_HEALTHS.find((h) => h === asked);
+    if (!match) {
+      return { refused: `unknown health ${JSON.stringify((opts.filter ?? '').slice(0, 40))} — use one of: ${WORKTREE_HEALTHS.join(', ')}` };
+    }
+    health = match;
+  }
+  const mine = ownWorktreeSlug(rows, opts.cwd, opts.taskSlug);
+  const worktrees = rows
+    .filter((r) => health === null || r.health === health)
+    .map((r) => ({
+      slug: r.slug,
+      branch: r.branch,
+      state: r.state,
+      health: r.health,
+      // The record's claim first: "codex claimed this" is the useful half of
+      // "codex claimed this and no codex is running" (health `abandoned`).
+      holder: r.claimedBy ?? r.agent,
+      holderRunning: r.holderRunning,
+      quietForMs: r.quietForMs,
+      ...(r.slug === mine ? { mine: true as const } : {}),
+    }));
+  return { worktrees, mine };
+}
+
 /**
  * Debounce for refreshing a session's presence on tool calls — well under the
  * 2-min heartbeat window (WATCHER_HEARTBEAT_STALE_MS) so an active agent always
@@ -241,6 +385,29 @@ export async function startMcpServer(): Promise<void> {
     },
     async () => asText(await collectStatus(root)),
   );
+
+  // Sessions are `list_tasks`; WORKTREES are this. The two are not the same
+  // question: a task row says what the board believes, and this says whether
+  // the worktree behind it is actually moving, who holds it, and what is at
+  // risk if it is not. Everything it serves comes from `collectWorktrees` —
+  // one read-model, one definition of health, no second opinion here.
+  //
+  // Read-only: `collectWorktrees` creates no ref, writes no file and reclaims
+  // nothing, so this tool is safe to call from anywhere at any time.
+  reg(
+    'list_worktrees',
+    {
+      description: TOOL_HELP.list_worktrees,
+      inputSchema: { health: z.string().optional().describe(WORKTREES_FILTER_HELP) },
+    },
+    // `process.cwd()` is the agent's own worktree when it has one: `baton mcp`
+    // runs one process per agent session, started where the agent is working.
+    async ({ health }) => asText(worktreeBrief(
+      await collectWorktrees(root),
+      { cwd: process.cwd(), taskSlug, filter: health },
+    )),
+  );
+
 
   reg(
     'report_progress',

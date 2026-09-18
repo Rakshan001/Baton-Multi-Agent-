@@ -16,6 +16,7 @@ const EXPECTED_TOOLS = [
   'create_handoff', 'search_history', 'save_progress',
   'my_tasks', 'take_task', 'complete_task', 'report_blocked',
   'next_handoff', 'resolve_handoff',
+  'list_worktrees',
 ] as const;
 
 describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
@@ -26,10 +27,11 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
   it('stays inside the total budget (the whole point of T1)', () => {
     const total = Object.values(TOOL_HELP).reduce((n, d) => n + d.length, 0);
     expect(total).toBeLessThanOrEqual(TOOL_HELP_BUDGET);
-    // 19 tools now. Two raises so far, both for a feature rather than a
-    // convenience: the pipeline tools, then the handoff relay's two ends.
+    // 20 tools now. Three raises so far, each for a feature rather than a
+    // convenience: the pipeline tools, the handoff relay's two ends, then
+    // list_worktrees — the only way an agent learns a sibling worktree exists.
     // Raising it again needs a deliberate edit — keep every new tool lean.
-    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(3200);
+    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(3400);
   });
 
   it('keeps every tool description individually lean', () => {
