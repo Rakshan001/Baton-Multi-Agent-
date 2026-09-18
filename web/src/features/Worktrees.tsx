@@ -60,7 +60,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Icon } from "../components/Icon";
-import { EmptyState, ErrorState } from "../components/primitives";
+import { EmptyState, ErrorState, Sheet } from "../components/primitives";
 import { WorktreeNode } from "../components/flow/WorktreeNode";
 import { GroupNode } from "../components/flow/GroupNode";
 import { HEALTH_META, healthColor, quietLabel } from "../components/flow/health";
@@ -73,16 +73,24 @@ import {
   type FlowNode, type GroupDescriptor, type GroupFlowNode,
 } from "../components/flow/groups";
 import { GroupToggleContext, useCollapseStore } from "../components/flow/collapseStore";
+import { WorktreePanel } from "./WorktreePanel";
 import { usePoll } from "../hooks/usePoll";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { BatonAPI, ApiError, failureReason } from "../lib/api";
 import { ScreenHeader } from "./shared";
-import type { WorktreeRow } from "../types";
+import { DiffViewer } from "./Diff";
+import { HandoffDialog } from "./Handoff";
+import { LiveSession } from "./Live";
+import type { HandoffBriefEntry, PipelineView, StatusRow, WorktreeRow } from "../types";
 
 /** Defined once, at module scope: React Flow re-creates its internal node
  *  renderers whenever this object's identity changes, which on a polling
  *  screen would mean remounting every card several times a minute. */
 const NODE_TYPES = { worktree: WorktreeNode, worktreeGroup: GroupNode };
+
+/** The panel's heading id. One constant, because the inline `aside` and the
+ *  `Sheet` are the SAME panel body and the Sheet labels itself by it. */
+const PANEL_HEADING_ID = "worktree-panel-verdict";
 
 /** Split the one node map back into the two the merge functions each own.
  *  The screen keeps ONE map — the array React Flow hands back through
@@ -100,7 +108,15 @@ function splitNodes(all: Map<string, FlowNode>) {
 /** Health values that want a person now — the header count and the list sort. */
 const isUrgent = (r: WorktreeRow) => HEALTH_META[r.health]?.urgent ?? true;
 
-export function WorktreesScreen({ live = false }: { live?: boolean }) {
+export function WorktreesScreen({
+  live = false,
+  // Defaulted from the client rather than required as a prop, because App.tsx
+  // renders this screen with `live` alone and App.tsx is not in this change's
+  // scope. `usePrefs` writes `BatonAPI.writeEnabled` on every change
+  // (hooks/usePrefs.ts:77) and this screen re-renders on the 5 s poll, so the
+  // gate follows the toggle. An explicit prop still wins when App is wired.
+  writeEnabled = BatonAPI.writeEnabled,
+}: { live?: boolean; writeEnabled?: boolean }) {
   // 5 s is the safety net, not the mechanism: any lifecycle event on the bus
   // refetches this immediately (useEvents → BatonAPI.notify → usePoll). When
   // the stream is live the net can be slack.
@@ -111,6 +127,69 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
   // Collapse state, persisted per project through the one local-preference
   // helper `web/` already has (flow/collapseStore.ts explains why not usePrefs).
   const { collapsed, toggle, setMany } = useCollapseStore(BatonAPI.project);
+
+  /* ---- selection: ONE state, two presentations ----------------------
+   * The plan's rule. Above 900px the panel is an inline `aside` beside the
+   * canvas; below it, the shared `Sheet` — which is already a focus-trapped
+   * bottom sheet on a small viewport, so there is nothing to re-solve. Both
+   * render the SAME <WorktreePanel>, and only one of them is mounted at a
+   * time, so the panel's ledger poll never runs twice.
+   *
+   * 900px rather than the 760px the canvas falls back at: between the two the
+   * canvas still works but an inline panel would leave it narrower than one
+   * node, so the sheet covers that band too.
+   */
+  const isWide = useMediaQuery("(min-width: 900px)");
+  const [selected, setSelected] = useState<string | null>(null);
+  const selectedRow = useMemo(
+    () => (rows ?? []).find((r) => r.slug === selected) ?? null,
+    [rows, selected],
+  );
+  // A worktree that has left the read-model must not leave a panel describing
+  // it behind: the row is the only thing the panel knows, and a stale one is
+  // exactly the "work that is gone but still on screen" this screen exists to
+  // prevent.
+  useEffect(() => {
+    if (selected && rows && !rows.some((r) => r.slug === selected)) setSelected(null);
+  }, [rows, selected]);
+
+  /*
+   * Section 2's `blocker` and Copy prompt's brief live in two OTHER
+   * read-models, and both are fetched only while something is selected —
+   * `enabled` keeps the idle canvas at one request per tick rather than three.
+   *
+   * `blocker` is not on a worktree row on purpose: src/worktrees.ts answers
+   * "what is on disk" and "why is this refused" is the pipeline's question
+   * (src/pipeline-view.ts:51 takes it verbatim from `blockers()`), so the panel
+   * joins the two by slug. Neither value is ever reworded here.
+   */
+  const pipeline = usePoll<PipelineView>(
+    () => BatonAPI.getPipeline(),
+    { interval: 20000, enabled: selected !== null },
+  );
+  const briefs = usePoll<HandoffBriefEntry[]>(
+    () => BatonAPI.getHandoffs(),
+    { interval: 30000, enabled: selected !== null },
+  );
+
+  /* ---- the three dialogs the panel hands off to ---------------------
+   * Diff, Hand off and Open Live already exist as dialogs (features/Diff.tsx,
+   * Handoff.tsx, Live.tsx) and App.tsx owns them for the session board. This
+   * screen mounts them itself rather than taking three more props, because
+   * App.tsx is not in this change's scope — and a button wired to an
+   * `onOpenDiff` nobody passed is a button that silently does nothing.
+   *
+   * All three read a `StatusRow` for their metadata. Fetched ONCE, on demand,
+   * rather than adding a third poll to a screen that already runs two: they
+   * degrade honestly without it (the diff still loads from /api/tasks/:slug/diff),
+   * so there is nothing to block on.
+   */
+  const [overlay, setOverlay] = useState<{ kind: "diff" | "handoff" | "live"; slug: string } | null>(null);
+  const [statusRows, setStatusRows] = useState<StatusRow[]>([]);
+  const openOverlay = useCallback((kind: "diff" | "handoff" | "live", slug: string) => {
+    setOverlay({ kind, slug });
+    BatonAPI.getStatus().then(setStatusRows).catch(() => { /* the dialogs degrade without it */ });
+  }, []);
 
   /* ---- the graph ---------------------------------------------------- */
 
@@ -204,6 +283,20 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
       nodesRef.current = new Map(next.map((n) => [n.id, n]));
       return next;
     });
+  }, []);
+
+  /*
+   * React Flow's selection, reduced to the one slug the panel describes.
+   *
+   * A hidden node can still carry `selected` — that is how expanding a group
+   * restores what you had — but it must not OPEN a panel, or somebody would
+   * get a detail pane for a card they cannot see. Multi-select resolves to no
+   * panel for the same reason: "these five" is not a thing this panel can
+   * describe, and showing the first of them would be a quiet lie.
+   */
+  const onSelectionChange = useCallback(({ nodes: picked }: { nodes: FlowNode[] }) => {
+    const visible = picked.filter((n) => n.type !== "worktreeGroup" && !n.hidden);
+    setSelected(visible.length === 1 ? visible[0].id : null);
   }, []);
 
   /** Put every node back on its deterministic position. Explicit, because the
@@ -328,6 +421,63 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
     </ScreenHeader>
   );
 
+  /* ---- the panel, built once and presented twice ------------------- */
+
+  const panelBody = selectedRow ? (
+    <WorktreePanel
+      row={selectedRow}
+      pipeline={pipeline.data}
+      briefs={briefs.data}
+      writeEnabled={writeEnabled}
+      onClose={() => setSelected(null)}
+      // A write changed what the read-model says, so re-read it now rather
+      // than leaving the canvas up to five seconds behind its own panel.
+      onRefresh={poll.refetch}
+      onOpenDiff={(slug) => openOverlay("diff", slug)}
+      onLive={(slug) => openOverlay("live", slug)}
+      onHandoff={(slug) => openOverlay("handoff", slug)}
+      headingId={PANEL_HEADING_ID}
+    />
+  ) : null;
+
+  const inlinePanel = isWide && panelBody && (
+    <aside aria-label={`Worktree ${selected}`} style={{
+      width: 372, flex: "none", marginLeft: 12, minHeight: 0, position: "relative",
+      display: "flex", flexDirection: "column", background: "var(--bg-surface)",
+      border: "1px solid var(--border-subtle)", borderRadius: "var(--r-lg)", overflow: "hidden",
+    }}>{panelBody}</aside>
+  );
+
+  // `Sheet` renders nothing while closed, so the body is mounted in exactly one
+  // of the two presentations — never both.
+  const sheetPanel = !isWide && (
+    <Sheet open={panelBody !== null} onClose={() => setSelected(null)}
+      labelledBy={PANEL_HEADING_ID} side="bottom">
+      {panelBody}
+    </Sheet>
+  );
+
+  const overlaySession = overlay ? statusRows.find((r) => r.slug === overlay.slug) : undefined;
+  const dialogs = overlay && (
+    <>
+      {overlay.kind === "diff" && (
+        <DiffViewer slug={overlay.slug} session={overlaySession} writeEnabled={writeEnabled}
+          onClose={() => setOverlay(null)}
+          onHandoff={(slug) => setOverlay({ kind: "handoff", slug })} />
+      )}
+      {overlay.kind === "handoff" && (
+        <HandoffDialog slug={overlay.slug} session={overlaySession} writeEnabled={writeEnabled}
+          onClose={() => setOverlay(null)} />
+      )}
+      {overlay.kind === "live" && (
+        <LiveSession slug={overlay.slug} session={overlaySession} sessions={statusRows}
+          demo={BatonAPI.demo} onClose={() => setOverlay(null)}
+          setSlug={(slug) => setOverlay({ kind: "live", slug })}
+          onOpenDiff={(slug) => setOverlay({ kind: "diff", slug })} />
+      )}
+    </>
+  );
+
   if (rows && rows.length === 0) {
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -349,7 +499,9 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
         {header}
-        <RankedList rows={rows} loading={poll.isLoading} />
+        <RankedList rows={rows} loading={poll.isLoading} selected={selected} onSelect={setSelected} />
+        {sheetPanel}
+        {dialogs}
       </div>
     );
   }
@@ -357,7 +509,8 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       {header}
-      <div style={{ flex: 1, minHeight: 0, margin: "0 16px 16px", borderRadius: "var(--r-lg)", border: "1px solid var(--border-subtle)", overflow: "hidden", position: "relative" }}>
+      <div style={{ flex: 1, minHeight: 0, margin: "0 16px 16px", display: "flex" }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, borderRadius: "var(--r-lg)", border: "1px solid var(--border-subtle)", overflow: "hidden", position: "relative" }}>
         {/* The group nodes reach `toggle` through context rather than through
             `node.data`, because data is rebuilt from the descriptors on every
             poll and a callback living there would be a new identity several
@@ -368,6 +521,7 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
           edges={edges}
           nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange}
+          onSelectionChange={onSelectionChange}
           onInit={(inst) => { rfRef.current = inst; }}
           // React Flow's own colour mode, kept in step with the shell's theme
           // rather than left on "light" forever.
@@ -408,12 +562,25 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
           }} data-tip={`The last refresh failed — ${failureReason(poll.error)}`}>may be stale</div>
         )}
       </div>
+      {inlinePanel}
+      </div>
+      {sheetPanel}
+      {dialogs}
     </div>
   );
 }
 
-/** The small-screen fallback: the same rows, worst first. */
-function RankedList({ rows, loading }: { rows: WorktreeRow[] | null; loading: boolean }) {
+/** The small-screen fallback: the same rows, worst first.
+ *
+ *  Each row is a BUTTON, not a div, so the panel is reachable on a phone and
+ *  from the keyboard — this list is the only way in when there is no canvas,
+ *  and it feeds the same one selection state the canvas does. */
+function RankedList({ rows, loading, selected, onSelect }: {
+  rows: WorktreeRow[] | null;
+  loading: boolean;
+  selected: string | null;
+  onSelect: (slug: string) => void;
+}) {
   const sorted = useMemo(() => [...(rows ?? [])].sort(
     (a, b) => Number(isUrgent(b)) - Number(isUrgent(a))
       || Number(b.unprotected.atRisk) - Number(a.unprotected.atRisk)
@@ -430,11 +597,17 @@ function RankedList({ rows, loading }: { rows: WorktreeRow[] | null; loading: bo
       {sorted.map((r) => {
         const meta = HEALTH_META[r.health] ?? HEALTH_META.unknown;
         return (
-          <div key={r.slug} style={{
-            display: "flex", flexDirection: "column", gap: 5, padding: "10px 12px",
-            background: "var(--bg-surface)", border: "1px solid var(--border-default)",
-            borderLeft: `3px solid ${meta.color}`, borderRadius: "var(--r-md)",
-          }}>
+          <button key={r.slug} type="button" className="fr"
+            onClick={() => onSelect(r.slug)}
+            aria-pressed={selected === r.slug}
+            style={{
+              display: "flex", flexDirection: "column", gap: 5, padding: "10px 12px",
+              width: "100%", minWidth: 0, textAlign: "left", font: "inherit",
+              color: "var(--text-primary)", cursor: "pointer",
+              background: selected === r.slug ? "var(--bg-active)" : "var(--bg-surface)",
+              border: `1px solid ${selected === r.slug ? "var(--border-strong)" : "var(--border-default)"}`,
+              borderLeft: `3px solid ${meta.color}`, borderRadius: "var(--r-md)",
+            }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.slug}</span>
               <span style={{ fontSize: "var(--fs-11)", color: meta.color }} title={meta.blurb}>{meta.label}</span>
@@ -443,7 +616,7 @@ function RankedList({ rows, loading }: { rows: WorktreeRow[] | null; loading: bo
               {r.branch ?? "(no branch)"} · quiet {quietLabel(r.quietForMs)}
               {r.unprotected.atRisk ? ` · ${r.unprotected.lines} lines at risk` : ""}
             </div>
-          </div>
+          </button>
         );
       })}
     </div>

@@ -27,7 +27,11 @@ import { DEMO_SKILLS, type DemoSkill } from "./demoSkills";
 import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
-import { demoWorktrees } from "./demoWorktrees";
+import {
+  applyDemoOverlay, demoPausePatch, demoPauseRefusal, demoTakeoverPatch, demoTakeoverRefusal,
+  demoWorktreeProgress, demoWorktrees,
+} from "./demoWorktrees";
+import type { WorktreeProgress } from "../components/flow/panel";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -359,9 +363,91 @@ class BatonClient {
   async getWorktrees(): Promise<WorktreeRow[]> {
     if (this.demo) {
       await this.demoGate();
-      return demoWorktrees();
+      return applyDemoOverlay(demoWorktrees(), this.demoWorktreePatches);
     }
     return this.request<WorktreeRow[]>("/api/worktrees");
+  }
+
+  /**
+   * GET /api/worktrees/:slug/progress — what the agent SAID it was doing.
+   *
+   * The read above can say a worktree has been quiet for 34 minutes; only the
+   * progress ledger can say what it was doing when it went quiet. Read-only
+   * and not write-gated, for the same reason as the read above.
+   *
+   * An unknown slug is NOT a 404 here: the daemon answers with
+   * `hasLedger: false` on purpose (src/handoff/progress-ledger.ts:170),
+   * because "said nothing" and "does not exist" are different facts. So
+   * nothing in this method laundered a missing ledger into an error either.
+   */
+  async getWorktreeProgress(slug: string): Promise<WorktreeProgress> {
+    if (this.demo) {
+      await this.demoGate();
+      return demoWorktreeProgress(slug);
+    }
+    return this.request<WorktreeProgress>(
+      `/api/worktrees/${encodeURIComponent(slug)}/progress`,
+    );
+  }
+
+  /* ---- WRITE: the two worktree verbs (src/endpoints/worktrees.ts) ----
+     Both are `--write` gated by the daemon and refuse with a 409 whose `error`
+     is the pipeline's own sentence, passed through untouched. `request` already
+     turns that into ApiError("CONFLICT", <that sentence>), so the panel has the
+     CLI's wording to render and this layer adds no vocabulary of its own.
+
+     The demo has no daemon, so it patches the fixture instead — and reproduces
+     the refusals from the RECORDED lifecycle sentences in lib/demoWorktrees.ts,
+     because a showcase whose stall guard does not exist teaches the opposite of
+     the feature. */
+
+  /** Slug → the patch a demo write left on `demoWorktrees()`. */
+  private demoWorktreePatches = new Map<string, Partial<WorktreeRow>>();
+
+  private demoRow(slug: string): WorktreeRow | null {
+    const rows = applyDemoOverlay(demoWorktrees(), this.demoWorktreePatches);
+    return rows.find((r) => r.slug === slug) ?? null;
+  }
+
+  private demoPatch(slug: string, patch: Partial<WorktreeRow>) {
+    this.demoWorktreePatches.set(slug, { ...this.demoWorktreePatches.get(slug), ...patch });
+    this.emit(); // every poll-driven screen refetches, so the canvas moves too
+  }
+
+  /** Adopt work that went quiet. `agent` is the agent taking it over. */
+  async takeoverWorktree(slug: string, agent: string): Promise<void> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      const row = this.demoRow(slug);
+      if (!row) throw new ApiError("NOT_FOUND", `No task '${slug}'.`, 404);
+      const refusal = demoTakeoverRefusal(row);
+      if (refusal) throw new ApiError("CONFLICT", refusal, 409);
+      this.demoPatch(slug, demoTakeoverPatch(agent));
+      return;
+    }
+    await this.request(`/api/worktrees/${encodeURIComponent(slug)}/takeover`, {
+      method: "POST",
+      body: JSON.stringify({ agent }),
+    });
+  }
+
+  /** Hand the task back deliberately. `reason` is recorded as `stoppedReason`. */
+  async pauseWorktree(slug: string, opts: { reason?: string; agent?: string } = {}): Promise<void> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(140);
+      const row = this.demoRow(slug);
+      if (!row) throw new ApiError("NOT_FOUND", `No task '${slug}'.`, 404);
+      const refusal = demoPauseRefusal(row);
+      if (refusal) throw new ApiError("CONFLICT", refusal, 409);
+      this.demoPatch(slug, demoPausePatch());
+      return;
+    }
+    await this.request(`/api/worktrees/${encodeURIComponent(slug)}/pause`, {
+      method: "POST",
+      body: JSON.stringify({ reason: opts.reason, agent: opts.agent }),
+    });
   }
   async getStatus(): Promise<StatusRow[]> {
     if (this.demo) {
