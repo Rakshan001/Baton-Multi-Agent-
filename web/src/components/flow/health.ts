@@ -51,6 +51,20 @@ export interface HealthMeta {
   urgent: boolean;
 }
 
+/**
+ * ONE GLYPH AND ONE WORD PER HEALTH VALUE, AND NO SHARING.
+ *
+ * `label` and `icon` are two of the three non-colour channels that carry
+ * health (the third is the card's border pattern+width, in encoding.ts), so
+ * both have to be unique across all eleven values or two of them become the
+ * same node in a greyscale screenshot. They were NOT unique before
+ * wt-flow-nodes: `alertTriangle` covered stalled, conflict and unknown at
+ * once, and `alertOctagon` covered abandoned and missing — which made the
+ * glyph channel worth roughly two bits instead of eleven values.
+ *
+ * `encoding.test.ts` pins the uniqueness, so adding a twelfth health value
+ * that reuses a glyph fails the suite rather than quietly degrading.
+ */
 export const HEALTH_META: Record<WorktreeHealth, HealthMeta> = {
   /* --- the liveness vocabulary: four names, not a boolean --- */
   working: {
@@ -79,15 +93,15 @@ export const HEALTH_META: Record<WorktreeHealth, HealthMeta> = {
     blurb: "Changes on disk that no commit holds, and no agent is here.",
   },
   conflict: {
-    label: "Conflict", color: "var(--conflict)", icon: "alertTriangle", urgent: true,
+    label: "Conflict", color: "var(--conflict)", icon: "gitMerge", urgent: true,
     blurb: "A person has to resolve this before 'is it moving' means anything.",
   },
   rebasing: {
-    label: "Mid-operation", color: "var(--dirty)", icon: "gitMerge", urgent: true,
+    label: "Mid-operation", color: "var(--dirty)", icon: "history", urgent: true,
     blurb: "A rebase, merge, cherry-pick or revert is half-finished. The exact one is on the card.",
   },
   missing: {
-    label: "Missing", color: "var(--conflict)", icon: "alertOctagon", urgent: true,
+    label: "Missing", color: "var(--conflict)", icon: "fileWarning", urgent: true,
     blurb: "Recorded as a worktree, but the directory is gone from disk.",
   },
   "orphan-disk": {
@@ -95,7 +109,7 @@ export const HEALTH_META: Record<WorktreeHealth, HealthMeta> = {
     blurb: "On disk and known to git, but no task owns it.",
   },
   unknown: {
-    label: "Unknown", color: "var(--idle)", icon: "alertTriangle", urgent: true,
+    label: "Unknown", color: "var(--idle)", icon: "wifiOff", urgent: true,
     blurb: "Git did not answer for this worktree. Reported as unknown rather than guessed as fine.",
   },
 };
