@@ -32,6 +32,7 @@ import {
   demoWorktreeProgress, demoWorktrees,
 } from "./demoWorktrees";
 import type { WorktreeProgress } from "../components/flow/panel";
+import { demoDiscardRefusal, demoDoctorReport } from "./demoRecover";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -83,6 +84,47 @@ export function failureReason(e: unknown): string {
     default:
       return e.message || `the daemon answered ${e.status ?? "an error"}`;
   }
+}
+
+/* ============================================================
+   THE JUNK AUDIT (GET /api/doctor)
+
+   A verbatim mirror of `AuditReport` / `JunkItem` in src/cleanup.ts.
+   Declared here rather than in types.ts because this change does not own
+   that file — the same reason components/flow/panel.ts declares
+   `WorktreeProgress` beside the panel that reads it.
+
+   Note the vocabulary: the daemon calls these things JUNK, and every item
+   carries a `reason` and an `action` written for `baton clean`. The Recover
+   screen re-states them as work to rescue (features/recover.ts explains
+   why); nothing is widened or renamed on the way in, so this stays a
+   faithful mirror of what the route sends.
+   ============================================================ */
+export type JunkKind =
+  | "orphan-worktree-task"
+  | "orphan-worktree-disk"
+  | "orphan-branch"
+  | "orphan-tmux"
+  | "tmp-file"
+  | "tmp-upload";
+
+export interface JunkItem {
+  kind: JunkKind;
+  /** slug / branch / session name / filename — the thing to act on. */
+  id: string;
+  path: string | null;
+  reason: string;
+  action: string;
+  /** Set when a fix would REFUSE this item (and why). */
+  blocked?: "dirty" | "main-worktree" | null;
+  bytes?: number | null;
+  branch?: string;
+}
+
+export interface DoctorReport {
+  items: JunkItem[];
+  scannedAt: string;
+  counts: Record<JunkKind, number>;
 }
 
 export class ApiError extends Error {
@@ -388,6 +430,62 @@ class BatonClient {
     return this.request<WorktreeProgress>(
       `/api/worktrees/${encodeURIComponent(slug)}/progress`,
     );
+  }
+
+  /* ---- the recovery audit (GET /api/doctor + its one per-item delete) ---- */
+
+  /**
+   * The junk audit, read as the source for the Recover screen.
+   *
+   * NOT write-gated, deliberately: `auditJunk` never mutates (src/cleanup.ts
+   * says so at the top and the route comment repeats it), and someone hunting
+   * for work an agent left behind has to be able to LOOK at a read-only
+   * daemon. Only the two verbs below need `--write`.
+   */
+  async getDoctor(): Promise<DoctorReport> {
+    if (this.demo) {
+      await this.demoGate();
+      return demoDoctorReport(Date.now(), this.demoDiscarded);
+    }
+    return this.request<DoctorReport>("/api/doctor");
+  }
+
+  /** Slugs a demo delete has removed, so the demo audit stops reporting them. */
+  private demoDiscarded = new Set<string>();
+
+  /**
+   * Delete ONE stranding — the secondary action on the Recover screen.
+   *
+   * Only a stale task record has a per-item route (`DELETE /api/tasks/:slug`).
+   * `POST /api/doctor/clean` is deliberately NOT called from here: `cleanJunk`
+   * acts on the whole report at once, so a per-row button wired to it would
+   * delete rows the reader never looked at. `canDiscard` in features/recover.ts
+   * is the same rule stated for the UI, and this refuses anything else rather
+   * than trusting the caller to have asked.
+   *
+   * `force: false`, unlike `removeTask` above, which forces by default: a
+   * stranding that still holds uncommitted work must hit the daemon's own
+   * DirtyWorktreeError and come back as a 409 carrying its sentence, not be
+   * quietly bulldozed by the one screen that exists to stop that happening.
+   */
+  async discardStranding(item: JunkItem): Promise<void> {
+    this.assertWrite();
+    if (item.kind !== "orphan-worktree-task") {
+      throw new ApiError(
+        "BAD_REQUEST",
+        `No endpoint deletes one ${item.kind}. Run \`baton clean --apply\`, which acts on the whole audit.`,
+      );
+    }
+    if (this.demo) {
+      await this.demoGate(140);
+      const refusal = demoDiscardRefusal(item);
+      if (refusal) throw new ApiError("CONFLICT", refusal, 409);
+      this.demoDiscarded.add(item.id);
+      this.emit();
+      return;
+    }
+    await this.request(`/api/tasks/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    this.emit();
   }
 
   /* ---- WRITE: the two worktree verbs (src/endpoints/worktrees.ts) ----
