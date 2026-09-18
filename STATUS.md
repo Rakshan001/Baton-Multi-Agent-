@@ -949,7 +949,7 @@ dependency is isolated as the cause.
 Found while searching for `dependsOn` and getting silence from a file that visibly
 contains it. `src/pipeline.ts:327` held a literal NUL inside a string sentinel
 (`agents.add(...)`, "a name no agent has"), typed as a control character rather than
-written as ` `. The runtime value was correct, so tsc and 1644 tests were all happy —
+written as `\0`. The runtime value was correct, so tsc and 1644 tests were all happy —
 but `file(1)` reported "data" and grep, ripgrep and every other tool that skips binaries
 silently returned nothing for the whole file. Silent wrong answers from search, in the
 module that decides which agent may touch which work.

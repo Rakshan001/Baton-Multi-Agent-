@@ -196,7 +196,7 @@ export async function planDispatch(input: DispatchInput): Promise<DispatchPlan> 
   // The union over every distinct assignee is exactly "eligible for somebody".
   // `eligibleFor` filters `assignee != null && assignee !== agent`, so asking it
   // with a task's own assignee is asking whether that task may start.
-  const OPEN = ' open';
+  const OPEN = '\u0000open';
   const eligible = new Set<string>();
   for (const who of new Set(tasks.map((t) => t.assignee ?? OPEN))) {
     for (const t of eligibleFor(who, tasks, input.gate)) eligible.add(t.slug);
