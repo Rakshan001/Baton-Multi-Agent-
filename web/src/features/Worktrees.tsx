@@ -30,6 +30,28 @@
       `var(--…)` tokens; the one place a literal is needed — the
       minimap's SVG fill — goes through `useFlowTheme`, which re-reads
       on every theme change instead of once (flow/useFlowTheme.ts).
+
+   GROUPING AND COLLAPSE (wt-flow-groups) is all in
+   flow/groups.ts + flow/GroupNode.tsx + flow/collapseStore.ts; this
+   screen only wires the three together. The four things it is
+   responsible for here:
+
+     · ONE NODE ARRAY, PARENTS FIRST. React Flow resolves a child's
+       position against its parent, so a parent must appear before its
+       children or the child lands in the wrong place.
+       `composeFlowNodes` guarantees that ordering and is the only
+       thing allowed to build the array.
+     · COLLAPSE IS A REBUILD, NOT A RE-SEED. Toggling a group runs the
+       exact same merge path a poll runs, so positions, drags and
+       selections survive it — a collapse that moved the canvas would
+       be worse than no collapse at all.
+     · EDGES REROUTE, THEY DO NOT VANISH. `routeEdges` re-points every
+       edge crossing a collapsed boundary at the group node. A
+       dependency that disappeared when somebody tidied up is a
+       dependency they would rediscover the hard way.
+     · WORST, NEVER AVERAGE. A collapsed group carries its worst
+       child's health (flow/groups.ts:HEALTH_SEVERITY) so collapsing
+       can never be a way to hide a stalled worktree.
    ============================================================ */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -40,11 +62,17 @@ import "@xyflow/react/dist/style.css";
 import { Icon } from "../components/Icon";
 import { EmptyState, ErrorState } from "../components/primitives";
 import { WorktreeNode } from "../components/flow/WorktreeNode";
+import { GroupNode } from "../components/flow/GroupNode";
 import { HEALTH_META, healthColor, quietLabel } from "../components/flow/health";
 import { resolveToken, useFlowTheme } from "../components/flow/useFlowTheme";
 import {
-  layoutWorktrees, mergeFlowNodes, worktreeEdges, type WorktreeFlowNode,
+  layoutWorktrees, mergeFlowNodes, worktreeEdges, type WorktreeFlowNode, type XY,
 } from "../components/flow/layout";
+import {
+  composeFlowNodes, computeGroups, groupMembership, mergeGroupNodes, routeEdges,
+  type FlowNode, type GroupDescriptor, type GroupFlowNode,
+} from "../components/flow/groups";
+import { GroupToggleContext, useCollapseStore } from "../components/flow/collapseStore";
 import { usePoll } from "../hooks/usePoll";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { BatonAPI, ApiError, failureReason } from "../lib/api";
@@ -54,7 +82,20 @@ import type { WorktreeRow } from "../types";
 /** Defined once, at module scope: React Flow re-creates its internal node
  *  renderers whenever this object's identity changes, which on a polling
  *  screen would mean remounting every card several times a minute. */
-const NODE_TYPES = { worktree: WorktreeNode };
+const NODE_TYPES = { worktree: WorktreeNode, worktreeGroup: GroupNode };
+
+/** Split the one node map back into the two the merge functions each own.
+ *  The screen keeps ONE map — the array React Flow hands back through
+ *  `onNodesChange` contains both kinds — so this is where the kinds part. */
+function splitNodes(all: Map<string, FlowNode>) {
+  const worktrees = new Map<string, WorktreeFlowNode>();
+  const groups = new Map<string, GroupFlowNode>();
+  for (const [id, node] of all) {
+    if (node.type === "worktreeGroup") groups.set(id, node);
+    else worktrees.set(id, node);
+  }
+  return { worktrees, groups };
+}
 
 /** Health values that want a person now — the header count and the list sort. */
 const isUrgent = (r: WorktreeRow) => HEALTH_META[r.health]?.urgent ?? true;
@@ -67,31 +108,80 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
   const rows = poll.data;
   const isNarrow = useMediaQuery("(max-width: 760px)");
   const { tokens, mode } = useFlowTheme();
+  // Collapse state, persisted per project through the one local-preference
+  // helper `web/` already has (flow/collapseStore.ts explains why not usePrefs).
+  const { collapsed, toggle, setMany } = useCollapseStore(BatonAPI.project);
 
   /* ---- the graph ---------------------------------------------------- */
 
-  // The authoritative node map. State holds the array React Flow renders; this
-  // ref holds identity, so a poll can merge into it without a render ordering
-  // race (two polls can land between renders; the ref is always current).
-  const nodesRef = useRef(new Map<string, WorktreeFlowNode>());
-  const [nodes, setNodes] = useState<WorktreeFlowNode[]>([]);
+  // The authoritative node map — worktree nodes AND group containers, because
+  // the array React Flow hands back through `onNodesChange` holds both. State
+  // holds the array it renders; this ref holds identity, so a poll can merge
+  // into it without a render ordering race (two polls can land between
+  // renders; the ref is always current).
+  const nodesRef = useRef(new Map<string, FlowNode>());
+  const [nodes, setNodes] = useState<FlowNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const rfRef = useRef<ReactFlowInstance<WorktreeFlowNode, Edge> | null>(null);
+  // The descriptors behind the current picture. Kept so "Collapse all" knows
+  // which ids exist and `relayout` knows where each container belongs, without
+  // either of them recomputing the layout a second time.
+  const [groups, setGroups] = useState<GroupDescriptor[]>([]);
+  const rfRef = useRef<ReactFlowInstance<FlowNode, Edge> | null>(null);
   const didFit = useRef(false);
 
+  /*
+   * THE ONE REBUILD PATH. A poll and a collapse toggle both come through here,
+   * which is what makes collapsing free of side effects: it runs the same two
+   * merges, and both of those preserve the node objects they already had.
+   *
+   * Order matters and is not interchangeable:
+   *   1. absolute layout    — deterministic, from the plan DAG (flow/layout.ts)
+   *   2. group descriptors  — boxes + parent-relative child grids over that
+   *   3. merge, both kinds  — keep every existing position object
+   *   4. compose            — parents first, then `parentId`/`extent`/`hidden`
+   *   5. route the edges    — reroute across every collapsed boundary
+   */
   useEffect(() => {
     if (!rows) return;
     const positions = layoutWorktrees(rows);
-    nodesRef.current = mergeFlowNodes(nodesRef.current, rows, positions);
-    setNodes([...nodesRef.current.values()]);
-    setEdges(worktreeEdges(rows).map((e) => ({
-      ...e,
+    const descriptors = computeGroups(rows, positions);
+    const prev = splitNodes(nodesRef.current);
+    const worktreeNodes = mergeFlowNodes(prev.worktrees, rows, positions);
+    const groupNodes = mergeGroupNodes(prev.groups, descriptors, collapsed);
+    const composed = composeFlowNodes(groupNodes, worktreeNodes, descriptors, collapsed);
+
+    // Written straight back into the ref, not left to wait for React Flow's
+    // first change event: `composeFlowNodes` is what turns an absolute position
+    // into a parent-relative one, and the next rebuild has to see that.
+    nodesRef.current = new Map(composed.map((n) => [n.id, n]));
+    setGroups(descriptors);
+    setNodes(composed);
+
+    const membership = groupMembership(rows);
+    setEdges(routeEdges(worktreeEdges(rows), membership, collapsed).map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
       type: "smoothstep",
+      // A rerouted edge is a SUMMARY of one or more dependencies, and a summary
+      // that looked identical to a precise edge would be a small lie. Dashed
+      // says "this points at a folded-up group", and the label says how many
+      // dependencies it stands for when it stands for more than one.
+      animated: false,
+      label: e.count > 1 ? String(e.count) : undefined,
+      labelStyle: e.count > 1
+        ? { fill: "var(--text-tertiary)", fontSize: 11 }
+        : undefined,
+      labelBgStyle: e.count > 1 ? { fill: "var(--bg-base)" } : undefined,
       // A CSS variable, not a resolved literal: the browser re-resolves it on a
       // theme switch and no JS has to notice.
-      style: { stroke: "var(--border-default)", strokeWidth: 1.4 },
+      style: {
+        stroke: "var(--border-default)",
+        strokeWidth: 1.4,
+        strokeDasharray: e.rerouted ? "5 4" : undefined,
+      },
     })));
-  }, [rows]);
+  }, [rows, collapsed]);
 
   // Exactly once, on first load. `didFit` is a ref rather than state because a
   // re-render must not be able to re-arm it — every later refresh has to leave
@@ -108,7 +198,7 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
 
   // React Flow's own changes — drag, selection, measurement — are written back
   // into the ref so the next poll's merge preserves them.
-  const onNodesChange = useCallback((changes: NodeChange<WorktreeFlowNode>[]) => {
+  const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     setNodes((cur) => {
       const next = applyNodeChanges(changes, cur);
       nodesRef.current = new Map(next.map((n) => [n.id, n]));
@@ -117,33 +207,73 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
   }, []);
 
   /** Put every node back on its deterministic position. Explicit, because the
-   *  merge deliberately never does this on its own. */
+   *  merge deliberately never does this on its own.
+   *
+   *  A grouped worktree goes back to its position INSIDE its container (which
+   *  is parent-relative), and the container itself goes back to its absolute
+   *  one. Resetting a child against the absolute layout instead would throw it
+   *  a whole band's worth of pixels down the canvas. */
   const relayout = useCallback(() => {
     if (!rows) return;
     const positions = layoutWorktrees(rows);
-    const next = new Map<string, WorktreeFlowNode>();
-    for (const [slug, n] of nodesRef.current) {
-      next.set(slug, { ...n, position: positions.get(slug) ?? n.position });
+    const relative = new Map<string, XY>();
+    for (const g of groups) {
+      relative.set(g.id, g.position);
+      for (const [slug, p] of g.childPositions) relative.set(slug, p);
+    }
+    const next = new Map<string, FlowNode>();
+    for (const [id, n] of nodesRef.current) {
+      next.set(id, { ...n, position: relative.get(id) ?? positions.get(id) ?? n.position });
     }
     nodesRef.current = next;
     setNodes([...next.values()]);
     requestAnimationFrame(() => rfRef.current?.fitView({ padding: 0.2, duration: 200 }));
-  }, [rows]);
+  }, [rows, groups]);
 
-  const minimapColor = useCallback(
-    (n: WorktreeFlowNode) => resolveToken(tokens, healthColor(n.data.row.health)),
-    [tokens],
+  /** Health is the only thing the minimap can say at that size, so a container
+   *  reports its ROLLED-UP health — the worst child's. A collapsed group that
+   *  showed as neutral in the minimap would be a second place collapse hid a
+   *  problem. An expanded container reports nothing (its children are drawn
+   *  over it anyway) so the box does not swamp the dots inside it. */
+  const minimapColor = useCallback((n: FlowNode) => {
+    if (n.type === "worktreeGroup") {
+      return n.data.collapsed
+        ? resolveToken(tokens, healthColor(n.data.group.worstHealth))
+        : "transparent";
+    }
+    return resolveToken(tokens, healthColor(n.data.row.health));
+  }, [tokens]);
+
+  /* ---- collapse ------------------------------------------------------ */
+
+  const groupIds = useMemo(() => groups.map((g) => g.id), [groups]);
+  const collapsedCount = useMemo(
+    () => groupIds.filter((id) => collapsed.has(id)).length,
+    [groupIds, collapsed],
+  );
+  const allCollapsed = groupIds.length > 0 && collapsedCount === groupIds.length;
+  // How many worktrees are currently folded away. Said out loud in the header
+  // because "13 worktrees" beside a canvas showing four is how somebody comes
+  // to believe work has disappeared — the exact belief this screen exists to
+  // prevent.
+  const foldedAway = useMemo(
+    () => groups.filter((g) => collapsed.has(g.id)).reduce((n, g) => n + g.count, 0),
+    [groups, collapsed],
   );
 
   /* ---- header ------------------------------------------------------- */
 
-  const selectedCount = nodes.filter((n) => n.selected).length;
+  // A hidden node can still carry `selected` — that is deliberate, it is how
+  // expanding a group restores the selection you had — but it must not be
+  // COUNTED, or the header would claim a selection nobody can see.
+  const selectedCount = nodes.filter((n) => n.selected && !n.hidden).length;
   const urgent = useMemo(() => (rows ?? []).filter(isUrgent).length, [rows]);
   const atRisk = useMemo(() => (rows ?? []).filter((r) => r.unprotected.atRisk).length, [rows]);
 
   const subtitle = !rows ? undefined
     : rows.length === 0 ? "No worktrees on disk."
-      : `${rows.length} worktree${rows.length === 1 ? "" : "s"} · ${urgent} needing attention · ${atRisk} holding work that exists nowhere else`;
+      : `${rows.length} worktree${rows.length === 1 ? "" : "s"} · ${urgent} needing attention · ${atRisk} holding work that exists nowhere else`
+        + (foldedAway > 0 ? ` · ${foldedAway} folded into ${collapsedCount} collapsed group${collapsedCount === 1 ? "" : "s"}` : "");
 
   /* ---- failure paths ------------------------------------------------ */
 
@@ -184,6 +314,15 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
             data-tip="Put every node back where the plan DAG says it goes">
             <Icon name="grid" size={13} /> Re-layout
           </button>
+          {groupIds.length > 0 && (
+            <button className="btn fr" onClick={() => setMany(groupIds, !allCollapsed)}
+              data-tip={allCollapsed
+                ? "Expand every plan phase"
+                : "Fold every plan phase into one node each — each one keeps its count and its worst health"}>
+              <Icon name={allCollapsed ? "maximize" : "minimize"} size={13} />
+              {allCollapsed ? "Expand all" : "Collapse all"}
+            </button>
+          )}
         </>
       )}
     </ScreenHeader>
@@ -219,7 +358,12 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       {header}
       <div style={{ flex: 1, minHeight: 0, margin: "0 16px 16px", borderRadius: "var(--r-lg)", border: "1px solid var(--border-subtle)", overflow: "hidden", position: "relative" }}>
-        <ReactFlow<WorktreeFlowNode, Edge>
+        {/* The group nodes reach `toggle` through context rather than through
+            `node.data`, because data is rebuilt from the descriptors on every
+            poll and a callback living there would be a new identity several
+            times a minute — defeating the `memo` on every card. */}
+        <GroupToggleContext.Provider value={toggle}>
+        <ReactFlow<FlowNode, Edge>
           nodes={nodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
@@ -246,6 +390,7 @@ export function WorktreesScreen({ live = false }: { live?: boolean }) {
           <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={2}
             style={{ background: "var(--bg-base)", border: "1px solid var(--border-default)" }} />
         </ReactFlow>
+        </GroupToggleContext.Provider>
 
         {poll.isLoading && !rows && (
           <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "var(--bg-canvas)", color: "var(--text-tertiary)" }}>
