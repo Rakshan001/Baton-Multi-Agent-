@@ -36,14 +36,15 @@ baton serve → dashboard http://localhost:7077
 The shell is a top bar, a left sidebar (a bottom tab bar on mobile), and the
 active screen. The top bar holds the project switcher, live counters (Active /
 Tasks / Conflicts), a **New session** button, search (`⌘K`), the connection
-status dot, and the theme toggle. The sidebar lists the ten screens defined in
+status dot, and the theme toggle. The sidebar lists the screens defined in
 [`web/src/App.tsx`](../web/src/App.tsx).
 
 ## Screens
 
 | Screen | What it shows |
 | --- | --- |
-| Command Center | Home. The sessions board — every task with its agent, status, and git state — switchable to a canvas view. Start here. |
+| Command Center | Home. The sessions board — every task with its agent, status, and git state. Start here. |
+| Worktrees | The flow canvas: one node per worktree, is it actually moving, who holds it, and what it still holds that exists nowhere else. Collapses by plan phase, and takes work over from a node. See [below](#worktrees-the-flow-canvas). |
 | Activity | A live feed of session activity, with quick access to a task's diff, handoff, and live terminal. |
 | Pipeline | Phase swimlanes for an applied plan — which phase is open, which is locked, and **why** each waiting task cannot start. Read the plan document, and cancel a task, a phase or a whole plan with a blast-radius confirmation. See below. |
 | Conflicts | Tasks currently flagged `conflict` (overlapping edits), plus the live **who's-editing panel**: each busy file grouped with every session holding it — the agent, its live intent note ("what I'm doing right now"), and freshness. The sidebar shows a badge with the count. |
@@ -114,6 +115,236 @@ own actions work while cross-site requests cannot.
 
 Restart the daemon with the flag you want; you cannot flip write mode from inside
 the browser in real mode.
+
+## Worktrees: the flow canvas
+
+The Worktrees screen answers the question the sessions board cannot: **is that
+worktree actually moving, and what does it still hold?** It reads one
+read-model, `GET /api/worktrees` ([`src/worktrees.ts`](../src/worktrees.ts)),
+which joins four things that already existed and were never joined — git's own
+worktree list, the task record, the poller's status rows, and the liveness
+probe. It replaced the Command Center's old board/canvas toggle; there is no
+second canvas.
+
+### `state` vs. `health`
+
+Two fields on every row, and they are not peers. **This is the one distinction
+to read before adding a third state-ish field, and it is stated only here —
+every other document links to this section rather than restating it.**
+
+- **`state` is what the daemon was told.** The lifecycle value it owns and
+  writes down: `queued`, `claimed`, `active`, `paused`, `review`, `blocked`,
+  `done`, `cancelled`. Somebody claimed a task, so the record says `claimed`.
+- **`health` is what the disk says.** Evidence, read back from git and from the
+  filesystem at the moment you ask: is anything uncommitted, is a process alive
+  in there, has the progress token moved.
+
+`health` is therefore a **modifier on a `state`, never a second state**. A task
+can be `active` and `abandoned` at the same time, and that pair is the entire
+point of the feature: the record says an agent is working, the disk says nobody
+is home and the work here exists nowhere else. The canvas renders them on
+different channels for the same reason — `state` owns the card's left rail,
+`health` owns its border — and a card never shows two state pills.
+
+Anything new that describes a worktree belongs on one side of that line. If it
+is something Baton was told, it is part of `state`'s story; if it is something
+Baton measured, it is `health`'s. A third field that mixes the two would have to
+be reconciled with both, and the first thing to drift would be which one the
+dashboard believes.
+
+### The health vocabulary
+
+Four names for liveness, six git-truth modifiers that outrank them, and
+`unknown`:
+
+| `health` | What it means |
+| --- | --- |
+| `working` | The progress token advanced inside the period (10 minutes). Silent. |
+| `quiet` | Silent past the period, still inside grace (45 minutes). Visible, never an alarm. |
+| `stalled` | Past period *and* grace with nothing moving. Another agent can take it over. |
+| `abandoned` | Nothing running, and work here exists nowhere else. The one that gets lost. |
+| `ok` | Nothing uncommitted, and nobody is expected to be moving it. |
+| `dirty` | Uncommitted changes, no agent present. |
+| `conflict` | A person has to resolve this before "is it moving" means anything. |
+| `rebasing` | A rebase, merge, cherry-pick or revert is half-finished. `repoState` names which. |
+| `missing` | Recorded as a worktree, but the directory is gone from disk. |
+| `orphan-disk` | On disk and known to git, but no task owns it. |
+| `unknown` | Git did not answer. Reported as unknown rather than guessed as fine. |
+
+The **progress token** is what makes the liveness half honest. "No signal for N"
+is the wrong condition, because a livelocked agent heartbeats happily forever
+while making zero progress. The token is commit count, files changed and the
+`report_progress` line, and `stalled` means the token has not advanced *and*
+liveness says something is nominally still there.
+
+**`health` is derived per request and never stored** — the same doctrine as
+`isStalled` and the pipeline's locks, which are computed and never written. No
+row is filed anywhere as `stalled`; the answer is recomputed from evidence each
+time, so it cannot go stale in a file and it cannot be edited into being wrong.
+
+**It fails closed to `unknown`.** A row whose git calls did not answer reports
+`unknown` and can never report `working` or `ok`; so does a row whose local-only
+commit count could not be read, and a held worktree with no liveness evidence at
+all. This is not defensive padding — guessing "fine" when nothing can be seen is
+how the dashboard launders dead work into looking fresh, which was the reported
+bug. `unknown` also counts as *needing attention* in the header and sorts above
+every reassuring value when a group is collapsed: the absence of evidence is not
+evidence of fine.
+
+**`quiet` deliberately never raises an alarm.** It is visible on the card, no
+handoff brief is composed for it, no takeover of it will succeed (the daemon
+refuses one for any worktree that showed activity inside the stall window), and
+the desktop app never notifies on it
+([`electron/notify.ts`](../electron/notify.ts) fires only for `stalled`,
+`abandoned` and needs-input). That restraint is the feature, not a gap: a
+worktree that is merely between commits is not a problem, and a
+notification stream people learn to dismiss also teaches them to dismiss the
+real one. Over-eager detection is worse than none here, because "restart" in
+this product means handing another agent somebody's dirty worktree — a data-loss
+operation, not a retry.
+
+Rows are sorted **most-exposed-first**: `unprotected` counts uncommitted lines
+plus commits that exist only on this branch on this machine, and the row at the
+top of the list is what you lose if the disk dies. An unknown count keeps
+`atRisk` true, because not knowing is not the same as being safe.
+
+### The canvas
+
+One node per worktree, laid out left to right along the plan DAG: rows band by
+`planId`, phases ascend with `dependsOn` chains ordering nodes inside a phase,
+and ties break on slug. The layout is pure and deterministic — the same data
+always draws the same picture. A force simulation that re-settled on every poll
+would be the fastest way to make this screen unusable.
+
+Three things it is careful about, because a live graph fails at all three by
+default:
+
+- **Nodes are merged, never re-seeded.** Node objects are kept in a map keyed by
+  slug and updated in place, so a drag and a selection survive a poll; only a
+  genuinely new slug gets a position allocated. `fitView` runs exactly once.
+- **Every value reads without colour.** `--clean` and `--dirty` sit 0.016 apart
+  in WCAG relative luminance, so colour alone cannot carry this screen. Each
+  `state` and each `health` value is also carried by a border or rail *pattern*,
+  a unique glyph and its own word — a stalled node is identifiable in a
+  greyscale screenshot, and a test pins the uniqueness. Quiet time draws as a
+  decay ring that empties across the grace window, so an `active` node with an
+  empty ring reads as evidence rather than as a verdict the daemon never issued.
+  `prefers-reduced-motion` is honoured in JS, and the ring is never animated.
+- **Theme tokens resolve per paint**, so a theme switch does not leave the
+  canvas on the old palette.
+
+Below 760px the canvas is replaced by a ranked list over the same read-model —
+same data, same vocabulary, worst first — feeding the same selection state.
+
+### Collapsing a plan phase
+
+Worktrees group by plan and phase. A group folds into one node carrying its
+member count and the **worst** child's health — never an average and never the
+first child's, because otherwise collapsing would be a way to hide one stalled
+worktree behind nine healthy ones, which inverts the point of the screen. Edges
+crossing a collapsed boundary are re-pointed at the group node rather than
+dropped, and several that reroute onto the same pair merge into one dashed edge
+carrying a count. Worktrees with no plan are never grouped and never hidden.
+Collapse state is remembered per project across a reload.
+
+### The detail panel
+
+Selecting a node opens a panel ordered **diagnosis before identity**, because
+whoever is reading it has just found work that stopped. The order is exported as
+data and a test fails if it drifts:
+
+1. **Verdict** — the state pill and quiet time, in the largest type on the panel.
+2. **Why** — the pipeline's own refusal sentence, rendered verbatim. The
+   dashboard must not invent a second vocabulary for a refusal the CLI answers
+   to.
+3. **Who** — the agent, and **whether a process is actually running** in there.
+   "An agent claimed this and no agent is here" is the single highest-value fact
+   the route serves, and nothing else in the product states it.
+4. **Work in flight** — ahead/behind, files changed, conflicts.
+5. **What it said it was doing** — the progress ledger from
+   `GET /api/worktrees/:slug/progress`, including the `flagged` overclaim
+   marker, verbatim. This is what turns "quiet for 34m" into "quiet for 34m, and
+   the last thing it said it was doing was X".
+6. **Identity** — title, branch and worktree path, as copy fields.
+7. **Actions**.
+
+The panel is an inline aside above 900px and a focus-trapped bottom sheet below
+it: one selection state, two presentations.
+
+Actions, and what gates each:
+
+| Action | Route | Notes |
+| --- | --- | --- |
+| Take over | `POST /api/worktrees/:slug/takeover` | `--write`. Refused with **the lifecycle guard's own sentence** for work that is not stalled — two agents in one worktree is the failure that guard prevents, and the refusal is shown rather than softened. |
+| Pause | `POST /api/worktrees/:slug/pause` | `--write`. Records the reason. |
+| Hand off | the shell's handoff dialog | `--write`. A worktree that entered `stalled` already has a brief composed for it, so this is usually one click on an artifact that exists. |
+| Open Live, Diff | reads | **Not** write-gated: somebody hunting for work that went quiet must be able to see it from a read-only daemon. Gated on there being something to read. |
+| Copy prompt | — | Copies the daemon's own brief body when an open brief exists, and the pickup command when none does. There is no third branch: the browser never assembles prompt text, because a fabricated handoff read as a real one is worse than no handoff. |
+| Merge | `baton merge`'s endpoint | `--write`, and see below. |
+
+**Merge names the branch it will land on.** `baton merge` merges into the
+current branch of the daemon's repo with no reference to the task's own base, so
+on a canvas showing a dozen worktrees a button labelled just "Merge" is a loaded
+gun. The target is read from `/api/meta` — the same call the merge itself makes
+— and named in the confirmation, along with the commit count. Every unknown
+refuses rather than guesses: meta unread, a null branch, a hub root, a null
+`repoState`, unknown health, a null ahead/behind. A conflict, a half-finished
+git operation and a phase still held by the integration barrier are refused
+*with the reason*, not hidden. Unlike `baton merge` from the CLI this does not
+remove the worktree afterwards — on the one screen built for not losing work, a
+button that silently deleted a directory its own confirmation never mentioned
+would be exactly wrong.
+
+### Snapshots: why stalled work stops being lost
+
+Everything above makes lost work *visible*. One thing makes it *recoverable*:
+when a worktree enters `stalled` or `abandoned` still holding uncommitted
+changes, the daemon writes them to a dangling commit under
+`refs/baton/wip/<slug>` ([`src/wip-snapshot.ts`](../src/wip-snapshot.ts)). A ref
+in that namespace is invisible to `git branch`, lives in the common ref store,
+is never pushed, and survives `git worktree remove` — and the row reports it as
+`wipRef`. Long after the directory is gone:
+
+```bash
+git show refs/baton/wip/<slug>            # the diff against its HEAD
+git show refs/baton/wip/<slug>:path/file  # one file, verbatim
+git checkout -b rescue refs/baton/wip/<slug>
+```
+
+Nothing is written for a clean worktree, snapshotting twice with no change
+writes one ref rather than two, gitignored paths are excluded twice over, and
+the capture is size-capped per file (2 MiB) and in total (32 MiB) — otherwise
+the first thing an auto-snapshot captures is somebody's `.env`, which turns a
+safety feature into a secret-exfiltration feature.
+
+### Recover: the same audit, read as work to rescue
+
+**Not yet reachable.** `App.tsx` was outside this change's scope, so the screen
+is built and nothing routes it — it needs one line in the shell's screen switch
+before anybody can open it. What follows describes what lands when that line
+does.
+
+`GET /api/doctor` already found orphaned worktrees, stale task records and
+`baton/*` branches nobody owns. [`src/cleanup.ts`](../src/cleanup.ts) frames all
+of it as **junk to delete**, which is right for `baton clean`, whose job is to
+reclaim disk. It is the wrong framing for somebody looking for work an agent
+left behind, so the Recover screen restates the same data with the verb
+inverted — as **strandings**, work with no owner — and the verb decides which
+button is primary: *recover into a new task* leads, delete is secondary and
+confirmed.
+
+Three categories (orphaned worktrees, stranded branches, snapshots), each sorted
+independently by unmerged commits descending, most valuable first. An unknown
+count sorts **above** every number including zero, and an orphan-worktree row's
+zeros are read as unknown too, because `/api/worktrees` deliberately skips the
+per-orphan status walk and synthesizes zeros — believing them would print
+"nothing at risk" about a worktree nobody examined.
+
+Recovery is honest about being two steps: no route grafts a stranded branch or a
+snapshot into a new worktree, so the primary button creates the task and then
+names the graft commands, saying plainly that Baton has no endpoint for that
+step. The read is never write-gated; only the two verbs are.
+
 
 ## Project switcher and multi-daemon connections
 

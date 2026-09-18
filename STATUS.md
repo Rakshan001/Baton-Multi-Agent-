@@ -1177,6 +1177,163 @@ Each one reproduced before it was touched; each guard mutation-tested.
 
 1577 tests green (+2, +1 file). Closes pending items 1 and 5.
 
+### Session 20 — worktree flow: is that agent still there, and what does it hold
+
+Plan: [`baton/plans/worktree-flow.md`](baton/plans/worktree-flow.md). Eight
+commits, `450756f`…`d720686`. The reported problem, in the reporter's words:
+*"one agent may be stopped in between so that worktree work will be paused,
+user will think that work is completed but that work will be lost if worktree is
+lost."* Three separate failures were bundled in that sentence — agents cannot
+see each other's worktrees, a stopped agent is indistinguishable from a working
+one, and a lost worktree renders as healthy — and they got three different
+fixes.
+
+**`GET /api/worktrees` (`src/worktrees.ts`)** — one read-model joining four
+subsystems that already knew everything separately and were never joined: git's
+own worktree list, `tasks.json`, the poller's status rows, and the liveness
+probe. `isStalled` and `livenessProbe` had existed for months and were served by
+no route. `health` is `working|quiet|stalled|abandoned` plus the git-truth
+modifiers `ok|dirty|conflict|rebasing|missing|orphan-disk` and `unknown`,
+**derived per request and never stored** (the same doctrine as the pipeline's
+locks), and it **fails closed**: a row whose git calls did not answer reports
+`unknown` and can never report `working` or `ok`. The highest-value field is
+`holderRunning` — an agent claimed this and no process is alive in it, a fact
+nothing in the product stated before. Rows sort most-exposed-first, so the top
+row is what you lose if the disk dies. Cost discipline is written into the file:
+the whole `StatusRow` set is the poller's cached 2s snapshot, and the only live
+git is `listWorktrees` plus one `for-each-ref` pair per distinct repo root —
+O(repos), never O(worktrees).
+
+**`state` vs. `health` is stated exactly once**, in
+[`docs/dashboard.md`](docs/dashboard.md) under "`state` vs. `health`":
+`state` is what the daemon was *told*, `health` is what the disk *says*, and
+`health` is a modifier on a state and never a peer of it. Nothing else
+restates it — this file links to it, and `docs/mcp-tools.md` links to it in
+the held `list_worktrees` block below. `CODEBASE.md` deliberately carries no
+copy: `renderCodebaseMd` regenerates that file wholesale, so a hand-written
+paragraph there is deleted by the next `baton kb rebuild`. Anyone adding a
+third state-like field to a worktree row reads the canonical section first.
+
+**`src/wip-snapshot.ts`** is the part that makes "that work will be lost" false
+rather than merely visible. A worktree entering `stalled`/`abandoned` with
+uncommitted changes has them written to a dangling commit under
+`refs/baton/wip/<slug>`: invisible to `git branch`, in the common ref store,
+never pushed, and unaffected by `git worktree remove`. Staging goes through a
+scratch index so a background poll never changes what a human sees in `git
+status`. Gitignored paths are excluded twice over and the capture is size-capped
+(2 MiB per file, 32 MiB total) — the cautionary half of the Jujutsu precedent is
+that a naive auto-snapshot's first capture is somebody's `.env`.
+
+**The board's `Stopped · work at risk` column** is the four-line bug the plan
+would not lose sight of. `deriveColumn` short-circuited on `agent === null` to
+*"Idle — No agent attached"* before it ever checked whether anything was at
+risk, so a crashed agent's dirty worktree was filed beside tasks nobody had
+started. The column is named for what is at stake, not for what is absent.
+
+**Phase 2 made it actionable.** `POST /api/worktrees/:slug/takeover|pause`
+(there was no API path to adopt stalled work at all — `server.ts` imported only
+`cancelTasks`, `claim`, `releaseClaim`), `GET /api/worktrees/:slug/progress` for
+the progress ledger (written by `save_progress`, previously read only by
+`buildBrief`), lifecycle events on the bus for claim/activate/pause/block/
+takeover with `watch.ts` diffing `tasks.json` to carry the cross-process half,
+and `src/handoff/auto-brief.ts` composing a brief the moment a worktree stalls.
+`takeover`'s stall guard was deliberately not weakened to make the button feel
+better: a live worktree answers 409 carrying the guard's own sentence, and a
+test asserts on that sentence so nobody softens it quietly. Nothing is composed
+for `quiet`.
+
+**The Worktrees screen** (`web/src/features/Worktrees.tsx`, `@xyflow/react` in
+`web/` only — the root `package.json` and the zero-dependency daemon are
+untouched). Deterministic layered layout from the plan DAG, nodes merged into a
+`Map<slug, node>` so a drag and a selection survive a poll, `fitView` exactly
+once, theme tokens resolved per paint. `Canvas.tsx` (415 lines of hand-rolled
+pan/zoom) was deleted in the same change rather than left beside it. Every
+`state` and `health` value separates on three non-colour channels, because
+`--clean` and `--dirty` sit 0.016 apart in WCAG relative luminance and a test
+pins that collapse. Quiet time is a decay ring emptying across `STALL_GRACE_MS`.
+Groups fold by plan and phase carrying the **worst** member's health, never an
+average — otherwise collapsing is a way to hide a stalled worktree behind nine
+healthy ones. The detail panel is ordered diagnosis-first (verdict → why → who →
+work → progress → identity → actions), the order is exported as data and pinned
+by a test, and Copy prompt can only ever return text the daemon produced.
+Merge names the branch it will land on, read from `/api/meta`, and every unknown
+resolves to not-eligible.
+
+**`electron/notify.ts`** — Baton shipped a desktop app that never told you
+anything. Notifications and a dock badge fire on entering `stalled`/`abandoned`
+and on needs-input, on the transition rather than the level; **`quiet` never
+notifies**, because that state exists precisely so the UI can show concern
+without raising an alarm, and a notification stream people learn to dismiss
+teaches them to dismiss the real one too. The decision half is pure and tested;
+Electron's API stays a thin adapter.
+
+15 new test files across both workspaces (`test/worktree-health`,
+`wip-snapshot`, `worktree-verbs`, `worktree-events`, `progress-route`,
+`stall-brief`, `electron-notify`, plus `web/src/components/flow/*.test.ts`,
+`web/src/features/recover.test.ts`, `web/src/lib/derive.test.ts` — the first
+tests under `web/` at all, which is why `test/helpers/{free-port,daemon-start}`
+arrived with them).
+
+**What is NOT done, and would be wrong to read as done.**
+
+- **`list_worktrees` (the MCP tool) is complete in the working tree and
+  deliberately uncommitted.** `test/mcp-help.test.ts`'s `EXPECTED_TOOLS`
+  assertion is entangled with an unrelated uncommitted `suggest_skills` change
+  — both tools are added to the same array, and that file's budget accounting
+  moved from chars to bytes in the same WIP — so committing the worktree tool
+  alone would either break the test or drag in someone else's change. It lands
+  with, or after, that change. `src/mcp.ts`, `src/mcp-help.ts` and
+  `test/mcp-worktrees.test.ts` hold it; `docs/mcp-tools.md` documents it in one
+  contiguous block that can be held back with it.
+- **`RecoverScreen` is exported and nothing routes it.** `web/src/App.tsx` was
+  out of `wt-recover`'s scope, so the screen is dead code until one line lands
+  in the shell's screen switch
+  (`case "recover": return <RecoverScreen writeEnabled={prefs.writeEnabled} />;`)
+  plus a `NAV` entry. `WorktreesScreen` *is* routed.
+- **wip snapshots are only half reachable.** `GET /api/worktrees` serves
+  `wipRef` for a task whose directory is gone — the case that matters most —
+  but `GET /api/doctor` exposes no `refs/baton/wip/*` refs at all, and
+  `src/worktrees.ts` hard-codes `wipRef: null` for orphan-disk rows. So a
+  snapshot whose task record was deleted is invisible to every committed route.
+  The Recover screen implements the reachable half and names the gap in the UI
+  rather than implying completeness.
+- **The merge gate's "done or approved" is done only.** The review verdict the
+  pipeline keeps (`reviewedBy.verdict`) is not carried into `LaneTask` or
+  `WorktreeRow`, so "approved" is a fact nothing served to the dashboard can
+  corroborate. A `review` task gets a refusal that says exactly which fact is
+  missing, rather than one implying the review failed.
+- **A `done` task has no per-task blocker sentence**, because `blockers()` skips
+  terminal states. Where a sentence exists it is rendered verbatim; where none
+  does, the merge gate states the integration hold's phase numbers in the
+  wording `Pipeline.tsx` already uses rather than inventing a second vocabulary.
+- **Merge refuses in a hub.** `mergeTaskBranch` runs in the sub-project's repo,
+  so `/api/meta`'s `branch` is the wrong repo's branch entirely. The gate
+  refuses and says to merge from inside that repo rather than guessing where the
+  commits would land.
+- **No part of this UI has been verified in a browser.** All four canvas tasks
+  and both screens are verified by unit test, `tsc --noEmit` and
+  `npm run build --prefix web` only. A visual pass is outstanding.
+
+**Known and unscheduled, filed so they are not rediscovered the hard way:**
+
+- `src/commands/claim.ts:220-223` records `baseBranch` from `currentBranch(repo)`
+  (or the task's own) and then cuts the worktree from `'HEAD'` — one base
+  recorded, another used. `src/commands/new.ts` has the same shape. Harmless
+  today only because the two are usually the same commit. Wants its own fix and
+  its own regression test.
+- `auditWorktrees` (`src/cleanup.ts:80`) compares worktree paths as
+  `resolve()`d **strings**, so a task whose `tasks.json` path is `/var/…` while
+  git reports `/private/var/…` is filed as an orphan nobody owns.
+  `collectWorktrees` works around it with a `realpath`-based `samePath` and
+  re-filters the audit's output; `GET /api/doctor` still has the bug.
+- `web/src/features/Pipeline.tsx:70` animates a keyframe named `pulse`, and
+  `web/src/styles/base.css:77` defines `pulse-dot`. There is no `pulse`, so that
+  active-state dot has never moved.
+- A task reaching `done` with zero files changed, or far faster than any prior
+  task, should be flagged `suspicious-completion` and routed to review. It
+  attacks "the user thinks it is complete" from the opposite side — the agent
+  lying rather than the agent dying. Deliberately its own plan, not this one.
+
 ## Pending / next 🔜
 
 0. **Task pipeline — phases 1–5 done.** Plans + apply, board, `task add`, lifecycle,
