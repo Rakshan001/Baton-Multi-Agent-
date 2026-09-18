@@ -25,6 +25,7 @@ import {
 import type { ScenarioName } from "./lib/demoData";
 import { CommandCenter } from "./features/CommandCenter";
 import { WorktreesScreen } from "./features/Worktrees";
+import { RecoverScreen } from "./features/Recover";
 import { KnowledgeGraphScreen } from "./features/KnowledgeGraph";
 import { ActivityScreen } from "./features/Activity";
 import { ConflictsScreen } from "./features/Conflicts";
@@ -54,6 +55,10 @@ const NAV: NavItem[] = [
   // its own read-model (GET /api/worktrees) and answers a question the session
   // board cannot — which worktrees have stopped, and what they still hold.
   { id: "worktrees", label: "Worktrees", icon: "gitBranch" },
+  // Sits next to Worktrees because it answers the same question one step later:
+  // the canvas shows work that stopped, this shows work whose worktree is
+  // already gone. Same audit the doctor route serves, read as work to rescue.
+  { id: "recover", label: "Recover", icon: "history" },
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
   { id: "graph", label: "Knowledge Graph", icon: "network" },
   { id: "memory", label: "Memory", icon: "sparkle" },
@@ -601,6 +606,7 @@ export default function App() {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
       case "pipeline": return <PipelineScreen writeEnabled={prefs.writeEnabled} />;
       case "worktrees": return <WorktreesScreen live={events.live} />;
+      case "recover": return <RecoverScreen writeEnabled={prefs.writeEnabled} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;

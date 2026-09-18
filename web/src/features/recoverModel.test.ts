@@ -18,7 +18,7 @@ import type { WorktreeRow } from "../types";
 import {
   DISCARD_CLI, buildStrandings, canDiscard, compareUnknownFirst, discardConsequence,
   exposureOf, recoverSteps, recoverTaskDescription, stakesOf, strandingsIn, type Stranding,
-} from "./recover";
+} from "./recoverModel";
 import { demoDiscardRefusal, demoDoctorReport } from "../lib/demoRecover";
 
 /* ---------- fixtures ---------------------------------------------------- */

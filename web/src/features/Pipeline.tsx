@@ -62,7 +62,7 @@ function StatePill({ state }: { state: TaskState }) {
       border: `1px solid color-mix(in srgb, ${c} 30%, transparent)`,
       textDecoration: state === "cancelled" ? "line-through" : "none",
     }}>
-      {state === "active" && <span style={{ width: 5, height: 5, borderRadius: 999, background: c, animation: "pulse 1.8s ease-in-out infinite" }} />}
+      {state === "active" && <span style={{ width: 5, height: 5, borderRadius: 999, background: c, animation: "pulse-dot 1.8s ease-in-out infinite" }} />}
       {state}
     </span>
   );

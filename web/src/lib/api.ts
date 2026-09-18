@@ -96,7 +96,7 @@ export function failureReason(e: unknown): string {
 
    Note the vocabulary: the daemon calls these things JUNK, and every item
    carries a `reason` and an `action` written for `baton clean`. The Recover
-   screen re-states them as work to rescue (features/recover.ts explains
+   screen re-states them as work to rescue (features/recoverModel.ts explains
    why); nothing is widened or renamed on the way in, so this stays a
    faithful mirror of what the route sends.
    ============================================================ */
@@ -459,7 +459,7 @@ class BatonClient {
    * Only a stale task record has a per-item route (`DELETE /api/tasks/:slug`).
    * `POST /api/doctor/clean` is deliberately NOT called from here: `cleanJunk`
    * acts on the whole report at once, so a per-row button wired to it would
-   * delete rows the reader never looked at. `canDiscard` in features/recover.ts
+   * delete rows the reader never looked at. `canDiscard` in features/recoverModel.ts
    * is the same rule stated for the UI, and this refuses anything else rather
    * than trusting the caller to have asked.
    *

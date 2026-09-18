@@ -13,7 +13,7 @@
    things to rescue. Same data, opposite verb, and the verb decides which
    button is primary: RECOVER INTO A NEW TASK is the primary action on
    every row, delete is secondary, confirmed, and on most rows is not a
-   button at all. features/recover.ts holds that reasoning and every
+   button at all. features/recoverModel.ts holds that reasoning and every
    decision this file renders.
 
    THREE THINGS THIS FILE REFUSES TO DO:
@@ -23,7 +23,7 @@
       daemon. Only the two verbs are `writeEnabled`-gated, with the
       tooltip this codebase already uses (flow/panel.ts READ_ONLY_TIP).
    2. Render an unknown as a zero. A row whose commits nobody could count
-      says so and sorts to the top; see the rules in features/recover.ts.
+      says so and sorts to the top; see the rules in features/recoverModel.ts.
    3. Offer a one-click delete for the kinds the committed API can only
       delete in bulk. `POST /api/doctor/clean` acts on the WHOLE report,
       so those rows show the CLI command instead of a button that would
@@ -47,7 +47,7 @@ import {
   DISCARD_CLI, EXPOSURE_LABEL, RECOVER_CATEGORIES, buildStrandings, canDiscard,
   discardConsequence, exposureOf, recoverSteps, recoverTaskDescription, stakesOf,
   strandingsIn, type RecoverStep, type Stranding, type StrandingCategory,
-} from "./recover";
+} from "./recoverModel";
 
 const CATEGORY_META: Record<StrandingCategory, { title: string; icon: IconName; blurb: string }> = {
   worktree: {
@@ -221,7 +221,7 @@ function RescueCard({ rescue, onDismiss }: { rescue: Rescue; onDismiss: () => vo
       </div>
       {/* Said plainly, because the alternative is a screen that implies the work
           already moved. POST /api/tasks branches from the base and takes no
-          source ref — see recoverSteps() in features/recover.ts. */}
+          source ref — see recoverSteps() in features/recoverModel.ts. */}
       <p style={{ margin: 0, fontSize: "var(--fs-12)", color: "var(--text-secondary)", lineHeight: "var(--lh-normal)" }}>
         The worktree and branch are real and empty. Baton has no endpoint that grafts a stranded branch or snapshot into
         a new task, so these are the commands that finish the rescue — run them in order.
