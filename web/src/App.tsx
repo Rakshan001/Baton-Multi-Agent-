@@ -24,6 +24,7 @@ import {
 } from "./lib/connections";
 import type { ScenarioName } from "./lib/demoData";
 import { CommandCenter } from "./features/CommandCenter";
+import { WorktreesScreen } from "./features/Worktrees";
 import { KnowledgeGraphScreen } from "./features/KnowledgeGraph";
 import { ActivityScreen } from "./features/Activity";
 import { ConflictsScreen } from "./features/Conflicts";
@@ -49,6 +50,10 @@ const NAV: NavItem[] = [
   { id: "home", label: "Command Center", icon: "grid" },
   { id: "activity", label: "Activity", icon: "zap" },
   { id: "pipeline", label: "Pipeline", icon: "layers" },
+  // Replaces the Command Center's old board/canvas toggle: the canvas now has
+  // its own read-model (GET /api/worktrees) and answers a question the session
+  // board cannot — which worktrees have stopped, and what they still hold.
+  { id: "worktrees", label: "Worktrees", icon: "gitBranch" },
   { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
   { id: "graph", label: "Knowledge Graph", icon: "network" },
   { id: "memory", label: "Memory", icon: "sparkle" },
@@ -595,6 +600,7 @@ export default function App() {
     switch (route) {
       case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
       case "pipeline": return <PipelineScreen writeEnabled={prefs.writeEnabled} />;
+      case "worktrees": return <WorktreesScreen live={events.live} />;
       case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
       case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
       case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
@@ -604,7 +610,7 @@ export default function App() {
       case "team": return <TeamScreen writeEnabled={prefs.writeEnabled} subscribe={events.subscribe} knownProjects={(meta.data?.projects ?? []).map((p) => p.id)} />;
       case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "skills" ? searchSeed : undefined} />;
       case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} viewer={meta.data?.viewer} meta={meta.data} />;
-      default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
+      default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
     }
   })();
 

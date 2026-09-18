@@ -855,3 +855,55 @@ export interface CancelResult {
 
 export type CancelScopeInput =
   | { slug: string } | { phase: number } | { plan: string };
+
+/**
+ * `health` is the evidence layer under `state`, never a peer of it
+ * (src/worktrees.ts:48-58). `state` is the lifecycle value the daemon was told;
+ * `health` is what the disk says. A task can be `active` and `abandoned` at the
+ * same time — that pair is the entire point of the feature.
+ *
+ * `unknown` is the fail-closed answer: a row whose git calls did not answer
+ * reports it and never `working`.
+ */
+export type WorktreeHealth =
+  | "working" | "quiet" | "stalled" | "abandoned"
+  | "ok" | "dirty" | "conflict" | "rebasing" | "missing" | "orphan-disk"
+  | "unknown";
+
+/** What you lose if this disk dies (src/worktrees.ts:66-71). `commits: null`
+ *  means the refs read failed, and `atRisk` then stays true — not knowing is
+ *  not the same as being safe. */
+export interface Unprotected {
+  lines: number;
+  commits: number | null;
+  atRisk: boolean;
+}
+
+/** One row of `GET /api/worktrees`. Mirrors `WorktreeRow` in src/worktrees.ts. */
+export interface WorktreeRow {
+  slug: string;
+  branch: string | null;
+  worktreePath: string;
+  /** null for an orphan worktree on disk: no task owns it, so it has no lifecycle. */
+  state: TaskState | null;
+  health: WorktreeHealth;
+  /** ms since the progress token last advanced; null when there is no evidence. */
+  quietForMs: number | null;
+  lastActivityAt: string | null;
+  unprotected: Unprotected;
+  filesChanged: number | null;
+  ahead: number | null;
+  behind: number | null;
+  repoState: RepoState | null;
+  /** The process actually detected in the worktree. */
+  agent: string | null;
+  /** The agent the task RECORD says holds it. Differs from `agent` exactly when
+   *  the holder died. */
+  claimedBy: string | null;
+  holderRunning: boolean;
+  planId: string | null;
+  phase: number | null;
+  dependsOn: string[];
+  orphan: boolean;
+  wipRef: string | null;
+}

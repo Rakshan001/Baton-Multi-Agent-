@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — preferences hook (ported from app.jsx usePrefs)
-   theme / accent / motion / write / view / offline,
+   theme / accent / motion / write / offline,
    persisted to localStorage and applied to <html>.
    ============================================================ */
 import { useState, useEffect } from "react";
@@ -13,7 +13,6 @@ import { ls } from "../lib/storage";
 
 export type Theme = "system" | "light" | "dark";
 export type Motion = "full" | "reduce";
-export type View = "board" | "canvas";
 
 // Re-exported for back-compat: callers import `ls` from this module.
 export { ls };
@@ -33,8 +32,6 @@ export interface Prefs {
    *  choice still wins, except a read-only daemon always forces read-only.
    *  Pass null when there is no daemon (demo mode) to restore pure-pref behavior. */
   followDaemonWrite: (daemonWrite: boolean | null) => void;
-  view: View;
-  setView: (v: View) => void;
   offline: boolean;
   setOffline: (v: boolean) => void;
 }
@@ -49,7 +46,6 @@ export function usePrefs(): Prefs {
   // Read-only daemon always forces read-only; otherwise an explicit choice wins,
   // then the daemon's capability, then the safe default (off).
   const writeEnabled = daemonWrite === false ? false : (writeChoice ?? daemonWrite ?? false);
-  const [view, setViewRaw] = useState<View>(() => ls.get<View>("baton:view", "board"));
   const [offline, setOfflineRaw] = useState(false);
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("dark");
 
@@ -105,8 +101,6 @@ export function usePrefs(): Prefs {
       });
     },
     followDaemonWrite: setDaemonWrite,
-    view,
-    setView: (v) => { setViewRaw(v); ls.set("baton:view", v); },
     offline, setOffline: setOfflineRaw,
   };
 }

@@ -2,20 +2,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
    BATON — Command Center (home) (ported from command-center.jsx)
-   At-a-glance summary + the Sessions workspace (board ⇄ canvas).
+   At-a-glance summary + the Sessions workspace.
+
+   The board/canvas toggle that used to sit here is gone with
+   features/Canvas.tsx: the canvas is now its own screen over its own
+   read-model (features/Worktrees.tsx over GET /api/worktrees), not a
+   second rendering of the session rows.
    ============================================================ */
 import type { ReactNode } from "react";
 import { Icon } from "../components/Icon";
-import { AgentBadge, SegmentedControl } from "../components/primitives";
+import { AgentBadge } from "../components/primitives";
 import { AGENT_REGISTRY, AgentGlyph, getAgent } from "../lib/registry";
 import { deriveColumn } from "../lib/derive";
 import { Board } from "./Board";
 import { HandoffInbox } from "./Handoff";
-import { CanvasView } from "./Canvas";
 import type { StatusRow } from "../types";
 import type { Project } from "../lib/preview";
 import type { PollState } from "../hooks/usePoll";
-import type { View } from "../hooks/usePrefs";
 
 type Tone = "conflict" | "ready" | "accent" | "clean" | "default";
 type Filter = "conflict" | "ready" | null;
@@ -39,13 +42,11 @@ function StatSeg({ label, value, tone, sub, onClick, active }: {
 }
 
 export function CommandCenter({
-  status, rootAgents, view, setView, onOpen, writeEnabled, filter, setFilter, project, onNewSession,
+  status, rootAgents, onOpen, writeEnabled, filter, setFilter, project, onNewSession,
 }: {
   status: PollState<StatusRow[]>;
   /** Agents at the hub/repo root or a kb sub-project — no task worktree of their own. */
   rootAgents?: Array<{ agent: string; count: number }>;
-  view: View;
-  setView: (v: View) => void;
   onOpen: (slug: string) => void;
   writeEnabled: boolean;
   filter: Filter;
@@ -171,17 +172,13 @@ export function CommandCenter({
             </button>}
           </h2>
           <div style={{ flex: 1 }} />
-          <SegmentedControl ariaLabel="Workspace view" value={view} onChange={setView}
-            options={[{ value: "board", label: "Board", icon: "columns" }, { value: "canvas", label: "Canvas", icon: "network" }]} />
         </div>
       </div>
 
       {/* workspace */}
       <div style={{ flex: 1, minHeight: 0 }}>
-        {view === "board"
-          ? <Board sessions={filter ? sessions.filter((s) => (filter === "conflict" ? s.status === "conflict" : deriveColumn(s) === filter)) : sessions}
-              loading={loading} error={status.error && !sessions.length ? status.error : null} onOpen={onOpen} writeEnabled={writeEnabled} onRetry={status.refetch} onNewSession={onNewSession} />
-          : <CanvasView sessions={sessions} loading={loading} error={status.error && !sessions.length ? status.error : null} onRetry={status.refetch} onOpen={onOpen} />}
+        <Board sessions={filter ? sessions.filter((s) => (filter === "conflict" ? s.status === "conflict" : deriveColumn(s) === filter)) : sessions}
+          loading={loading} error={status.error && !sessions.length ? status.error : null} onOpen={onOpen} writeEnabled={writeEnabled} onRetry={status.refetch} onNewSession={onNewSession} />
       </div>
     </div>
   );

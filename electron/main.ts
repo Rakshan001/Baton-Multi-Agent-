@@ -5,7 +5,8 @@
  * HTTP server. Fleet ops go through fleet.ts → dist/daemons.js.
  */
 import {
-  app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray,
+  app, BrowserView, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage,
+  Notification, shell, Tray,
 } from 'electron';
 import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -19,6 +20,10 @@ import {
   cleanDeadFleetRecords, cleanFleetRecord, listFleet, stopFleetDaemon, type FleetRow,
 } from './fleet.js';
 import { isAllowedDashboardUrl } from './nav-guard.js';
+import {
+  nextInQueue, planNotifications, readNotifyPrefs, writeNotifyPrefs,
+  type AttentionMap, type AttentionRow, type QueueEntry,
+} from './notify.js';
 import { addProject, assertGitRepo, forgetProject, readProjects } from './projects.js';
 import { lastLines, spawnServe, type SpawnHandle } from './spawn.js';
 
@@ -31,6 +36,29 @@ let dashView: BrowserView | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let attentionTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Notification state. `attentionSeen === null` means "never polled" — the first
+ * sweep seeds the baseline silently, see electron/notify.ts:planNotifications.
+ */
+let attentionSeen: AttentionMap | null = null;
+let attentionQueue: QueueEntry[] = [];
+let lastJumpKey: string | null = null;
+let notifyPrefs = { enabled: true };
+
+/**
+ * How often the desktop asks every running daemon what its worktrees look like.
+ *
+ * `/api/worktrees` rides the poller's own git scan (`src/server.ts:2368`) but it
+ * is still a round trip per project, and a stall is 45 minutes old by definition
+ * (`STALL_GRACE_MS`) — so a minute is the same reasoning `STALL_SCAN_MS`
+ * (`src/poller.ts:32`) already settled on, and costs ~1/30th of the fleet tick.
+ */
+const ATTENTION_MS = 60_000;
+
+/** The hotkey. Alt keeps it clear of the platform's own Cmd/Ctrl+Shift space. */
+const ATTENTION_HOTKEY = 'CommandOrControl+Alt+W';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -155,6 +183,115 @@ async function openDashboard(port: number): Promise<void> {
   }, 3000);
 }
 
+/* ------------------------------------------------------------------ */
+/* Attention: notifications, dock badge, hotkey                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Ask one daemon what its worktrees look like. Read-only and un-gated
+ * (`src/server.ts:2368`), so this works against a daemon started without
+ * `--write` too.
+ *
+ * Every failure mode is "this project contributes no rows this tick": a daemon
+ * that just stopped must never be reported as a fleet of abandoned worktrees.
+ */
+async function fetchAttentionRows(row: FleetRow): Promise<AttentionRow[]> {
+  if (row.port == null) return [];
+  try {
+    const res = await fetch(`http://127.0.0.1:${row.port}/api/worktrees`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return [];
+    const body = await res.json() as Array<{
+      slug?: string; health?: string; state?: string | null;
+      branch?: string | null; quietForMs?: number | null;
+    }>;
+    if (!Array.isArray(body)) return [];
+    return body
+      .filter((w): w is { slug: string; health: string } & typeof w =>
+        typeof w.slug === 'string' && typeof w.health === 'string')
+      .map((w) => ({
+        root: row.root,
+        projectName: row.name,
+        port: row.port,
+        slug: w.slug,
+        // `health` is consumed verbatim — the four-state vocabulary is derived
+        // once, in `deriveHealth` (`src/worktrees.ts:168`). Nothing here decides
+        // what "stalled" means.
+        health: w.health,
+        state: w.state ?? null,
+        branch: w.branch ?? null,
+        quietForMs: w.quietForMs ?? null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Dock badge (macOS), taskbar count (Linux). Never throws the tick. */
+function setBadge(count: number): void {
+  try {
+    if (typeof app.setBadgeCount === 'function') app.setBadgeCount(count);
+  } catch { /* unsupported platform — the tray tooltip still carries the count */ }
+}
+
+/**
+ * One sweep: read health from every running daemon, ask notify.ts what that
+ * means, then do exactly what it says. All the judgement is in the pure
+ * function; this is the adapter.
+ */
+async function refreshAttention(): Promise<void> {
+  const running = (await listFleet()).filter((r) => r.state === 'running' && r.port != null);
+  const rows = (await Promise.all(running.map(fetchAttentionRows))).flat();
+  const plan = planNotifications(attentionSeen, rows, notifyPrefs);
+  attentionSeen = plan.next;
+  attentionQueue = plan.queue;
+  setBadge(plan.badge);
+
+  if (!Notification.isSupported()) return;
+  for (const n of plan.notifications) {
+    const note = new Notification({ title: n.title, body: n.body });
+    // Clicking a notification must land on the thing it is about, or it is just
+    // an interruption with no action attached.
+    note.on('click', () => {
+      mainWindow?.show();
+      mainWindow?.focus();
+      lastJumpKey = n.key;
+      if (n.port != null) void openDashboard(n.port);
+    });
+    note.show();
+  }
+}
+
+/**
+ * The hotkey: jump to the next worktree needing attention, worst first.
+ *
+ * Deliberately a PULL. It answers even when notifications are switched off —
+ * turning the shouting off is not the same as giving up the ability to ask.
+ */
+function jumpToNextAttention(): void {
+  const target = nextInQueue(attentionQueue, lastJumpKey);
+  mainWindow?.show();
+  mainWindow?.focus();
+  if (!target) {
+    lastJumpKey = null;
+    mainWindow?.webContents.send('attention:none');
+    return;
+  }
+  lastJumpKey = target.key;
+  mainWindow?.webContents.send('attention:jump', target);
+  if (target.port != null) void openDashboard(target.port);
+}
+
+/** Flip the preference, persist it, and act on it immediately. */
+function setNotifyEnabled(enabled: boolean): { enabled: boolean } {
+  notifyPrefs = writeNotifyPrefs({ enabled });
+  if (!enabled) setBadge(0);
+  else void refreshAttention();
+  void refreshTray();
+  return notifyPrefs;
+}
+
 async function refreshTray(): Promise<void> {
   if (!tray) return;
   const rows = (await listFleet()).filter((r) => r.state === 'running');
@@ -185,6 +322,19 @@ async function refreshTray(): Promise<void> {
         },
       ],
     })),
+    { type: 'separator' },
+    {
+      label: 'Notifications',
+      type: 'checkbox' as const,
+      checked: notifyPrefs.enabled,
+      click: (item: { checked: boolean }) => { setNotifyEnabled(item.checked); },
+    },
+    {
+      label: 'Next needing attention',
+      accelerator: ATTENTION_HOTKEY,
+      enabled: attentionQueue.length > 0,
+      click: () => { jumpToNextAttention(); },
+    },
     { type: 'separator' },
     { label: 'Show', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { label: 'Quit', click: () => { void quitApp(); } },
@@ -342,6 +492,9 @@ function registerIpc(): void {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   });
+  ipcMain.handle('notify:get', () => ({ ...notifyPrefs, queue: attentionQueue }));
+  ipcMain.handle('notify:set', (_e, enabled: boolean) => setNotifyEnabled(!!enabled));
+  ipcMain.handle('notify:next', () => { jumpToNextAttention(); });
   ipcMain.handle('cli:status', () => getCliInstallState());
   ipcMain.handle('cli:install', async () => {
     const cli = bundledCliPath();
@@ -397,6 +550,14 @@ app.whenReady().then(() => {
   createTray();
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: false });
   pollTimer = setInterval(emitFleetChanged, 5000);
+  // The preference is read once at startup and is the reason a user who turned
+  // notifications off yesterday is not shouted at today (electron/notify.ts).
+  notifyPrefs = readNotifyPrefs();
+  try {
+    globalShortcut.register(ATTENTION_HOTKEY, jumpToNextAttention);
+  } catch { /* the combination is taken by another app — the tray item still works */ }
+  void refreshAttention();
+  attentionTimer = setInterval(() => { void refreshAttention(); }, ATTENTION_MS);
   app.on('activate', () => {
     if (!mainWindow) createWindow();
     else mainWindow.show();
@@ -417,4 +578,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   quitting = true;
   if (pollTimer) clearInterval(pollTimer);
+  if (attentionTimer) clearInterval(attentionTimer);
+  try { globalShortcut.unregisterAll(); } catch { /* never block the quit */ }
 });

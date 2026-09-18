@@ -18,7 +18,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, WorktreeRow } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
@@ -27,6 +27,7 @@ import { DEMO_SKILLS, type DemoSkill } from "./demoSkills";
 import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
+import { demoWorktrees } from "./demoWorktrees";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -47,6 +48,38 @@ export type ApiErrorCode =
   /** A repo held several skills and none was named — details.choices lists them. */
   | "AMBIGUOUS"
   | "SERVER";
+
+/**
+ * One clause naming what actually stopped a read — for a screen that would
+ * otherwise have to guess, and guess benignly.
+ *
+ * D-009 applied to failures rather than to numbers: a cause may be reported
+ * only where it is known, and the only place that knowledge exists is the
+ * `code` the transport put on the ApiError. A refused credential, a read-only
+ * refusal, a daemon that went away mid-poll and a daemon that never had the
+ * route are four different facts; collapsing them into one reassuring sentence
+ * is the failure this exists to prevent.
+ *
+ * Reads as the tail of "Couldn't read X — …", so it starts lowercase and
+ * carries no full stop.
+ */
+export function failureReason(e: unknown): string {
+  if (!(e instanceof ApiError)) {
+    return e instanceof Error && e.message ? e.message : "an unknown error";
+  }
+  switch (e.code) {
+    case "OFFLINE":
+      return "Baton couldn't be reached";
+    case "UNAUTHORIZED":
+      return "this daemon refused the credential";
+    case "READ_ONLY":
+      return "this daemon is read-only and refused the request";
+    case "NOT_FOUND":
+      return "this daemon serves no such endpoint";
+    default:
+      return e.message || `the daemon answered ${e.status ?? "an error"}`;
+  }
+}
 
 export class ApiError extends Error {
   code: ApiErrorCode;
@@ -311,6 +344,25 @@ class BatonClient {
   }
 
   /* ---- GET endpoints (real, or demo-store when demo mode is on) ---- */
+  /**
+   * The worktree read-model — one row per worktree (src/worktrees.ts).
+   *
+   * Read-only and needs no `--write`: it is a join over what four subsystems
+   * already know, and the whole point of it is that it states `holderRunning`
+   * — whether a process is ACTUALLY alive in the worktree, as opposed to a
+   * claim in tasks.json saying somebody owns it.
+   *
+   * A daemon older than the route 404s. That is NOT an empty repo, so it is not
+   * laundered into `[]`: the Worktrees screen says the daemon does not serve
+   * this yet, which is a fact a person can act on.
+   */
+  async getWorktrees(): Promise<WorktreeRow[]> {
+    if (this.demo) {
+      await this.demoGate();
+      return demoWorktrees();
+    }
+    return this.request<WorktreeRow[]>("/api/worktrees");
+  }
   async getStatus(): Promise<StatusRow[]> {
     if (this.demo) {
       await this.demoGate();

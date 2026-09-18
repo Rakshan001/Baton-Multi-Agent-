@@ -74,8 +74,8 @@ export function CommandBar({
       { id: "a-launch", label: "Launch session", icon: "zap", group: "Actions", run: () => onLaunch(null) },
       { id: "a-theme", label: `Switch to ${prefs.resolvedTheme === "dark" ? "light" : "dark"} theme`, icon: prefs.resolvedTheme === "dark" ? "sun" : "moon", group: "Actions", run: () => prefs.setTheme(prefs.resolvedTheme === "dark" ? "light" : "dark") },
       { id: "a-write", label: `${prefs.writeEnabled ? "Disable" : "Enable"} write actions`, icon: "gitMerge", group: "Actions", run: () => prefs.setWriteEnabled(!prefs.writeEnabled) },
-      { id: "a-board", label: "View board", icon: "columns", group: "Actions", run: () => { navigate("home"); prefs.setView("board"); } },
-      { id: "a-canvas", label: "View canvas", icon: "network", group: "Actions", run: () => { navigate("home"); prefs.setView("canvas"); } },
+      { id: "a-board", label: "View board", icon: "columns", group: "Actions", run: () => { navigate("home"); } },
+      { id: "a-worktrees", label: "View worktrees", icon: "gitBranch", group: "Actions", run: () => { navigate("worktrees"); } },
     ];
     const sess: Command[] = (sessions || []).map((s) => ({ id: "s-" + s.slug, label: s.task, sub: s.slug, agent: s.agent, group: "Sessions", run: () => onOpen(s.slug) }));
     const commits: Command[] = (history || []).flatMap((h) =>
