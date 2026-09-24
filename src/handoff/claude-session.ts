@@ -12,7 +12,6 @@
  */
 import { createReadStream } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,22 +36,46 @@ export interface SessionContext {
   estTokens: number;
 }
 
-/** Claude Code's project-dir encoding: every non-alphanumeric char → '-'. */
-export function sessionDirFor(cwd: string): string {
-  return join(homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+export function claudeProjectsDir(): string {
+  return join(homedir(), '.claude', 'projects');
 }
 
-/** All .jsonl transcripts for `cwd`, newest first ([] when none). */
-export async function listSessionFiles(cwd: string): Promise<string[]> {
+/** Claude Code's project-dir encoding: every non-alphanumeric char → '-'. */
+export function encodeCwd(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+export function sessionDirFor(cwd: string): string {
+  return join(claudeProjectsDir(), encodeCwd(cwd));
+}
+
+/** Top-level .jsonl transcripts in `dir`, newest first ([] when unreadable).
+ *  A file that vanishes between readdir and stat is skipped, not fatal. */
+export async function transcriptsIn(dir: string): Promise<string[]> {
   try {
-    const dir = sessionDirFor(cwd);
     const entries = await readdir(dir);
     const files = entries.filter((f) => f.endsWith('.jsonl'));
-    const stats = await Promise.all(
+    const stats = (await Promise.allSettled(
       files.map(async (f) => ({ f: join(dir, f), mtime: (await stat(join(dir, f))).mtimeMs })),
-    );
+    )).flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
     stats.sort((a, b) => b.mtime - a.mtime);
     return stats.map((s) => s.f);
+  } catch {
+    return [];
+  }
+}
+
+/** All top-level .jsonl transcripts for `cwd`, newest first ([] when none).
+ *  Subagent transcripts are deliberately not listed: callers read `[0]`. */
+export async function listSessionFiles(cwd: string): Promise<string[]> {
+  return transcriptsIn(sessionDirFor(cwd));
+}
+
+/** `<dir>/<sessionId>/subagents/*.jsonl` for one top-level transcript ([] when none). */
+export async function subagentTranscripts(sessionFile: string): Promise<string[]> {
+  const dir = join(sessionFile.replace(/\.jsonl$/, ''), 'subagents');
+  try {
+    return (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort().map((f) => join(dir, f));
   } catch {
     return [];
   }
@@ -61,6 +84,22 @@ export async function listSessionFiles(cwd: string): Promise<string[]> {
 /** Newest .jsonl transcript in the session dir for `cwd`, or null. */
 export async function latestSessionFile(cwd: string): Promise<string | null> {
   return (await listSessionFiles(cwd))[0] ?? null;
+}
+
+/**
+ * A JSONL file's lines, streamed. Splits on `\n` ONLY (a trailing `\r` is
+ * dropped): `readline` also breaks on U+2028/U+2029, which JSON allows raw
+ * inside a string, so one such line became pieces that each failed to parse
+ * and the whole line was silently lost. Read errors reject the iteration.
+ */
+export async function* readLines(file: string): AsyncGenerator<string> {
+  let carry = '';
+  for await (const chunk of createReadStream(file, 'utf-8') as AsyncIterable<string>) {
+    const parts = (carry + chunk).split('\n');
+    carry = parts.pop()!;
+    for (const p of parts) yield p.endsWith('\r') ? p.slice(0, -1) : p;
+  }
+  if (carry) yield carry.endsWith('\r') ? carry.slice(0, -1) : carry;
 }
 
 interface ToolUseBlock {
@@ -86,9 +125,8 @@ export async function parseSession(file: string): Promise<SessionContext> {
   const notes: string[] = [];
   let chars = 0;
 
-  const rl = createInterface({ input: createReadStream(file, 'utf-8'), crlfDelay: Infinity });
   try {
-    for await (const line of rl) {
+    for await (const line of readLines(file)) {
       chars += line.length;
       let m: { type?: string; message?: { content?: unknown } };
       try {
@@ -132,8 +170,6 @@ export async function parseSession(file: string): Promise<SessionContext> {
     }
   } catch {
     /* truncated/locked file — keep whatever we collected */
-  } finally {
-    rl.close();
   }
 
   ctx.filesRead = [...read].slice(-40);

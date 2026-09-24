@@ -14,6 +14,9 @@ logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# …except test fixtures: the agent log trees they mimic really do live under a
+# `logs/` directory, and a fixture that git refuses to commit is not a fixture.
+!test/fixtures/**
 
 # Env / secrets
 .env

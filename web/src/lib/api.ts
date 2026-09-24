@@ -657,8 +657,15 @@ class BatonClient {
     }
     try {
       return await this.request<PresenceSession[]>("/api/sessions");
-    } catch {
-      return []; // older daemons don't serve this — the panel just stays hidden
+    } catch (e) {
+      // 404 only: an older daemon doesn't serve this, so the panel stays
+      // hidden. A failed refresh is NOT the same event — an empty array here
+      // makes the panel vanish, which the screen reads as "nothing connected
+      // outside worktrees", and it silently disabled the panel's own
+      // "may be stale" badge (usePoll never saw an error, so the badge could
+      // never fire). Rethrowing lets the last known list stay up, labelled.
+      if (e instanceof ApiError && e.code === "NOT_FOUND") return [];
+      throw e;
     }
   }
   async getHistory(): Promise<TaskHistory[]> {

@@ -1,0 +1,1 @@
+{"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-08-11T10:00:00Z","tokenCount":99999,"tool_calls":[{"name":"list_dir","args":{"DirectoryPath":"\"/other/project/src\""}}]}
