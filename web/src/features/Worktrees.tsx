@@ -635,7 +635,9 @@ function RankedList({ rows, loading, selected, onSelect }: {
             </div>
             <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>
               {r.branch ?? "(no branch)"} · quiet {quietLabel(r.quietForMs)}
-              {r.unprotected.atRisk ? ` · ${r.unprotected.lines} lines at risk` : ""}
+              {r.unprotected.atRisk
+                ? (r.filesChanged === null ? " · at risk (uncounted)" : ` · ${r.unprotected.lines} lines at risk`)
+                : ""}
             </div>
           </button>
         );

@@ -166,15 +166,16 @@ export function unprotectedOf(f: WorktreeFacts): Unprotected {
  * where it does.
  */
 export function deriveHealth(f: WorktreeFacts, now: number, opts: HealthOpts = {}): WorktreeHealth {
-  // 1. Git did not answer. Everything below this line would be a guess.
+  // 1. On disk with no task behind it. A known fact, and more useful than
+  //    anything we could say about how busy it looks. First, because an orphan
+  //    carries no git facts at all (we never read it) and must not read `unknown`.
+  if (f.orphan) return 'orphan-disk';
+  // 2. Git did not answer. Everything below this line would be a guess.
   if (f.git === null) return 'unknown';
-  // 2. A recorded worktree whose directory is gone. A known fact, not a guess —
+  // 3. A recorded worktree whose directory is gone. A known fact, not a guess —
   //    `worktreeStatus` keeps `missing` separate from `clean` precisely so this
   //    rung can exist (git.ts:105).
   if (f.git.status === 'missing') return 'missing';
-  // 3. On disk with no task behind it. Also a known fact, and more useful than
-  //    anything we could say about how busy it looks.
-  if (f.orphan) return 'orphan-disk';
   // 4. We could not count what exists only here, so we cannot claim it is safe.
   if (f.localOnlyCommits === null) return 'unknown';
 
@@ -441,9 +442,11 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
       // Deliberately NOT `worktreeStatus` here: one spawn per orphan is the
       // fan-out the cost discipline forbids, and `orphan-disk` outranks
       // anything a status call could add. `auditJunk` is where a caller that
-      // wants the dirty check on these pays for it.
-      git: { status: 'clean', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 },
-      localOnlyCommits: 0,
+      // wants the dirty check on these pays for it. Not read = not known:
+      // null, never a stubbed "clean, 0 files", which sorted real unsaved
+      // work last.
+      git: null,
+      localOnlyCommits: null,
       agent: null,
       claimedBy: null,
       holderRunning: false,
