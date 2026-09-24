@@ -798,14 +798,33 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T | null> {
   }
 }
 
+/**
+ * The whole request body, as text — and the decoding is the point.
+ *
+ * A socket delivers whatever bytes have arrived, so a multi-byte character can
+ * and does straddle two 'data' events. This used to accumulate with
+ * `data += chunk`, which decodes EACH chunk as UTF-8 on its own: a character
+ * split across the boundary became two runs of U+FFFD in both halves. It was
+ * silent, because the JSON around it is pure ASCII and still parsed — so the
+ * corrupted value was accepted and written to disk. A task title, a memory
+ * fact, a skill's own markdown on `/api/skills/upload`, an MCP tool argument
+ * through the graphify proxy: every body on this daemon comes through here.
+ *
+ * Buffers now, decoded once at the end, so no boundary is ever a decode point.
+ * `limit` also becomes what it always read as — BYTES, matching Content-Length
+ * — rather than UTF-16 code units, which let a body of astral characters use
+ * roughly twice the cap.
+ */
 function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > limit) { reject(new Error('payload too large')); req.destroy(); }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    req.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > limit) { reject(new Error('payload too large')); req.destroy(); return; }
+      chunks.push(chunk);
     });
-    req.on('end', () => resolve(data));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
 }
@@ -924,6 +943,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // allowed set widens to exactly what the operator declared, and nothing else.
   if (!isAllowedHost(req.headers.host, opts)) {
     return send(res, 403, { error: 'forbidden' }, origin);
+  }
+
+  // A path that cannot be decoded is a bad request, and it is one answer for
+  // every route rather than 27 of them. Each route that names a resource calls
+  // `decodeURIComponent` on its own segment, and a truncated escape
+  // (`%E0%A4%A`) makes that throw — which the catch around `handle` turned into
+  // a 500 carrying an internal error string. Checked on the whole path: if that
+  // decodes, so does every segment of it.
+  try {
+    decodeURIComponent(path);
+  } catch {
+    return send(res, 400, { error: 'bad request path' }, origin);
   }
 
   // CORS preflight — answered BEFORE the auth gate, and it has to be. A browser
@@ -2035,6 +2066,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       }, origin);
     }
     if (method === 'POST') {
+      // This writes `.baton/providers.json`. `--write` is what an operator
+      // relies on when they expose a dashboard they do not fully trust, and a
+      // read-only daemon that writes a settings file is read-only in name only.
+      if (!opts.writeEnabled) return denyReadOnly(res, origin);
       const body = await readJsonBody<{ agent?: string; mode?: string }>(req);
       const agent = typeof body?.agent === 'string' ? body.agent.trim() : '';
       if (!agent) return send(res, 400, { error: 'agent is required' }, origin);
@@ -2941,7 +2976,24 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (method === 'GET') return send(res, 200, await loadRetention(root), origin);
     if (method === 'POST') {
       if (!opts.writeEnabled) return denyReadOnly(res, origin);
-      const body = (await readJsonBody<RetentionPolicy>(req)) ?? {};
+      /*
+       * A body we could not read is not a policy — it is a request that did not
+       * arrive, and the only honest answer is to refuse it.
+       *
+       * `saveRetention` is a FULL REPLACEMENT: every field it does not find is
+       * written as off. So `?? {}` here turned a truncated or garbled body into
+       * the definite statement "drop nothing, keep everything forever", wrote
+       * that over the operator's configured policy, and answered 200 — the
+       * null-vs-zero mistake, on a route where the cost is a setting nobody
+       * asked to change.
+       *
+       * An ABSENT body still means the defaults, and that half is deliberate:
+       * `readJsonBody` reads an empty body as `{}` for every POST on this
+       * daemon, and on a full-replacement route `{}` is also how you legitimately
+       * CLEAR the policy. Only "unreadable" changed meaning.
+       */
+      const body = await readJsonBody<RetentionPolicy>(req);
+      if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
       const saved = await saveRetention(root, body);
       // Apply immediately so the user sees the effect; future runs apply on daemon start.
       const removed = retentionActive(saved) ? await pruneMemories(root, saved) : [];
@@ -3189,6 +3241,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const slug = decodeURIComponent(hm[1]);
     const body = await readJsonBody<{ toAgent?: string; model?: string; note?: string; commitPending?: boolean }>(req);
     if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+    /*
+     * "No such task" is a 404, and it has to be decided HERE.
+     *
+     * `passTask` THROWS for a slug it cannot resolve — the `!result` branch
+     * below is only reachable in its `--auto` hook mode, which this route never
+     * asks for. So a typo'd slug fell into the catch and answered 500 with an
+     * internal string, and a caller could not tell a name that does not exist
+     * from a daemon that is broken. Same lookup `passTask` itself performs for
+     * a named slug (`resolveTask` → `getTask`), so the two cannot disagree.
+     */
+    if (!(await getTask(root, slug))) return send(res, 404, { error: `no task '${slug}'` }, origin);
     try {
       // toAgent absent or "auto" → routed by baton.config.json rules + severity
       const result = await passTask(slug, { to: body.toAgent, model: body.model, note: body.note, commitPending: body.commitPending }, root);
@@ -3204,7 +3267,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
         briefPath: brief.path, markdown: brief.markdown,
       }, origin);
     } catch (e) {
-      return send(res, 500, { error: (e as Error).message }, origin);
+      /*
+       * The operator's disk stays out of the answer, the same rule
+       * `resolvePlanForApi` keeps for plan refusals.
+       *
+       * Writing the brief touches the worktree, so a real failure here is an
+       * ENOENT/EACCES naming an absolute path — and this route answers a
+       * browser and, through Orca's relay, a phone. The failure is still
+       * reported in full; only the prefix that says where this repo lives on
+       * this machine is removed.
+       */
+      return send(res, 500, { error: (e as Error).message.split(`${root}${sep}`).join('') }, origin);
     }
   }
   if (hm && method === 'GET') {
