@@ -143,9 +143,9 @@ export interface DoctorReport {
 }
 
 /* ============================================================
-   DEMO FIXTURES — plan inventory
+   DEMO FIXTURES — plan inventory + token usage
 
-   It lives here rather than beside the daemon shape it mirrors, because
+   Both live here rather than beside the daemon shapes they mirror, because
    demo mode is the showcase: these are the values a person sees before they
    ever run `baton serve`, and they have to teach the real states.
 
@@ -231,6 +231,130 @@ const DEMO_PLAN_INVENTORY: PlanInventory = {
         approvedBy: null, at: null, sha256: null,
       },
     },
+  ],
+};
+
+/**
+ * A multi-agent spend fixture, shaped to put the three honest outcomes side by
+ * side: Claude measured and priced, Codex measured but UNPRICED (an OpenAI
+ * model at Claude's rates would be fiction), and Antigravity parsed but with no
+ * token accounting in the format at all. Nulls here are the whole point — the
+ * screen has to render them as "not counted", never as `0`.
+ *
+ * The slugs are demo board slugs, so the per-task breakdown lines up with the
+ * sessions table below it.
+ */
+const DEMO_USAGE: RepoUsage = {
+  sessions: [
+    {
+      sessionId: "5f1c9a2e", slug: "auth-api-keys", agent: "claude", model: "claude-opus-4-6",
+      attribution: "measured", turns: 148, inputTokens: 412_000, outputTokens: 96_400, cacheReadTokens: 8_940_000,
+      cacheWriteTokens: 512_000, totalTokens: 9_960_400, consumedTokens: 1_020_400, estCostUsd: 33.5,
+      firstAt: "2026-09-04T08:10:00.000Z", lastAt: "2026-09-04T12:41:00.000Z",
+    },
+    {
+      sessionId: "a0d47b13", slug: "webhooks-docs", agent: "claude", model: "claude-sonnet-4-5",
+      attribution: "measured", turns: 42, inputTokens: 71_500, outputTokens: 21_300, cacheReadTokens: 1_240_000,
+      cacheWriteTokens: 88_000, totalTokens: 1_420_800, consumedTokens: 180_800, estCostUsd: 1.24,
+      firstAt: "2026-09-04T09:02:00.000Z", lastAt: "2026-09-04T10:18:00.000Z",
+    },
+    {
+      sessionId: "rollout-2026-09-04-3f8a", slug: "fix-checkout-e2e", agent: "codex", model: "gpt-5.2-codex",
+      attribution: "measured", turns: 63, inputTokens: 268_000, outputTokens: 44_100, cacheReadTokens: 196_000,
+      cacheWriteTokens: null, totalTokens: 508_100, consumedTokens: 312_100,
+      // No price for this model here, so no cost — not a cost of zero.
+      estCostUsd: null,
+      firstAt: "2026-09-04T07:44:00.000Z", lastAt: "2026-09-04T11:07:00.000Z",
+    },
+    {
+      sessionId: "brain-9c21", slug: null, agent: "antigravity", model: null,
+      // Antigravity records no cwd, so the daemon PLACES it from the paths it
+      // touched — the table labels this row "inferred" rather than showing it
+      // as if someone had measured which repo it belonged to.
+      attribution: "inferred",
+      turns: 29, inputTokens: null, outputTokens: null, cacheReadTokens: null,
+      cacheWriteTokens: null, totalTokens: null, consumedTokens: null, estCostUsd: null,
+      firstAt: "2026-09-03T15:30:00.000Z", lastAt: "2026-09-03T18:02:00.000Z",
+    },
+  ],
+  totals: {
+    sessions: 4, turns: 282, inputTokens: 751_500, outputTokens: 161_800,
+    cacheReadTokens: 10_376_000, cacheWriteTokens: 600_000, totalTokens: 11_889_300, consumedTokens: 1_513_300,
+    estCostUsd: 34.74, unpricedSessions: 1,
+  },
+  byModel: {
+    "claude-opus-4-6": {
+      sessions: 1, turns: 148, inputTokens: 412_000, outputTokens: 96_400,
+      cacheReadTokens: 8_940_000, cacheWriteTokens: 512_000, totalTokens: 9_960_400, consumedTokens: 1_020_400, estCostUsd: 33.5, unpricedSessions: 0,
+    },
+    "claude-sonnet-4-5": {
+      sessions: 1, turns: 42, inputTokens: 71_500, outputTokens: 21_300,
+      cacheReadTokens: 1_240_000, cacheWriteTokens: 88_000, totalTokens: 1_420_800, consumedTokens: 180_800, estCostUsd: 1.24, unpricedSessions: 0,
+    },
+    "gpt-5.2-codex": {
+      sessions: 1, turns: 63, inputTokens: 268_000, outputTokens: 44_100,
+      cacheReadTokens: 196_000, cacheWriteTokens: null, totalTokens: 508_100, consumedTokens: 312_100, estCostUsd: null, unpricedSessions: 1,
+    },
+    unknown: {
+      sessions: 1, turns: 29, inputTokens: null, outputTokens: null, cacheReadTokens: null,
+      cacheWriteTokens: null, totalTokens: null, consumedTokens: null, estCostUsd: null, unpricedSessions: 0,
+    },
+  },
+  byAgent: {
+    claude: {
+      sessions: 2, turns: 190, inputTokens: 483_500, outputTokens: 117_700,
+      cacheReadTokens: 10_180_000, cacheWriteTokens: 600_000, totalTokens: 11_381_200, consumedTokens: 1_201_200, estCostUsd: 34.74, unpricedSessions: 0,
+    },
+    codex: {
+      sessions: 1, turns: 63, inputTokens: 268_000, outputTokens: 44_100,
+      cacheReadTokens: 196_000, cacheWriteTokens: null, totalTokens: 508_100, consumedTokens: 312_100, estCostUsd: null, unpricedSessions: 1,
+    },
+    antigravity: {
+      sessions: 1, turns: 29, inputTokens: null, outputTokens: null, cacheReadTokens: null,
+      cacheWriteTokens: null, totalTokens: null, consumedTokens: null, estCostUsd: null, unpricedSessions: 0,
+    },
+  },
+  // Rolled up per task by the daemon in real mode (`aggregate` in src/usage.ts);
+  // the fixture supplies the same shape so demo and real render through one
+  // code path. The last row is the honest one: an unmeasured task keeps nulls.
+  byTask: [
+    {
+      slug: "auth-api-keys", agents: ["claude"], inferred: false,
+      totals: {
+        sessions: 1, turns: 148, inputTokens: 412_000, outputTokens: 96_400,
+        cacheReadTokens: 8_940_000, cacheWriteTokens: 512_000, totalTokens: 9_960_400, consumedTokens: 1_020_400, estCostUsd: 33.5, unpricedSessions: 0,
+      },
+    },
+    {
+      slug: "webhooks-docs", agents: ["claude"], inferred: false,
+      totals: {
+        sessions: 1, turns: 42, inputTokens: 71_500, outputTokens: 21_300,
+        cacheReadTokens: 1_240_000, cacheWriteTokens: 88_000, totalTokens: 1_420_800, consumedTokens: 180_800, estCostUsd: 1.24, unpricedSessions: 0,
+      },
+    },
+    {
+      slug: "fix-checkout-e2e", agents: ["codex"], inferred: false,
+      totals: {
+        sessions: 1, turns: 63, inputTokens: 268_000, outputTokens: 44_100,
+        cacheReadTokens: 196_000, cacheWriteTokens: null, totalTokens: 508_100, consumedTokens: 312_100, estCostUsd: null, unpricedSessions: 1,
+      },
+    },
+    {
+      // Placed by inference, and labelled as such on the screen.
+      slug: null, agents: ["antigravity"], inferred: true,
+      totals: {
+        sessions: 1, turns: 29, inputTokens: null, outputTokens: null, cacheReadTokens: null,
+        cacheWriteTokens: null, totalTokens: null, consumedTokens: null, estCostUsd: null, unpricedSessions: 0,
+      },
+    },
+  ],
+  // The roster the daemon serves from `readableAgents()` — the demo shows the
+  // same three, so an agent with no sessions still gets its "looked here, found
+  // nothing" row instead of vanishing.
+  readable: [
+    { agent: "claude", readFrom: "~/.claude/projects/**/*.jsonl" },
+    { agent: "codex", readFrom: "~/.codex/sessions/**/rollout-*.jsonl" },
+    { agent: "antigravity", readFrom: "~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl" },
   ],
 };
 
@@ -1645,13 +1769,21 @@ class BatonClient {
     });
   }
 
-  /* ---- real token usage (Claude session files) ---- */
+  /* ---- real token usage (every agent whose session logs are parseable) ---- */
+  /** null = this daemon serves no /api/usage (an older build). Anything else is
+   *  rethrown, because the spend table answers a missing payload by naming each
+   *  board agent "logs not readable" — a specific, benign, checkable claim
+   *  about the machine's session files, which a refused or unreachable request
+   *  never checked. That is exactly the D-009 failure on the screen D-009 was
+   *  written about: usage is still an enhancement and still must never break
+   *  the page, but "we could not ask" is not "we asked and found nothing". */
   async getRealUsage(): Promise<RepoUsage | null> {
-    if (this.demo) return null; // demo keeps its labelled illustrative numbers
+    if (this.demo) return DEMO_USAGE; // a fixture, and the screen says so
     try {
       return await this.request<RepoUsage>("/api/usage");
-    } catch {
-      return null; // usage is an enhancement — never break the page over it
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "NOT_FOUND") return null;
+      throw e;
     }
   }
 

@@ -425,35 +425,102 @@ export interface KbProjectStat {
 }
 
 /** Real per-session token usage — GET /api/usage (src/usage.ts). */
-export interface SessionUsage {
+/**
+ * Token counts as REPORTED, which is why every one of them is nullable.
+ *
+ * `null` means the agent's log format never reported that number; `0` means it
+ * reported zero. Conflating the two is how a spend table starts lying — an
+ * Antigravity transcript carries no token accounting at all, and rendering
+ * that as `0` would say "this agent spent nothing" about an agent nobody
+ * counted. Mirrors `TokenCounts` in src/usage.ts; keep them in step.
+ */
+export interface TokenCounts {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  /** The sum of whatever was reported, or a total reported directly by a
+   *  format that gives no input/output split at all. */
+  totalTokens: number | null;
+  /** input + output + cache writes (cache reads excluded); null = none
+   *  reported. Optional: a fleet member on an older daemon does not send it. */
+  consumedTokens?: number | null;
+}
+
+/**
+ * How a session was tied to its slug — mirrors `Attribution` in src/usage.ts.
+ *
+ * `measured`: the log recorded the working directory. `inferred`: the format
+ * records no cwd, so the daemon deduced the placement from the paths the
+ * session touched. The screen labels the second kind; inferred attribution is
+ * never rendered as if it had been measured.
+ */
+export type Attribution = "measured" | "inferred";
+
+export interface SessionUsage extends TokenCounts {
   sessionId: string;
   slug: string | null;
-  agent: "claude";
+  /** Measured from a logged cwd, or inferred from the paths it touched. */
+  attribution: Attribution;
+  /** An open agent id — 'claude', 'codex', 'antigravity', … — not just Claude. */
+  agent: string;
   model: string | null;
   turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  estCostUsd: number;
+  /** null when the model has no price here — never a guessed or zeroed cost. */
+  estCostUsd: number | null;
   firstAt: string | null;
   lastAt: string | null;
 }
 
-export interface UsageTotals {
+export interface UsageTotals extends TokenCounts {
   sessions: number;
   turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  estCostUsd: number;
+  estCostUsd: number | null;
+  /** Sessions with tokens but no price — > 0 means `estCostUsd` is partial.
+   *  Optional for the same mixed-version reason as `consumedTokens`. */
+  unpricedSessions?: number;
+}
+
+/**
+ * One task's spend, rolled up BY THE DAEMON (`aggregate` in src/usage.ts).
+ *
+ * Grouped there, not here. This rollup is where "a missing measurement is
+ * never a 0" is enforced, and the browser used to hold a second copy of the
+ * same loop — two copies of a safety rule drift, and the day they do the
+ * dashboard shows `0` where the daemon shows `null`.
+ */
+export interface TaskUsage {
+  /** Task slug, or null for the repo itself. */
+  slug: string | null;
+  agents: string[];
+  totals: UsageTotals;
+  /** True when any contributing session was PLACED by inference rather than a
+   *  logged working directory — the row is labelled when it is. */
+  inferred: boolean;
+}
+
+/** An agent whose session logs Baton can read, and the path it reads from.
+ *  Served by the daemon: it is the one place that knows which parsers exist. */
+export interface ReadableAgent {
+  agent: string;
+  readFrom: string;
 }
 
 export interface RepoUsage {
   sessions: SessionUsage[];
   totals: UsageTotals;
   byModel: Record<string, UsageTotals>;
+  /** Only agents with at least one parsed session appear. An agent whose logs
+   *  could not be read has NO row here rather than a row of zeros — the screen
+   *  is what has to say "not measured" for it. */
+  byAgent: Record<string, UsageTotals>;
+  /** Per task (and the repo itself), highest measured spend first. */
+  byTask: TaskUsage[];
+  /** Every agent the daemon can parse. An agent listed here with no `byAgent`
+   *  row was looked for and not found — which is not a spend of zero. */
+  readable: ReadableAgent[];
+  /** The date the daemon's price table was read. Absent from older daemons. */
+  pricesAsOf?: string;
 }
 
 /** Knowledge-base status — GET /api/kb. */
