@@ -13,6 +13,7 @@ import { activeBatonRoot, getTask, mutateTasks } from '../store.js';
 import { block, pause, type Outcome } from '../lifecycle.js';
 import { resolveAgentId, resolveSessionSlug } from '../identity.js';
 import { resolveTask } from './pass.js';
+import { quotedInline } from '../handoff/untrusted.js';
 import { bus } from '../events.js';
 
 async function resolveSlug(root: string, slug: string | undefined): Promise<string | null> {
@@ -43,14 +44,21 @@ export async function pauseCmd(slug: string | undefined, opts: { reason?: string
   });
 
   report(out, (t) => {
-    console.log(`✓ ${t.slug} handed back — queued, not done.`);
-    console.log(`  The worktree and branch are untouched: ${t.worktreePath}`);
     // Inside `report`, so it fires only on the success branch — a refusal
     // changed nothing and must not look like a hand-back on the dashboard.
     // Only the reason typed just now: `pause` keeps an older `stoppedReason`,
-    // and re-broadcasting it would attribute another session's words to this stop.
+    // and re-broadcasting it would attribute another session's words to this
+    // stop (same reason the echo below is hedged).
     bus.publish({ type: 'task.paused', slug: t.slug, agent: who.agent, ...(opts.reason ? { reason: opts.reason } : {}) });
-    if (t.stoppedReason) console.log(`  reason: ${t.stoppedReason}`);
+    console.log(`✓ ${t.slug} handed back — queued, not done.`);
+    console.log(`  The worktree and branch are untouched: ${t.worktreePath}`);
+    // Usually the reason this caller just typed — but not always. `pause` keeps
+    // an existing `stoppedReason` when none is given, and only checks the AGENT
+    // id, not the session, so `baton pause <slug>` on a task another session
+    // blocked echoes THAT session's text. Quoted for the same reason the rest
+    // of this bug's sites are: it is a terminal, this line sits between two
+    // lines Baton wrote, and a break would forge a third.
+    if (t.stoppedReason) console.log(`  reason: ${quotedInline(t.stoppedReason)}`);
     console.log(`  Anyone can continue it with: baton take ${t.slug}`);
   });
 }
@@ -71,12 +79,16 @@ export async function blockCmd(slug: string | undefined, reason: string): Promis
   });
 
   report(out, (t) => {
+    // `block` refuses an empty reason, so the stored one is always the one this
+    // caller just gave — no hedging needed here, unlike `pause` above.
+    bus.publish({ type: 'task.blocked', slug: t.slug, agent: who.agent, reason: t.stoppedReason ?? reason });
     // Owned, not returned to the pool: the next agent would hit the same wall.
     console.log(`⊘ ${t.slug} blocked — still yours, waiting on a person.`);
-    // `block` refuses an empty reason, so the stored one is always the one
-    // this caller just gave — no hedging needed here, unlike `pause` above.
-    bus.publish({ type: 'task.blocked', slug: t.slug, agent: who.agent, reason: t.stoppedReason ?? reason });
-    console.log(`  ${t.stoppedReason}`);
+    // The most forgeable of the terminal sites: the reason gets a LINE OF ITS
+    // OWN at the same indent as the sentence under it, so a raw break puts
+    // attacker text at column 2 directly above `It shows on \`baton ls\`…` and
+    // it reads as another line of Baton's. One line, capped.
+    console.log(`  ${quotedInline(t.stoppedReason)}`);
     console.log('  It shows on `baton ls` and `baton next` until someone resolves it.');
   });
 }

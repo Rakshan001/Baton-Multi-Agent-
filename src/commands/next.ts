@@ -14,6 +14,7 @@ import { resolveGate } from '../gate.js';
 import { nextFor } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
 import { resolveAgentId } from '../identity.js';
+import { quotedInline } from '../handoff/untrusted.js';
 
 export function describeTask(t: Task): string[] {
   const out = [`  ${t.slug}${t.phase ? `  (phase ${t.phase})` : ''}`, `    ${t.task}`];
@@ -55,8 +56,15 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
     for (const t of held) {
       for (const line of describeTask(t)) console.log(line);
       console.log(`    cd ${t.worktreePath}`);
+      // A terminal, but not only a human's: this command exists to answer an
+      // agent asking "do you have any pending task?", and agents shell out to
+      // it and read stdout. So the reason is treated as what it is — another
+      // agent's text landing mid-sentence in Baton's own answer — and gets the
+      // same `quotedInline` the MCP path uses. Even for a human the minimum
+      // holds: it is printed inside an indented line that ends in a command to
+      // run, so a break would let it forge a line of Baton's own output.
       console.log(stateOf(t) === 'blocked'
-        ? `    blocked: ${t.stoppedReason ?? 'no reason recorded'} — hand it back with: baton pause ${t.slug}`
+        ? `    blocked: ${t.stoppedReason ? quotedInline(t.stoppedReason) : 'no reason recorded'} — hand it back with: baton pause ${t.slug}`
         : `    finish it: baton done ${t.slug}   ·   hand it back: baton pause ${t.slug}`);
     }
     console.log('');

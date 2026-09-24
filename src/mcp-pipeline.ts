@@ -23,10 +23,10 @@ import { z } from 'zod';
 import { asText } from './mcp-format.js';
 import { TOOL_HELP } from './mcp-help.js';
 import { loadTasks, type Task } from './store.js';
-import { bus } from './events.js';
 import { branchCommits, worktreeStatus } from './git.js';
 import type { DiffStamp } from './handoff/progress-ledger.js';
 import { blockers, eligibleFor, integrationHold, isTerminal, phaseOf, reviewableBy, stateOf, takeable } from './pipeline.js';
+import { INLINE_MAX, quotedInline } from './handoff/untrusted.js';
 import { resolveGate } from './gate.js';
 import { block, nextFor, type Who } from './lifecycle.js';
 import { claimTask, ClaimRefused } from './commands/claim.js';
@@ -34,6 +34,7 @@ import { finishTask } from './commands/finish.js';
 import { livenessProbe } from './liveness.js';
 import { resolveAgentId, resolveSessionSlug } from './identity.js';
 import { mutateTasks } from './store.js';
+import { bus } from './events.js';
 
 /**
  * The subset of the MCP registrar this module needs. The SDK's own signature is
@@ -48,6 +49,44 @@ export type RegisterTool = (
   cb: (args: ToolArgs) => Promise<{ content: { type: 'text'; text: string }[] }>,
 ) => unknown;
 
+/** How much foreign text one Baton sentence will carry. One number, defined by
+ *  the quoting itself — a second copy of the cap drifts exactly like a second
+ *  copy of the scrub did. */
+export const QUOTED_MAX = INLINE_MAX;
+
+/**
+ * Foreign text about to be spliced into a sentence BATON wrote.
+ *
+ * Most of what these tools return is data in named fields, and a reader treats
+ * it as data. A few strings are not: `still blocked: <reason> — resolve it…`
+ * and `STOP: … was cancelled by <actor> (<reason>). Do not continue…` are
+ * imperatives in Baton's own voice, and the consuming model reads them as the
+ * hub speaking with authority. The bracketed halves are not Baton's — `<reason>`
+ * is whatever one agent handed to `report_blocked`, served back to a DIFFERENT
+ * agent — so without this the hub launders one agent's text into its own voice.
+ *
+ * This was a SECOND implementation of `quotedInline`, and the weaker one: it
+ * scrubbed `[\u0000-\u001f\u007f]` — C0 and DEL — which is the set somebody
+ * writes when they are thinking of `\n`. It is not the set a reader breaks a
+ * line on. U+2028 LINE SEPARATOR is category Zl: not a control character, not a
+ * format character, not escaped by `JSON.stringify`, and laid out as a new line
+ * by the model reading the answer. One agent put it in a `report_blocked`
+ * reason and its forged `BATON SYSTEM NOTICE` arrived at column 0 inside this
+ * module's own imperative, in front of a different agent.
+ *
+ * So it is now the same function, not a same-looking one. `quotedInline` builds
+ * on `sanitizeUntrusted`, which also drops `\p{Cf}` invisibles and defangs the
+ * fence marker so a payload cannot forge a `BATON-UNTRUSTED` terminator. The
+ * cap is unchanged (`INLINE_MAX === 200`) and doubles as the budget guard — an
+ * unbounded `reason` rides out on the next tool answer whatever it is, and a
+ * 50 KB one costs five whole `tools/list` handshakes in a session that asked
+ * for none of it.
+ *
+ * Kept as an export here because mcp.ts imports it for the echo it owns
+ * (`get_report`), and because the sentences it protects are in this module.
+ */
+export const quoted = quotedInline;
+
 /**
  * Has the ground moved under a working agent?
  *
@@ -56,24 +95,29 @@ export type RegisterTool = (
  * the work. Pure, so every case is a unit test; mcp.ts does the reading and
  * attaches the result to whatever tool the agent called next, which is the
  * soonest moment it can possibly hear.
+ *
+ * Everything interpolated below goes through `quoted`: the slug is the caller's
+ * own text and the actor, reason and agent are another party's, and all four
+ * land inside a STOP the reader is meant to obey.
  */
 export function groundMovedNotice(
   task: Task | undefined,
   slug: string,
   selfSlug: string,
 ): string | null {
-  if (!task) return `STOP: task '${slug}' no longer exists. Do not continue — nothing you write will be merged.`;
+  const named = quoted(slug, 80);
+  if (!task) return `STOP: task '${named}' no longer exists. Do not continue — nothing you write will be merged.`;
   const state = stateOf(task);
   if (state === 'cancelled') {
-    const by = task.cancelledBy ? ` by ${task.cancelledBy.actor}` : '';
-    const why = task.cancelledBy?.reason ? ` (${task.cancelledBy.reason})` : '';
-    return `STOP: task '${slug}' was cancelled${by}${why}. Do not continue — nothing further will be merged.`;
+    const by = task.cancelledBy ? ` by ${quoted(task.cancelledBy.actor, 80)}` : '';
+    const why = task.cancelledBy?.reason ? ` (${quoted(task.cancelledBy.reason)})` : '';
+    return `STOP: task '${named}' was cancelled${by}${why}. Do not continue — nothing further will be merged.`;
   }
   const held = task.claimedBy?.sessionSlug;
   if (held && held !== selfSlug && (state === 'active' || state === 'claimed')) {
     // Two agents in one worktree double-write. Saying so is the whole point:
     // the displaced agent is the only party that can stop.
-    return `NOTE: '${slug}' was adopted by ${task.claimedBy?.agent ?? 'another agent'} while you were quiet. Stop, or take it back explicitly with \`baton take ${slug} --resume\` — two agents in one worktree overwrite each other.`;
+    return `NOTE: '${named}' was adopted by ${quoted(task.claimedBy?.agent, 80) || 'another agent'} while you were quiet. Stop, or take it back explicitly with \`baton take ${named} --resume\` — two agents in one worktree overwrite each other.`;
   }
   return null;
 }
@@ -139,7 +183,9 @@ export function taskContract(t: Task): Record<string, unknown> {
 function resolveOwn(tasks: Task[], who: Who, slug?: string): { task: Task } | { error: string } {
   if (slug) {
     const t = tasks.find((x) => x.slug === slug);
-    return t ? { task: t } : { error: `No task '${slug}'. Call my_tasks to see what is yours.` };
+    // The slug came from a model, so it can be 40 KB of anything. Echoing it
+    // back whole would charge the session for its own hallucination twice.
+    return t ? { task: t } : { error: `No task '${quoted(slug, 80)}'. Call my_tasks to see what is yours.` };
   }
   const mine = tasks.filter((t) => holds(t, who));
   if (mine.length === 1) return { task: mine[0]! };
@@ -178,7 +224,10 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
           worktree: t.worktreePath,
           ...(t.reviewedBy?.verdict === 'reject' ? { sentBackBy: t.reviewedBy.actor, fix: t.reviewedBy.notes } : {}),
           next: stateOf(t) === 'blocked'
-            ? `still blocked: ${t.stoppedReason ?? ''} — resolve it, or hand it back with \`baton pause ${t.slug}\``
+            // The reason was written by whoever called report_blocked — another
+            // agent, on another day — and it is being read here inside Baton's
+            // own next-step instruction. Quoted, so it stays a quote.
+            ? `still blocked: ${quoted(t.stoppedReason)} — resolve it, or hand it back with \`baton pause ${t.slug}\``
             : `complete_task when finished · report_blocked if you cannot proceed · \`baton pause ${t.slug}\` if you are out of time`,
         })),
         awaitingYourReview: toReview.map((t) => ({

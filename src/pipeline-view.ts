@@ -21,6 +21,7 @@ import {
   blockers, integrationHold, isDeadlocked, openPhase, phaseComplete, phaseOf, stateOf,
   type EligibilityOpts, type PipelineTask, type TaskState,
 } from './pipeline.js';
+import { quotedInline } from './handoff/untrusted.js';
 
 /**
  * What a lane header says about its phase.
@@ -104,6 +105,34 @@ function laneStatus(phase: number, tasks: readonly PipelineTask[], open: number,
   return 'locked';
 }
 
+/**
+ * The two free-text fields on a row, quoted for a sink that is not a terminal
+ * and not an LLM.
+ *
+ * `stoppedReason` is whatever an agent handed `report_blocked`; `cancelledBy`
+ * carries what a person typed at `baton cancel`. Both are drawn beside Baton's
+ * own words — the lane badge reads `cancelled by <actor> — <reason>` — and both
+ * arrive here having passed through no scrub at all.
+ *
+ * React escapes markup, so this is not about XSS; nothing here would become a
+ * tag. What survives escaping is exactly what `sanitizeUntrusted` removes: a
+ * BiDi override that visually reorders the trusted half of the same text run, a
+ * zero-width run that makes the rendering disagree with the stored value, and
+ * U+2028, which the browser lays out as a line break inside a badge. The cap is
+ * the other half: this payload ships on every poll of the board, and an
+ * unbounded reason is a cost the dashboard pays forever for one agent's write.
+ *
+ * The same JSON is served on loopback and is readable by any agent that curls
+ * the endpoint, which is the second reason not to leave it raw.
+ */
+function safeCancelledBy(c: NonNullable<PipelineTask['cancelledBy']>): NonNullable<LaneTask['cancelledBy']> {
+  return {
+    ...c,
+    actor: quotedInline(c.actor, 80),
+    ...(c.reason ? { reason: quotedInline(c.reason) } : {}),
+  };
+}
+
 /** One row, flattened for transport. */
 function toLaneTask(t: PipelineTask & { task?: string; branch?: string }, blocker: string | null): LaneTask {
   return {
@@ -117,8 +146,8 @@ function toLaneTask(t: PipelineTask & { task?: string; branch?: string }, blocke
     planId: t.planId ?? null,
     blocker,
     branch: t.branch ?? '',
-    ...(t.cancelledBy ? { cancelledBy: t.cancelledBy } : {}),
-    ...(t.stoppedReason ? { stoppedReason: t.stoppedReason } : {}),
+    ...(t.cancelledBy ? { cancelledBy: safeCancelledBy(t.cancelledBy) } : {}),
+    ...(t.stoppedReason ? { stoppedReason: quotedInline(t.stoppedReason) } : {}),
   };
 }
 

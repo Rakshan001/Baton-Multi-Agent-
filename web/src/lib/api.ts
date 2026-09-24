@@ -18,6 +18,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
+import { DEMO_BRIEF_BODY, demoResumePrompt } from "./demoHandoff";
 import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, QuarantineView, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, MemoryConsolidation, MemoryDelegateSpend, MemoryProducedFact, WorktreeRow } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
@@ -1586,24 +1587,14 @@ class BatonClient {
     if (this.demo) {
       await this.demoGate();
       // One illustrative open brief so the inbox + copy buttons are explorable.
-      const body = [
-        "# Handoff: Fix flaky checkout e2e",
-        "",
-        "## Done",
-        "- [x] reproduced the flaky Stripe redirect locally",
-        "- [x] root cause: webhook race in checkout.service.ts",
-        "",
-        "## Pending",
-        "- [ ] add the retry guard + regression test",
-        "",
-        "## Next step",
-        "Write the failing test in e2e/checkout.spec.ts first, then guard the webhook race.",
-        "",
-        "## Pick up with",
-        "```",
-        "baton resume sess-cursor-demo",
-        "```",
-      ].join("\n");
+      const body = DEMO_BRIEF_BODY;
+      // The fence has ONE implementation (src/handoff/untrusted.ts), and the
+      // daemon builds the resume prompt with it so no client ever assembles
+      // one. Demo calls no daemon, so it replays a RECORDING of that output —
+      // see web/src/lib/demoHandoff.ts. Rebuilding the fence here, as this once
+      // did, is the second implementation that rule exists to forbid; showing
+      // no fence at all would teach the wrong shape.
+      const demoResume = demoResumePrompt;
       // Two briefs, one waiting on the other: the demo has to show the
       // pipeline, because the pipeline is the point of the panel. Closing one
       // unblocks the next, exactly as it does against a real daemon.
@@ -1613,7 +1604,7 @@ class BatonClient {
           status: "ready", from: "cursor", to: "any",
           created: new Date(Date.now() - 22 * 60_000).toISOString(),
           path: "/repo/.baton/handoffs/sess-cursor-demo.md", cwd: "/repo",
-          markdown: body, body,
+          markdown: body, body, resumePrompt: demoResume("sess-cursor-demo", "/repo"),
           dependsOn: [], phase: null, step: 1, parallel: true,
           ready: true, blockedBy: [], cyclic: false,
         },
@@ -1622,7 +1613,7 @@ class BatonClient {
           status: "ready", from: "cursor", to: "gemini",
           created: new Date(Date.now() - 18 * 60_000).toISOString(),
           path: "/repo/.baton/handoffs/sess-docs-demo.md", cwd: "/repo",
-          markdown: body, body,
+          markdown: body, body, resumePrompt: demoResume("sess-docs-demo", "/repo"),
           dependsOn: [], phase: null, step: 1, parallel: true,
           ready: true, blockedBy: [], cyclic: false,
         },
@@ -1631,7 +1622,7 @@ class BatonClient {
           status: "ready", from: "cursor", to: "claude",
           created: new Date(Date.now() - 9 * 60_000).toISOString(),
           path: "/repo/.baton/handoffs/sess-release-demo.md", cwd: "/repo",
-          markdown: body, body,
+          markdown: body, body, resumePrompt: demoResume("sess-release-demo", "/repo"),
           dependsOn: ["sess-cursor-demo"], phase: null, step: 2, parallel: false,
           ready: false, blockedBy: ["sess-cursor-demo"], cyclic: false,
         },

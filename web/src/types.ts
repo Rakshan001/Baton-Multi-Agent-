@@ -534,8 +534,18 @@ export interface HandoffBriefEntry {
   cwd: string;
   /** Full HANDOFF.md (frontmatter + body). */
   markdown: string;
-  /** Body only — the resume prompt to paste into the next agent. */
+  /** Body only. */
   body: string;
+  /**
+   * The prompt to paste into the next agent, with the body already quoted.
+   *
+   * Built by the daemon (`resumePromptFor` in `src/handoff/resume.ts`) and
+   * copied verbatim. Do NOT assemble one here: a brief arrives by `git pull`
+   * from a branch nobody reviewed, and `web/` cannot import `src/`, so a fence
+   * written in the browser would be a second implementation of a security
+   * primitive that could drift from the real one.
+   */
+  resumePrompt: string;
   /** Slugs this brief waits on that are still open. */
   dependsOn: string[];
   /** The plan phase this brief came from, when it came from a plan. */

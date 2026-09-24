@@ -15,7 +15,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { parseFrontmatter } from '../util/frontmatter.js';
 import { listBriefs } from './resume.js';
-import { fenceUntrusted } from './untrusted.js';
+import { fenceUntrusted, quotedInline } from './untrusted.js';
 
 export interface ResolveOptions {
   /** Agent or person closing it — recorded as `resolvedBy`. */
@@ -117,7 +117,10 @@ export async function resolveBriefBySlug(
   // A closed brief has already left the list, so this covers both "never
   // existed" and "already done" — neither is an error worth throwing at an
   // agent that is simply reporting finished work.
-  if (!brief) return { closed: false, error: `no handoff '${slug}' is open` };
+  // The slug is the CALLER's text landing in a sentence Baton wrote — and a
+  // refusal is the one answer reached by guessing a name, so the attacker picks
+  // the whole string. One line, hard cap; see `quotedInline`.
+  if (!brief) return { closed: false, error: `no handoff '${quotedInline(slug)}' is open` };
   try {
     await resolveBrief(brief.path, opts);
   } catch (e) {

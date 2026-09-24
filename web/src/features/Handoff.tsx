@@ -32,9 +32,19 @@ function briefAge(iso: string): string {
   return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
 
-/** The paste-into-the-next-agent prompt: where to work + the brief itself. */
+/**
+ * The paste-into-the-next-agent prompt, as the daemon built it.
+ *
+ * This used to be a template literal here that dropped the raw body between two
+ * sentences in Baton's own imperative voice, the last of which said "Execute
+ * the plan above" — endorsing whatever an unreviewed brief happened to say. The
+ * fence now lives in `src/handoff/resume.ts` beside its two siblings, and this
+ * copies the result verbatim. The fallback is deliberately bare: if an older
+ * daemon sends no prompt, send the body with NO instruction wrapped around it
+ * rather than re-creating the sentence that caused the problem.
+ */
 function resumePrompt(b: HandoffBriefEntry): string {
-  return `Continue this handed-off work. Work in: ${b.cwd}\n\n${b.body}\n\nExecute the plan above — don't re-plan from scratch; flag blockers instead.`;
+  return b.resumePrompt || b.body;
 }
 
 export function HandoffInbox({ writeEnabled = false }: { writeEnabled?: boolean }) {

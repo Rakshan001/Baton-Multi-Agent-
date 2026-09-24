@@ -12,6 +12,7 @@
  * to a shared remote is the kind of thing a person expects to have asked for.
  */
 import { loadTasks, mutateTasks, resolveBatonRoot, type Task } from '../store.js';
+import { quotedInline } from '../handoff/untrusted.js';
 import { resolveTask } from './pass.js';
 import { changedFiles } from '../conflicts.js';
 import { clearFetchableCache } from '../fetchable.js';
@@ -64,7 +65,10 @@ export async function pushCmd(
   // working must not be able to publish — the decision to stop it is only real
   // if it also stops the work leaving this machine.
   if (stateOf(task) === 'cancelled') {
-    const by = task.cancelledBy ? ` by ${task.cancelledBy.actor}` : '';
+    // Quoted for the same reason `pause.ts` quotes `stoppedReason`: `actor` is
+    // free text that reaches a terminal, and an unquoted one can forge a second
+    // line of Baton's own output.
+    const by = task.cancelledBy ? ` by ${quotedInline(task.cancelledBy.actor)}` : '';
     console.error(`✗ '${task.slug}' was cancelled${by} — refusing to push.`);
     process.exitCode = 1;
     return;

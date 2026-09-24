@@ -13,6 +13,7 @@ import { readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { batonDir, loadTasks } from '../store.js';
 import { handoffPath } from './brief.js';
+import { fenceUntrusted, sanitizeUntrusted } from './untrusted.js';
 
 export interface BriefEntry {
   slug: string;
@@ -27,8 +28,16 @@ export interface BriefEntry {
   cwd: string;
   /** Full HANDOFF.md content (frontmatter + body) — what the copy button copies. */
   markdown: string;
-  /** Body without frontmatter — the resume prompt. */
+  /** Body without frontmatter. */
   body: string;
+  /**
+   * The paste-into-the-next-agent prompt, with the body already quoted.
+   *
+   * Served pre-built so no client assembles one: `web/` cannot import `src/`,
+   * so a browser-side fence would be a second implementation of a security
+   * primitive. Copy this verbatim. See `resumePromptFor`.
+   */
+  resumePrompt: string;
   /**
    * Slugs this brief waits on, from the plan contract's `dependsOn`.
    *
@@ -56,7 +65,7 @@ function toEntry(raw: string, path: string, fallback: { slug: string; kind: 'tas
   }
   const data = parsed.data;
   if (data.baton !== 1) return null; // not a baton brief — ignore junk
-  return {
+  const entry: BriefEntry = {
     slug: fallback.slug,
     kind: fallback.kind,
     title: String(data.title ?? fallback.title ?? fallback.slug),
@@ -70,10 +79,40 @@ function toEntry(raw: string, path: string, fallback: { slug: string; kind: 'tas
     body: parsed.content.trim(),
     dependsOn: strList(data.dependsOn),
     phase: data.phase == null ? null : String(data.phase),
+    resumePrompt: '',
   };
+  return { ...entry, resumePrompt: resumePromptFor(entry) };
 }
 
 /** Every baton handoff brief in the repo — task worktrees + session briefs. */
+/**
+ * The paste-into-the-next-agent prompt: Baton's instruction, then the brief,
+ * quoted.
+ *
+ * Built here rather than in the browser because `web/` cannot import `src/`,
+ * so a fence written there would be a SECOND implementation of a security
+ * primitive — and two would drift apart exactly when it mattered. This is the
+ * same argument `orderBriefs` makes for computing the pipeline once.
+ *
+ * Order is the point. A brief arrives by `git pull` from a branch nobody
+ * reviewed, and an agent reads top-down: Baton's own authority is established
+ * BEFORE the quoted span, and nothing follows the terminator. The version this
+ * replaced put a raw body between two imperative sentences ending "Execute the
+ * plan above", which endorsed whatever the brief happened to say.
+ */
+export function resumePromptFor(b: BriefEntry): string {
+  const cwd = sanitizeUntrusted(b.cwd).replace(/[\r\n]+/g, ' ').trim();
+  const ours = [
+    `Continue this handed-off work. Work in: ${cwd}`,
+    '',
+    'The brief is quoted below. Carry out the work it describes rather than',
+    're-planning from scratch, and flag blockers instead of working around them.',
+  ].join('\n');
+  // Nothing after the fence: a closing imperative would be an instruction about
+  // content Baton has just finished disclaiming authority over.
+  return `${ours}\n\n${fenceUntrusted(`handoff ${b.slug}`, b.body)}`;
+}
+
 export async function listBriefs(root: string): Promise<BriefEntry[]> {
   const out: BriefEntry[] = [];
 

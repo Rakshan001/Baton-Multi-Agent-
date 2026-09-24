@@ -9,8 +9,14 @@
  * two facts it cannot compute itself (is a dependency's work fetchable, and
  * when was this agent last alive) arrive as injected functions.
  *
+ * The one import is `handoff/untrusted.ts`, which is pure by the same rule —
+ * regex and string, no I/O, no clock — so the purity above still holds. It is
+ * here because a `blocked` reason is agent-written text that this module splices
+ * into a sentence four different readers take as Baton's own.
+ *
  * Design: docs/superpowers/specs/2026-08-05-task-pipeline-design.md
  */
+import { quotedInline } from './handoff/untrusted.js';
 
 /**
  * Stored lifecycle states.
@@ -281,7 +287,18 @@ export function blockers(
     const st = stateOf(t);
     if (TERMINAL.has(st)) continue;
     if (st === 'blocked') {
-      out.push({ slug: t.slug, reason: t.stoppedReason ? `blocked — ${t.stoppedReason}` : 'blocked, needs a decision' });
+      // `stoppedReason` is the one field here an agent writes freely, and this
+      // string has four sinks — `waitingOn` in the MCP answer, the `take_task`
+      // refusal built in lifecycle.ts, the dashboard lane, and `baton next` /
+      // `baton ls`. The strictest of those is an LLM reading it as Baton's own
+      // account of the board, so it decides the treatment for all four:
+      // `quotedInline`, the same quoting the handoff fence uses. A raw reason
+      // let one agent put a forged notice on its own line inside another
+      // agent's instructions (U+2028 is a line break and is not a control
+      // character). Sanitizing HERE rather than per-consumer is deliberate —
+      // `blockers()` is the single definition of why work is stuck, and a
+      // consumer that quoted it itself would be a second definition to drift.
+      out.push({ slug: t.slug, reason: t.stoppedReason ? `blocked — ${quotedInline(t.stoppedReason)}` : 'blocked, needs a decision' });
       continue;
     }
     // Nobody is working on a task in review, so "review (claude)" would read as
