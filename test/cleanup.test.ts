@@ -186,3 +186,27 @@ describe('cleanup against a real repo', () => {
     await rm(live, { force: true });
   });
 });
+
+// A branch whose commits exist nowhere else is only deleted once they are
+// archived; if that cannot happen it must be reported skipped, never removed.
+describe('cleanup never reports an unarchivable branch as removed', () => {
+  let root: string;
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'baton-clean-arch-'));
+    for (const a of [['init', '-q'], ['config', 'user.email', 't@t.t'], ['config', 'user.name', 'T'], ['commit', '--allow-empty', '-qm', 'init']]) {
+      await execa('git', a, { cwd: root });
+    }
+  });
+  afterAll(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('skips it, with the reason, and keeps the branch', async () => {
+    const tip = (await execa('git', ['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'lonely work'], { cwd: root })).stdout.trim();
+    await execa('git', ['update-ref', 'refs/heads/baton/lonely', tip], { cwd: root });
+    await mkdir(join(root, '.git', 'refs', 'baton'), { recursive: true });
+    await writeFile(join(root, '.git', 'refs', 'baton', 'archive'), 'not a directory'); // update-ref must fail
+    const r = await cleanJunk(root, await auditJunk(root), { apply: true });
+    expect(r.skipped.some((x) => x.item.id === 'baton/lonely' && /kept baton\/lonely/.test(x.why))).toBe(true);
+    expect(r.removed.some((i) => i.id === 'baton/lonely')).toBe(false);
+    expect((await execa('git', ['branch', '--list', 'baton/lonely'], { cwd: root })).stdout).toContain('baton/lonely');
+  });
+});

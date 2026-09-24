@@ -93,7 +93,7 @@ export function auditWorktrees(
       items.push({
         kind: 'orphan-worktree-task', id: t.slug, path: t.worktreePath, branch: t.branch,
         reason: 'recorded task, but its worktree directory no longer exists',
-        action: 'remove the stale task entry + its branch',
+        action: 'remove the stale task entry + its branch (tip kept under refs/baton/archive/ unless merged)',
       });
     }
   }
@@ -105,7 +105,7 @@ export function auditWorktrees(
     items.push({
       kind: 'orphan-worktree-disk', id: basename(e.path), path: e.path, branch: e.branch ?? '',
       reason: 'baton worktree on disk with no matching task (interrupted create/remove)',
-      action: 'remove the worktree + its branch',
+      action: 'remove the worktree + its branch (tip kept under refs/baton/archive/ unless merged)',
     });
   }
   return items;
@@ -120,7 +120,7 @@ export function auditBranches(branches: string[], tasks: Task[], worktrees: Work
     .map((b) => ({
       kind: 'orphan-branch' as const, id: b, path: null, branch: b,
       reason: 'baton branch with no task and no live worktree',
-      action: 'delete the branch',
+      action: 'delete the branch (tip kept under refs/baton/archive/ unless merged)',
     }));
 }
 

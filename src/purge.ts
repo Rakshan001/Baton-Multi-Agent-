@@ -16,7 +16,7 @@
  */
 import { rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { batonDir } from './store.js';
+import { batonDir, loadTasksStrict } from './store.js';
 import { memoryAreas, mainRepoRoot } from './memory.js';
 import { loadKb } from './kb/state.js';
 import { storageUsage, dirSize } from './storage.js';
@@ -76,11 +76,18 @@ export function sanitizeCategories(input: unknown): PurgeCategory[] {
   return [...new Set(input.filter(isValidCategory))];
 }
 
-/** Orphan `baton/*` branches = baton branches with no live worktree (safe to drop). */
+/** Orphan `baton/*` branches = baton branches with no live worktree AND no task
+ *  row (safe to drop). An unreadable task store names none: we cannot tell which
+ *  branches a task still owns, so this category spares them all. */
 async function orphanBatonBranches(mainRoot: string): Promise<string[]> {
-  const [branches, worktrees] = await Promise.all([listBatonBranches(mainRoot), listWorktrees(mainRoot)]);
+  const [branches, worktrees, owned] = await Promise.all([
+    listBatonBranches(mainRoot),
+    listWorktrees(mainRoot),
+    loadTasksStrict(mainRoot).then((ts) => new Set(ts.map((t) => t.branch)), () => null),
+  ]);
+  if (owned === null) return [];
   const live = new Set(worktrees.map((w) => w.branch).filter(Boolean) as string[]);
-  return branches.filter((b) => !live.has(b));
+  return branches.filter((b) => !live.has(b) && !owned.has(b));
 }
 
 /** Total Baton-owned bytes on disk (data stores + git object store). */
@@ -191,7 +198,7 @@ export async function purgeStorage(root: string, categories: PurgeCategory[]): P
     const refs = await listArchiveRefs(mainRoot);
     for (const ref of refs) await deleteRef(ref, mainRoot);
     const orphans = await orphanBatonBranches(mainRoot);
-    for (const b of orphans) await deleteBranch(b, mainRoot);
+    for (const b of orphans) await deleteBranch(b, mainRoot, { archive: false }); // purge IS the delete-history action
     gcRan = await gitGc(mainRoot); // reclaims the now-unreachable objects
     deleted.push({ category: 'archives', count: refs.length + orphans.length });
   }

@@ -94,6 +94,19 @@ describe('purgeStorage (real repo)', () => {
     expect((await listBatonBranches(root))).toHaveLength(0);
   });
 
+  // purge never read tasks.json, so a branch a task still owns (its worktree
+  // just not checked out right now) was deleted as an "orphan".
+  it('spares a baton branch a task row still owns', async () => {
+    await writeFile(join(root, '.baton', 'tasks.json'), JSON.stringify([{
+      slug: 'feat-x', task: 't', branch: 'baton/feat-x', worktreePath: join(root, '.baton', 'wt', 'feat-x'),
+      baseBranch: 'main', baseCommit: null, createdAt: '2026-01-01T00:00:00Z',
+    }]), 'utf-8');
+    const archives = (await purgePreview(root)).items.find((i) => i.category === 'archives');
+    expect(archives?.count).toBe(1); // the archive ref only
+    await purgeStorage(root, ['archives']);
+    expect(await branchExists('baton/feat-x', root)).toBe(true);
+  });
+
   it('only deletes the categories asked for', async () => {
     await purgeStorage(root, ['tmp']);
     expect(existsSync(join(root, '.baton', 'tmp'))).toBe(false);

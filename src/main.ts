@@ -161,7 +161,7 @@ program
   .command('merge')
   .argument('<slug>', 'task slug')
   .option('--no-squash', 'keep full branch history (default squashes to one commit)')
-  .option('--no-archive', 'do not preserve branch history under refs/baton/archive')
+  .option('--no-archive', 'do not preserve branch history under refs/baton/archive (a later rm still keeps the unmerged tip there; only purge drops it)')
   .description("merge a task's branch into the current branch (squash + archive)")
   .action((slug: string, opts: { squash?: boolean; archive?: boolean }) =>
     run(() => mergeCmd(slug, opts)),

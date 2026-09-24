@@ -4,7 +4,7 @@
  * `baton rm <slug>` — remove a task's worktree + branch and drop it from the store.
  */
 import { resolve } from 'node:path';
-import { hasUnsavedWork, removeWorktree, worktreeStatus } from '../git.js';
+import { ensureDurable, hasUnsavedWork, removeWorktree, worktreeStatus } from '../git.js';
 import { getTask, removeTask, resolveBatonRoot, TaskNotFoundError } from '../store.js';
 import { killSessionFor } from '../util/tmux.js';
 import { bus } from '../events.js';
@@ -53,6 +53,10 @@ export async function removeTaskWorktree(
     // nothing to lose, and refusing to remove its task would strand the row.
     if (hasUnsavedWork(status)) throw new DirtyWorktreeError(slug, status.unreadable ? 'unreadable' : status.state);
   }
+
+  // Before the agent is killed: if this branch's commits exist nowhere else and
+  // cannot be archived, refuse now — not after the session is already gone.
+  await ensureDurable(task.branch, gitRepo);
 
   // Kill any interactive agent session BEFORE deleting its working directory —
   // via tmux directly (deterministic session name), so this works no matter

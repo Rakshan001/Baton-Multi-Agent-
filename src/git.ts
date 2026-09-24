@@ -198,8 +198,47 @@ export async function listBatonBranches(cwd?: string): Promise<string[]> {
   return r.ok && r.stdout ? r.stdout.split('\n').filter(Boolean) : [];
 }
 
-/** Delete a local branch (force). Best-effort, never throws. */
-export async function deleteBranch(branch: string, cwd?: string): Promise<boolean> {
+/** A branch tip no durable ref holds could not be archived, so it was not deleted. */
+export class ArchiveFailedError extends Error {
+  constructor(branch: string, reason: string) {
+    super(`kept ${branch}: its commits exist nowhere else and archiving them failed (${reason.trim() || 'update-ref failed'})`);
+    this.name = 'ArchiveFailedError';
+  }
+}
+
+/**
+ * Make sure `branch`'s tip outlives the branch: if no DURABLE ref holds it — a
+ * tag, a non-baton branch, or an archive ref — write
+ * `refs/baton/archive/<name>-deleted-<ms>-<sha7>` first. Remotes, the stash and
+ * wip snapshots do not count (each can disappear on its own), nor do other
+ * baton/* branches (often deleted in the same pass). Returns false when the
+ * branch does not exist; throws ArchiveFailedError rather than lose the tip.
+ */
+export async function ensureDurable(branch: string, cwd?: string): Promise<boolean> {
+  if (!branch) return false;
+  const tip = await gitTry(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], cwd);
+  if (!tip.ok || !tip.stdout.trim()) return false;
+  const sha = tip.stdout.trim();
+  const held = await gitTry(
+    ['for-each-ref', '--contains', sha, '--format=%(refname)', 'refs/tags', 'refs/heads', 'refs/baton/archive'], cwd);
+  // A failed lookup reads as "not held" — archiving needlessly is the safe side.
+  const durable = held.ok && held.stdout.split('\n').some((r) =>
+    r && r !== `refs/heads/${branch}` && !r.startsWith('refs/heads/baton/'));
+  if (durable) return true;
+  const flat = branch.replace(/^baton\//, '').replace(/\//g, '-');
+  const w = await gitTry(['update-ref', `refs/baton/archive/${flat}-deleted-${Date.now()}-${sha.slice(0, 7)}`, sha], cwd);
+  if (!w.ok) throw new ArchiveFailedError(branch, w.stderr);
+  return true;
+}
+
+/**
+ * Delete a local branch (force), archiving an unmerged tip first. Returns false
+ * when there was no such branch. Throws ArchiveFailedError only when the tip
+ * could not be archived — the branch is then kept. `archive: false` is purge's
+ * explicit, confirmed "delete history".
+ */
+export async function deleteBranch(branch: string, cwd?: string, opts: { archive?: boolean } = {}): Promise<boolean> {
+  if (opts.archive !== false && !(await ensureDurable(branch, cwd))) return false;
   return (await gitTry(['branch', '-D', branch], cwd)).ok;
 }
 
@@ -252,9 +291,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Remove a worktree and delete its branch. Robust to the common failure modes:
  * if the worktree dir was deleted out from under us, prune stale metadata
  * instead of issuing a doomed `remove`; retry transient EBUSY/EPERM; always
- * prune afterward to sweep leftovers. Best-effort, never throws.
+ * prune afterward to sweep leftovers. Best-effort — except that it throws
+ * ArchiveFailedError, BEFORE touching the disk, when the branch holds commits
+ * that exist nowhere else and could not be archived.
  */
 export async function removeWorktree(path: string, branch: string, cwd?: string): Promise<void> {
+  // Before the worktree goes: `-D` below must run after it (git will not delete
+  // a checked-out branch), and a refusal must leave the checkout untouched.
+  await ensureDurable(branch, cwd);
   if (!(await pathExists(path))) {
     await gitTry(['worktree', 'prune'], cwd);
   } else {
