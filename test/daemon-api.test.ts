@@ -29,12 +29,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
 import { type DaemonRecord, pidAlive, recordPath, writeDaemonRecord } from '../src/daemons.js';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT_A = 7411;
-const PORT_B = 7412;
-const PORT_RO = 7413;
+// Ports come from the kernel at spawn time — see test/helpers/free-port.ts.
+// They are therefore unordered, so anything comparing a fleet listing has to
+// sort BOTH sides numerically (`.sort()` alone is lexicographic).
+let PORT_A = 0;
+let PORT_B = 0;
+let PORT_RO = 0;
+const numeric = (a: number, b: number) => a - b;
 
 async function api(port: number, path: string, init?: RequestInit): Promise<{ status: number; body: any }> {
   const res = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(8000), ...init });
@@ -57,7 +63,7 @@ async function makeRepo(base: string, name: string): Promise<string> {
 }
 
 async function waitUp(port: number): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + DAEMON_START_MS;
   for (;;) {
     try {
       if ((await fetch(`http://127.0.0.1:${port}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) return;
@@ -108,8 +114,11 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     await writeFile(join(a, '.baton', 'agents.json'), JSON.stringify({
       agents: [{ id: 'ghostly', label: 'Ghostly', binary: 'ghostly' }],
     }));
+    PORT_A = await freePort();
     await spawnDaemon(a, PORT_A, true);
+    PORT_B = await freePort();
     await spawnDaemon(b, PORT_B, true);
+    PORT_RO = await freePort();
     await spawnDaemon(ro, PORT_RO, false);
   }, 90_000);
 
@@ -122,8 +131,8 @@ describe.runIf(hasDist)('fleet endpoints', () => {
   it('lists the fleet with a self marker', async () => {
     const { status, body } = await api(PORT_A, '/api/daemons');
     expect(status).toBe(200);
-    const ports = body.daemons.map((d: any) => d.port).sort();
-    expect(ports).toEqual([PORT_A, PORT_B, PORT_RO]);
+    const ports = body.daemons.map((d: any) => d.port).sort(numeric);
+    expect(ports).toEqual([PORT_A, PORT_B, PORT_RO].sort(numeric));
     // `self` is A's own view — B is somebody else from where A stands.
     expect(body.daemons.find((d: any) => d.port === PORT_A).self).toBe(true);
     expect(body.daemons.find((d: any) => d.port === PORT_B).self).toBe(false);
@@ -191,7 +200,7 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect(status).toBe(200);
     expect(body.removed).toBe(2);
     const fleet = (await api(PORT_A, '/api/daemons')).body.daemons;
-    expect(fleet.map((d: any) => d.port).sort()).toEqual([PORT_A, PORT_B, PORT_RO]);
+    expect(fleet.map((d: any) => d.port).sort(numeric)).toEqual([PORT_A, PORT_B, PORT_RO].sort(numeric));
     expect(fleet.every((d: any) => d.status === 'live')).toBe(true);
     // A second clean finds nothing — the sweep is idempotent, not greedy.
     expect((await api(PORT_A, '/api/daemons/clean', { method: 'POST' })).body.removed).toBe(0);
@@ -313,7 +322,7 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect(again.status).toBe(200);
     expect(again.body.outcome).toBe('cleaned');
     const after = await api(PORT_A, '/api/daemons');
-    expect(after.body.daemons.map((d: any) => d.port).sort()).toEqual([PORT_A, PORT_RO]);
+    expect(after.body.daemons.map((d: any) => d.port).sort(numeric)).toEqual([PORT_A, PORT_RO].sort(numeric));
   });
 
   it('POST /api/shutdown answers 200 BEFORE dying, then dies', async () => {

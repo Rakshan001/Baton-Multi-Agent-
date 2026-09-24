@@ -20,6 +20,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -84,13 +86,17 @@ describe.runIf(hasDist)('baton serve --host fails closed', () => {
    */
   it('still starts on loopback with no members at all', async () => {
     const cwd = await repo();
-    const child = execa('node', [DIST_CLI, 'serve', '--port', '7394'], { cwd, reject: false });
+    // The only case in this file that actually binds, so the only one that
+    // needs a port nobody else in the parallel run holds. The refusals above
+    // never reach listen(), so their literals cannot collide with anything.
+    const port = await freePort();
+    const child = execa('node', [DIST_CLI, 'serve', '--port', String(port)], { cwd, reject: false });
     try {
-      const deadline = Date.now() + 20_000;
+      const deadline = Date.now() + DAEMON_START_MS;
       let ok = false;
       while (Date.now() < deadline && !ok) {
         try {
-          const res = await fetch('http://127.0.0.1:7394/api/meta', { signal: AbortSignal.timeout(1000) });
+          const res = await fetch(`http://127.0.0.1:${port}/api/meta`, { signal: AbortSignal.timeout(1000) });
           ok = res.ok;
         } catch { await new Promise((r) => setTimeout(r, 200)); }
       }

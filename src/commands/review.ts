@@ -12,7 +12,8 @@
  *
  *   baton review save <slug> < findings.json   # stdin JSON, the skill's last step
  *   baton review list                          # every recorded review
- *   baton review show <slug>                   # findings, grouped by axis
+ *   baton review show <slug>                   # every finding, grouped by axis,
+ *                                              # each tagged open / fixed / dismissed
  *   baton review resolve <slug> <n> [--dismiss]
  *
  * Findings are printed grouped by axis and NEVER ranked across axes — the whole
@@ -37,7 +38,11 @@ const AXIS_LABEL: Record<ReviewAxis, string> = {
   security: 'Security',
 };
 
-const STATUS_MARK: Record<string, string> = { open: '○', fixed: '●', dismissed: '·' };
+// A resolved finding is TAGGED, never merely re-glyphed: '●' beside '○' is
+// invisible at a glance, and a body whose closed findings look open contradicts
+// the open-only header above it — which is how a fixed finding got reported as
+// outstanding to a human.
+const STATUS_MARK: Record<string, string> = { open: '○', fixed: '✓', dismissed: '✗' };
 
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -49,41 +54,62 @@ function readStdin(): Promise<string> {
   });
 }
 
-function printFinding(f: ReviewFinding, index: number): void {
+function findingLines(f: ReviewFinding, index: number): string[] {
   const mark = STATUS_MARK[f.status] ?? '○';
   const where = f.file ? `  ${f.file}${f.line ? `:${f.line}` : ''}` : '';
   // A documented-standard breach is binding; everything else is a judgement
   // call. Keeping them visually distinct is a rule of the skill, not a nicety.
   const kind = f.hard ? 'VIOLATION' : 'judgement';
+  // Closed findings keep their kind — a violation that was fixed is still the
+  // violation it was — but the state comes first, in a word.
+  const state = f.status === 'open' ? kind : `${f.status} · ${kind}`;
   // Both handles: the index is what people type, the id is what survives a
   // re-review (which reorders the list). `resolve` accepts either.
-  console.log(`  [${index}] ${f.id}  ${mark} ${kind}  ${f.title}${where}`);
-  console.log(`        source: ${f.source}`);
-  if (f.detail) console.log(`        ${f.detail.split('\n')[0]}`);
-  if (f.route && f.status === 'open') console.log(`        → next: ${f.route}`);
+  const out = [
+    `  [${index}] ${f.id}  ${mark} ${state}  ${f.title}${where}`,
+    `        source: ${f.source}`,
+  ];
+  if (f.detail) out.push(`        ${f.detail.split('\n')[0]}`);
+  if (f.route && f.status === 'open') out.push(`        → next: ${f.route}`);
+  return out;
 }
 
-function printRecord(rec: ReviewRecord, currentHead: string): void {
+/** The `baton review show` body, as lines. Exported so the rendering can be
+ *  tested directly: the header counts open findings only, and the body must
+ *  never read as if it disagreed with that count. */
+export function renderReview(rec: ReviewRecord, currentHead: string): string[] {
   const open = openFindings(rec);
   const counts = countByAxis(open);
-  console.log(`${rec.slug} — ${rec.fixedPoint}...${rec.head.slice(0, 9)}${rec.agent ? ` · ${rec.agent}` : ''}`);
-  console.log(`  reviewed ${rec.updatedAt.split('T')[0]} · open: ${REVIEW_AXES.map((a) => `${AXIS_LABEL[a]} ${counts[a]}`).join(' · ')}`);
+  const out: string[] = [
+    `${rec.slug} — ${rec.fixedPoint}...${rec.head.slice(0, 9)}${rec.agent ? ` · ${rec.agent}` : ''}`,
+    `  reviewed ${rec.updatedAt.split('T')[0]} · open: ${REVIEW_AXES.map((a) => `${AXIS_LABEL[a]} ${counts[a]}`).join(' · ')}`,
+  ];
 
   if (isReviewStale(rec, currentHead)) {
-    console.log(`  ⚠ STALE: reviewed at ${rec.head.slice(0, 9)}, HEAD is now ${currentHead.slice(0, 9)} — findings may already be fixed`);
+    out.push(`  ⚠ STALE: reviewed at ${rec.head.slice(0, 9)}, HEAD is now ${currentHead.slice(0, 9)} — findings may already be fixed`);
   }
-  if (rec.partial) console.log(`  ⚠ PARTIAL: ${rec.partial}`);
-  for (const s of rec.skipped) console.log(`  — ${AXIS_LABEL[s.axis]} axis skipped: ${s.why}`);
-  console.log('');
+  if (rec.partial) out.push(`  ⚠ PARTIAL: ${rec.partial}`);
+  for (const s of rec.skipped) out.push(`  — ${AXIS_LABEL[s.axis]} axis skipped: ${s.why}`);
+  // The body lists every finding, including the closed ones; the header counts
+  // only the open ones. Say so once, with the arithmetic, so the longer list
+  // below can never be mistaken for a longer list of outstanding work.
+  const fixed = rec.findings.filter((f) => f.status === 'fixed').length;
+  const dismissed = rec.findings.filter((f) => f.status === 'dismissed').length;
+  if (fixed || dismissed) {
+    const parts = [`${fixed} fixed`, `${dismissed} dismissed`].filter((p) => !p.startsWith('0 '));
+    out.push(`  ${rec.findings.length} findings below · ${open.length} open · ${fixed + dismissed} resolved (${parts.join(' · ')})`);
+  }
+  out.push('');
 
   // Grouped by axis, printed in a fixed order. No cross-axis ranking.
   for (const axis of REVIEW_AXES) {
     const inAxis = rec.findings.map((f, i) => [f, i] as const).filter(([f]) => f.axis === axis);
     if (!inAxis.length) continue;
-    console.log(`  ## ${AXIS_LABEL[axis]}`);
-    for (const [f, i] of inAxis) printFinding(f, i);
-    console.log('');
+    out.push(`  ## ${AXIS_LABEL[axis]}`);
+    for (const [f, i] of inAxis) out.push(...findingLines(f, i));
+    out.push('');
   }
+  return out;
 }
 
 /** `baton review save <slug>` — read a findings JSON payload on stdin. */
@@ -166,7 +192,7 @@ export async function reviewShowCmd(slug: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  printRecord(rec, (await reviewHeads(root, [slug])).get(slug) ?? '');
+  console.log(renderReview(rec, (await reviewHeads(root, [slug])).get(slug) ?? '').join('\n'));
 }
 
 /** `baton review resolve <slug> <index>` — mark a finding fixed (or dismissed). */

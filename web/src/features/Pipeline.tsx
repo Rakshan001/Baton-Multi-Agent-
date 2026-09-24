@@ -33,7 +33,12 @@ import type { CancelResult, CancelScopeInput, Lane, LaneStatus, LaneTask, Pipeli
 
 const LANE_META: Record<LaneStatus, { label: string; color: string; icon: IconName; blurb: string }> = {
   ungated: { label: "Ungated", color: "var(--idle)", icon: "layers", blurb: "Hand-made tasks — not part of a plan, never held by a phase." },
-  complete: { label: "Complete", color: "var(--ok)", icon: "checkCircle", blurb: "Every task finished and landed on the base." },
+  // `--clean`, not `--ok`: there is no `--ok` in src/styles/tokens.css, so
+  // every rule built on it — the chip's colour, its color-mix background and
+  // border, and the lane's progress fill — was invalid and dropped. A finished
+  // phase drew an unstyled chip above a 100%-wide bar with no colour in it,
+  // which is the one lane state that reads as "nothing happened".
+  complete: { label: "Complete", color: "var(--clean)", icon: "checkCircle", blurb: "Every task finished and landed on the base." },
   holding: { label: "Holding", color: "var(--dirty)", icon: "gitMerge", blurb: "Finished, but the branches have not landed — this is what is locking the next phase. Run: baton integrate" },
   open: { label: "Open", color: "var(--accent)", icon: "play", blurb: "Agents may start work here now." },
   locked: { label: "Locked", color: "var(--idle)", icon: "lock", blurb: "Waiting on an earlier phase to finish and land." },
@@ -46,7 +51,7 @@ const STATE_COLOR: Record<TaskState, string> = {
   paused: "var(--dirty)",
   review: "var(--dirty)",
   blocked: "var(--conflict)",
-  done: "var(--ok)",
+  done: "var(--clean)",   // see LANE_META above — `--ok` is not a token, so the done pill lost its fill AND its border
   cancelled: "var(--idle)",
 };
 

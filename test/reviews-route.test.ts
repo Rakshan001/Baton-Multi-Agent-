@@ -22,6 +22,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { execa } from 'execa';
 import { saveReview } from '../src/reviews.js';
 import type { ReviewFinding } from '../src/reviews.js';
+import { freePort } from './helpers/free-port.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -41,7 +42,9 @@ async function waitForDaemon(port: number, timeoutMs = 20_000): Promise<void> {
 describe.runIf(hasDist)('/api/reviews routes', () => {
   let child: ChildProcess | null = null;
   let root = '';
-  const port = 7400 + Math.floor(Math.random() * 400);
+  // Assigned right before each spawn, not here: a port held from module load is
+  // a port some other parallel file may want. See test/helpers/free-port.ts.
+  let port = 0;
 
   afterEach(async () => {
     if (child) {
@@ -85,6 +88,7 @@ describe.runIf(hasDist)('/api/reviews routes', () => {
     // Deliberately the SECOND finding: an id-addressed resolve must land on it
     // regardless of position, which is what a positional API cannot promise.
     const target = findings[1]!;
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port), '--write'], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 
@@ -104,6 +108,7 @@ describe.runIf(hasDist)('/api/reviews routes', () => {
   it('dismisses by id when { dismiss: true }', async () => {
     await setupRepo();
     const findings = await seedReview();
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port), '--write'], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 
@@ -119,6 +124,7 @@ describe.runIf(hasDist)('/api/reviews routes', () => {
   it('404s an id that is not in the review', async () => {
     await setupRepo();
     await seedReview();
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port), '--write'], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 
@@ -132,6 +138,7 @@ describe.runIf(hasDist)('/api/reviews routes', () => {
   it('still accepts a positional index, and rejects a body with neither', async () => {
     await setupRepo();
     const findings = await seedReview();
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port), '--write'], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 
@@ -154,6 +161,7 @@ describe.runIf(hasDist)('/api/reviews routes', () => {
   it('lists reviews with per-axis open counts and a staleness flag', async () => {
     await setupRepo();
     await seedReview();
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port), '--write'], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 
@@ -175,6 +183,7 @@ describe.runIf(hasDist)('/api/reviews routes', () => {
   it('is write-gated like every other mutating endpoint', async () => {
     await setupRepo();
     const findings = await seedReview();
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port)], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 

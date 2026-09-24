@@ -143,6 +143,29 @@ function LiveSessionRail({ sessions, currentSlug, onPick, onClose }: {
   );
 }
 
+type LiveTab = "activity" | "terminal";
+
+/* Module scope, not inside LiveSession: a component declared in the body of
+   another component is a NEW type on every render, so React unmounts the old
+   <button> and mounts a fresh one each time. This dialog re-renders once a
+   second (the "watching mm:ss" timer), so a tab button the user had just
+   clicked — or tabbed to — was torn out from under the keyboard within a
+   second, dropping focus onto <body>, outside the focus trap's Tab cycle. */
+function TabBtn({ id, label, icon, tab, onPick, live }: {
+  id: LiveTab; label: string; icon: IconName; tab: LiveTab; onPick: (id: LiveTab) => void; live?: boolean;
+}) {
+  const on = tab === id;
+  return (
+    <button className="fr" onClick={() => onPick(id)} aria-pressed={on} style={{
+      display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 99, cursor: "pointer",
+      fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", border: `1px solid ${on ? "var(--border-strong)" : "transparent"}`,
+      background: on ? "var(--bg-surface)" : "transparent", color: on ? "var(--text-primary)" : "var(--text-tertiary)" }}>
+      <Icon name={icon} size={12} /> {label}
+      {live && <LiveDot size={5} />}
+    </button>
+  );
+}
+
 const cap = (list: TimedEvent[]) => (list.length > 500 ? list.slice(-500) : list);
 
 export function LiveSession({
@@ -164,7 +187,7 @@ export function LiveSession({
   const [demoStreaming, setDemoStreaming] = useState(true);
   const [elapsed, setElapsed] = useState(0);
   const [railOpen, setRailOpen] = useState(false);
-  const [tab, setTab] = useState<"activity" | "terminal">("activity");
+  const [tab, setTab] = useState<LiveTab>("activity");
   const [terminal, setTerminal] = useState<TerminalInfo | null>(null);
   const [termCap, setTermCap] = useState<{ available: boolean; hint?: string } | null>(null);
   const [termStarting, setTermStarting] = useState(false);
@@ -175,6 +198,7 @@ export function LiveSession({
   useFocusTrap(dialogRef, onClose);
   const others = useMemo(() => sessions.filter((s) => s.agent && s.slug !== slug), [sessions, slug]);
   const pick = (s: string) => { setSlug(s); setRailOpen(false); };
+  const pickTab = (id: LiveTab) => { userPickedTab.current = true; setTab(id); };
   // Real mode: "working" = an agent process is attached to the worktree.
   const streaming = demo ? demoStreaming : task?.agent != null;
 
@@ -379,16 +403,6 @@ export function LiveSession({
     </div>
   );
 
-  const TabBtn = ({ id, label, icon }: { id: "activity" | "terminal"; label: string; icon: IconName }) => (
-    <button className="fr" onClick={() => { userPickedTab.current = true; setTab(id); }} aria-pressed={tab === id} style={{
-      display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 99, cursor: "pointer",
-      fontSize: "var(--fs-12)", fontWeight: "var(--fw-medium)", border: `1px solid ${tab === id ? "var(--border-strong)" : "transparent"}`,
-      background: tab === id ? "var(--bg-surface)" : "transparent", color: tab === id ? "var(--text-primary)" : "var(--text-tertiary)" }}>
-      <Icon name={icon} size={12} /> {label}
-      {id === "terminal" && terminal && <LiveDot size={5} />}
-    </button>
-  );
-
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-overlay)" as unknown as number, display: "grid", placeItems: "center", padding: "min(3vh, 24px) min(3vw, 28px)" }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
@@ -441,8 +455,8 @@ export function LiveSession({
           )}
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-surface)" }}>
-              <TabBtn id="activity" label="Activity" icon="layers" />
-              <TabBtn id="terminal" label="Terminal" icon="terminal" />
+              <TabBtn id="activity" label="Activity" icon="layers" tab={tab} onPick={pickTab} />
+              <TabBtn id="terminal" label="Terminal" icon="terminal" tab={tab} onPick={pickTab} live={terminal != null} />
             </div>
             <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
               {tab === "activity" ? ActivityPane : TerminalPane}

@@ -39,11 +39,14 @@ import { takeCmd } from '../src/commands/take.js';
 import { saveHostLink } from '../src/host-link.js';
 import { loadTasks, saveTasks, type Task } from '../src/store.js';
 import { git } from '../src/util/exec.js';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT = 7399;
-const HUB = `http://127.0.0.1:${PORT}`;
+// Port comes from the kernel at spawn time — see test/helpers/free-port.ts.
+let PORT = 0;
+let HUB = '';
 
 const WHO = (n: string) => ({ agent: 'claude', sessionSlug: n });
 
@@ -127,8 +130,10 @@ describe('team — the hub is the single writer', () => {
 
   beforeAll(async () => {
     hub = await repoWith('baton-hub-', (d) => [queued(d, 'alpha'), queued(d, 'beta'), queued(d, 'gamma')]);
+    PORT = await freePort();
+    HUB = `http://127.0.0.1:${PORT}`;
     child = execa('node', [DIST_CLI, 'serve', '--write', '--port', String(PORT)], { cwd: hub, reject: false });
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`${HUB}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;

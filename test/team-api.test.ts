@@ -18,11 +18,14 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT = 7398;
-const BASE = `http://127.0.0.1:${PORT}`;
+// Port comes from the kernel at spawn time — see test/helpers/free-port.ts.
+let PORT = 0;
+let BASE = '';
 
 interface Json { status: number; body: any }
 
@@ -53,8 +56,10 @@ describe.runIf(hasDist)('team endpoints', () => {
     await execa('node', [DIST_CLI, 'member', 'add', 'Priya'], { cwd: dir });
     await execa('node', [DIST_CLI, 'member', 'add', 'Sam'], { cwd: dir });
 
+    PORT = await freePort();
+    BASE = `http://127.0.0.1:${PORT}`;
     child = execa('node', [DIST_CLI, 'serve', '--write', '--port', String(PORT)], { cwd: dir, reject: false });
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`${BASE}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;

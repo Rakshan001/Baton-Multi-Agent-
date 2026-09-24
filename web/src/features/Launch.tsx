@@ -59,7 +59,12 @@ export function LaunchSession({
       if (m.agents?.fromProject) setProjectAgents(m.agents.fromProject);
       if (m.hub && m.projects?.length) {
         setHubProjects(m.projects);
-        setProject((p) => p ?? m.projects![0].id); // default to the first sub-project
+        setProject((p) => {
+          if (p) return p;
+          const preferred = BatonAPI.hubTarget;
+          if (preferred && m.projects!.some((x) => x.id === preferred)) return preferred;
+          return m.projects![0].id;
+        });
       }
     }).catch(() => { if (alive.current) setTerminals({ available: false }); });
   }, []);

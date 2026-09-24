@@ -21,11 +21,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
 import { createHash } from 'node:crypto';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT = 7396;
-const BASE = `http://127.0.0.1:${PORT}`;
+// Ports come from the kernel at spawn time — see test/helpers/free-port.ts.
+// BASE is therefore filled in by the beforeAll, not at module load.
+let PORT = 0;
+let BASE = '';
 
 interface Json { status: number; body: any }
 
@@ -60,8 +64,10 @@ describe.runIf(hasDist)('owner controls', () => {
     await execa('node', [DIST_CLI, 'member', 'add', 'Priya'], { cwd: dir });
     await execa('node', [DIST_CLI, 'member', 'add', 'Sam'], { cwd: dir });
 
+    PORT = await freePort();
+    BASE = `http://127.0.0.1:${PORT}`;
     child = execa('node', [DIST_CLI, 'serve', '--write', '--port', String(PORT)], { cwd: dir, reject: false });
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`${BASE}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;
@@ -224,8 +230,8 @@ describe.runIf(hasDist)('owner controls', () => {
  * refusal points at the CLI, which still works when the dashboard cannot.
  */
 describe.runIf(hasDist)('owner controls on a read-only daemon', () => {
-  const RO_PORT = 7397;
-  const RO = `http://127.0.0.1:${RO_PORT}`;
+  let RO_PORT = 0;
+  let RO = '';
   let dir = '';
   let child: ResultPromise | null = null;
 
@@ -237,8 +243,10 @@ describe.runIf(hasDist)('owner controls on a read-only daemon', () => {
     await execa('git', ['commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dir });
     await execa('node', [DIST_CLI, 'member', 'add', 'Priya'], { cwd: dir });
 
+    RO_PORT = await freePort();
+    RO = `http://127.0.0.1:${RO_PORT}`;
     child = execa('node', [DIST_CLI, 'serve', '--port', String(RO_PORT)], { cwd: dir, reject: false });
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`${RO}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;
@@ -298,8 +306,8 @@ describe.runIf(hasDist)('owner controls on a read-only daemon', () => {
  * folder" path, minus the actual `git clone` (covered in test/workspace.test.ts).
  */
 describe.runIf(hasDist)('invites', () => {
-  const INV_PORT = 7398;
-  const INV = `http://127.0.0.1:${INV_PORT}`;
+  let INV_PORT = 0;
+  let INV = '';
   let dir = '';
   let child: ResultPromise | null = null;
 
@@ -324,8 +332,10 @@ describe.runIf(hasDist)('invites', () => {
     await execa('git', ['remote', 'add', 'origin', 'https://example.com/acme/hub.git'], { cwd: dir });
     await execa('node', [DIST_CLI, 'member', 'add', 'Owner'], { cwd: dir });
 
+    INV_PORT = await freePort();
+    INV = `http://127.0.0.1:${INV_PORT}`;
     child = execa('node', [DIST_CLI, 'serve', '--write', '--port', String(INV_PORT)], { cwd: dir, reject: false });
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`${INV}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;

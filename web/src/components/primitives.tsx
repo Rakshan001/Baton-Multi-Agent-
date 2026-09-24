@@ -8,6 +8,7 @@ import {
   useState, useEffect, useRef, useReducer,
   type CSSProperties, type ReactNode,
 } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { Icon, type IconName } from "./Icon";
 import { getAgent, AgentGlyph } from "../lib/registry";
 import { progressEstimate, timeAgo, timeAgoShort, copyText } from "../lib/format";
@@ -336,26 +337,12 @@ export function Sheet({
   open, onClose, children, labelledBy, side = "right", width = 460,
 }: { open: boolean; onClose: () => void; children: ReactNode; labelledBy?: string; side?: "right" | "bottom"; width?: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  const lastFocus = useRef<Element | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    lastFocus.current = document.activeElement;
-    const el = ref.current!;
-    const focusable = () => el.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])');
-    const first = focusable()[0];
-    if (first) setTimeout(() => first.focus(), 40);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
-      if (e.key === "Tab") {
-        const f = Array.from(focusable()); if (!f.length) return;
-        const i = f.indexOf(document.activeElement as HTMLElement);
-        if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-        else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => { document.removeEventListener("keydown", onKey, true); (lastFocus.current as HTMLElement)?.focus?.(); };
-  }, [open, onClose]);
+  // The shared trap, not a second copy of it. The copy that used to live here
+  // listed `onClose` in its deps, and every caller passes an inline arrow — so
+  // the trap tore down and re-armed on EVERY parent render (App polls /api/status
+  // every 2 s), yanking focus back to the sheet's first control a couple of
+  // times a minute. `useFocusTrap` keeps the callback in a ref for exactly this.
+  useFocusTrap(ref, onClose, { enabled: open });
   if (!open) return null;
   const isMobile = window.matchMedia("(max-width: 720px)").matches;
   const mobile = isMobile || side === "bottom";
@@ -379,24 +366,14 @@ export function ConfirmDialog({
   open, onClose, onConfirm, title, body, confirmLabel = "Confirm", tone = "default", icon, busy,
 }: { open: boolean; onClose: () => void; onConfirm: () => void; title?: ReactNode; body?: ReactNode; confirmLabel?: string; tone?: "default" | "danger" | "warn"; icon?: IconName; busy?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    const el = ref.current!;
-    const f = () => el.querySelectorAll<HTMLElement>('button:not([disabled]),[tabindex]:not([tabindex="-1"])');
-    setTimeout(() => { const b = el.querySelector<HTMLElement>("[data-autofocus]"); (b || f()[0])?.focus(); }, 40);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-      if (e.key === "Tab") {
-        const list = Array.from(f()); if (!list.length) return;
-        const i = list.indexOf(document.activeElement as HTMLElement);
-        if (e.shiftKey && i <= 0) { e.preventDefault(); list[list.length - 1].focus(); }
-        else if (!e.shiftKey && i === list.length - 1) { e.preventDefault(); list[0].focus(); }
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => { document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
-  }, [open, onClose]);
+  // Same story as Sheet above, and it cost more here: this dialog's body can
+  // hold a text field (the Warn note on Team, the reason on Pipeline's cancel).
+  // Re-arming on every parent render moved focus onto the primary button after
+  // each keystroke, so one space press sent a half-typed warning — or confirmed
+  // a cancellation. The shared trap holds `onClose` in a ref and re-arms only
+  // when `open` changes; its Tab cycle also now includes inputs and links,
+  // which the local copy's button-only selector skipped.
+  useFocusTrap(ref, onClose, { enabled: open });
   if (!open) return null;
   const accent = tone === "danger" ? "var(--conflict)" : tone === "warn" ? "var(--dirty)" : "var(--accent)";
   return (

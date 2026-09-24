@@ -88,6 +88,10 @@ describe('nodeVersionError', () => {
     const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf-8'));
     // A guard that disagrees with `engines` gives two different answers to the
     // same question — npm warns at one floor, the binary refuses at another.
+    // Whole-string, deliberately: parsing the first number out of `engines`
+    // instead would accept a range this guard does not implement (">= 24",
+    // ">=24 <26"), so it can only ever fail when this stronger check already
+    // has. There is one assertion here because a weaker twin proves nothing.
     expect(pkg.engines.node).toBe(`>=${MIN_NODE_MAJOR}`);
   });
 });

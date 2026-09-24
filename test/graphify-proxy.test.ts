@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { probeBinary } from '../src/util/exec.js';
+import { freePort } from './helpers/free-port.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const MERGED = '/Users/rakshanshetty/Desktop/Developer/work/FAT_FOX/.baton/kb/merged-graph.json';
@@ -49,19 +50,6 @@ async function killChild(child: ChildProcess): Promise<void> {
   });
 }
 
-/** Find a free loopback port. */
-async function freePort(): Promise<number> {
-  const { createServer } = await import('node:net');
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const addr = s.address();
-      const port = typeof addr === 'object' && addr ? addr.port : 0;
-      s.close(() => (port ? resolve(port) : reject(new Error('no port'))));
-    });
-  });
-}
 
 describe.runIf(canRun)('graphify proxy route (e2e)', () => {
   let child: ChildProcess | null = null;

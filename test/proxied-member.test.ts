@@ -24,13 +24,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-// 7415: test files run in PARALLEL, so a port shared with another suite is a
-// race, not a detail — 7398 is already team-api's and member-controls'.
-const PORT = 7415;
-const BASE = `http://127.0.0.1:${PORT}`;
+// Test files run in PARALLEL, so a port shared with another suite is a race,
+// not a detail. The kernel picks one nobody holds — test/helpers/free-port.ts.
+let PORT = 0;
+let BASE = '';
 
 interface Json { status: number; body: any }
 
@@ -77,8 +79,10 @@ describe.runIf(hasDist)('a member reaching the daemon through a proxy', () => {
     memberToken = tokenFrom((await execa('node', [DIST_CLI, 'member', 'add', 'Sam'], { cwd: dir })).stdout);
     danaToken = tokenFrom((await execa('node', [DIST_CLI, 'member', 'add', 'Dana'], { cwd: dir })).stdout);
 
+    PORT = await freePort();
+    BASE = `http://127.0.0.1:${PORT}`;
     child = execa('node', [DIST_CLI, 'serve', '--write', '--behind-proxy', '--port', String(PORT)], { cwd: dir, reject: false });
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         // /api/meta needs a token here too — reaching ANY status means it is up.

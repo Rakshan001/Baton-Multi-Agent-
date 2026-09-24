@@ -26,7 +26,15 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     void BatonAPI.getMeta().then((m) => {
-      if (m.hub && m.projects?.length) { setHubProjects(m.projects); setProject((p) => p ?? m.projects![0].id); }
+      if (m.hub && m.projects?.length) {
+        setHubProjects(m.projects);
+        setProject((p) => {
+          if (p) return p;
+          const preferred = BatonAPI.hubTarget;
+          if (preferred && m.projects!.some((x) => x.id === preferred)) return preferred;
+          return m.projects![0].id;
+        });
+      }
     }).catch(() => undefined);
   }, []);
 

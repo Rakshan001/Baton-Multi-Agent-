@@ -21,11 +21,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
 import { planDigest } from '../src/plan-trust.js';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT_RW = 7441;
-const PORT_RO = 7442;
+// Ports come from the kernel at spawn time — see test/helpers/free-port.ts.
+let PORT_RW = 0;
+let PORT_RO = 0;
 
 const PLAN = `---
 plan: auth
@@ -75,7 +78,7 @@ describe.runIf(hasDist)('plan approval over HTTP', () => {
       cwd, reject: false, env: { ...process.env, BATON_DAEMONS_DIR: registry },
     });
     children.push(child);
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`http://127.0.0.1:${port}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) return;
@@ -90,7 +93,9 @@ describe.runIf(hasDist)('plan approval over HTTP', () => {
     registry = join(base, 'registry');
     const [a, ro] = await Promise.all([makeRepo(base, 'repo-rw'), makeRepo(base, 'repo-ro')]);
     rw = a;
+    PORT_RW = await freePort();
     await spawnDaemon(a, PORT_RW, true);
+    PORT_RO = await freePort();
     await spawnDaemon(ro, PORT_RO, false);
   }, 90_000);
 

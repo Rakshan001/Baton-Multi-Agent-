@@ -50,6 +50,8 @@ const EXCLUDE = [
   ['.refs/', 'reference source for learning — never ships'],
   ['.github/', 'personal funding + security-report routing; downstream owns its CI'],
   ['scripts/release-export.mjs', 'origin release tooling'],
+  ['docs/two-repo-workflow.md', 'the withholding rules themselves — origin-only by definition'],
+  ['docs/superpowers/', 'design specs and plans for work not yet released downstream'],
 ];
 
 /** Downstream owns these; the export must not clobber them. */

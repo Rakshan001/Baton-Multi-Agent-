@@ -27,10 +27,13 @@ import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { execa, type ResultPromise } from 'execa';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT = 7451;
+// Port comes from the kernel at spawn time — see test/helpers/free-port.ts.
+let PORT = 0;
 
 describe.runIf(hasDist)('enrollment identity over loopback', () => {
   let base = '';
@@ -89,13 +92,14 @@ describe.runIf(hasDist)('enrollment identity over loopback', () => {
     const added = await execa('node', [DIST_CLI, 'member', 'add', 'Priya'], { cwd: repo, reject: false });
     token = /baton_[0-9a-f]{64}/.exec(`${added.stdout}\n${added.stderr}`)?.[0] ?? '';
 
+    PORT = await freePort();
     const child = execa('node', [DIST_CLI, 'serve', '--port', String(PORT)], {
       cwd: repo,
       reject: false,
       env: { ...process.env, GW_ADMIN: 'sk-admin-secret', BATON_DAEMONS_DIR: join(base, 'registry') },
     });
     children.push(child);
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`http://127.0.0.1:${PORT}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;

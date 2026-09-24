@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { execa } from 'execa';
 import { saveMemory } from '../src/memory.js';
+import { freePort } from './helpers/free-port.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -32,7 +33,9 @@ async function waitForDaemon(port: number, timeoutMs = 20_000): Promise<void> {
 describe.runIf(hasDist)('POST /api/memory/repair', () => {
   let child: ChildProcess | null = null;
   let root = '';
-  const port = 7300 + Math.floor(Math.random() * 500);
+  // Assigned right before each spawn, not here: a port held from module load is
+  // a port some other parallel file may want. See test/helpers/free-port.ts.
+  let port = 0;
 
   afterEach(async () => {
     if (child) {
@@ -66,6 +69,7 @@ describe.runIf(hasDist)('POST /api/memory/repair', () => {
       fact: 'The `DOOMED` flag in src/gone.ts controls the legacy path.',
       type: 'gotcha', files: ['src/gone.ts'],
     });
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port), '--write'], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
 
@@ -89,6 +93,7 @@ describe.runIf(hasDist)('POST /api/memory/repair', () => {
 
   it('is write-gated like every other mutating memory endpoint', async () => {
     await setupRepo();
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port)], { cwd: root, stdio: 'ignore' });
     await waitForDaemon(port);
     const r = await fetch(`http://127.0.0.1:${port}/api/memory/repair`, { method: 'POST', body: '{}' });

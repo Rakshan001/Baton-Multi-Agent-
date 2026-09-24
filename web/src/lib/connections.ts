@@ -49,6 +49,47 @@ export function normalizeBaseUrl(url: string): string {
   return trimmed;
 }
 
+/**
+ * Loopback dashboard URL for a fleet port. The only legal URL we mint from a
+ * daemon record — never interpolates `root` (that is a filesystem path).
+ */
+export function fleetBaseUrl(port: number): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("invalid port");
+  return `http://127.0.0.1:${port}`;
+}
+
+/** True when `baseUrl` is a loopback URL on this port (never a filesystem path). */
+export function isLoopbackPortUrl(baseUrl: string, port: number): boolean {
+  try {
+    const u = new URL(baseUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    if (u.hostname !== "127.0.0.1" && u.hostname !== "localhost") return false;
+    const p = u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80);
+    return p === port;
+  } catch {
+    return false;
+  }
+}
+
+/** Match a saved connection to a live fleet port, including same-origin default. */
+export function connectionForFleetPort(
+  port: number,
+  connections: Connection[],
+  opts: { self?: boolean } = {},
+): Connection | undefined {
+  const hit = connections.find((c) => c.baseUrl !== "" && isLoopbackPortUrl(c.baseUrl, port));
+  if (hit) return hit;
+  if (opts.self) return connections.find((c) => c.id === "default");
+  return undefined;
+}
+
+/** Persist a loopback connection for a live fleet daemon, or reuse one. */
+export function ensureFleetConnection(port: number, name: string): Connection {
+  const existing = connectionForFleetPort(port, loadConnections());
+  if (existing) return existing;
+  return addConnection({ name, baseUrl: fleetBaseUrl(port) });
+}
+
 export function addConnection(input: { name: string; baseUrl: string }): Connection {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const name = input.name.trim() || baseUrl.replace(/^https?:\/\//, "");

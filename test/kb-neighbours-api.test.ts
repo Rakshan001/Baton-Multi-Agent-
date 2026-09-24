@@ -18,10 +18,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT = 7443;
+// Port comes from the kernel at spawn time — see test/helpers/free-port.ts.
+let PORT = 0;
 
 const NODES = [
   { id: 'a', label: 'alpha()', file_type: 'code', source_file: 'src/a.ts', source_location: 'L1' },
@@ -61,11 +64,12 @@ describe.runIf(hasDist)('GET /api/kb/neighbours', () => {
       lastBuiltAt: new Date().toISOString(),
     }));
 
+    PORT = await freePort();
     const child = execa('node', [DIST_CLI, 'serve', '--port', String(PORT)], {
       cwd: repo, reject: false, env: { ...process.env, BATON_DAEMONS_DIR: join(base, 'registry') },
     });
     children.push(child);
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`http://127.0.0.1:${PORT}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) break;

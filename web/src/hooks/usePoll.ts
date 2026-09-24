@@ -14,7 +14,7 @@
    Over a metered or rate-limited tunnel that is a request storm aimed
    at a dead endpoint.
    ============================================================ */
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import { BatonAPI } from "../lib/api";
 import type { StatusRow, TaskHistory, TaskDetail } from "../types";
 
@@ -73,6 +73,20 @@ export function usePoll<T>(
    *  Making someone wait out a 30 s window they can see is a button that lies. */
   const refetch = useCallback(() => { failures.current = 0; void run(); }, [run]);
 
+  // useLayoutEffect: a useEffect reset would paint one frame of the previous
+  // daemon after a connection switch. Interval is NOT in this list: stretching
+  // 2s → 30s when SSE goes live must not blank the board. A notify/refetch
+  // also keeps the last snapshot — that is the "daemon dropped, keep what we
+  // knew" path. Only a new identity is a different daemon/resource.
+  useLayoutEffect(() => {
+    if (deps.length === 0) return;
+    generation.current++;
+    failures.current = 0;
+    setState({ data: null, error: null, isLoading: true, isFetching: false });
+    setLastUpdated(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+
   useEffect(() => {
     mounted.current = true;
     generation.current++; // invalidate any response still in flight from the previous deps
@@ -124,9 +138,12 @@ export function usePoll<T>(
 }
 
 /** When SSE is live, polling is only a safety net — stretch the intervals. */
-export const useStatus = (live = false) => usePoll<StatusRow[]>(() => BatonAPI.getStatus(), { interval: live ? 30000 : 2000 });
+export const useStatus = (live = false, deps: unknown[] = []) =>
+  usePoll<StatusRow[]>(() => BatonAPI.getStatus(), { interval: live ? 30000 : 2000, deps });
 /** Agents at a hub/repo root or kb sub-project — outside any task worktree. */
-export const useRootAgents = () => usePoll<Array<{ agent: string; count: number }>>(() => BatonAPI.getRootAgents(), { interval: 5000 });
-export const useHistory = (live = false) => usePoll<TaskHistory[]>(() => BatonAPI.getHistory(), { interval: live ? 60000 : 10000 });
+export const useRootAgents = (deps: unknown[] = []) =>
+  usePoll<Array<{ agent: string; count: number }>>(() => BatonAPI.getRootAgents(), { interval: 5000, deps });
+export const useHistory = (live = false, deps: unknown[] = []) =>
+  usePoll<TaskHistory[]>(() => BatonAPI.getHistory(), { interval: live ? 60000 : 10000, deps });
 export const useTask = (slug: string) =>
   usePoll<TaskDetail>(() => BatonAPI.getTask(slug), { interval: 2000, deps: [slug] });

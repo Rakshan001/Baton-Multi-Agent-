@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { freePort } from './helpers/free-port.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -30,7 +31,9 @@ async function waitForDaemon(port: number, timeoutMs = 20_000): Promise<void> {
 describe.runIf(hasDist)('GET /api/kb/context', () => {
   let child: ChildProcess | null = null;
   let dir = '';
-  const port = 7300 + Math.floor(Math.random() * 500);
+  // Assigned right before the spawn, not here: a port held from module load is
+  // a port some other parallel file may want. See test/helpers/free-port.ts.
+  let port = 0;
 
   afterEach(async () => {
     if (child) {
@@ -45,6 +48,7 @@ describe.runIf(hasDist)('GET /api/kb/context', () => {
     dir = await mkdtemp(join(tmpdir(), 'ctx-route-'));
     await mkdir(join(dir, '.baton'), { recursive: true });
     await writeFile(join(dir, 'README.md'), 'Route test project.\n');
+    port = await freePort();
     child = spawn('node', [DIST_CLI, 'serve', '-p', String(port)], { cwd: dir, stdio: 'ignore' });
     await waitForDaemon(port);
 

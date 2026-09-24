@@ -408,7 +408,11 @@ export function HandoffDialog({
               <button role="checkbox" aria-checked={commitPending} onClick={(e) => { e.preventDefault(); setCommitPending((v) => !v); }} className="fr" style={{ width: 18, height: 18, flex: "none", marginTop: 1, borderRadius: 5, cursor: "pointer", display: "grid", placeItems: "center", background: commitPending ? "var(--dirty)" : "transparent", border: `1.5px solid ${commitPending ? "var(--dirty)" : "var(--border-strong)"}` }}>
                 {commitPending && <Icon name="check" size={12} style={{ color: "#1a1a1a" }} strokeWidth={3} />}
               </button>
-              <div onClick={() => setCommitPending((v) => !v)}>
+              {/* No onClick here. <button> is a labelable element, so this
+                  <label> already forwards a click on its text to the checkbox
+                  above; a handler here fired as well and the two toggles
+                  cancelled out, making the whole text a dead click. */}
+              <div>
                 <div style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", display: "flex", alignItems: "center", gap: 7 }}>
                   Commit {task?.filesChanged} pending change{task?.filesChanged === 1 ? "" : "s"} first
                 </div>

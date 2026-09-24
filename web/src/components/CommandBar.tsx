@@ -10,6 +10,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { Icon, type IconName } from "./Icon";
 import { AgentBadge } from "./primitives";
 import { BatonAPI } from "../lib/api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { Prefs } from "../hooks/usePrefs";
 import type { StatusRow, AgentId, TaskHistory, MemoryFactStatus, SkillStatus } from "../types";
 
@@ -46,6 +47,14 @@ export function CommandBar({
   const [facts, setFacts] = useState<MemoryFactStatus[]>([]);
   const [skills, setSkills] = useState<SkillStatus[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // The palette says `aria-modal="true"` and had none of what that promises:
+  // Tab off its last result landed on the Tweaks button BEHIND the scrim, and
+  // closing left focus wherever it had wandered instead of back on the control
+  // that opened it. Same trap every other overlay uses — it also keeps its own
+  // 30 ms input focus, because the trap only places focus when the dialog has
+  // none.
+  useFocusTrap(dialogRef, onClose, { enabled: open });
   useEffect(() => { if (open) { setQ(""); setSel(0); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
   // Lazy-load the searchable corpora when the palette opens; both are small
   // (memory is hard-capped at 500 facts) and failures just mean fewer groups.
@@ -75,6 +84,8 @@ export function CommandBar({
       { id: "a-theme", label: `Switch to ${prefs.resolvedTheme === "dark" ? "light" : "dark"} theme`, icon: prefs.resolvedTheme === "dark" ? "sun" : "moon", group: "Actions", run: () => prefs.setTheme(prefs.resolvedTheme === "dark" ? "light" : "dark") },
       { id: "a-write", label: `${prefs.writeEnabled ? "Disable" : "Enable"} write actions`, icon: "gitMerge", group: "Actions", run: () => prefs.setWriteEnabled(!prefs.writeEnabled) },
       { id: "a-board", label: "View board", icon: "columns", group: "Actions", run: () => { navigate("home"); } },
+      // Was "View canvas", which set a board/canvas pref on the home screen.
+      // The canvas is a route of its own now, so this navigates instead.
       { id: "a-worktrees", label: "View worktrees", icon: "gitBranch", group: "Actions", run: () => { navigate("worktrees"); } },
     ];
     const sess: Command[] = (sessions || []).map((s) => ({ id: "s-" + s.slug, label: s.task, sub: s.slug, agent: s.agent, group: "Sessions", run: () => onOpen(s.slug) }));
@@ -117,7 +128,7 @@ export function CommandBar({
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-cmd)" as unknown as number, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh" }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", backdropFilter: "blur(3px)", animation: "fade-in var(--dur-2)" }} />
-      <div role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKey} style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKey} style={{
         position: "relative", width: "min(580px, 92vw)", maxHeight: "66vh", background: "var(--bg-elevated)",
         border: "1px solid var(--border-strong)", borderRadius: "var(--r-xl)", boxShadow: "var(--shadow-xl)",
         display: "flex", flexDirection: "column", overflow: "hidden", animation: "scale-in var(--dur-2) var(--ease-out)" }}>

@@ -27,14 +27,14 @@ import { DEMO_FLEET } from "./fleet";
 import { DEMO_SKILLS, type DemoSkill } from "./demoSkills";
 import { DEMO_QUARANTINE } from "./quarantine";
 import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
-import { BUILTIN_ROUTING, suggestRoute } from "./routing";
-import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
   applyDemoOverlay, demoMergePatch, demoMergeRefusal, demoPausePatch, demoPauseRefusal,
   demoTakeoverPatch, demoTakeoverRefusal, demoWorktreeProgress, demoWorktrees,
 } from "./demoWorktrees";
 import type { WorktreeProgress } from "../components/flow/panel";
 import { demoDiscardRefusal, demoDoctorReport } from "./demoRecover";
+import { BUILTIN_ROUTING, suggestRoute } from "./routing";
+import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
   SCENARIOS, statusFrom, historyFrom, detailFrom, br,
   type ScenarioName, type DemoSession,
@@ -260,6 +260,8 @@ class BatonClient {
   demo = ls.get<boolean>("baton:demo", import.meta.env.DEV);
   scenario: ScenarioName = ls.get<ScenarioName>("baton:scenario", "busy");
   project = ls.get<string>("baton:project", "orbit");
+  /** Hub sub-project Launch should preselect. Not a board filter. */
+  hubTarget: string | null = ls.get<string | null>("baton:hub-target", null);
   private demoSessions: DemoSession[] = [];
   private demoHistory: TaskHistory[] = [];
   /** Runs "started" in demo, so the showcase can demonstrate the stop control
@@ -317,6 +319,10 @@ class BatonClient {
     this.project = id;
     ls.set("baton:project", id);
     this.applyDataset();
+  }
+  setHubTarget(id: string | null) {
+    this.hubTarget = id;
+    ls.set("baton:hub-target", id);
   }
   activeProject(): DemoProject {
     return WORKSPACE.projects.find((p) => p.id === this.project) || WORKSPACE.projects[0];
@@ -484,6 +490,18 @@ class BatonClient {
   }
 
   /* ---- GET endpoints (real, or demo-store when demo mode is on) ---- */
+  async getStatus(): Promise<StatusRow[]> {
+    if (this.demo) {
+      await this.demoGate();
+      return statusFrom(this.demoSessions);
+    }
+    const rows = await this.request<StatusRow[]>("/api/status");
+    return rows.map((r) => {
+      if (!this.agentOverride.has(r.slug)) return r;
+      if (r.agent) { this.agentOverride.delete(r.slug); return r; } // agent attached — overlay no longer needed
+      return { ...r, agent: this.agentOverride.get(r.slug)! };
+    });
+  }
   /**
    * The worktree read-model — one row per worktree (src/worktrees.ts).
    *
@@ -720,18 +738,6 @@ class BatonClient {
       this.mergeUndo.delete(slug);
     }
     this.emit();
-  }
-  async getStatus(): Promise<StatusRow[]> {
-    if (this.demo) {
-      await this.demoGate();
-      return statusFrom(this.demoSessions);
-    }
-    const rows = await this.request<StatusRow[]>("/api/status");
-    return rows.map((r) => {
-      if (!this.agentOverride.has(r.slug)) return r;
-      if (r.agent) { this.agentOverride.delete(r.slug); return r; } // agent attached — overlay no longer needed
-      return { ...r, agent: this.agentOverride.get(r.slug)! };
-    });
   }
   /** Agents at the hub/repo root or a kb sub-project — not attached to any task worktree. */
   async getRootAgents(): Promise<Array<{ agent: string; count: number }>> {

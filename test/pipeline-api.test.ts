@@ -28,12 +28,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
+import { freePort } from './helpers/free-port.js';
+import { DAEMON_START_MS } from './helpers/daemon-start.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
-const PORT_RW = 7431;
-const PORT_RO = 7432;
-const PORT_MEMBER = 7433;
+// Ports come from the kernel at spawn time — see test/helpers/free-port.ts.
+let PORT_RW = 0;
+let PORT_RO = 0;
+let PORT_MEMBER = 0;
 
 async function api(port: number, path: string, init?: RequestInit): Promise<{ status: number; body: any }> {
   const res = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(8000), ...init });
@@ -110,7 +113,7 @@ describe.runIf(hasDist)('pipeline over HTTP', () => {
       cwd, reject: false, env: { ...process.env, BATON_DAEMONS_DIR: registry },
     });
     children.push(child);
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + DAEMON_START_MS;
     for (;;) {
       try {
         if ((await fetch(`http://127.0.0.1:${port}/api/meta`, { signal: AbortSignal.timeout(1000) })).ok) return;
@@ -139,8 +142,11 @@ describe.runIf(hasDist)('pipeline over HTTP', () => {
     // This machine answers to somebody else's hub — the §7.6 member case.
     await writeFile(join(m, '.baton', 'host.json'),
       JSON.stringify({ url: 'http://hub.example:7077', token: 'tkn', device: 'laptop' }));
+    PORT_RW = await freePort();
     await spawnDaemon(a, PORT_RW, true);
+    PORT_RO = await freePort();
     await spawnDaemon(ro, PORT_RO, false);
+    PORT_MEMBER = await freePort();
     await spawnDaemon(m, PORT_MEMBER, true);
   }, 90_000);
 

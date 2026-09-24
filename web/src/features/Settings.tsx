@@ -449,8 +449,12 @@ function DaemonsCard({ writeEnabled }: { writeEnabled: boolean }) {
             <span className="mono" style={{ flex: "none", fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>:{d.port}</span>
             <span style={{ flex: "none", fontSize: "var(--fs-12)", color: "var(--text-tertiary)", width: 74, textAlign: "right" }}>{live ? uptimeLabel(d.startedAt) : "—"}</span>
             <div style={{ flex: "none", display: "flex", gap: 6 }}>
+              {/* Icon-only, so it needs a name of its own: the glyph is
+                  aria-hidden and a screen reader would otherwise read out the
+                  bare URL. `data-tip` is a tooltip, not an accessible name. */}
               {live && !d.self && (
-                <a className="btn btn-sm btn-ghost fr" href={`http://127.0.0.1:${d.port}`} target="_blank" rel="noreferrer" data-tip="Open that project's dashboard">
+                <a className="btn btn-sm btn-ghost fr" href={`http://127.0.0.1:${d.port}`} target="_blank" rel="noreferrer"
+                  aria-label={`Open the ${folderName(d.root)} dashboard on port ${d.port}`} data-tip="Open that project's dashboard">
                   <Icon name="externalLink" size={13} />
                 </a>
               )}
