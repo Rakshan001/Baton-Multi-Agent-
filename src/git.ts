@@ -422,16 +422,25 @@ async function churn(path: string): Promise<{ insertions: number; deletions: num
   return { insertions, deletions };
 }
 
+/** Commits `branch` is ahead / behind `base`, or `null` when git could not count them. */
+export async function aheadBehindOrNull(
+  branch: string,
+  base: string,
+  cwd?: string,
+): Promise<{ ahead: number; behind: number } | null> {
+  const r = await gitTry(['rev-list', '--left-right', '--count', `${base}...${branch}`], cwd);
+  if (!r.ok) return null;
+  const [behind, ahead] = r.stdout.split(/\s+/).map((n) => parseInt(n, 10) || 0);
+  return { ahead: ahead ?? 0, behind: behind ?? 0 };
+}
+
 /** Commits `branch` is ahead / behind `base`. Returns {0,0} on any error. */
 export async function aheadBehind(
   branch: string,
   base: string,
   cwd?: string,
 ): Promise<{ ahead: number; behind: number }> {
-  const r = await gitTry(['rev-list', '--left-right', '--count', `${base}...${branch}`], cwd);
-  if (!r.ok) return { ahead: 0, behind: 0 };
-  const [behind, ahead] = r.stdout.split(/\s+/).map((n) => parseInt(n, 10) || 0);
-  return { ahead: ahead ?? 0, behind: behind ?? 0 };
+  return (await aheadBehindOrNull(branch, base, cwd)) ?? { ahead: 0, behind: 0 };
 }
 
 export interface CommitInfo {

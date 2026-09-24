@@ -6,7 +6,7 @@
  */
 import { detectAgents, detectionRoots, detectRootAgents, type RootAgentSession } from './agents.js';
 import { computeConflicts } from './conflicts.js';
-import { aheadBehind, worktreeStatus, type RepoState } from './git.js';
+import { aheadBehindOrNull, worktreeStatus, type RepoState } from './git.js';
 import { isMaterialized, loadTasks } from './store.js';
 import { liveSessions, WATCHER_HEARTBEAT_STALE_MS } from './signals.js';
 import { runningHeadless } from './spawn.js';
@@ -19,6 +19,8 @@ export interface StatusRow {
   status: 'clean' | 'dirty' | 'conflict' | 'missing';
   repoState: RepoState;
   ahead: number;
+  /** False when git could not count `ahead`/`behind` (they then read 0) — e.g. a base branch that no longer resolves. */
+  aheadKnown: boolean;
   behind: number;
   conflictFiles: string[];
   filesChanged: number;
@@ -53,7 +55,8 @@ export async function collectStatus(root: string): Promise<StatusRow[]> {
       // the served root may not be a git repo at all. aheadBehind swallows
       // every error as {0,0}, so asking the wrong repo drew each hub task with
       // nothing to merge — the column that says "this is ready" reading zero.
-      const { ahead, behind } = await aheadBehind(t.branch, t.baseBranch, t.repoRoot ?? root);
+      const counted = await aheadBehindOrNull(t.branch, t.baseBranch, t.repoRoot ?? root);
+      const { ahead, behind } = counted ?? { ahead: 0, behind: 0 };
       return {
         slug: t.slug,
         task: t.task,
@@ -64,6 +67,7 @@ export async function collectStatus(root: string): Promise<StatusRow[]> {
         repoState: st.repoState,
         ahead,
         behind,
+        aheadKnown: counted !== null,
         conflictFiles: conflicts.get(t.slug) ?? [],
         filesChanged: st.changedFiles.length,
         insertions: st.insertions,

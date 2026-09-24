@@ -397,9 +397,11 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
     if (refs?.local && git) {
       const lead = refs.local.get(t.branch);
       // Absent from the map = the branch no longer exists; nothing is at risk on
-      // a ref that is gone. NaN = no upstream, so `ahead` is the exposure.
+      // a ref that is gone. NaN = no upstream, so `ahead` is the exposure — but
+      // only if git could count it: an uncountable `ahead` reads 0, and 0 here
+      // would call every commit on the branch safe.
       if (lead === undefined) localOnly = 0;
-      else localOnly = Number.isNaN(lead) ? git.ahead : lead;
+      else localOnly = Number.isNaN(lead) ? (st?.aheadKnown === true ? git.ahead : null) : lead;
     }
     return {
       slug: t.slug,
