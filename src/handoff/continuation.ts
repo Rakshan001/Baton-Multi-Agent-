@@ -15,6 +15,7 @@
 import type { HandoffMeta } from './brief.js';
 import { guardrailOneLine } from './guardrails.js';
 import { fenceOverhead, fenceUntrusted, isFenceScaffolding } from './untrusted.js';
+import { CURSOR_RULE_REL } from '../baton-artifacts.js';
 
 /** Trim quoted text to a budget at a word boundary. Never applied to a rendered fence. */
 function clip(text: string, max: number): string {
@@ -134,8 +135,7 @@ export function renderContinuationHead(
   return `${ours}\n${fenceUntrusted('handoff.resume', quoted)}`;
 }
 
-/** Worktree-relative path of the Cursor auto-load rule (git-excluded by the writer). */
-export const CURSOR_RULE_REL = '.cursor/rules/baton-continuation.mdc';
+export { CURSOR_RULE_REL };
 
 /**
  * Wrap the continuation head as an always-applied Cursor rule (`.mdc`). Cursor

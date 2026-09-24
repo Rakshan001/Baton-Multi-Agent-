@@ -22,6 +22,7 @@ import { sessionContextFor, type SessionContext } from './claude-session.js';
 import { loadProgress } from './progress-ledger.js';
 import { loadReview, openFindings, REVIEW_AXES } from '../reviews.js';
 import { guardrailLines } from './guardrails.js';
+import { HANDOFF_REL } from '../baton-artifacts.js';
 
 export interface HandoffMeta {
   baton: number;
@@ -119,8 +120,7 @@ export function fitBriefBody(sections: BriefSection[], maxChars: number = HANDOF
   return { body: render(), dropped };
 }
 
-/** Repo-root-relative name of the brief — also the `.git/info/exclude` pattern. */
-export const HANDOFF_REL = 'HANDOFF.md';
+export { HANDOFF_REL };
 
 /** Longest a task's text may run when used as a heading. Enough to identify the
  *  work, far too short to carry an instruction block. */

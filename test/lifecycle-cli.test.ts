@@ -247,4 +247,16 @@ describe('newestMtimeIn', () => {
   it('returns 0 for a directory that is not there', () => {
     expect(newestMtimeIn(join(dir, 'gone'))).toBe(0);
   });
+
+  /** Baton writes these into a stalled worktree (the auto-brief, the snapshot's
+   *  Cursor rule). Counting them made the stall revive itself and refuse takeover. */
+  it("ignores Baton's own files at the worktree root, but not a user's nested one", async () => {
+    await writeFile(join(dir, 'HANDOFF.md'), 'brief\n', 'utf-8');
+    await mkdir(join(dir, '.cursor', 'rules'), { recursive: true });
+    await writeFile(join(dir, '.cursor', 'rules', 'baton-continuation.mdc'), 'rule\n', 'utf-8');
+    expect(newestMtimeIn(dir)).toBe(0);
+    await mkdir(join(dir, 'docs'), { recursive: true });
+    await writeFile(join(dir, 'docs', 'HANDOFF.md'), 'the user wrote this\n', 'utf-8');
+    expect(newestMtimeIn(dir)).toBeGreaterThan(Date.now() - 60_000);
+  });
 });

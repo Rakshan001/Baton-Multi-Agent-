@@ -15,12 +15,17 @@
  */
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { CURSOR_RULE_REL, HANDOFF_REL } from './baton-artifacts.js';
 import { liveSessions } from './signals.js';
 import type { PipelineTask } from './pipeline.js';
 import type { Task } from './store.js';
 
 /** Never walked: huge, and their mtimes say nothing about the agent. */
 const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', '.venv', '__pycache__']);
+
+/** Never counted: Baton writes these into a stalled worktree, so their mtime is
+ *  Baton's, not the agent's. Root-relative, so a user's nested copy still counts. */
+const OWN_FILES = new Set([HANDOFF_REL, CURSOR_RULE_REL]);
 
 /**
  * Newest mtime under `dir`, or 0.
@@ -33,7 +38,7 @@ const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverag
 export function newestMtimeIn(dir: string, budget = 2000): number {
   let newest = 0;
   let seen = 0;
-  const walk = (d: string, depth: number): void => {
+  const walk = (d: string, depth: number, rel: string): void => {
     if (seen >= budget || depth > 6) return;
     let entries: import('node:fs').Dirent[];
     try {
@@ -45,10 +50,12 @@ export function newestMtimeIn(dir: string, budget = 2000): number {
       if (seen >= budget) return;
       if (SKIP.has(e.name)) continue;
       const p = join(d, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        walk(p, depth + 1);
+        walk(p, depth + 1, r);
         continue;
       }
+      if (OWN_FILES.has(r)) continue;
       seen++;
       try {
         const st = statSync(p);
@@ -56,7 +63,7 @@ export function newestMtimeIn(dir: string, budget = 2000): number {
       } catch { /* raced with a delete — skip */ }
     }
   };
-  walk(dir, 0);
+  walk(dir, 0, '');
   return newest;
 }
 
