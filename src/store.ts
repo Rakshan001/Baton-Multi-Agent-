@@ -76,7 +76,7 @@ const untrustedWarned = new Set<string>();
  * match is the real gate against a .baton planted by another user. On
  * platforms without getuid (Windows) the ownership check is skipped.
  */
-async function trustedBatonDir(dir: string): Promise<boolean> {
+export async function trustedBatonDir(dir: string): Promise<boolean> {
   const st = await stat(join(dir, '.baton'));
   if (!st.isDirectory()) return false;
   if (typeof process.getuid !== 'function') return true;

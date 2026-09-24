@@ -55,6 +55,11 @@ async function isInside(root: string, p: string): Promise<boolean> {
 }
 
 async function auditProject(root: string, p: KbProject, out: KbFinding[]): Promise<void> {
+  // kb.json is hand-editable; a missing path used to print "points at undefined".
+  if (typeof p.path !== 'string') {
+    out.push({ level: 'error', message: `project '${p.id}' has no path in kb.json`, fix: 'baton kb init' });
+    return;
+  }
   if (!(await isDir(p.path))) {
     out.push({
       level: 'error',

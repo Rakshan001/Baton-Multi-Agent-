@@ -184,7 +184,7 @@ program
   );
 
 program
-  .command('stamp-commit')
+  .command('stamp-commit', { hidden: true }) // git's prepare-commit-msg hook calls it
   .argument('<file>', 'the commit message file git passes to prepare-commit-msg')
   .description('internal: add a Baton-Task: trailer when committing inside a task worktree')
   .action((file: string) => run(() => stampCommitCmd(file)));
@@ -310,7 +310,7 @@ program
   .command('doctor')
   .option('--docs', 'scan for scattered .md sprawl (memory-bank/, stray NOTES/TODO, competing rule files) — propose-only')
   .option('--fix', 'reconcile hub coherence: delete empty/ephemeral shadow .baton dirs inside sub-projects (real state is reported, never touched)')
-  .description('audit junk: orphaned worktrees, branches, tmux sessions, leaked temp files; + hub-coherence (shadow .baton) check')
+  .description('check setup (Node, git, daemon, agent MCP configs, hooks, graphify, .baton ownership) and audit junk, the knowledge base and hub coherence; exits 1 on a problem')
   .action((opts: { docs?: boolean; fix?: boolean }) => run(() => doctorCmd(opts)));
 
 program
@@ -580,10 +580,13 @@ program
 
 program
   .command('block')
-  .argument('[slug]', 'task slug (default: the worktree you are in)')
-  .argument('<reason>', 'what is in the way')
+  // A required argument after an optional one can never be met by one word, so
+  // `baton block "<why>"` inside a worktree died. One argument is the reason.
+  .argument('<slugOrReason>', 'task slug — or, alone, the reason (the task is the worktree you are in)')
+  .argument('[reason]', 'what is in the way')
+  .usage('[options] [slug] <reason>')
   .description('report that a task cannot proceed — stays yours, waits for a person')
-  .action((slug: string | undefined, reason: string) => run(() => blockCmd(slug, reason)));
+  .action((a: string, b: string | undefined) => run(() => (b === undefined ? blockCmd(undefined, a) : blockCmd(a, b))));
 
 program
   .command('done')
@@ -661,7 +664,7 @@ program
   .action(() => run(mcpCmd));
 
 program
-  .command('mcp-bridge')
+  .command('mcp-bridge', { hidden: true }) // written into agent MCP configs, not typed
   .argument('<url>', 'daemon graphify proxy URL (http://127.0.0.1:<port>/mcp/g/<token>/<id>)')
   .description('stdio↔HTTP bridge so Codex can query the shared graphify pool (requires baton serve)')
   .action((url: string) => run(() => mcpBridgeCmd(url)));
@@ -828,6 +831,39 @@ program
   .argument('<slug>', 'task slug')
   .description("print a task's worktree path")
   .action((slug: string) => run(() => pathCmd(slug)));
+
+// `baton --help` grouped by what you are trying to do. One explicit map rather
+// than a .helpGroup() on each definition, so every command's group is visible
+// in one place; test/cli-help.test.ts fails when a new command is missing here.
+// Groups print in the order their first command is defined.
+const GROUP: Record<string, string> = {
+  setup: 'Start work:', workspace: 'Start work:', join: 'Start work:', new: 'Start work:', ls: 'Start work:',
+  status: 'Start work:', next: 'Start work:', take: 'Start work:', start: 'Start work:', stop: 'Start work:',
+  route: 'Start work:', task: 'Start work:', plan: 'Start work:', dispatch: 'Start work:', path: 'Start work:',
+  connect: 'Coordinate:', disconnect: 'Coordinate:', hooks: 'Coordinate:', signals: 'Coordinate:', blame: 'Coordinate:',
+  progress: 'Coordinate:', history: 'Coordinate:', review: 'Coordinate:', merge: 'Coordinate:', push: 'Coordinate:',
+  integrate: 'Coordinate:', done: 'Coordinate:', cancel: 'Coordinate:', rm: 'Coordinate:', usage: 'Coordinate:',
+  pass: 'Hand off:', pause: 'Hand off:', block: 'Hand off:', resume: 'Hand off:', handoff: 'Hand off:', snapshot: 'Hand off:',
+  kb: 'Knowledge & memory:', memory: 'Knowledge & memory:', skills: 'Knowledge & memory:', orient: 'Knowledge & memory:',
+  bugs: 'Knowledge & memory:',
+  doctor: 'Repair:', clean: 'Repair:',
+  serve: 'Daemon & dashboard:', ps: 'Daemon & dashboard:', daemon: 'Daemon & dashboard:', host: 'Daemon & dashboard:',
+  member: 'Daemon & dashboard:', team: 'Daemon & dashboard:', endpoints: 'Daemon & dashboard:',
+  'stamp-commit': 'Internal:', 'mcp-bridge': 'Internal:', guard: 'Internal:', mcp: 'Internal:',
+};
+program.commands.forEach((c) => { const g = GROUP[c.name()]; if (g) c.helpGroup(g); });
+// Commander prints headings in the order each group first appears in
+// program.commands (hidden ones included), so sort by an explicit order.
+// Array.prototype.sort is stable: definition order holds within a group.
+const ORDER = ['Start work:', 'Coordinate:', 'Hand off:', 'Knowledge & memory:', 'Repair:', 'Daemon & dashboard:', 'Internal:'];
+(program.commands as Command[]).sort((a, b) => ORDER.indexOf(a.helpGroup()) - ORDER.indexOf(b.helpGroup()));
+program.commandsGroup('Start work:').helpCommand(true); // `help` joins the first group
+program.addHelpText('after', `
+Examples:
+  $ baton setup                        set up this repo: graph, agent MCP config, docs
+  $ baton new "add rate limiting"      a branch + worktree for one task
+  $ baton block "waiting on API key"   inside a worktree: stop, and wait for a person
+  $ baton doctor                       check setup, junk, and the knowledge base`);
 
 async function run(fn: () => Promise<void>): Promise<void> {
   try {

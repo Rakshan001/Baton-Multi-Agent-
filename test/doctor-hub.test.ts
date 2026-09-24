@@ -4,6 +4,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { execa } from 'execa';
 import { git } from '../src/util/exec.js';
 import { scanShadowBatons, reconcileShadowBatons } from '../src/commands/doctor.js';
 
@@ -153,4 +155,66 @@ describe('doctor — hub coherence (shadow .baton detection)', () => {
     expect(removed.map((s) => s.projectId)).toEqual(['api']); // reported as removable…
     expect(await exists(join(h.api, '.baton'))).toBe(true);   // …but not actually deleted
   });
+});
+
+/**
+ * `baton doctor` as a user runs it (spawned against dist/cli.js, so run
+ * `npm run build` first). HOME and the fleet dir point at tmp dirs so the
+ * setup checks never read this machine's real agent configs or daemons.
+ */
+const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
+
+describe.runIf(existsSync(DIST_CLI))('doctor — exit code and a pathless kb.json project', () => {
+  let dir: string;
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  async function fixture(): Promise<{ repo: string; env: NodeJS.ProcessEnv }> {
+    dir = await mkdtemp(join(tmpdir(), 'baton-dexit-'));
+    const repo = join(dir, 'repo');
+    await mkdir(join(repo, '.baton'), { recursive: true });
+    await git(['init', '-q', '-b', 'main'], repo);
+    await git(['config', 'user.email', 't@t.dev'], repo);
+    await git(['config', 'user.name', 't'], repo);
+    await git(['commit', '-q', '-m', 'init', '--allow-empty'], repo);
+    // The shape that printed "points at undefined" and leaked a TypeError.
+    await writeFile(join(repo, '.baton', 'kb.json'), JSON.stringify({
+      root: repo, projects: [{ id: 'x', name: 'x' }], mergedGraphPath: null, lastBuiltAt: null,
+    }));
+    await mkdir(join(dir, 'home'), { recursive: true });
+    // A stand-in graphify first on PATH, so the setup checks cannot be what
+    // fails: with a kb.json present, a missing graphify is itself a ✗.
+    const bin = join(dir, 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'graphify'), '#!/bin/sh\necho "graphify 0.0.0-test"\n', { mode: 0o755 });
+    return { repo, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, 'home'), BATON_DAEMONS_DIR: join(dir, 'daemons') } };
+  }
+
+  const doctor = (args: string[], repo: string, env: NodeJS.ProcessEnv) =>
+    execa(process.execPath, [DIST_CLI, 'doctor', ...args], { cwd: repo, env, reject: false, timeout: 90_000 });
+
+  it('exits 1 on a KB error and names the missing path without leaking a TypeError', async () => {
+    const { repo, env } = await fixture();
+    const r = await doctor([], repo, env);
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toContain("project 'x' has no path in kb.json");
+    expect(r.stdout).not.toContain('undefined');
+    expect(r.stderr).not.toMatch(/TypeError|must be of type string/);
+    // The KB error is the ONLY failure, so it is what set the exit code.
+    expect(r.stdout.split('\n').filter((l) => l.includes('✗'))).toEqual(["  ✗ project 'x' has no path in kb.json"]);
+  }, 120_000);
+
+  it('exits 0 on the same setup once the KB error is gone (control)', async () => {
+    const { repo, env } = await fixture();
+    await rm(join(repo, '.baton', 'kb.json'));
+    const r = await doctor([], repo, env);
+    expect(r.stdout).not.toContain('✗');
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  it('rejects --docs --fix instead of silently ignoring --fix', async () => {
+    const { repo, env } = await fixture();
+    const r = await doctor(['--docs', '--fix'], repo, env);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/--fix does not apply to --docs/);
+  }, 120_000);
 });

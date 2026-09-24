@@ -119,4 +119,10 @@ describe('auditKb', () => {
     const out = await auditKb(root, NOW);
     expect(out.some((f) => /lists no projects/.test(f.message))).toBe(true);
   });
+
+  it('names a project with no path instead of printing "points at undefined"', async () => {
+    await writeKb({ projects: [{ id: 'x', name: 'x' } as never], lastBuiltAt: NOW.toISOString() });
+    const out = await auditKb(root, NOW);
+    expect(out).toEqual([{ level: 'error', message: "project 'x' has no path in kb.json", fix: 'baton kb init' }]);
+  });
 });

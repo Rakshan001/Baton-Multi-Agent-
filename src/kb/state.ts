@@ -77,16 +77,20 @@ export function resetKbValidationWarnings(): void {
  * after that turned a hidden KB into a deleted one.
  */
 async function isValidProject(root: string, p: KbProject): Promise<boolean> {
+  const key = `${p.id}\0${p.path}`;
   try {
+    // Before realpath: handed undefined, it throws a Node TypeError whose text
+    // ("The \"path\" argument must be of type string…") leaked into the warning.
+    if (typeof p.path !== 'string') throw new Error('no path in kb.json');
     const [realRoot, realProj] = await Promise.all([realpath(root), realpath(p.path)]);
     if (realProj !== realRoot && !realProj.startsWith(realRoot + sep)) throw new Error('outside the Baton root');
     if (!(await stat(p.path)).isDirectory()) throw new Error('not a directory');
     if (!(await looksLikeProject(p.path))) throw new Error('no .git and no project marker');
     return true;
   } catch (e) {
-    if (!invalidWarned.has(p.path)) {
-      invalidWarned.add(p.path);
-      console.warn(`[baton] kb.json: skipping project '${p.id}' — ${p.path}: ${(e as Error).message}`);
+    if (!invalidWarned.has(key)) {
+      invalidWarned.add(key);
+      console.warn(`[baton] kb.json: skipping project '${p.id}' — ${typeof p.path === 'string' ? `${p.path}: ` : ''}${(e as Error).message}`);
     }
     return false;
   }

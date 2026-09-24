@@ -13,10 +13,13 @@
  *
  * Gated on dist/cli.js being built (run `npm run build` first).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execa } from 'execa';
+import { git } from '../src/util/exec.js';
 
 const DIST_CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const hasDist = existsSync(DIST_CLI);
@@ -72,5 +75,50 @@ describe.runIf(hasDist)('the baton launcher', () => {
     const staticImports = [...src.matchAll(/^import\s.*?from\s+['"](.+?)['"]/gm)].map((m) => m[1]);
     expect(staticImports).toEqual(['./util/node-preflight.js']);
     expect(src).toContain("import('./main.js')");
+  });
+});
+
+/**
+ * `baton block "<why>"` from inside a worktree is the common case, and it used
+ * to die with `missing required argument 'reason'`: a required argument after
+ * an optional one can never be satisfied by one word.
+ */
+describe.runIf(hasDist)('baton block argument parsing', () => {
+  let dir: string;
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  async function repo(): Promise<{ root: string; env: NodeJS.ProcessEnv }> {
+    dir = await mkdtemp(join(tmpdir(), 'baton-blockargs-'));
+    const root = join(dir, 'repo');
+    await mkdir(join(root, '.baton'), { recursive: true });
+    await git(['init', '-q', '-b', 'main'], root);
+    await mkdir(join(dir, 'home'), { recursive: true });
+    return { root, env: { ...process.env, HOME: join(dir, 'home'), BATON_DAEMONS_DIR: join(dir, 'daemons') } };
+  }
+  const block = (args: string[], cwd: string, env: NodeJS.ProcessEnv) =>
+    execa(process.execPath, [DIST_CLI, 'block', ...args], { cwd, env, reject: false, timeout: 30_000 });
+
+  it('reads a single argument as the reason', async () => {
+    const { root, env } = await repo();
+    const r = await block(['waiting on the API key'], root, env);
+    expect(r.stderr).not.toContain('missing required argument');
+    expect(r.stderr).toContain('Not inside a task worktree');
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('refuses a lone argument that is a task slug — the reason was forgotten', async () => {
+    const { root, env } = await repo();
+    await writeFile(join(root, '.baton', 'tasks.json'), JSON.stringify([{
+      slug: 'fix-login', task: 'fix login', branch: 'baton/fix-login', worktreePath: join(root, '.baton', 'wt', 'fix-login'),
+      baseBranch: 'main', baseCommit: null, createdAt: '2026-09-21T00:00:00.000Z',
+    }]));
+    const r = await block(['fix-login'], root, env);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('baton block fix-login "<why>"');
+  });
+
+  it('shows the slug as optional in its usage line', async () => {
+    const { stdout } = await cli(['block', '--help']);
+    expect(stdout).toContain('Usage: baton block [options] [slug] <reason>');
   });
 });

@@ -65,6 +65,13 @@ export async function pauseCmd(slug: string | undefined, opts: { reason?: string
 
 export async function blockCmd(slug: string | undefined, reason: string): Promise<void> {
   const root = await activeBatonRoot();
+  // One argument is the reason — but one that names a task is far likelier a
+  // slug whose reason was forgotten than a reason that happens to be a slug.
+  if (!slug && (await getTask(root, reason))) {
+    console.error(`✗ '${reason}' is a task, not a reason. Did you mean: baton block ${reason} "<why>"`);
+    process.exitCode = 1;
+    return;
+  }
   const target = await resolveSlug(root, slug);
   if (!target) {
     console.error(slug ? `No task '${slug}'. See: baton ls` : 'Not inside a task worktree — pass a slug: baton block <slug> "<why>"');

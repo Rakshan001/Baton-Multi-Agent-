@@ -17,6 +17,7 @@ import {
 } from '../agents/registry.js';
 import { loadEndpointsConfig } from '../endpoints/config.js';
 import { endpointDoctorLines } from '../endpoints/doctor-report.js';
+import { printSetup, setupChecks } from './doctor-setup.js';
 
 const KIND_LABEL: Record<JunkItem['kind'], string> = {
   'orphan-worktree-task': 'orphaned worktree (stale task)',
@@ -48,6 +49,7 @@ const KB_GLYPH: Record<KbFinding['level'], string> = { error: '✗', warn: '⚠'
  * exists to catch is silent: the graph answers with nothing and looks fine.
  */
 function printKb(findings: KbFinding[]): void {
+  if (findings.some((f) => f.level === 'error')) process.exitCode = 1;
   if (!findings.length) {
     console.log('✓ knowledge base looks healthy');
     return;
@@ -60,6 +62,11 @@ function printKb(findings: KbFinding[]): void {
 }
 
 export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): Promise<void> {
+  if (opts.docs && opts.fix) {
+    console.error('✗ --fix does not apply to --docs — the docs scan only proposes, it never moves or deletes anything');
+    process.exitCode = 1;
+    return;
+  }
   if (opts.docs) return doctorDocsCmd();
   // An audit that cannot run is itself the finding — report it and carry on to
   // the sections that do not depend on the task store.
@@ -91,6 +98,10 @@ export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): P
   await reportShadowBatons(root, !!opts.fix);
   printCustomAgents(root);
   await printEndpoints(root);
+  console.log('');
+  printSetup(await setupChecks(root));
+  // Junk is a finding too: scripts and CI branch on the exit code.
+  if (report?.items.length) process.exitCode = 1;
 }
 
 /** Self-hosted model servers (P15). Silent when none are configured — that is
@@ -119,6 +130,7 @@ function printCustomAgents(root: string): void {
   for (const id of proj.ids) printAgent(proj.defs[id], '  [this project]');
   for (const issue of CUSTOM_AGENT_ISSUES) console.log(`  ✗ ${issue}`);
   for (const issue of proj.issues) console.log(`  ✗ [this project] ${issue}`);
+  if (CUSTOM_AGENT_ISSUES.length || proj.issues.length) process.exitCode = 1;
   if (CUSTOM_AGENT_ISSUES.length) console.log(`\n  Fix ${customAgentsPath()} and re-run — entries load again on the next start.`);
   if (proj.issues.length) console.log(`\n  Fix ${projectAgentsPath(root)} and re-run — the project file reloads on every use, no restart needed.`);
 }
