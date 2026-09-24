@@ -1121,7 +1121,11 @@ export interface PlanInventory {
 export type WorktreeHealth =
   | "working" | "quiet" | "stalled" | "abandoned"
   | "ok" | "dirty" | "conflict" | "rebasing" | "missing" | "orphan-disk"
-  | "unknown";
+  | "unknown" | "unmanaged";
+
+/** Who made the worktree (src/worktrees.ts:WorktreeKind). `task` and `orphan`
+ *  are Baton's; `main` and `external` are shown, and Baton acts on neither. */
+export type WorktreeKind = "task" | "orphan" | "main" | "external";
 
 /** What you lose if this disk dies (src/worktrees.ts:66-71). `commits: null`
  *  means the refs read failed, and `atRisk` then stays true — not knowing is
@@ -1134,7 +1138,9 @@ export interface Unprotected {
 
 /** One row of `GET /api/worktrees`. Mirrors `WorktreeRow` in src/worktrees.ts. */
 export interface WorktreeRow {
+  /** The task slug for a task row; `<name>~<hash>` for every other kind. */
   slug: string;
+  kind: WorktreeKind;
   branch: string | null;
   worktreePath: string;
   /** null for an orphan worktree on disk: no task owns it, so it has no lifecycle. */

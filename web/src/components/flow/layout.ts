@@ -20,6 +20,7 @@
    ============================================================ */
 import type { Node, NodeChange } from "@xyflow/react";
 import type { WorktreeRow } from "../../types";
+import { isBatonRow } from "./panel";
 
 /** Node box. Wide enough for a slug plus a branch at the 11px floor. */
 export const NODE_W = 236;
@@ -39,17 +40,27 @@ export interface WorktreeNodeData extends Record<string, unknown> {
 }
 export type WorktreeFlowNode = Node<WorktreeNodeData, "worktree">;
 
+/** The band of rows Baton did not create (main checkouts, other tools'
+ *  worktrees). A plan id is a slug, so it can never be this string. */
+const UNMANAGED_BAND = "\u0000unmanaged";
+
 /** The band a row belongs to. `null` planId is its own band, sorted last:
- *  one-off tasks are not part of any plan's left-to-right story. */
+ *  one-off tasks are not part of any plan's left-to-right story. A row Baton
+ *  did not create sits in a band after that, so the main checkout never lands
+ *  among the one-off tasks. */
 function bandKey(row: WorktreeRow): string {
+  if (!isBatonRow(row)) return UNMANAGED_BAND;
   return row.planId ?? "";
 }
 
-/** Band order: named plans alphabetically, the no-plan band last. Alphabetical
- *  rather than first-seen because first-seen depends on server order, and the
- *  server sorts by risk — which moves whenever a worktree gets dirty. */
+/** Band order: named plans alphabetically, the no-plan band, then the
+ *  unmanaged band. Alphabetical rather than first-seen because first-seen
+ *  depends on server order, and the server sorts by risk — which moves
+ *  whenever a worktree gets dirty. */
 function compareBands(a: string, b: string): number {
   if (a === b) return 0;
+  if (a === UNMANAGED_BAND) return 1;
+  if (b === UNMANAGED_BAND) return -1;
   if (a === "") return 1;
   if (b === "") return -1;
   return a.localeCompare(b);
@@ -211,7 +222,9 @@ export function dropRemovals<N extends Node>(changes: NodeChange<N>[]): NodeChan
  * orphan is renamed `~orphan`, then `~orphan-2`, … until it is unique. An
  * orphan has no task record, so nothing reads that slug back from the daemon.
  *
- * Hands back the SAME array when nothing collides.
+ * The daemon no longer serves collisions — every non-task row carries a
+ * `<name>~<hash>` id (src/worktrees.ts:worktreeId) — so this stays only as a
+ * backstop. Hands back the SAME array when nothing collides.
  */
 export function uniqueSlugs(rows: WorktreeRow[]): WorktreeRow[] {
   const taken = new Set(rows.filter((r) => !r.orphan).map((r) => r.slug));

@@ -11,8 +11,8 @@
    ============================================================ */
 import { describe, expect, it } from "vitest";
 import {
-  MERGE_NO_TASK_TIP, PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, handoffGate,
-  inspectGate, mergeGate, pauseGate, pickupCommand, planProgress, progressHeadline,
+  MERGE_NO_TASK_TIP, NOT_BATONS_TIP, PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor,
+  displayName, handoffGate, inspectGate, isBatonRow, isTaskRow, mergeGate, shownAtRisk, worktreeSummary, pauseGate, pickupCommand, planProgress, progressHeadline,
   resolveCopyPrompt, takeoverGate, whoFacts, workInFlightFacts, type PanelBrief,
   type PanelMeta, type PanelPipeline, type WorktreeProgress,
 } from "./panel";
@@ -22,6 +22,7 @@ import type { WorktreeRow } from "../../types";
 
 function row(o: Partial<WorktreeRow> & { slug: string }): WorktreeRow {
   return {
+    kind: o.orphan ? "orphan" : "task",
     branch: `baton/${o.slug}`,
     worktreePath: `/repo/.baton/worktrees/${o.slug}`,
     state: "active",
@@ -536,5 +537,71 @@ describe("mergeGate — the phase barrier REFUSES", () => {
     expect(g.enabled).toBe(false);
     expect(g.tip).toBe(said);
     expect(g.refused).toBe(true);
+  });
+});
+
+/* ---------- rows Baton did not create -------------------------------- */
+
+describe("a main or external worktree", () => {
+  const unmanaged = (kind: "main" | "external") => row({
+    slug: `orbit~0123456789`, kind, state: null, health: "unmanaged", planId: null, phase: null,
+    filesChanged: null, ahead: null, behind: null, repoState: null,
+    unprotected: { lines: 0, commits: null, atRisk: true },
+  });
+
+  it("has every action gate disabled with the not-Baton's tip, never `baton clean`", () => {
+    for (const kind of ["main", "external"] as const) {
+      const r = unmanaged(kind);
+      for (const write of [true, false]) {
+        const gates = [takeoverGate(r, write), pauseGate(r, write), handoffGate(r, write), inspectGate(r), mergeGate(r, quietPipeline(), META, write)];
+        for (const g of gates) {
+          expect(g.enabled, kind).toBe(false);
+          expect(g.tip).toBe(NOT_BATONS_TIP);
+        }
+      }
+    }
+    expect(NOT_BATONS_TIP).not.toContain("baton clean");
+  });
+
+  it("copies the inspect command for an external row, never a pickup or a brief", () => {
+    const out = resolveCopyPrompt(unmanaged("external"), brief(), true);
+    expect(out.kind).toBe("inspect");
+    expect(out.text).toContain("git status");
+    expect(out.tip).toBe(NOT_BATONS_TIP);
+  });
+
+  it("is not counted at risk, and says it was not read instead", () => {
+    const r = unmanaged("main");
+    expect(shownAtRisk(r)).toBe(false);
+    const fact = workInFlightFacts(r).find((f) => f.key === "atRisk")!;
+    expect(fact.urgent).toBe(false);
+    expect(fact.value).toMatch(/not read/);
+    // An orphan's fail-closed risk still counts.
+    expect(shownAtRisk(row({ slug: "o~0123456789", kind: "orphan", unprotected: { lines: 0, commits: null, atRisk: true } }))).toBe(true);
+  });
+
+  it("classifies kinds and shows the name before the id's hash", () => {
+    expect([isTaskRow(unmanaged("main")), isBatonRow(unmanaged("main"))]).toEqual([false, false]);
+    expect(isBatonRow(row({ slug: "o~0123456789", kind: "orphan" }))).toBe(true);
+    expect(displayName(unmanaged("main"))).toBe("orbit");
+    expect(displayName(row({ slug: "a-task" }))).toBe("a-task");
+  });
+});
+
+describe("the screen's one-line summary", () => {
+  const main = row({ slug: "orbit~0123456789", kind: "main", state: null, health: "unmanaged", unprotected: { lines: 0, commits: null, atRisk: true } });
+
+  it("is null only when there are no rows at all — the true empty state", () => {
+    expect(worktreeSummary([])).toBeNull();
+  });
+
+  it("still speaks when only rows Baton did not create exist, so they stay on screen", () => {
+    expect(worktreeSummary([main])).toBe("No Baton worktrees · 1 not Baton's");
+  });
+
+  it("counts Baton's rows only, and names the rest", () => {
+    const stalled = row({ slug: "a", unprotected: { lines: 3, commits: 0, atRisk: true } });
+    expect(worktreeSummary([stalled, main]))
+      .toBe("1 worktree · 1 needing attention · 1 holding work that exists nowhere else · +1 not Baton's");
   });
 });

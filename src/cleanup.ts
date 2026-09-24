@@ -68,7 +68,7 @@ export interface CleanResult {
 /* Pure detectors (unit-tested without I/O)                            */
 /* ------------------------------------------------------------------ */
 
-const isBatonWorktree = (root: string, e: WorktreeEntry): boolean => {
+export const isBatonWorktree = (root: string, e: WorktreeEntry): boolean => {
   const wtRoot = resolve(batonDir(root), 'wt');
   return resolve(e.path).startsWith(wtRoot + '/') || (e.branch?.startsWith('baton/') ?? false);
 };
@@ -102,8 +102,10 @@ export function auditWorktrees(
     if (resolve(e.path) === mainPath) continue;
     if (!isBatonWorktree(root, e)) continue;
     if (taskByPath.has(resolve(e.path))) continue;
+    // A detached worktree has no branch, so the item carries none — never
+    // `''` (and `/api/doctor` JSON then omits the field).
     items.push({
-      kind: 'orphan-worktree-disk', id: basename(e.path), path: e.path, branch: e.branch ?? '',
+      kind: 'orphan-worktree-disk', id: basename(e.path), path: e.path, ...(e.branch ? { branch: e.branch } : {}),
       reason: 'baton worktree on disk with no matching task (interrupted create/remove)',
       action: 'remove the worktree + its branch (tip kept under refs/baton/archive/ unless merged)',
     });

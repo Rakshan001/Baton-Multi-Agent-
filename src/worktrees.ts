@@ -28,11 +28,13 @@
  * than having no health model at all, because the dashboard then launders dead
  * work into looking fresh — which is the reported bug.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { collectStatus, type StatusRow } from './board.js';
-import { auditWorktrees } from './cleanup.js';
+import { isBatonWorktree } from './cleanup.js';
 import { listWorktrees, type RepoState } from './git.js';
+import { loadKb } from './kb/state.js';
 import { livenessProbe } from './liveness.js';
 import { STALL_GRACE_MS, stateOf, type TaskState } from './pipeline.js';
 import { isMaterialized, loadTasks, type Task } from './store.js';
@@ -56,7 +58,29 @@ export const STALL_QUIET_MS = 10 * 60_000;
 export type WorktreeHealth =
   | 'working' | 'quiet' | 'stalled' | 'abandoned'
   | 'ok' | 'dirty' | 'conflict' | 'rebasing' | 'missing' | 'orphan-disk'
-  | 'unknown';
+  | 'unknown' | 'unmanaged';
+
+/**
+ * Who made this worktree. `task` and `orphan` are Baton's own; `main` (a repo's
+ * primary checkout) and `external` (a plain `git worktree add`, another tool's
+ * `.claude/worktrees/*`) are listed so they can be SEEN, and Baton acts on
+ * neither.
+ */
+export type WorktreeKind = 'task' | 'orphan' | 'main' | 'external';
+
+/**
+ * The id of a row no task owns: `<basename>~<10 hex of sha1(path)>`.
+ *
+ * A basename can equal a task slug or another orphan's basename, so it cannot
+ * be the id. `slugify` (store.ts) only emits `[a-z0-9-]`, so an id carrying `~`
+ * can never equal a task slug, and `isSafeProgressSlug` rejects it, so no
+ * ledger route reads it. `path` is used exactly as git reports it: no second
+ * realpath, so the id is stable across polls at no extra syscall.
+ */
+export function worktreeId(path: string): string {
+  const base = basename(path).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40) || 'wt';
+  return `${base}~${createHash('sha1').update(path).digest('hex').slice(0, 10)}`;
+}
 
 /**
  * What you lose if this disk dies: uncommitted lines, plus commits that exist
@@ -76,7 +100,9 @@ export interface Unprotected {
 
 /** One worktree, as `GET /api/worktrees` serves it. */
 export interface WorktreeRow {
+  /** The task slug for a task row, `worktreeId(path)` for every other kind. */
   slug: string;
+  kind: WorktreeKind;
   branch: string | null;
   worktreePath: string;
   /** null for an orphan worktree on disk: no task owns it, so it has no lifecycle. */
@@ -99,6 +125,7 @@ export interface WorktreeRow {
   planId: string | null;
   phase: number | null;
   dependsOn: string[];
+  /** `kind === 'orphan'`, kept so every existing orphan consumer reads on. */
   orphan: boolean;
   wipRef: string | null;
 }
@@ -131,7 +158,10 @@ export interface WorktreeFacts {
   planId: string | null;
   phase: number | null;
   dependsOn: string[];
-  orphan: boolean;
+  kind: WorktreeKind;
+  /** false for a non-task row whose directory is gone (git still records it).
+   *  Omitted for rows that were not checked. */
+  onDisk?: boolean;
   wipRef: string | null;
 }
 
@@ -149,6 +179,10 @@ function isHeld(f: WorktreeFacts): boolean {
 
 /** Uncommitted lines + commits nowhere else. Unknown counts as at risk. */
 export function unprotectedOf(f: WorktreeFacts): Unprotected {
+  // An orphan whose directory is gone holds no uncommitted work to lose. Its
+  // commits were never counted (null) and stay that way — but the disk has
+  // nothing on it, which is the question `atRisk` answers.
+  if (f.kind === 'orphan' && f.onDisk === false) return { lines: 0, commits: f.localOnlyCommits, atRisk: false };
   const lines = f.git ? f.git.insertions + f.git.deletions : 0;
   const commits = f.localOnlyCommits;
   const dirty = f.git?.status === 'dirty' || f.git?.status === 'conflict';
@@ -166,10 +200,14 @@ export function unprotectedOf(f: WorktreeFacts): Unprotected {
  * where it does.
  */
 export function deriveHealth(f: WorktreeFacts, now: number, opts: HealthOpts = {}): WorktreeHealth {
+  // 0. Baton did not create this worktree. A known fact, like `orphan-disk`,
+  //    and not a guess: nobody reads its status (git: null) and nothing here
+  //    may call it stalled or abandoned.
+  if (f.kind === 'main' || f.kind === 'external') return 'unmanaged';
   // 1. On disk with no task behind it. A known fact, and more useful than
   //    anything we could say about how busy it looks. First, because an orphan
   //    carries no git facts at all (we never read it) and must not read `unknown`.
-  if (f.orphan) return 'orphan-disk';
+  if (f.kind === 'orphan') return 'orphan-disk';
   // 2. Git did not answer. Everything below this line would be a guess.
   if (f.git === null) return 'unknown';
   // 3. A recorded worktree whose directory is gone. A known fact, not a guess —
@@ -210,6 +248,7 @@ export function deriveHealth(f: WorktreeFacts, now: number, opts: HealthOpts = {
 export function buildWorktreeRow(f: WorktreeFacts, now: number, opts: HealthOpts = {}): WorktreeRow {
   return {
     slug: f.slug,
+    kind: f.kind,
     branch: f.branch,
     worktreePath: f.worktreePath,
     state: f.state,
@@ -227,7 +266,7 @@ export function buildWorktreeRow(f: WorktreeFacts, now: number, opts: HealthOpts
     planId: f.planId,
     phase: f.phase,
     dependsOn: f.dependsOn,
-    orphan: f.orphan,
+    orphan: f.kind === 'orphan',
     wipRef: f.wipRef,
   };
 }
@@ -313,10 +352,42 @@ export interface CollectOpts extends HealthOpts {
    * rides the 2s snapshot — see the cost note below.
    */
   status?: () => Promise<StatusRow[]>;
+  /** Task rows only: skips every `git worktree list`. For a caller that acts
+   *  on task rows alone (the poller's stall briefs). */
+  tasksOnly?: boolean;
 }
 
 /**
- * Join everything into rows.
+ * The repos whose worktrees are listed: `root`, every task's `repoRoot`, every
+ * kb project — deduped by real path BEFORE any spawn. A repo is listed only if
+ * it has a `.git` (dir or file), so a hub that is not a repo never asks git,
+ * which would answer for whatever repo encloses it.
+ */
+async function reposToList(root: string, tasks: Task[]): Promise<string[]> {
+  const kb = await loadKb(root);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const repo of [root, ...tasks.map((t) => t.repoRoot ?? root), ...(kb?.projects ?? []).map((p) => p.path)]) {
+    const key = samePath(repo);
+    if (seen.has(key) || !existsSync(join(repo, '.git'))) continue;
+    seen.add(key);
+    out.push(repo);
+  }
+  return out;
+}
+
+/** `p` is `dir` or below it, by real path and by path segment. */
+function within(dir: string, p: string): boolean {
+  const d = samePath(dir);
+  const q = samePath(p);
+  return q === d || q.startsWith(d.endsWith(sep) ? d : d + sep);
+}
+
+/**
+ * Join everything into rows: one per task, plus one per worktree git lists in
+ * any repo above that no task owns — `orphan` when `isBatonWorktree` says Baton
+ * made it (the predicate `baton clean` uses), `main` for a repo's primary
+ * checkout, `external` for everything else.
  *
  * Cost, because this is a route and the discipline here is explicit:
  *
@@ -326,10 +397,12 @@ export interface CollectOpts extends HealthOpts {
  *              connected (`statusRows` in server.ts), so a request adds no git
  *              spawn for any of it. Only an idle daemon pays for a fresh
  *              `collectStatus`.
- *   LIVE     — `listWorktrees` (1 spawn) plus, per DISTINCT repo root, one
- *              `for-each-ref` for upstream tracking and one for the wip
- *              namespace. O(repos), not O(worktrees): no per-request fan-out,
- *              which is the thing this daemon cannot afford.
+ *   LIVE     — one `listWorktrees` per DISTINCT repo (root, task repoRoots,
+ *              kb projects), run in parallel — measured 62-125 ms each — plus,
+ *              per distinct task repo, one `for-each-ref` for upstream tracking
+ *              and one for the wip namespace. O(repos), not O(worktrees): no
+ *              per-request fan-out, which is the thing this daemon cannot
+ *              afford. Non-task rows are never status-read (`git: null`).
  *   LIVE-ish — `livenessProbe` reads the in-memory presence table and walks each
  *              worktree's mtimes, capped at 2000 entries / depth 6
  *              (liveness.ts:33-37). The same bounded walk the board already does.
@@ -351,20 +424,6 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
   } catch {
     statusBySlug = null;
   }
-
-  const worktrees = await listWorktrees(root);
-  // The orphan half of `auditJunk` (cleanup.ts:216) without its cost: auditJunk
-  // also probes tmux, scans two tmp directories, and runs `worktreeStatus` per
-  // item — exactly the per-request fan-out this route must not do.
-  // `auditWorktrees` is its pure detector and yields the same orphan items from
-  // the tasks and worktree list already in hand.
-  const junk = auditWorktrees(root, tasks, worktrees, existsSync);
-  // …and re-checked against the real paths of the tasks we are already about to
-  // serve, because `auditWorktrees` compares path STRINGS. See `samePath`.
-  const taskPaths = new Set(materialized.map((t) => samePath(t.worktreePath)));
-  const orphansOnDisk = junk.filter(
-    (j) => j.kind === 'orphan-worktree-disk' && j.path && !taskPaths.has(samePath(j.path)),
-  );
 
   // One pair of ref reads per repo, not per task: a hub's tasks are spread over
   // a handful of sub-projects, and every task in one shares its refs.
@@ -422,48 +481,83 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
       planId: t.planId ?? null,
       phase: t.phase ?? null,
       dependsOn: t.dependsOn ?? [],
-      orphan: false,
+      kind: 'task',
       wipRef: refs?.wip.get(t.slug) ?? null,
     };
   };
 
   const rows = materialized.map((t) => buildWorktreeRow(factsFor(t), now, opts));
 
+  if (opts.tasksOnly) return sortRows(rows);
+
   // Worktrees git knows about that no task claims. They are the ones most
   // likely to be forgotten, so they belong in this list rather than only in a
   // doctor report that has no client at all.
-  for (const item of orphansOnDisk) {
-    const entry = worktrees.find((w) => resolve(w.path) === resolve(item.path!));
-    rows.push(buildWorktreeRow({
-      slug: item.id,
-      branch: entry?.branch ?? item.branch ?? null,
-      worktreePath: item.path!,
-      state: null,
-      // Deliberately NOT `worktreeStatus` here: one spawn per orphan is the
-      // fan-out the cost discipline forbids, and `orphan-disk` outranks
-      // anything a status call could add. `auditJunk` is where a caller that
-      // wants the dirty check on these pays for it. Not read = not known:
-      // null, never a stubbed "clean, 0 files", which sorted real unsaved
-      // work last.
-      git: null,
-      localOnlyCommits: null,
-      agent: null,
-      claimedBy: null,
-      holderRunning: false,
-      lastActivityAt: 0,
-      planId: null,
-      phase: null,
-      dependsOn: [],
-      orphan: true,
-      wipRef: null,
-    }, now, opts));
+  const taskPaths = new Set(materialized.map((t) => samePath(t.worktreePath)));
+  const listings = await Promise.all((await reposToList(root, tasks)).map(async (repo) => {
+    const entries = await listWorktrees(repo);
+    // git lists the main worktree first. When that main is outside this root
+    // (root is a linked worktree of an outer repo), the outer checkout is some
+    // other project's business: keep only what lives under root.
+    const kept = entries[0] && within(root, entries[0].path) ? entries : entries.filter((e) => within(root, e.path));
+    return { repo: samePath(repo), main: entries[0], entries: kept };
+  }));
+  const listed = new Set<string>();
+  for (const { repo, main, entries } of listings) {
+    for (const e of entries) {
+      // A bare repo's "main" has no checkout to show.
+      if (e === main && e.head === null) continue;
+      const key = samePath(e.path);
+      if (taskPaths.has(key) || listed.has(key)) continue;
+      // The listed repo's own checkout is its main, even when git's index 0
+      // is an outer repo's.
+      const kind: WorktreeKind = e === main || key === repo ? 'main' : isBatonWorktree(root, e) ? 'orphan' : 'external';
+      const onDisk = existsSync(e.path);
+      // A prunable entry is git metadata, not a worktree.
+      if (kind === 'external' && !onDisk) continue;
+      listed.add(key);
+      rows.push(buildWorktreeRow({
+        slug: worktreeId(e.path),
+        branch: e.branch,
+        worktreePath: e.path,
+        state: null,
+        // Deliberately NOT `worktreeStatus` here: one spawn per row is the
+        // fan-out the cost discipline forbids, and `orphan-disk`/`unmanaged`
+        // outrank anything a status call could add. `auditJunk` is where a
+        // caller that wants the dirty check on orphans pays for it. Not read =
+        // not known: null, never a stubbed "clean, 0 files", which sorted real
+        // unsaved work last.
+        git: null,
+        localOnlyCommits: null,
+        agent: null,
+        claimedBy: null,
+        holderRunning: false,
+        lastActivityAt: 0,
+        planId: null,
+        phase: null,
+        dependsOn: [],
+        kind,
+        onDisk,
+        wipRef: null,
+      }, now, opts));
+    }
   }
 
-  // Most exposed first: sorting by this descending answers the reporter's fear
-  // directly — the row at the top is what you lose if the disk dies.
+  return sortRows(rows);
+}
+
+/**
+ * Baton's rows first, most exposed first: sorting by risk descending answers
+ * the reporter's fear directly — the row at the top is what you lose if the
+ * disk dies. Every unmanaged row follows, main checkouts first, then by path.
+ */
+function sortRows(rows: WorktreeRow[]): WorktreeRow[] {
+  const tier = (r: WorktreeRow) => (r.kind === 'task' || r.kind === 'orphan' ? 0 : r.kind === 'main' ? 1 : 2);
   const risk = (r: WorktreeRow) => (r.unprotected.atRisk ? 1 : 0);
-  return rows.sort((a, b) => risk(b) - risk(a)
-    || b.unprotected.lines - a.unprotected.lines
-    || (b.unprotected.commits ?? 0) - (a.unprotected.commits ?? 0)
-    || a.slug.localeCompare(b.slug));
+  return rows.sort((a, b) => tier(a) - tier(b) || (tier(a) > 0
+    ? a.worktreePath.localeCompare(b.worktreePath)
+    : risk(b) - risk(a)
+      || b.unprotected.lines - a.unprotected.lines
+      || (b.unprotected.commits ?? 0) - (a.unprotected.commits ?? 0)
+      || a.slug.localeCompare(b.slug)));
 }

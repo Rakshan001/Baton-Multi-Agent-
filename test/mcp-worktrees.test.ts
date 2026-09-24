@@ -47,7 +47,7 @@ function facts(over: Partial<WorktreeFacts> = {}): WorktreeFacts {
     planId: null,
     phase: null,
     dependsOn: [],
-    orphan: false,
+    kind: 'task',
     wipRef: null,
     ...over,
   };
@@ -194,12 +194,38 @@ describe('list_worktrees — the one filter it takes', () => {
   });
 });
 
+describe('list_worktrees — Baton\'s worktrees only', () => {
+  const unmanaged = (kind: 'main' | 'external', worktreePath: string) =>
+    row({ slug: `${kind}~0123456789`, kind, worktreePath, state: null, claimedBy: null, agent: null, holderRunning: false, git: null, localOnlyCommits: null });
+
+  it('never serves a worktree Baton does not own', () => {
+    const rows = [row({ slug: 'a' }), row({ slug: 'o~0123456789', kind: 'orphan', state: null }), unmanaged('main', '/repo'), unmanaged('external', '/repo/.claude/worktrees/x')];
+    const out = worktreeBrief(rows, { cwd: '/elsewhere' });
+    if ('refused' in out) throw new Error(out.refused);
+    expect(out.worktrees.map((w) => w.slug)).toEqual(['a', 'o~0123456789']);
+  });
+
+  it('mine still falls back to BATON_SLUG when the cwd is the main checkout', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'baton-wt-'));
+    const rows = [row({ slug: 'a', worktreePath: join(repo, '.baton', 'wt', 'a') }), unmanaged('main', repo)];
+    const out = worktreeBrief(rows, { cwd: repo, taskSlug: 'a' });
+    if ('refused' in out) throw new Error(out.refused);
+    expect(out.mine).toBe('a');
+  });
+
+  it('refuses a filter of unmanaged rather than always answering empty', () => {
+    const out = worktreeBrief([unmanaged('main', '/repo')], { cwd: '/elsewhere', filter: 'unmanaged' });
+    expect('refused' in out).toBe(true);
+    expect(WORKTREE_HEALTHS as readonly string[]).not.toContain('unmanaged');
+  });
+});
+
 describe('list_worktrees — the vocabulary and the context budget', () => {
   it('knows every health the read-model can derive', () => {
     const cases: WorktreeFacts[] = [
       facts({ git: null }),
       facts({ git: { status: 'missing', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 } }),
-      facts({ orphan: true }),
+      facts({ kind: 'orphan' }),
       facts({ localOnlyCommits: null }),
       facts({ holderRunning: false, agent: null, localOnlyCommits: 2 }),
       facts({ git: { status: 'conflict', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 } }),

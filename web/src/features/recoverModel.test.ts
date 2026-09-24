@@ -40,6 +40,7 @@ function report(items: JunkItem[]): DoctorReport {
 
 function row(o: Partial<WorktreeRow> & { slug: string }): WorktreeRow {
   return {
+    kind: o.orphan ? "orphan" : "task",
     branch: `baton/${o.slug}`,
     worktreePath: `/repo/.baton/wt/${o.slug}`,
     state: "queued",
@@ -101,6 +102,50 @@ describe("sorting", () => {
       ],
     );
     expect(strandings.map((s) => s.slug)).toEqual(["uncounted", "big", "small"]);
+  });
+});
+
+/* ---------- joining a doctor item to its worktree row ------------------- */
+
+describe("the join", () => {
+  it("gives an orphan-disk item the row at its PATH, not a task sharing its basename", () => {
+    // The task `alpha` has counted work; the orphan directory `nested/alpha`
+    // was never read. Joining by basename handed the orphan the task's counts.
+    const [s] = buildStrandings(
+      report([item({ kind: "orphan-worktree-disk", id: "alpha", path: "/repo/.baton/wt/nested/alpha", branch: "baton/alpha-dup" })]),
+      [
+        row({ slug: "alpha", unprotected: { lines: 40, commits: 3, atRisk: true } }),
+        row({ slug: "alpha~0123456789", kind: "orphan", orphan: true, state: null, worktreePath: "/repo/.baton/wt/nested/alpha", filesChanged: null, unprotected: { lines: 0, commits: null, atRisk: true } }),
+      ],
+    );
+    expect(s.commits).toBeNull();
+    expect(s.lines).toBeNull();
+  });
+
+  it("still joins an orphan-worktree-task item by slug", () => {
+    const [s] = buildStrandings(
+      report([item({ kind: "orphan-worktree-task", id: "gone", path: "/elsewhere/gone" })]),
+      [row({ slug: "gone", unprotected: { lines: 5, commits: 2, atRisk: true } })],
+    );
+    expect(s.commits).toBe(2);
+    expect(s.lines).toBe(5);
+  });
+
+  it("gives two orphans with one basename distinct stranding ids, ordered by path", () => {
+    const strandings = buildStrandings(report([
+      item({ kind: "orphan-worktree-disk", id: "x", path: "/repo/b/x" }),
+      item({ kind: "orphan-worktree-disk", id: "x", path: "/repo/a/x" }),
+    ]), []);
+    expect(strandings.map((s) => s.id)).toEqual(["worktree:/repo/a/x", "worktree:/repo/b/x"]);
+  });
+
+  it("takes a detached orphan's branch as none when the item carries no branch", () => {
+    // `/api/doctor` omits `branch` for a detached worktree rather than sending "".
+    const [s] = buildStrandings(
+      report([item({ kind: "orphan-worktree-disk", id: "det", path: "/repo/.baton/wt/det" })]),
+      [row({ slug: "det~0123456789", kind: "orphan", orphan: true, state: null, branch: null, worktreePath: "/repo/.baton/wt/det" })],
+    );
+    expect(s.branch).toBeNull();
   });
 });
 

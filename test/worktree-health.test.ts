@@ -55,7 +55,7 @@ function facts(over: Partial<WorktreeFacts> = {}): WorktreeFacts {
     planId: null,
     phase: null,
     dependsOn: [],
-    orphan: false,
+    kind: 'task',
     wipRef: null,
     ...over,
   };
@@ -99,8 +99,18 @@ describe('worktree health derivation', () => {
     })).toBe('missing');
   });
 
+  it('reports orphan-disk for an orphan we never read (no git facts), not unknown', () => {
+    expect(health({ kind: 'orphan', state: null, claimedBy: null, agent: null, holderRunning: false, git: null, localOnlyCommits: null })).toBe('orphan-disk');
+  });
+
   it('reports orphan-disk for a baton worktree no task owns', () => {
-    expect(health({ orphan: true, state: null, claimedBy: null, agent: null, holderRunning: false })).toBe('orphan-disk');
+    expect(health({ kind: 'orphan', state: null, claimedBy: null, agent: null, holderRunning: false })).toBe('orphan-disk');
+  });
+
+  it('reports unmanaged for a main or external worktree, outranking git:null', () => {
+    for (const kind of ['main', 'external'] as const) {
+      expect(health({ kind, state: null, claimedBy: null, agent: null, holderRunning: false, git: null, localOnlyCommits: null })).toBe('unmanaged');
+    }
   });
 
   it('ranks conflict and an in-progress rebase above the liveness names', () => {
@@ -219,9 +229,11 @@ describe.runIf(hasDist)('GET /api/worktrees', () => {
     const { status, body } = await api(PORT_RO, '/api/worktrees');
     expect(status).toBe(200);
     expect(Array.isArray(body)).toBe(true);
-    expect(body.map((r: any) => r.slug)).toEqual(['api']);
-    // The main checkout is not a task worktree and must not be listed as one.
-    expect(body.some((r: any) => r.worktreePath === repo)).toBe(false);
+    expect(body.filter((r: any) => r.kind === 'task').map((r: any) => r.slug)).toEqual(['api']);
+    // The main checkout is listed, but as what it is: not a task, not Baton's.
+    const main = body.filter((r: any) => r.kind !== 'task');
+    expect(main).toHaveLength(1);
+    expect(main[0]).toMatchObject({ kind: 'main', health: 'unmanaged', state: null, orphan: false });
   });
 
   it('carries every field the flow canvas needs, with health distinct from state', async () => {
@@ -230,7 +242,7 @@ describe.runIf(hasDist)('GET /api/worktrees', () => {
     for (const key of [
       'slug', 'branch', 'worktreePath', 'state', 'health', 'quietForMs', 'lastActivityAt',
       'unprotected', 'filesChanged', 'ahead', 'behind', 'repoState', 'agent', 'claimedBy',
-      'holderRunning', 'planId', 'phase', 'dependsOn', 'orphan', 'wipRef',
+      'holderRunning', 'planId', 'phase', 'dependsOn', 'kind', 'orphan', 'wipRef',
     ]) {
       expect(row, `missing field ${key}`).toHaveProperty(key);
     }
@@ -240,6 +252,7 @@ describe.runIf(hasDist)('GET /api/worktrees', () => {
     expect(row.phase).toBe(2);
     expect(row.dependsOn).toEqual(['schema']);
     expect(row.orphan).toBe(false);
+    expect(row.kind).toBe('task');
   });
 
   it('says the holder is not running, and calls the dirty worktree abandoned', async () => {

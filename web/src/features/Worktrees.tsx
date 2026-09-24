@@ -74,6 +74,7 @@ import {
   type FlowNode, type GroupDescriptor, type GroupFlowNode,
 } from "../components/flow/groups";
 import { GroupToggleContext, useCollapseStore } from "../components/flow/collapseStore";
+import { displayName, isBatonRow, shownAtRisk, worktreeSummary } from "../components/flow/panel";
 import { WorktreePanel } from "./WorktreePanel";
 import { usePoll } from "../hooks/usePoll";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -398,12 +399,12 @@ export function WorktreesScreen({
   // expanding a group restores the selection you had — but it must not be
   // COUNTED, or the header would claim a selection nobody can see.
   const selectedCount = nodes.filter((n) => n.selected && !n.hidden).length;
-  const urgent = useMemo(() => (rows ?? []).filter(isUrgent).length, [rows]);
-  const atRisk = useMemo(() => (rows ?? []).filter((r) => r.unprotected.atRisk).length, [rows]);
+  // Counts are over Baton's own rows (flow/panel.ts:worktreeSummary).
+  const summary = useMemo(() => (rows ? worktreeSummary(rows) : null), [rows]);
 
   const subtitle = !rows ? undefined
-    : rows.length === 0 ? "No worktrees on disk."
-      : `${rows.length} worktree${rows.length === 1 ? "" : "s"} · ${urgent} needing attention · ${atRisk} holding work that exists nowhere else`
+    : summary === null ? "No worktrees on disk."
+      : summary
         + (foldedAway > 0 ? ` · ${foldedAway} folded into ${collapsedCount} collapsed group${collapsedCount === 1 ? "" : "s"}` : "");
 
   /* ---- failure paths ------------------------------------------------ */
@@ -518,6 +519,8 @@ export function WorktreesScreen({
     </>
   );
 
+  // The true empty state only: with no Baton rows but a main checkout, the
+  // canvas still renders so that checkout is visible.
   if (rows && rows.length === 0) {
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -630,7 +633,8 @@ function RankedList({ rows, loading, selected, onSelect }: {
 }) {
   const sorted = useMemo(() => [...(rows ?? [])].sort(
     (a, b) => Number(isUrgent(b)) - Number(isUrgent(a))
-      || Number(b.unprotected.atRisk) - Number(a.unprotected.atRisk)
+      || Number(isBatonRow(b)) - Number(isBatonRow(a))
+      || Number(shownAtRisk(b)) - Number(shownAtRisk(a))
       || b.unprotected.lines - a.unprotected.lines
       || a.slug.localeCompare(b.slug),
   ), [rows]);
@@ -656,12 +660,12 @@ function RankedList({ rows, loading, selected, onSelect }: {
               borderLeft: `3px solid ${meta.color}`, borderRadius: "var(--r-md)",
             }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.slug}</span>
+              <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.slug}>{displayName(r)}</span>
               <span style={{ fontSize: "var(--fs-11)", color: meta.color }} title={meta.blurb}>{meta.label}</span>
             </div>
             <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>
               {r.branch ?? "(no branch)"} · quiet {quietLabel(r.quietForMs)}
-              {r.unprotected.atRisk
+              {shownAtRisk(r)
                 ? (r.filesChanged === null ? " · at risk (uncounted)" : ` · ${r.unprotected.lines} lines at risk`)
                 : ""}
             </div>

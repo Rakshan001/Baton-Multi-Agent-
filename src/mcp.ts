@@ -187,6 +187,10 @@ export function historyLimit(limit: number | undefined): number {
 /* list_worktrees — the projection of the worktree read-model            */
 /* ------------------------------------------------------------------ */
 
+/** `unmanaged` is left out: this tool serves Baton's own rows only, so a filter
+ *  of it could only ever answer empty — and is refused instead. */
+type BatonHealth = Exclude<WorktreeHealth, 'unmanaged'>;
+
 /**
  * The health vocabulary as a runtime value, because a refusal has to be able to
  * name it.
@@ -202,9 +206,9 @@ export function historyLimit(limit: number | undefined): number {
 export const WORKTREE_HEALTHS = [
   'working', 'quiet', 'stalled', 'abandoned',
   'ok', 'dirty', 'conflict', 'rebasing', 'missing', 'orphan-disk', 'unknown',
-] as const satisfies readonly WorktreeHealth[];
+] as const satisfies readonly BatonHealth[];
 
-type MissingHealth = Exclude<WorktreeHealth, (typeof WORKTREE_HEALTHS)[number]>;
+type MissingHealth = Exclude<BatonHealth, (typeof WORKTREE_HEALTHS)[number]>;
 // Wrapped in a tuple on purpose: a bare `MissingHealth extends never` is a
 // distributive conditional and evaluates to `never` when the list IS complete,
 // which would fail exactly when nothing is wrong.
@@ -306,8 +310,14 @@ export function worktreeBrief(
     }
     health = match;
   }
-  const mine = ownWorktreeSlug(rows, opts.cwd, opts.taskSlug);
-  const worktrees = rows
+  // Baton's own rows only, and BEFORE `ownWorktreeSlug`: a main checkout
+  // contains the repo root, so an agent standing there would otherwise be
+  // handed the main row as `mine` instead of its BATON_SLUG fallback. The
+  // route has already paid for listing every repo; this drops that half.
+  // An orphan's `~` id does reach agents, and `take_task` refuses it.
+  const baton = rows.filter((r) => r.kind === 'task' || r.kind === 'orphan');
+  const mine = ownWorktreeSlug(baton, opts.cwd, opts.taskSlug);
+  const worktrees = baton
     .filter((r) => health === null || r.health === health)
     .map((r) => ({
       slug: r.slug,

@@ -121,16 +121,23 @@ function slugOf(item: JunkItem): string {
  */
 export function buildStrandings(report: DoctorReport | null, rows: WorktreeRow[] | null): Stranding[] {
   const bySlug = new Map((rows ?? []).map((r) => [r.slug, r]));
+  // An on-disk orphan's item id is its basename, which a task can share, so it
+  // takes its row by PATH — the same git-reported string on both sides.
+  const byPath = new Map((rows ?? []).map((r) => [r.worktreePath, r]));
   const items = report?.items ?? [];
   const out: Stranding[] = [];
 
   for (const item of items) {
     if (!WORKTREE_KINDS.includes(item.kind)) continue;
     const slug = slugOf(item);
-    const row = bySlug.get(slug);
+    const row = item.kind === "orphan-worktree-disk"
+      ? (item.path === null ? undefined : byPath.get(item.path))
+      : bySlug.get(slug);
     const { commits, lines } = countsOf(row);
     out.push({
-      id: `worktree:${slug}`,
+      // By path: two orphans with one basename are two rows. This also makes
+      // the id tiebreak in `compareStrandings` order worktrees by path.
+      id: `worktree:${item.path ?? slug}`,
       category: "worktree",
       slug,
       branch: item.branch || row?.branch || null,

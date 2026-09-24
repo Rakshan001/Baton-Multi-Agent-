@@ -31,6 +31,7 @@ import { HEALTH_META } from "./health";
 import type { WorktreeHealth, WorktreeRow } from "../../types";
 
 const row = (over: Partial<WorktreeRow> & { slug: string }): WorktreeRow => ({
+  kind: over.orphan ? "orphan" : "task",
   branch: `baton/${over.slug}`,
   worktreePath: `/tmp/${over.slug}`,
   state: "active",

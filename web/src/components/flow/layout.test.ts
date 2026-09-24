@@ -20,6 +20,7 @@ import {
 import type { WorktreeRow } from "../../types";
 
 const row = (over: Partial<WorktreeRow> & { slug: string }): WorktreeRow => ({
+  kind: over.orphan ? "orphan" : "task",
   branch: `baton/${over.slug}`,
   worktreePath: `/tmp/${over.slug}`,
   state: "active",
@@ -204,8 +205,26 @@ describe("the canvas cannot lose a worktree", () => {
     expect(out[1]!.slug).toMatch(/^auth~orphan-\d+$/);
   });
 
+  it("is a no-op on daemon-shaped ids", () => {
+    const rows = [row({ slug: "alpha" }), row({ slug: "alpha~0123456789", kind: "orphan", orphan: true, state: null })];
+    expect(uniqueSlugs(rows)).toBe(rows);
+  });
+
   it("hands back the same array when nothing collides", () => {
     const rows = [row({ slug: "a" }), row({ slug: "b", orphan: true })];
     expect(uniqueSlugs(rows)).toBe(rows);
+  });
+});
+
+describe("rows Baton did not create", () => {
+  it("get a band of their own, below the no-plan band", () => {
+    const rows = [
+      row({ slug: "main~0123456789", kind: "main", state: null, planId: null, phase: null }),
+      row({ slug: "one-off", planId: null, phase: null }),
+      row({ slug: "planned" }),
+    ];
+    const pos = layoutWorktrees(rows);
+    expect(pos.get("planned")!.y).toBeLessThan(pos.get("one-off")!.y);
+    expect(pos.get("one-off")!.y).toBeLessThan(pos.get("main~0123456789")!.y);
   });
 });

@@ -52,6 +52,17 @@ describe('auditWorktrees', () => {
     const items = auditWorktrees(root, [t], [wt(t.worktreePath, t.branch), wt(root, 'main')], () => true);
     expect(items).toHaveLength(0);
   });
+  // The worktree read-model now LISTS main and external worktrees. Clean must
+  // still never see them: that is what keeps `clean --fix` off them.
+  it('still ignores main and external worktrees', () => {
+    const others = [wt(root, 'main'), wt('/elsewhere/plain', 'feature'), wt(join(root, '.claude', 'worktrees', 'cx'), 'cx')];
+    expect(auditWorktrees(root, [], others, () => true)).toHaveLength(0);
+  });
+  it('gives a detached orphan item no branch, never an empty one', () => {
+    const [item] = auditWorktrees(root, [], [wt(join(root, '.baton', 'wt', 'det'), null)], () => true);
+    expect(item!.kind).toBe('orphan-worktree-disk');
+    expect(item).not.toHaveProperty('branch');
+  });
 });
 
 describe('auditBranches', () => {

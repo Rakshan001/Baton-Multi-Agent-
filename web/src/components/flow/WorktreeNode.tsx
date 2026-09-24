@@ -48,6 +48,7 @@ import {
 } from "./encoding";
 import { useNodeMotion } from "./useNodeMotion";
 import { NODE_H, NODE_W, type WorktreeFlowNode } from "./layout";
+import { displayName, shownAtRisk } from "./panel";
 
 /** A chip at the 11px legibility floor — the documented minimum, not a target. */
 function Chip({ color, icon, children, title, strike }: {
@@ -136,7 +137,7 @@ function WorktreeNodeInner({ data, selected }: NodeProps<WorktreeFlowNode>) {
     <div
       // One sentence, in the order someone hunting stuck work reads it:
       // verdict, then state, then the evidence behind the verdict.
-      aria-label={`${row.slug}: ${health.label}${row.state ? `, ${row.state}` : ""}, quiet ${quietLabel(row.quietForMs)}`}
+      aria-label={`${displayName(row)}: ${health.label}${row.state ? `, ${row.state}` : ""}, quiet ${quietLabel(row.quietForMs)}`}
       style={{
         position: "relative",
         width: NODE_W, minHeight: NODE_H, boxSizing: "border-box",
@@ -186,7 +187,7 @@ function WorktreeNodeInner({ data, selected }: NodeProps<WorktreeFlowNode>) {
             <span style={{
               fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", fontFamily: "var(--font-mono)",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0,
-            }} title={row.slug}>{row.slug}</span>
+            }} title={row.slug}>{displayName(row)}</span>
             {/* The one moving thing on the card, and only when a process is
                 genuinely there. Under reduced motion it is still DRAWN — the
                 fact must not vanish — it simply stops breathing. */}
@@ -233,7 +234,7 @@ function WorktreeNodeInner({ data, selected }: NodeProps<WorktreeFlowNode>) {
         {row.agent && row.holderRunning && (
           <Chip color="var(--ready)" icon="bot" title={`${row.agent} is running in this worktree`}>{row.agent}</Chip>
         )}
-        {row.unprotected.atRisk && (
+        {shownAtRisk(row) && (
           <Chip color="var(--dirty)" icon="alertTriangle"
             title="Uncommitted lines plus commits that exist nowhere but this disk">
             {row.unprotected.lines > 0 ? `${row.unprotected.lines} lines` : ""}

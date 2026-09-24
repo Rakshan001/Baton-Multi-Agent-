@@ -153,7 +153,7 @@ describe("every health value is distinguishable without colour", () => {
   it("covers every health value the daemon can compute", () => {
     expect(HEALTHS.sort()).toEqual(
       ["abandoned", "conflict", "dirty", "missing", "ok", "orphan-disk",
-        "quiet", "rebasing", "stalled", "unknown", "working"].sort(),
+        "quiet", "rebasing", "stalled", "unknown", "unmanaged", "working"].sort(),
     );
     // health.ts and encoding.ts must not drift apart.
     expect(HEALTHS.sort()).toEqual((Object.keys(HEALTH_META) as WorktreeHealth[]).sort());

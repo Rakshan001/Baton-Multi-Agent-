@@ -68,7 +68,7 @@ export const COLLAPSED_H = 72;
 /* ------------------------------------------- the worst-health ordering */
 
 /**
- * A TOTAL ORDER OVER THE ELEVEN HEALTH VALUES. Higher is worse.
+ * A TOTAL ORDER OVER THE TWELVE HEALTH VALUES. Higher is worse.
  *
  * This is the load-bearing decision of the whole task. A collapsed group
  * shows ONE health, and if that one were an average — or the commonest, or
@@ -103,6 +103,8 @@ export const COLLAPSED_H = 72;
  *   dirty      uncommitted changes, nobody expected to be moving them.
  *   orphan-disk on disk, no task owns it. A housekeeping fact.
  *   working    the token advanced inside the period.
+ *   unmanaged  a main checkout or another tool's worktree. Baton reads
+ *              nothing about it, and with no plan it is never grouped.
  *   ok         nothing uncommitted and nobody expected to move it.
  *
  * WHERE `unknown` SITS, AND WHY. It is the LEAST severe of the six values
@@ -133,6 +135,7 @@ export const HEALTH_SEVERITY: Record<WorktreeHealth, number> = {
   dirty: 30,
   "orphan-disk": 20,
   working: 10,
+  unmanaged: 5,
   ok: 0,
 };
 

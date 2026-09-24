@@ -42,6 +42,51 @@
       worked.
    ============================================================ */
 import type { WorktreeRow } from "../../types";
+import { HEALTH_META } from "./health";
+
+/* ---------- which rows are Baton's -------------------------------------
+   The daemon lists every worktree git knows (src/worktrees.ts:WorktreeKind).
+   Only a `task` row has a record to act on; `task` and `orphan` are the ones
+   Baton made; `main` and `external` are shown and never acted on. */
+
+type KindOf = Pick<WorktreeRow, "kind">;
+
+/** A task row: the only kind any write, the ledger, or a brief applies to. */
+export const isTaskRow = (row: KindOf): boolean => row.kind === "task";
+
+/** A row Baton made: a task, or an orphan of one. */
+export const isBatonRow = (row: KindOf): boolean => row.kind === "task" || row.kind === "orphan";
+
+/** At risk as the screen COUNTS it. A row Baton does not track is never read,
+ *  so its fail-closed `atRisk` is not "work that exists nowhere else". */
+export const shownAtRisk = (row: Pick<WorktreeRow, "kind" | "unprotected">): boolean =>
+  isBatonRow(row) && row.unprotected.atRisk;
+
+/** The name a person reads: the task slug, or the directory part of a non-task
+ *  id (`<name>~<hash>`). The full id belongs in a `title`. */
+export function displayName(row: Pick<WorktreeRow, "kind" | "slug">): string {
+  if (isTaskRow(row)) return row.slug;
+  const cut = row.slug.lastIndexOf("~");
+  return cut > 0 ? row.slug.slice(0, cut) : row.slug;
+}
+
+/**
+ * The Worktrees screen's one-line count, over Baton's rows only: a main
+ * checkout is not "work that exists nowhere else". Null only when there are
+ * no rows at all — the true empty state. With only rows Baton did not create,
+ * it still speaks, so the screen keeps showing them.
+ */
+export function worktreeSummary(rows: readonly WorktreeRow[]): string | null {
+  if (rows.length === 0) return null;
+  const baton = rows.filter(isBatonRow);
+  const others = `${rows.length - baton.length} not Baton's`;
+  if (baton.length === 0) return `No Baton worktrees · ${others}`;
+  // An unrecognised health counts as needing attention, never as fine.
+  const urgent = baton.filter((r) => HEALTH_META[r.health]?.urgent ?? true).length;
+  const atRisk = baton.filter(shownAtRisk).length;
+  return `${baton.length} worktree${baton.length === 1 ? "" : "s"} · ${urgent} needing attention · ${atRisk} holding work that exists nowhere else`
+    + (rows.length > baton.length ? ` · +${others}` : "");
+}
 
 /* ---------- the two read-models this module reads, NARROWED ----------
    `blockerFor` and `resolveCopyPrompt` take structural shapes rather than the
@@ -226,7 +271,15 @@ export function workInFlightFacts(row: WorktreeRow): WorkFact[] {
       urgent: true,
     });
   }
-  if (row.unprotected.atRisk) {
+  if (!isBatonRow(row)) {
+    facts.push({
+      key: "atRisk",
+      label: "exists nowhere else",
+      value: "not read — Baton does not track this worktree",
+      tip: "Baton reads no git state for a worktree it did not create",
+      urgent: false,
+    });
+  } else if (row.unprotected.atRisk) {
     const parts: string[] = [];
     if (row.unprotected.lines > 0) parts.push(`${row.unprotected.lines} lines`);
     if (row.unprotected.commits) parts.push(`${row.unprotected.commits} commits`);
@@ -291,9 +344,18 @@ export interface ActionGate {
  *  deletes its branch (the tip is archived) and every other item the dry run
  *  listed, so the sentence says both before anybody runs it. */
 const ORPHAN_NEXT =
-  "Inspect the directory, commit or push anything worth keeping, then run `baton clean` to see what it would remove. `baton clean --fix` removes it and deletes its branch (the tip is kept under refs/baton/archive/). It also removes any other junk the dry run listed. A dirty orphan is skipped unless you also pass `-f`.";
+  "Inspect the directory, commit or push anything worth keeping, then run `baton clean` to see what it would remove. `baton clean --fix` removes it and deletes its branch (the tip is kept under refs/baton/archive/). It also removes any other junk the dry run listed. A dirty orphan is skipped unless you also pass `-f`. In a multi-repo hub, `baton clean` scans only the hub's own repo.";
 
 const ORPHAN_TIP = `No task owns this worktree, so there is no claim to move. ${ORPHAN_NEXT}`;
+
+/** A main checkout or another tool's worktree. Never names `baton clean`:
+ *  clean does not touch these, and must not be suggested as if it did. */
+export const NOT_BATONS_TIP =
+  "Baton did not create this worktree. It is shown so you can see it; nothing here takes, pauses, merges, removes or cleans it. Its diff is read-only, against HEAD (no base branch to compare).";
+
+/** Why a row with no task record refuses: the orphan's sentence, or not-Baton's. */
+const noTaskTip = (row: WorktreeRow, orphanTip: string): string =>
+  isBatonRow(row) ? orphanTip : NOT_BATONS_TIP;
 
 /**
  * Take over / Pause / Hand off all act on the TASK RECORD, and an orphan
@@ -301,8 +363,8 @@ const ORPHAN_TIP = `No task owns this worktree, so there is no claim to move. ${
  * the gates stop, deliberately — see rule 3 in the header.
  */
 function recordGate(row: WorktreeRow, writeEnabled: boolean): ActionGate {
+  if (!isTaskRow(row) || row.state === null) return { enabled: false, tip: noTaskTip(row, ORPHAN_TIP) };
   if (!writeEnabled) return { enabled: false, tip: READ_ONLY_TIP };
-  if (row.orphan || row.state === null) return { enabled: false, tip: ORPHAN_TIP };
   return { enabled: true };
 }
 
@@ -325,7 +387,7 @@ export function inspectGate(row: WorktreeRow): ActionGate {
   if (row.health === "missing") {
     return { enabled: false, tip: "The worktree directory is gone from disk — there is nothing left to read." };
   }
-  if (row.orphan || row.state === null) return { enabled: false, tip: ORPHAN_TIP };
+  if (!isTaskRow(row) || row.state === null) return { enabled: false, tip: noTaskTip(row, ORPHAN_TIP) };
   return { enabled: true };
 }
 
@@ -431,8 +493,8 @@ export function mergeGate(
 ): MergeGate {
   const no = (tip: string, refused = false): MergeGate => ({ enabled: false, tip, refused });
 
+  if (!isTaskRow(row) || row.state === null) return no(noTaskTip(row, MERGE_NO_TASK_TIP));
   if (!writeEnabled) return no(READ_ONLY_TIP);
-  if (row.orphan || row.state === null) return no(MERGE_NO_TASK_TIP);
   if (!row.branch) return no(`'${row.slug}' has no branch recorded, so there is nothing to merge.`);
 
   /* 1 — the task record has to say the work is finished. See the note above. */
@@ -549,14 +611,14 @@ export function resolveCopyPrompt(
   brief: PanelBrief | null,
   writeEnabled: boolean,
 ): CopyPrompt {
-  // First, before any brief: an orphan's id names no task, and a brief
+  // First, before any brief: a non-task row's id names no task, and a brief
   // joined on it would belong to some other worktree.
-  if (row.orphan) {
+  if (!isTaskRow(row)) {
     return {
       kind: "inspect",
       label: "Copy inspect command",
       text: inspectCommand(row),
-      tip: `No task owns this worktree, so there is nothing to take. ${ORPHAN_NEXT}`,
+      tip: noTaskTip(row, `No task owns this worktree, so there is nothing to take. ${ORPHAN_NEXT}`),
     };
   }
   // `body` is the frontmatter-stripped brief; `markdown` is the whole file.

@@ -121,7 +121,7 @@ export interface HealthEncoding {
 }
 
 /**
- * Card border per health. Eleven values, eleven distinct (pattern, width)
+ * Card border per health. Twelve values, twelve distinct (pattern, width)
  * pairs — see the form vocabulary in the header comment for why each value
  * got the shape it did.
  *
@@ -136,6 +136,7 @@ export const HEALTH_ENCODING: Record<WorktreeHealth, HealthEncoding> = {
   dirty: { pattern: "solid", width: 3 },
   /* silence — dashed */
   quiet: { pattern: "dashed", width: 1 },
+  unmanaged: { pattern: "dashed", width: 2 },
   stalled: { pattern: "dashed", width: 3 },
   /* nobody home — dotted */
   "orphan-disk": { pattern: "dotted", width: 1 },

@@ -150,7 +150,12 @@ export class StatusPoller {
     this.briefBusy = true;
     try {
       this.stallBriefs ??= stallBriefComposer(this.root);
-      const worktrees = await collectWorktrees(this.root, { status: () => Promise.resolve(rows) });
+      // `tasksOnly`: a stall brief is only ever about a task row, so the tick
+      // never pays for a `git worktree list`.
+      const worktrees = await collectWorktrees(this.root, {
+        status: () => Promise.resolve(rows),
+        tasksOnly: true,
+      });
       await this.stallBriefs.onWorktrees(worktrees);
     } catch {
       // A brief is a convenience, never the reason a tick fails. The stall is

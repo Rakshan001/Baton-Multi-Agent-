@@ -87,6 +87,7 @@ function row(health: WorktreeHealth, over: Partial<WorktreeRow> = {}): WorktreeR
     planId: null,
     phase: null,
     dependsOn: [],
+    kind: 'task',
     orphan: false,
     wipRef: null,
     ...over,
@@ -198,7 +199,7 @@ describe('StallBriefComposer', () => {
   });
 
   it('says nothing about a slug no task owns', async () => {
-    const out = await new StallBriefComposer(root).onWorktrees([row('stalled', { slug: 'ghost', orphan: true })]);
+    const out = await new StallBriefComposer(root).onWorktrees([row('stalled', { slug: 'ghost', kind: 'orphan', orphan: true })]);
     expect(out).toEqual([expect.objectContaining({ slug: 'ghost', composed: false, reason: 'no-task' })]);
   });
 });

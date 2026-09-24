@@ -56,7 +56,7 @@ export interface HealthMeta {
  *
  * `label` and `icon` are two of the three non-colour channels that carry
  * health (the third is the card's border pattern+width, in encoding.ts), so
- * both have to be unique across all eleven values or two of them become the
+ * both have to be unique across every health value or two of them become the
  * same node in a greyscale screenshot. They were NOT unique before
  * wt-flow-nodes: `alertTriangle` covered stalled, conflict and unknown at
  * once, and `alertOctagon` covered abandoned and missing — which made the
@@ -111,6 +111,11 @@ export const HEALTH_META: Record<WorktreeHealth, HealthMeta> = {
   unknown: {
     label: "Unknown", color: "var(--idle)", icon: "wifiOff", urgent: true,
     blurb: "Git did not answer for this worktree. Reported as unknown rather than guessed as fine.",
+  },
+  /* --- not Baton's: listed so it can be seen, never acted on --- */
+  unmanaged: {
+    label: "Not Baton's", color: "var(--text-tertiary)", icon: "externalLink", urgent: false,
+    blurb: "A main checkout or a worktree another tool made. Baton lists it and does not read, take or clean it.",
   },
 };
 

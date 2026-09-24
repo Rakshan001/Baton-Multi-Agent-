@@ -36,10 +36,17 @@ import type { WorktreeProgress } from "../components/flow/panel";
 
 const MIN = 60_000;
 
+/** A row the daemon never status-reads: nothing counted, and fail-closed. */
+const NOT_READ = {
+  filesChanged: null, ahead: null, behind: null, repoState: null,
+  unprotected: { lines: 0, commits: null, atRisk: true },
+} satisfies Partial<WorktreeRow>;
+
 /** Defaults for a healthy, uninteresting worktree — so each row below states
  *  only what makes it different, and the differences are the fixture. */
 function wt(o: Partial<WorktreeRow> & { slug: string }): WorktreeRow {
   return {
+    kind: "task",
     branch: `baton/${o.slug}`,
     worktreePath: `/Users/dev/code/orbit/.baton/worktrees/${o.slug}`,
     state: "queued",
@@ -174,11 +181,28 @@ export function demoWorktrees(now: number = Date.now()): WorktreeRow[] {
     }),
     // On disk, git knows about it, no task owns it. `state: null` — an orphan
     // has no lifecycle, so it gets no state pill rather than a guessed one.
+    // Its id is the daemon's `worktreeId(path)`, pinned by
+    // test/worktree-coverage.test.ts. Never status-read, so nothing is counted.
     wt({
-      slug: "hotfix-auth", state: null, health: "orphan-disk", orphan: true,
+      slug: "hotfix-auth~4f1f32a51b", kind: "orphan", state: null, health: "orphan-disk", orphan: true,
       planId: null, phase: null,
       branch: "hotfix/auth",
       worktreePath: "/Users/dev/code/orbit/.baton/worktrees/hotfix-auth",
+      ...NOT_READ,
+    }),
+    /* Not Baton's: the repo's own checkout, and a worktree another tool cut.
+       Shown so they can be seen, in a band of their own; every action refuses. */
+    wt({
+      slug: "orbit~17beffe1ac", kind: "main", state: null, health: "unmanaged",
+      planId: null, phase: null, branch: "main",
+      worktreePath: "/Users/dev/code/orbit",
+      ...NOT_READ,
+    }),
+    wt({
+      slug: "review-pass~1dd5fe8260", kind: "external", state: null, health: "unmanaged",
+      planId: null, phase: null, branch: "claude/review-pass",
+      worktreePath: "/Users/dev/code/orbit/.claude/worktrees/review-pass",
+      ...NOT_READ,
     }),
   ];
 }

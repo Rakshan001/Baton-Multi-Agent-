@@ -44,8 +44,8 @@ import { HEALTH_META, STATE_COLOR, quietLabel } from "../components/flow/health"
 import { healthBorder } from "../components/flow/encoding";
 import { useNodeMotion } from "../components/flow/useNodeMotion";
 import {
-  PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, handoffGate, inspectGate,
-  mergeGate, pauseGate, progressHeadline, resolveCopyPrompt, takeoverGate, whoFacts,
+  PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, displayName, handoffGate, inspectGate,
+  isTaskRow, mergeGate, pauseGate, progressHeadline, resolveCopyPrompt, takeoverGate, whoFacts,
   workInFlightFacts, type PanelMeta, type PanelSection, type WorktreeProgress,
 } from "../components/flow/panel";
 import { usePoll } from "../hooks/usePoll";
@@ -175,9 +175,9 @@ function PanelBody(props: WorktreePanelProps) {
 
   // The ledger, per selected slug. `deps: [row.slug]` so switching selection
   // invalidates the response still in flight rather than painting the previous
-  // worktree's notes under the new one's name. Only for a task row: an orphan
-  // has no ledger to read.
-  const isTask = !row.orphan;
+  // worktree's notes under the new one's name. Only for a task row: nothing
+  // else has a ledger, and the route refuses a non-task id with a 400.
+  const isTask = isTaskRow(row);
   const progress = usePoll<WorktreeProgress>(
     () => BatonAPI.getWorktreeProgress(row.slug),
     { interval: 15000, deps: [row.slug], enabled: isTask },
@@ -415,7 +415,15 @@ function PanelBody(props: WorktreePanelProps) {
     progress: (
       <Section key="progress">
         <SectionTitle>What it said it was doing</SectionTitle>
-        {progress.error && !view
+        {!isTask
+          ? (
+            <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+              {row.kind === "orphan"
+                ? "No task owns this worktree, so there is no progress ledger to read."
+                : "Baton did not create this worktree, so there is no progress ledger to read."}
+            </span>
+          )
+          : progress.error && !view
           ? (
             <span style={{ fontSize: "var(--fs-12)", color: "var(--dirty-text)" }}>
               Couldn&apos;t read the progress ledger — {failureReason(progress.error)}.
@@ -476,7 +484,9 @@ function PanelBody(props: WorktreePanelProps) {
     identity: (
       <Section key="identity">
         <SectionTitle>Identity</SectionTitle>
-        <CopyField label="Slug" value={row.slug} />
+        {/* Only a task has a slug. Any other row's id is a derived key
+            (src/worktrees.ts:worktreeId); the path below names it. */}
+        {isTask && <CopyField label="Slug" value={row.slug} />}
         <CopyField label="Branch" value={row.branch ?? "(no branch)"} />
         <CopyField label="Path" value={row.worktreePath} />
         {(row.planId || row.phase !== null) && (
@@ -577,7 +587,7 @@ function PanelBody(props: WorktreePanelProps) {
         <span className="mono" title={row.slug} style={{
           flex: 1, minWidth: 0, fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)",
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        }}>{row.slug}</span>
+        }}>{displayName(row)}</span>
         <button className="btn btn-sm btn-ghost btn-icon fr" onClick={onClose} aria-label="Close worktree panel">
           <Icon name="x" size={14} />
         </button>
