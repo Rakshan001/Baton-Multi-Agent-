@@ -44,15 +44,16 @@ import { HEALTH_META, STATE_COLOR, quietLabel } from "../components/flow/health"
 import { healthBorder } from "../components/flow/encoding";
 import { useNodeMotion } from "../components/flow/useNodeMotion";
 import {
-  PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, displayName, handoffGate, inspectGate,
-  isTaskRow, mergeGate, pauseGate, progressHeadline, resolveCopyPrompt, takeoverGate, whoFacts,
+  PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor, diffGate, displayName, handoffGate,
+  isTaskRow, liveGate, mergeGate, pauseGate, progressHeadline, resolveCopyPrompt, takeoverGate, whoFacts,
   workInFlightFacts, type PanelMeta, type PanelSection, type WorktreeProgress,
 } from "../components/flow/panel";
+import { FILE_STATUS } from "./Diff";
 import { usePoll } from "../hooks/usePoll";
 import { ApiError, BatonAPI, failureReason } from "../lib/api";
 import { AGENT_REGISTRY } from "../lib/registry";
 import { showToast } from "../lib/toast";
-import type { AgentId, HandoffBriefEntry, PipelineView, WorktreeRow } from "../types";
+import type { AgentId, HandoffBriefEntry, PipelineView, WorktreeFileEntry, WorktreeRow } from "../types";
 
 /* ---------- small shared bits (local, deliberately) ----------
    `Chip` and `Field` exist as a near-copy of the chip inside
@@ -93,6 +94,37 @@ function Section({ children }: { children: React.ReactNode }) {
       display: "flex", flexDirection: "column", gap: 8, padding: "13px 16px",
       borderBottom: "1px solid var(--border-subtle)",
     }}>{children}</section>
+  );
+}
+
+/** "oldPath → path" for a rename/copy, else just the path — same idea as
+ *  Diff.tsx's `shownPath`, for the same reason (a rename with no old path
+ *  shown reads as a delete-and-add). */
+const shownFilePath = (f: WorktreeFileEntry) => (f.oldPath ? `${f.oldPath} → ${f.path}` : f.path);
+
+/** One row of the "Changed files" section: the shared glyph from Diff.tsx
+ *  (WorktreeFileEntry's extra `untracked`/`copied` values map onto
+ *  `added`/`renamed` — no second glyph table), the path, and — when another
+ *  task also touches this exact path — a chip naming it. */
+function FileRow({ f }: { f: WorktreeFileEntry }) {
+  const status = f.status === "untracked" ? "added" : f.status === "copied" ? "renamed" : f.status;
+  const glyph = FILE_STATUS[status];
+  return (
+    <li style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+      <span className="mono" title={glyph.tip} style={{
+        flex: "none", width: 14, textAlign: "center", fontSize: "var(--fs-11)",
+        fontWeight: "var(--fw-semibold)", color: glyph.c,
+      }}>{glyph.glyph}</span>
+      <span className="mono" title={shownFilePath(f)} style={{
+        flex: 1, minWidth: 0, fontSize: "var(--fs-11)", color: "var(--text-secondary)",
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}>{shownFilePath(f)}</span>
+      {f.overlaps && f.overlaps.length > 0 && (
+        <Chip color="var(--accent)" icon="network" title={`Also being edited in: ${f.overlaps.join(", ")}`}>
+          also in {f.overlaps.join(", ")}
+        </Chip>
+      )}
+    </li>
   );
 }
 
@@ -239,7 +271,8 @@ function PanelBody(props: WorktreePanelProps) {
   const takeover = takeoverGate(row, writeEnabled);
   const paws = pauseGate(row, writeEnabled);
   const handoff = handoffGate(row, writeEnabled);
-  const inspect = inspectGate(row);
+  const live = liveGate(row);
+  const diff = diffGate(row);
   const merge = mergeGate(row, pipeline, meta, writeEnabled);
 
   /* ---- merge: optimistic, and rolled back OUT LOUD if it fails -------
@@ -498,7 +531,36 @@ function PanelBody(props: WorktreePanelProps) {
       </Section>
     ),
 
-    /* 7 — ACTIONS. */
+    /* 7 — CHANGED FILES. Lean by design: a plain list, no tree, no
+           virtualization — `WORKTREE_FILES_CAP` (src/worktrees.ts) already
+           bounds it to 300 rows. `row.files === null` (a row never status-read)
+           renders nothing, matching how the rest of the panel omits sections
+           with no data. */
+    files: (
+      <Section key="files">
+        <SectionTitle>Changed files</SectionTitle>
+        {row.files === null
+          ? null
+          : row.files.length === 0
+            ? <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>No changes.</span>
+            : (
+              <>
+                <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+                  {row.files.map((f) => (
+                    <FileRow key={f.path} f={f} />
+                  ))}
+                </ul>
+                {row.filesTruncated && (
+                  <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>
+                    and more — showing the first {row.files.length}
+                  </span>
+                )}
+              </>
+            )}
+      </Section>
+    ),
+
+    /* 8 — ACTIONS. */
     actions: (
       <Section key="actions">
         <SectionTitle>Actions</SectionTitle>
@@ -527,10 +589,10 @@ function PanelBody(props: WorktreePanelProps) {
           <GatedButton gate={handoff} onClick={() => props.onHandoff(row.slug)}>
             <Icon name="share" size={12} /> Hand off
           </GatedButton>
-          <GatedButton gate={inspect} onClick={() => props.onLive(row.slug)}>
+          <GatedButton gate={live} onClick={() => props.onLive(row.slug)}>
             <Icon name="terminal" size={12} /> Open Live
           </GatedButton>
-          <GatedButton gate={inspect} onClick={() => props.onOpenDiff(row.slug)}>
+          <GatedButton gate={diff} onClick={() => props.onOpenDiff(row.slug)}>
             <Icon name="columns" size={12} /> Diff
           </GatedButton>
           {/* Copy prompt copies what the DAEMON wrote, or a CLI command.

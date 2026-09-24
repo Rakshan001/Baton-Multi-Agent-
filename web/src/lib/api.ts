@@ -1957,13 +1957,20 @@ class BatonClient {
       throw e;
     }
   }
-  /** Full diff vs the task's base — GET /api/tasks/:slug/diff (demo: scripted fixtures). */
-  async getDiff(slug: string): Promise<import("../types").DiffResult> {
+  /**
+   * Full diff vs the task's base — GET /api/tasks/:slug/diff for a task row, or
+   * GET /api/worktrees/:id/diff (uncommitted-vs-HEAD) for any other kind (demo:
+   * scripted fixtures). `truncated`: the daemon cut the diff at its size or file cap.
+   */
+  async getDiff(id: string, kind: WorktreeKind = "task"): Promise<import("../types").DiffResult> {
     if (this.demo) {
       await this.demoGate(120);
-      return { files: demoDiff(slug), truncated: false };
+      return { files: demoDiff(id), truncated: false };
     }
-    const r = await this.request<{ files: DiffFile[]; truncated?: boolean }>(`/api/tasks/${encodeURIComponent(slug)}/diff`);
+    const path = kind === "task"
+      ? `/api/tasks/${encodeURIComponent(id)}/diff`
+      : `/api/worktrees/${encodeURIComponent(id)}/diff`;
+    const r = await this.request<{ files: DiffFile[]; truncated?: boolean }>(path);
     return { files: r.files, truncated: r.truncated === true };
   }
   async getBlame(file: string): Promise<BlameResult> {

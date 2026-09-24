@@ -33,7 +33,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import { collectStatus, type StatusRow } from './board.js';
 import { isBatonWorktree } from './cleanup.js';
-import { listWorktrees, type RepoState } from './git.js';
+import { listWorktrees, type RepoState, type WorktreeFileEntry } from './git.js';
 import { loadKb } from './kb/state.js';
 import { cachedNewestMtimeIn, livenessProbe } from './liveness.js';
 import { STALL_GRACE_MS, stateOf, type TaskState } from './pipeline.js';
@@ -48,6 +48,11 @@ import { gitTry } from './util/exec.js';
  * false alarms, because a human sees it before anything shouts.
  */
 export const STALL_QUIET_MS = 10 * 60_000;
+
+/** Most files listed per row on /api/worktrees. This rides every poll for every task,
+ *  unlike diff.ts's one-shot DIFF_MAX_FILES (1000) — a tighter cap here bounds the
+ *  steady-state payload, not a single request. */
+export const WORKTREE_FILES_CAP = 300;
 
 /**
  * `working|quiet|stalled|abandoned` is the liveness vocabulary; the rest are the
@@ -113,6 +118,13 @@ export interface WorktreeRow {
   lastActivityAt: string | null;
   unprotected: Unprotected;
   filesChanged: number | null;
+  /** null for every non-task row (orphan/main/external) — not read = not known,
+   *  same rule 4a already applied to `git`. */
+  files: WorktreeFileEntry[] | null;
+  filesTruncated: boolean;
+  /** Count of this row's `files` entries carrying `overlaps`, so the UI can badge
+   *  a card without re-scanning `files`. Set by `attachOverlaps`. */
+  overlapCount: number;
   ahead: number | null;
   behind: number | null;
   repoState: RepoState | null;
@@ -137,6 +149,9 @@ export interface WorktreeGitFacts {
   ahead: number;
   behind: number;
   filesChanged: number;
+  /** Capped to WORKTREE_FILES_CAP; see `filesTruncated`. */
+  files: WorktreeFileEntry[];
+  filesTruncated: boolean;
   insertions: number;
   deletions: number;
 }
@@ -257,6 +272,10 @@ export function buildWorktreeRow(f: WorktreeFacts, now: number, opts: HealthOpts
     lastActivityAt: f.lastActivityAt > 0 ? new Date(f.lastActivityAt).toISOString() : null,
     unprotected: unprotectedOf(f),
     filesChanged: f.git ? f.git.filesChanged : null,
+    files: f.git ? f.git.files : null,
+    filesTruncated: f.git ? f.git.filesTruncated : false,
+    // Filled in by `attachOverlaps` after every row exists; 0 until then.
+    overlapCount: 0,
     ahead: f.git ? f.git.ahead : null,
     behind: f.git ? f.git.behind : null,
     repoState: f.git ? f.git.repoState : null,
@@ -447,6 +466,9 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
     const refs = refsByRepo.get(t.repoRoot ?? root);
     // A materialized task with no board row means the board could not speak for
     // it — fail closed rather than call it clean.
+    const rawFiles = st?.files ?? [];
+    const files = rawFiles.slice(0, WORKTREE_FILES_CAP);
+    const filesTruncated = rawFiles.length > WORKTREE_FILES_CAP;
     const git: WorktreeGitFacts | null = st
       ? {
         status: st.status,
@@ -456,6 +478,8 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
         // `worktreeStatus` returns conflicts in their own list, so the plain
         // changed-file count is 0 exactly when the count matters most.
         filesChanged: st.status === 'conflict' ? st.conflictFiles.length : st.filesChanged,
+        files,
+        filesTruncated,
         insertions: st.insertions,
         deletions: st.deletions,
       }
@@ -550,7 +574,36 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
     }
   }
 
+  attachOverlaps(rows);
   return sortRows(rows);
+}
+
+/**
+ * path -> task slugs that touch it, then written back onto each entry as `overlaps`
+ * (excluding the row's own slug), and `overlapCount` onto each row. Pure,
+ * O(total files across task rows); no I/O.
+ *
+ * Task rows only — an orphan/main/external row's `files` is `null` (4a's "not
+ * read = not known" rule), so it can never be a source or target of an overlap.
+ * Extending overlap to those rows would require reading their status, the exact
+ * large-untracked-tree cost 4b bounded for task rows only — its own split-out.
+ */
+function attachOverlaps(rows: WorktreeRow[]): void {
+  const bySlug = new Map<string, string[]>();
+  for (const r of rows) {
+    if (r.kind !== 'task' || !r.files) continue;
+    for (const f of r.files) {
+      (bySlug.get(f.path) ?? bySlug.set(f.path, []).get(f.path)!).push(r.slug);
+    }
+  }
+  for (const r of rows) {
+    if (r.kind !== 'task' || !r.files) continue;
+    for (const f of r.files) {
+      const others = (bySlug.get(f.path) ?? []).filter((s) => s !== r.slug);
+      if (others.length) f.overlaps = [...new Set(others)];
+    }
+    r.overlapCount = r.files.filter((f) => f.overlaps?.length).length;
+  }
 }
 
 /**

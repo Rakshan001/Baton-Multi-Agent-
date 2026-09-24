@@ -83,7 +83,7 @@ import { ScreenHeader } from "./shared";
 import { DiffViewer } from "./Diff";
 import { HandoffDialog } from "./Handoff";
 import { LiveSession } from "./Live";
-import type { HandoffBriefEntry, Meta, PipelineView, StatusRow, WorktreeRow } from "../types";
+import type { HandoffBriefEntry, Meta, PipelineView, StatusRow, WorktreeRow, WorktreeKind } from "../types";
 
 /** Defined once, at module scope: React Flow re-creates its internal node
  *  renderers whenever this object's identity changes, which on a polling
@@ -208,10 +208,10 @@ export function WorktreesScreen({
    * degrade honestly without it (the diff still loads from /api/tasks/:slug/diff),
    * so there is nothing to block on.
    */
-  const [overlay, setOverlay] = useState<{ kind: "diff" | "handoff" | "live"; slug: string } | null>(null);
+  const [overlay, setOverlay] = useState<{ kind: "diff" | "handoff" | "live"; slug: string; rowKind?: WorktreeKind } | null>(null);
   const [statusRows, setStatusRows] = useState<StatusRow[]>([]);
-  const openOverlay = useCallback((kind: "diff" | "handoff" | "live", slug: string) => {
-    setOverlay({ kind, slug });
+  const openOverlay = useCallback((kind: "diff" | "handoff" | "live", slug: string, rowKind?: WorktreeKind) => {
+    setOverlay({ kind, slug, rowKind });
     BatonAPI.getStatus().then(setStatusRows).catch(() => { /* the dialogs degrade without it */ });
   }, []);
 
@@ -473,7 +473,7 @@ export function WorktreesScreen({
       // A write changed what the read-model says, so re-read it now rather
       // than leaving the canvas up to five seconds behind its own panel.
       onRefresh={poll.refetch}
-      onOpenDiff={(slug) => openOverlay("diff", slug)}
+      onOpenDiff={(slug) => openOverlay("diff", slug, selectedRow?.kind)}
       onLive={(slug) => openOverlay("live", slug)}
       onHandoff={(slug) => openOverlay("handoff", slug)}
       headingId={PANEL_HEADING_ID}
@@ -503,6 +503,7 @@ export function WorktreesScreen({
       {overlay.kind === "diff" && (
         <DiffViewer slug={overlay.slug} session={overlaySession} writeEnabled={writeEnabled}
           branch={rows?.find((r) => r.slug === overlay.slug)?.branch ?? undefined}
+          kind={overlay.rowKind ?? "task"}
           onClose={() => setOverlay(null)}
           onHandoff={(slug) => setOverlay({ kind: "handoff", slug })} />
       )}

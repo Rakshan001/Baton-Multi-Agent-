@@ -126,6 +126,7 @@ export const PANEL_SECTION_ORDER = [
   "work",
   "progress",
   "identity",
+  "files",
   "actions",
 ] as const;
 
@@ -382,12 +383,32 @@ export const handoffGate = recordGate;
  *
  * What DOES disable them is having nothing to read: a directory that is gone,
  * or a worktree with no task to diff.
+ *
+ * Live and Diff no longer share one gate: Live needs an agent-in-worktree
+ * target, which only a task row has, but Diff works for ANY kind now
+ * (GET /api/worktrees/:id/diff, phase 5 C2) — so Diff's gate must not refuse
+ * an orphan/main/external row the way Live's still does.
  */
-export function inspectGate(row: WorktreeRow): ActionGate {
+export function liveGate(row: WorktreeRow): ActionGate {
+  if (!isTaskRow(row) || row.state === null) return { enabled: false, tip: noTaskTip(row, ORPHAN_TIP) };
   if (row.health === "missing") {
     return { enabled: false, tip: "The worktree directory is gone from disk — there is nothing left to read." };
   }
-  if (!isTaskRow(row) || row.state === null) return { enabled: false, tip: noTaskTip(row, ORPHAN_TIP) };
+  return { enabled: true };
+}
+
+/**
+ * Diff is a read for ANY worktree kind — task, orphan, main or external
+ * (GET /api/worktrees/:id/diff for the last three, GET /api/tasks/:slug/diff
+ * for a task). It only refuses when there is nothing left to read at all: a
+ * directory gone from disk. `collectDiff` already degrades to an empty,
+ * non-error result rather than failing, so an empty-but-valid diff on a stale
+ * row is an acceptable outcome, not something this gate needs to predict.
+ */
+export function diffGate(row: WorktreeRow): ActionGate {
+  if (row.health === "missing") {
+    return { enabled: false, tip: "The worktree directory is gone from disk — there is nothing left to read." };
+  }
   return { enabled: true };
 }
 

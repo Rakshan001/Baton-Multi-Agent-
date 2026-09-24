@@ -11,7 +11,20 @@
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gitTry } from './util/exec.js';
-import type { Task } from './store.js';
+
+/**
+ * Anything `collectDiff` can diff: a task worktree, or any other worktree row
+ * (main/orphan/external) that has no task concept of "base". `Task` already
+ * carries all three fields, so `collectDiff(task)` keeps typechecking with no
+ * call-site change — this is a structural widening, not a new parameter shape.
+ */
+export interface DiffTarget {
+  worktreePath: string;
+  /** null when there is no base branch to compare against (a worktree with no
+   *  task) — the diff is then uncommitted-vs-HEAD only. */
+  baseBranch: string | null;
+  baseCommit?: string | null;
+}
 
 export type DiffLineType = 'add' | 'del' | 'ctx';
 export interface DiffLine {
@@ -208,17 +221,19 @@ async function sizeOf(path: string): Promise<number | null> {
  * diff too large to read used to come back as no files at all.
  */
 export async function collectDiff(
-  task: Task,
+  target: DiffTarget,
   opts: { maxChars?: number; maxFiles?: number } = {},
 ): Promise<DiffResult> {
-  const wt = task.worktreePath;
+  const wt = target.worktreePath;
   const maxFiles = opts.maxFiles ?? DIFF_MAX_FILES;
   let budget = opts.maxChars ?? DIFF_MAX_CHARS;
   let truncated = false;
 
-  let base = task.baseCommit || task.baseBranch;
-  const mb = await gitTry(['-C', wt, 'merge-base', task.baseBranch, 'HEAD']);
-  if (mb.ok && mb.stdout) base = mb.stdout;
+  let base = target.baseCommit || target.baseBranch || 'HEAD';
+  if (target.baseBranch) {
+    const mb = await gitTry(['-C', wt, 'merge-base', target.baseBranch, 'HEAD']);
+    if (mb.ok && mb.stdout) base = mb.stdout;
+  }
 
   const tracked = await gitTry(
     ['-C', wt, 'diff', '--no-color', '--no-ext-diff', '--find-renames', base],

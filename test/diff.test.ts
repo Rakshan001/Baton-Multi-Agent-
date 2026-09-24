@@ -223,3 +223,57 @@ describe('collectDiff truncation', () => {
     expect(added).toMatchObject({ status: 'added', hunks: [], tooLarge: true });
   });
 });
+
+/** §4: `collectDiff` widened to a `DiffTarget`, for a worktree with no task. */
+describe('collectDiff with a DiffTarget (no task)', () => {
+  usePrivateHome('baton-diff-target-home-');
+  let repo: string;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'baton-diff-target-'));
+    await git(['init', '-q', '-b', 'main'], repo);
+    await git(['config', 'user.email', 't@t.dev'], repo);
+    await git(['config', 'user.name', 't'], repo);
+    await writeFile(join(repo, 'seed.txt'), 'seed\n', 'utf-8');
+    await git(['add', '-A'], repo);
+    await git(['commit', '-qm', 'init'], repo);
+  });
+  afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
+
+  it('a null baseBranch diffs uncommitted-vs-HEAD only, with one changed file', async () => {
+    await writeFile(join(repo, 'seed.txt'), 'seed\nmore\n', 'utf-8');
+    const r = await collectDiff({ worktreePath: repo, baseBranch: null });
+    expect(r.truncated).toBe(false);
+    expect(r.files.map((f) => f.path)).toEqual(['seed.txt']);
+  });
+
+  it('a null baseBranch never spawns the merge-base call', async () => {
+    // A baseBranch that does not exist would make `git merge-base` fail loudly
+    // (and, if spawned by mistake, would not throw — gitTry swallows failures —
+    // so the real proof is behavioral: this must diff clean, not error, and
+    // still report the uncommitted edit, which only happens if merge-base was
+    // skipped and `base` stayed 'HEAD'.
+    await writeFile(join(repo, 'seed.txt'), 'seed\nmore\n', 'utf-8');
+    const r = await collectDiff({ worktreePath: repo, baseBranch: null, baseCommit: null });
+    expect(r.files.map((f) => f.path)).toEqual(['seed.txt']);
+  });
+
+  it('an empty worktree with a null baseBranch reports no files', async () => {
+    const r = await collectDiff({ worktreePath: repo, baseBranch: null });
+    expect(r).toEqual({ files: [], truncated: false });
+  });
+
+  it('collectDiff(task) is unchanged: still diffs against the merge-base', async () => {
+    await git(['checkout', '-qb', 'feature'], repo);
+    await writeFile(join(repo, 'seed.txt'), 'seed\nfeature change\n', 'utf-8');
+    await git(['commit', '-qam', 'on feature'], repo);
+    const task = {
+      slug: 't', task: 't', branch: 'feature', worktreePath: repo, baseBranch: 'main', baseCommit: null,
+      createdAt: '2026-09-21T10:00:00.000Z', phase: 1, dependsOn: [], assignee: null, scope: [], expects: [],
+      state: 'queued', requireReview: true,
+    } as Task;
+    const r = await collectDiff(task);
+    expect(r.truncated).toBe(false);
+    expect(r.files.map((f) => f.path)).toEqual(['seed.txt']);
+  });
+});

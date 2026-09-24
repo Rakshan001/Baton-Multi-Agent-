@@ -44,6 +44,8 @@ function facts(over: Partial<WorktreeFacts> = {}): WorktreeFacts {
       ahead: 0,
       behind: 0,
       filesChanged: 0,
+      files: [],
+      filesTruncated: false,
       insertions: 0,
       deletions: 0,
     },
@@ -79,7 +81,7 @@ describe('worktree health derivation', () => {
     expect(health({
       holderRunning: false,
       agent: null,
-      git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 3, insertions: 120, deletions: 4 },
+      git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 3, files: [], filesTruncated: false, insertions: 120, deletions: 4 },
     })).toBe('abandoned');
   });
 
@@ -95,7 +97,7 @@ describe('worktree health derivation', () => {
 
   it('reports missing for a recorded worktree whose directory is gone', () => {
     expect(health({
-      git: { status: 'missing', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 },
+      git: { status: 'missing', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, files: [], filesTruncated: false, insertions: 0, deletions: 0 },
     })).toBe('missing');
   });
 
@@ -115,10 +117,10 @@ describe('worktree health derivation', () => {
 
   it('ranks conflict and an in-progress rebase above the liveness names', () => {
     expect(health({
-      git: { status: 'conflict', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 1, deletions: 1 },
+      git: { status: 'conflict', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, files: [], filesTruncated: false, insertions: 1, deletions: 1 },
     })).toBe('conflict');
     expect(health({
-      git: { status: 'dirty', repoState: 'rebasing', ahead: 0, behind: 0, filesChanged: 1, insertions: 1, deletions: 0 },
+      git: { status: 'dirty', repoState: 'rebasing', ahead: 0, behind: 0, filesChanged: 1, files: [], filesTruncated: false, insertions: 1, deletions: 0 },
     })).toBe('rebasing');
   });
 
@@ -140,7 +142,7 @@ describe('worktree health derivation', () => {
     expect(health(unheld)).toBe('ok');
     expect(health({
       ...unheld,
-      git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 2, insertions: 9, deletions: 0 },
+      git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 2, files: [], filesTruncated: false, insertions: 9, deletions: 0 },
     })).toBe('dirty');
   });
 
@@ -241,7 +243,7 @@ describe.runIf(hasDist)('GET /api/worktrees', () => {
     const row = body[0];
     for (const key of [
       'slug', 'branch', 'worktreePath', 'state', 'health', 'quietForMs', 'lastActivityAt',
-      'unprotected', 'filesChanged', 'ahead', 'behind', 'repoState', 'agent', 'claimedBy',
+      'unprotected', 'filesChanged', 'files', 'filesTruncated', 'ahead', 'behind', 'repoState', 'agent', 'claimedBy',
       'holderRunning', 'planId', 'phase', 'dependsOn', 'kind', 'orphan', 'wipRef',
     ]) {
       expect(row, `missing field ${key}`).toHaveProperty(key);

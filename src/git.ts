@@ -117,6 +117,13 @@ export interface WorktreeStatus {
   unreadable?: true;
   repoState: RepoState;
   changedFiles: string[];
+  /**
+   * The same changed files as `changedFiles`, with status + rename info —
+   * derived from the same `parsePorcelainZ` parse, never a second git spawn.
+   * Populated even on the `conflict` branch (unlike `changedFiles`, which
+   * stays `[]` there) so a conflicted task's edits are still visible.
+   */
+  files: WorktreeFileEntry[];
   conflictFiles: string[];
   conflictDetails: ConflictEntry[];
   insertions: number;
@@ -342,6 +349,81 @@ export function parseConflicts(raw: string): ConflictEntry[] {
   return out;
 }
 
+export type WorktreeFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked';
+
+export interface WorktreeFileEntry {
+  path: string;
+  status: WorktreeFileStatus;
+  oldPath?: string;
+  /** Other task slugs whose OWN `files` list also has this exact `path`. Set only when
+   *  non-empty. A renamed file is keyed by its NEW path only — the same choice conflicts.ts
+   *  already made for the same reason. Filled in by worktrees.ts's attachOverlaps, never by
+   *  this parser. */
+  overlaps?: string[];
+}
+
+/**
+ * Worktree column (`xy[1]`) wins when it isn't `.`, else the index column (`xy[0]`).
+ * `renamed`/`copied` are never guessed here — the `'2 '` caller in `parsePorcelainZ`
+ * sets them explicitly, because a rename/copy's XY can itself be `M.`/`.M` when the
+ * move carries an edit.
+ */
+function statusFromXY(xy: string): WorktreeFileStatus {
+  const c = xy[1] && xy[1] !== '.' ? xy[1] : xy[0];
+  if (c === 'A') return 'added';
+  if (c === 'D') return 'deleted';
+  return 'modified';
+}
+
+/**
+ * Parse a `git status --porcelain=v2 -z` stream into changed-file entries and
+ * unmerged conflicts. The ONE place `-z` output is read, so nothing else
+ * duplicates NUL-splitting or the rename/copy two-token record shape.
+ *
+ * `-z` NUL-terminates every record instead of newline-terminating it, and a
+ * rename/copy (`'2 '`) record's old path becomes a SECOND NUL-terminated token
+ * instead of a tab-joined suffix on the same line — the only place two tokens
+ * belong to one record, since `'u '` (conflict) records never carry a second
+ * path in porcelain v2.
+ */
+export function parsePorcelainZ(raw: string): { changed: WorktreeFileEntry[]; conflicts: ConflictEntry[] } {
+  const changed: WorktreeFileEntry[] = [];
+  const conflicts: ConflictEntry[] = [];
+  const tokens = raw.split('\0');
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (!token) continue;
+    if (token.startsWith('1 ')) {
+      const parts = token.split(' ');
+      const path = parts.slice(8).join(' ');
+      if (path) changed.push({ path, status: statusFromXY(parts[1] ?? '') });
+    } else if (token.startsWith('2 ')) {
+      const parts = token.split(' ');
+      const xy = parts[1] ?? '';
+      const path = parts.slice(9).join(' ');
+      // The old path is the NEXT NUL-terminated token, not a tab suffix on this one.
+      const oldPath = tokens[++i] ?? '';
+      if (path) changed.push({ path, status: xy[0] === 'C' ? 'copied' : 'renamed', oldPath });
+    } else if (token.startsWith('? ')) {
+      const path = token.slice(2);
+      if (path) changed.push({ path, status: 'untracked' });
+    } else if (token.startsWith('u ')) {
+      const parts = token.split(' ');
+      if (parts.length < 11) continue;
+      const xy = parts[1] ?? '';
+      const path = parts.slice(10).join(' ');
+      if (!path) continue;
+      conflicts.push({ path, xy, label: CONFLICT_LABELS[xy] ?? xy });
+      // A conflicted path is recorded ONLY as a 'u ' record — never also as a
+      // '1 ' record — so `changed` gets it here too, or a conflicted file
+      // would be invisible to the Changed-files panel and overlap detection
+      // (the exact gap the conflict-branch `files` fix exists to close).
+      changed.push({ path, status: statusFromXY(xy) });
+    }
+  }
+  return { changed, conflicts };
+}
+
 const STATE_MARKERS: [string, RepoState][] = [
   ['MERGE_HEAD', 'merging'],
   ['rebase-merge', 'rebasing'],
@@ -392,15 +474,16 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   if (!(await pathExists(join(path, '.git'))) && (await pathExists(path))) {
     return {
       state: 'missing', unreadable: true, repoState: 'clean',
-      changedFiles: [], conflictFiles: [], conflictDetails: [], insertions: 0, deletions: 0,
+      changedFiles: [], files: [], conflictFiles: [], conflictDetails: [], insertions: 0, deletions: 0,
     };
   }
   const repo = await repoState(path);
   // --ignore-submodules=none: a `diff.ignoreSubmodules=all` (or `.gitmodules`
   // ignore=all) hid submodule edits, and removal passes `--force`.
-  // --untracked-files=all: one entry per untracked file, not `? dir/`, and it
-  // overrides a `status.showUntrackedFiles=no` config.
-  const r = await gitTry(['-C', path, 'status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all']);
+  // -z: NUL-terminated records so a path containing `"`, `\`, a tab or a
+  // newline round-trips literally instead of being C-quoted — parsed below by
+  // the one function that reads this stream, `parsePorcelainZ`.
+  const r = await gitTry(['-C', path, 'status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all', '-z']);
   if (!r.ok || r.stdout === '') {
     // `!r.ok` means git could not answer at all — the directory was deleted, or
     // it is no longer a worktree. Reporting that as `clean` (which is what this
@@ -414,6 +497,7 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
       ...(!r.ok && (await pathExists(path)) ? { unreadable: true as const } : {}),
       repoState: repo,
       changedFiles: [],
+      files: [],
       conflictFiles: [],
       conflictDetails: [],
       insertions: 0,
@@ -421,14 +505,20 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
     };
   }
 
-  const conflictDetails = parseConflicts(r.stdout);
+  const parsed = parsePorcelainZ(r.stdout);
+  const conflictDetails = parsed.conflicts;
   const { insertions, deletions } = await churn(path);
 
   if (conflictDetails.length > 0) {
     return {
       state: 'conflict',
       repoState: repo,
+      // The plain changed-file count is 0 exactly when the count matters most
+      // (worktrees.ts's own doctrine) — but `files` still reflects the real
+      // changed-file list, unlike the count, so a conflicted task's edits are
+      // still visible to the Changed-files panel and overlap detection.
       changedFiles: [],
+      files: parsed.changed,
       conflictFiles: conflictDetails.map((c) => c.path),
       conflictDetails,
       insertions,
@@ -436,23 +526,11 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
     };
   }
 
-  // Changed paths: ordinary ("1"/"2") and untracked ("?") porcelain v2 entries.
-  // A "2" (rename/copy) record has 9 fields before its path, then a tab and
-  // the old path; keep the new path only, one entry per rename.
-  const changedFiles: string[] = [];
-  for (const line of r.stdout.split('\n').filter(Boolean)) {
-    if (line.startsWith('1 ')) {
-      changedFiles.push(line.split(' ').slice(8).join(' '));
-    } else if (line.startsWith('2 ')) {
-      changedFiles.push(line.split(' ').slice(9).join(' ').split('\t')[0]!);
-    } else if (line.startsWith('? ')) {
-      changedFiles.push(line.slice(2));
-    }
-  }
   return {
     state: 'dirty',
     repoState: repo,
-    changedFiles,
+    changedFiles: parsed.changed.map((f) => f.path),
+    files: parsed.changed,
     conflictFiles: [],
     conflictDetails: [],
     insertions,

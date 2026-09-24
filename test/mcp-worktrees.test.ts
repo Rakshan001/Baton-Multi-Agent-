@@ -38,7 +38,7 @@ function facts(over: Partial<WorktreeFacts> = {}): WorktreeFacts {
     branch: 'baton/a',
     worktreePath: '/wt/a',
     state: 'active',
-    git: { status: 'clean', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 },
+    git: { status: 'clean', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, files: [], filesTruncated: false, insertions: 0, deletions: 0 },
     localOnlyCommits: 0,
     agent: 'claude',
     claimedBy: 'claude',
@@ -80,7 +80,7 @@ describe('list_worktrees — the projection', () => {
   it('reports the health the read-model derived, never one of its own', () => {
     // Held, no process, work that exists nowhere else: the terminal state the
     // whole feature exists to name.
-    const f = facts({ holderRunning: false, agent: null, git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 2, insertions: 30, deletions: 4 } });
+    const f = facts({ holderRunning: false, agent: null, git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 2, files: [], filesTruncated: false, insertions: 30, deletions: 4 } });
     const r = buildWorktreeRow(f, NOW);
     expect(r.health).toBe('abandoned'); // pin what the read-model says
     const out = worktreeBrief([r], { cwd: '/elsewhere' });
@@ -163,7 +163,7 @@ describe('list_worktrees — the caller\'s own worktree', () => {
 describe('list_worktrees — the one filter it takes', () => {
   const rows = [
     row({ slug: 'a' }),
-    row({ slug: 'b', worktreePath: '/wt/b', holderRunning: false, agent: null, git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 1, insertions: 9, deletions: 0 } }),
+    row({ slug: 'b', worktreePath: '/wt/b', holderRunning: false, agent: null, git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 1, files: [], filesTruncated: false, insertions: 9, deletions: 0 } }),
   ];
 
   it('returns everything when no filter is given', () => {
@@ -224,16 +224,16 @@ describe('list_worktrees — the vocabulary and the context budget', () => {
   it('knows every health the read-model can derive', () => {
     const cases: WorktreeFacts[] = [
       facts({ git: null }),
-      facts({ git: { status: 'missing', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 } }),
+      facts({ git: { status: 'missing', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, files: [], filesTruncated: false, insertions: 0, deletions: 0 } }),
       facts({ kind: 'orphan' }),
       facts({ localOnlyCommits: null }),
       facts({ holderRunning: false, agent: null, localOnlyCommits: 2 }),
-      facts({ git: { status: 'conflict', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 } }),
-      facts({ git: { status: 'clean', repoState: 'rebasing', ahead: 0, behind: 0, filesChanged: 0, insertions: 0, deletions: 0 } }),
+      facts({ git: { status: 'conflict', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 0, files: [], filesTruncated: false, insertions: 0, deletions: 0 } }),
+      facts({ git: { status: 'clean', repoState: 'rebasing', ahead: 0, behind: 0, filesChanged: 0, files: [], filesTruncated: false, insertions: 0, deletions: 0 } }),
       facts({}),
       facts({ lastActivityAt: NOW - 20 * 60_000 }),
       facts({ lastActivityAt: NOW - 24 * 60 * 60_000 }),
-      facts({ state: null, claimedBy: null, git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 1, insertions: 1, deletions: 0 } }),
+      facts({ state: null, claimedBy: null, git: { status: 'dirty', repoState: 'clean', ahead: 0, behind: 0, filesChanged: 1, files: [], filesTruncated: false, insertions: 1, deletions: 0 } }),
       facts({ state: null, claimedBy: null }),
     ];
     const seen = new Set(cases.map((f) => deriveHealth(f, NOW)));

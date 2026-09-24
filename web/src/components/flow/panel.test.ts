@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MERGE_NO_TASK_TIP, NOT_BATONS_TIP, PANEL_SECTION_ORDER, READ_ONLY_TIP, blockerFor, briefFor,
-  displayName, handoffGate, inspectGate, isBatonRow, isTaskRow, mergeGate, shownAtRisk, worktreeSummary, pauseGate, pickupCommand, planProgress, progressHeadline,
+  diffGate, displayName, handoffGate, liveGate, isBatonRow, isTaskRow, mergeGate, shownAtRisk, worktreeSummary, pauseGate, pickupCommand, planProgress, progressHeadline,
   resolveCopyPrompt, takeoverGate, whoFacts, workInFlightFacts, type PanelBrief,
   type PanelMeta, type PanelPipeline, type WorktreeProgress,
 } from "./panel";
@@ -31,6 +31,9 @@ function row(o: Partial<WorktreeRow> & { slug: string }): WorktreeRow {
     lastActivityAt: null,
     unprotected: { lines: 0, commits: 0, atRisk: false },
     filesChanged: 0,
+    files: null,
+    filesTruncated: false,
+    overlapCount: 0,
     ahead: 0,
     behind: 0,
     repoState: "clean",
@@ -99,7 +102,7 @@ describe("panel order", () => {
     // The plan is explicit about this order, and it is the whole reason the
     // panel is not a conventional detail pane. Any reshuffle fails here.
     expect([...PANEL_SECTION_ORDER]).toEqual([
-      "verdict", "why", "who", "work", "progress", "identity", "actions",
+      "verdict", "why", "who", "work", "progress", "identity", "files", "actions",
     ]);
   });
 
@@ -268,7 +271,7 @@ describe("resolveCopyPrompt", () => {
   });
 
   it("says clean --fix deletes the orphan's branch and the other junk it listed", () => {
-    const tip = inspectGate(row({ slug: "h", orphan: true, state: null })).tip!;
+    const tip = liveGate(row({ slug: "h", orphan: true, state: null })).tip!;
     expect(tip).toContain("deletes its branch");
     expect(tip).toContain("any other junk the dry run listed");
   });
@@ -339,7 +342,7 @@ describe("write gates", () => {
     const orphan = row({ slug: "hotfix", orphan: true, state: null });
     const tips = [
       takeoverGate(orphan, true).tip, pauseGate(orphan, true).tip, handoffGate(orphan, true).tip,
-      inspectGate(orphan).tip, mergeGate(orphan, quietPipeline(), META, true).tip, MERGE_NO_TASK_TIP,
+      liveGate(orphan).tip, mergeGate(orphan, quietPipeline(), META, true).tip, MERGE_NO_TASK_TIP,
     ];
     for (const tip of tips) {
       expect(tip).not.toContain("baton adopt");
@@ -357,18 +360,39 @@ describe("write gates", () => {
   });
 });
 
-describe("inspectGate", () => {
+describe("liveGate", () => {
   it("does not gate reads on --write", () => {
     // GET /api/worktrees is deliberately not write-gated: somebody looking for
     // work that has gone quiet must be able to see it from a daemon that
     // cannot touch anything. Gating the inspection would lock the panel away
     // from exactly the person it was built for.
-    expect(inspectGate(row({ slug: "s" })).enabled).toBe(true);
+    expect(liveGate(row({ slug: "s" })).enabled).toBe(true);
   });
 
   it("refuses when there is genuinely nothing left to read", () => {
-    expect(inspectGate(row({ slug: "s", health: "missing" })).enabled).toBe(false);
-    expect(inspectGate(row({ slug: "s", orphan: true, state: null })).enabled).toBe(false);
+    expect(liveGate(row({ slug: "s", health: "missing" })).enabled).toBe(false);
+    expect(liveGate(row({ slug: "s", orphan: true, state: null })).enabled).toBe(false);
+  });
+
+  it("refuses every non-task row — Live needs an agent-in-worktree target", () => {
+    expect(liveGate(row({ slug: "m", kind: "main", state: null })).enabled).toBe(false);
+    expect(liveGate(row({ slug: "e", kind: "external", state: null })).enabled).toBe(false);
+  });
+});
+
+describe("diffGate", () => {
+  it("does not gate reads on --write", () => {
+    expect(diffGate(row({ slug: "s" })).enabled).toBe(true);
+  });
+
+  it("refuses only when the directory is gone from disk", () => {
+    expect(diffGate(row({ slug: "s", health: "missing" })).enabled).toBe(false);
+  });
+
+  it("is enabled for every worktree kind — GET /api/worktrees/:id/diff covers task, orphan, main, external", () => {
+    expect(diffGate(row({ slug: "s", orphan: true, state: null })).enabled).toBe(true);
+    expect(diffGate(row({ slug: "m", kind: "main", state: null })).enabled).toBe(true);
+    expect(diffGate(row({ slug: "e", kind: "external", state: null })).enabled).toBe(true);
   });
 });
 
@@ -553,7 +577,7 @@ describe("a main or external worktree", () => {
     for (const kind of ["main", "external"] as const) {
       const r = unmanaged(kind);
       for (const write of [true, false]) {
-        const gates = [takeoverGate(r, write), pauseGate(r, write), handoffGate(r, write), inspectGate(r), mergeGate(r, quietPipeline(), META, write)];
+        const gates = [takeoverGate(r, write), pauseGate(r, write), handoffGate(r, write), liveGate(r), mergeGate(r, quietPipeline(), META, write)];
         for (const g of gates) {
           expect(g.enabled, kind).toBe(false);
           expect(g.tip).toBe(NOT_BATONS_TIP);
@@ -561,6 +585,15 @@ describe("a main or external worktree", () => {
       }
     }
     expect(NOT_BATONS_TIP).not.toContain("baton clean");
+    // C2 (phase 5) landed: the tip says the diff is read-only against HEAD,
+    // not that it is missing.
+    expect(NOT_BATONS_TIP).toMatch(/diff/i);
+  });
+
+  it("Diff is enabled for a main/external row — C2 reads it via GET /api/worktrees/:id/diff", () => {
+    for (const kind of ["main", "external"] as const) {
+      expect(diffGate(unmanaged(kind)).enabled).toBe(true);
+    }
   });
 
   it("copies the inspect command for an external row, never a pickup or a brief", () => {

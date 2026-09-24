@@ -6,7 +6,7 @@
  */
 import { detectAgents, detectionRoots, detectRootAgents, type RootAgentSession } from './agents.js';
 import { computeConflicts } from './conflicts.js';
-import { aheadBehindOrNull, worktreeStatus, type RepoState } from './git.js';
+import { aheadBehindOrNull, worktreeStatus, type RepoState, type WorktreeFileEntry } from './git.js';
 import { isMaterialized, loadTasks } from './store.js';
 import { liveSessions, WATCHER_HEARTBEAT_STALE_MS } from './signals.js';
 import { runningHeadless } from './spawn.js';
@@ -24,6 +24,7 @@ export interface StatusRow {
   behind: number;
   conflictFiles: string[];
   filesChanged: number;
+  files: WorktreeFileEntry[];
   insertions: number;
   deletions: number;
   createdAt: string;
@@ -70,6 +71,7 @@ export async function collectStatus(root: string): Promise<StatusRow[]> {
         aheadKnown: counted !== null,
         conflictFiles: conflicts.get(t.slug) ?? [],
         filesChanged: st.changedFiles.length,
+        files: st.files,
         insertions: st.insertions,
         deletions: st.deletions,
         createdAt: t.createdAt,

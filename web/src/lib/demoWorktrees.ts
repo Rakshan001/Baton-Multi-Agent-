@@ -36,9 +36,12 @@ import type { WorktreeProgress } from "../components/flow/panel";
 
 const MIN = 60_000;
 
-/** A row the daemon never status-reads: nothing counted, and fail-closed. */
+/** A row the daemon never status-reads: nothing counted, and fail-closed.
+ *  `files: null` follows the same "not read = not known" rule as `git: null`
+ *  in src/worktrees.ts. */
 const NOT_READ = {
   filesChanged: null, ahead: null, behind: null, repoState: null,
+  files: null, filesTruncated: false, overlapCount: 0,
   unprotected: { lines: 0, commits: null, atRisk: true },
 } satisfies Partial<WorktreeRow>;
 
@@ -55,6 +58,9 @@ function wt(o: Partial<WorktreeRow> & { slug: string }): WorktreeRow {
     lastActivityAt: null,
     unprotected: { lines: 0, commits: 0, atRisk: false },
     filesChanged: 0,
+    files: [],
+    filesTruncated: false,
+    overlapCount: 0,
     ahead: 0,
     behind: 0,
     repoState: "clean",
@@ -91,6 +97,9 @@ export function demoWorktrees(now: number = Date.now()): WorktreeRow[] {
 
     /* Phase 2 — where everything interesting is. */
     // Working: the token advanced two minutes ago. Silent by design.
+    // Overlaps with `build-the-login-ui` below on `src/shared/config.ts` — the
+    // showcase for cross-worktree overlap: two agents, two task worktrees, one
+    // file (§3 of the phase-5 plan).
     wt({
       slug: "wire-the-auth-api", state: "active", health: "working", phase: 2,
       dependsOn: ["design-the-schema"],
@@ -98,6 +107,12 @@ export function demoWorktrees(now: number = Date.now()): WorktreeRow[] {
       lastActivityAt: ago(2 * MIN), quietForMs: 2 * MIN,
       filesChanged: 6, ahead: 3, behind: 0,
       unprotected: { lines: 118, commits: 3, atRisk: true },
+      files: [
+        { path: "src/auth/session.ts", status: "modified" },
+        { path: "src/auth/routes.ts", status: "modified" },
+        { path: "src/shared/config.ts", status: "modified", overlaps: ["build-the-login-ui"] },
+      ],
+      overlapCount: 1,
     }),
     // Abandoned: claimed by cursor, no process in the worktree, work at risk.
     // This is the reported bug rendered honestly — the row the old board filed
@@ -110,6 +125,12 @@ export function demoWorktrees(now: number = Date.now()): WorktreeRow[] {
       filesChanged: 9, ahead: 1, behind: 2,
       unprotected: { lines: 47, commits: 1, atRisk: true },
       wipRef: "refs/baton/wip/build-the-login-ui",
+      files: [
+        { path: "web/src/routes/login.tsx", status: "modified" },
+        { path: "web/src/lib/session.ts", status: "added" },
+        { path: "src/shared/config.ts", status: "modified", overlaps: ["wire-the-auth-api"] },
+      ],
+      overlapCount: 1,
     }),
     // Stalled: held, past period + grace, but nothing on disk is at risk.
     wt({
@@ -176,6 +197,7 @@ export function demoWorktrees(now: number = Date.now()): WorktreeRow[] {
       claimedBy: "antigravity",
       lastActivityAt: ago(320 * MIN), quietForMs: 320 * MIN,
       filesChanged: null, ahead: null, behind: null, repoState: null,
+      files: null, filesTruncated: false, overlapCount: 0,
       unprotected: { lines: 0, commits: null, atRisk: true },
       wipRef: "refs/baton/wip/spike-the-oauth-flow",
     }),

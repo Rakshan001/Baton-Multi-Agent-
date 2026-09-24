@@ -335,6 +335,32 @@ const DIFFS: Record<string, DiffFile[]> = {
    await expect(page).toHaveURL(/\\/orders\\/\\d+/);`),
     ]),
   ],
+  // Phase 5's C2: a non-task worktree diffs uncommitted-vs-HEAD via
+  // GET /api/worktrees/:id/diff, no base branch involved. Keyed by the demo
+  // ids in demoWorktrees.ts so the new Diff gate does not look empty on the
+  // main checkout or an external tool's worktree.
+  "orbit~17beffe1ac": [
+    file("README.md", "modified", [
+      hunk(1, 1, "@@ -1,3 +1,3 @@", `
+ # orbit
+-A small app.
++A small app. Now with sessions.`),
+    ]),
+  ],
+  "review-pass~1dd5fe8260": [
+    file("src/auth/session.ts", "modified", [
+      hunk(1, 1, "@@ -1,4 +1,5 @@", `
++// left a note for whoever reviews this next
+ import { randomUUID } from "node:crypto";`),
+    ]),
+  ],
+  "hotfix-auth~4f1f32a51b": [
+    file("src/auth/token.ts", "modified", [
+      hunk(1, 1, "@@ -1,3 +1,4 @@", `
++// orphaned before this landed — worktree removed, branch left behind
+ export function signToken(payload: unknown): string {`),
+    ]),
+  ],
 };
 
 const TOKENS: Record<string, Usage> = {

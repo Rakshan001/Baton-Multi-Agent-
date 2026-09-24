@@ -2401,6 +2401,30 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     return send(res, 200, await progressView(root, slug), origin);
   }
   /*
+   * GET /api/worktrees/:id/diff — changed files for ANY worktree, task or not.
+   *
+   * `:id` is resolved against the SAME read-model /api/worktrees serves — never
+   * a client-supplied path — so a bad id 404s instead of touching disk. A task
+   * row's diff is unchanged (commits + uncommitted vs base, via
+   * collectDiff(task)); a non-task row has no base, so
+   * collectDiff({worktreePath, baseBranch: null}) reports uncommitted-vs-HEAD
+   * only. `/api/tasks/:slug/diff` below is untouched — this is a second,
+   * broader route, not a replacement.
+   */
+  const wDiff = path.match(/^\/api\/worktrees\/([^/]+)\/diff$/);
+  if (wDiff && method === 'GET') {
+    const id = decodeURIComponent(wDiff[1]!);
+    const rows = await collectWorktrees(root, { status: () => statusRows(root) });
+    const row = rows.find((r) => r.slug === id);
+    if (!row) return send(res, 404, { error: `no worktree '${id}'` }, origin);
+    if (row.kind === 'task') {
+      const task = (await loadTasks(root)).find((t) => t.slug === id);
+      if (!task) return send(res, 404, { error: `no worktree '${id}'` }, origin);
+      return send(res, 200, await collectDiff(task), origin);
+    }
+    return send(res, 200, await collectDiff({ worktreePath: row.worktreePath, baseBranch: null }), origin);
+  }
+  /*
    * POST /api/worktrees/:slug/takeover|pause — the two verbs that make the read
    * above actionable. Handlers live in src/endpoints/worktrees.ts; this is only
    * the dispatch and the write gate, which stays here beside every other write

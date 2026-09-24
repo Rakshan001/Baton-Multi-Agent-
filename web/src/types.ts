@@ -730,6 +730,13 @@ export interface DiffFile { path: string; status: FileStatus; oldPath?: string; 
 /** `truncated`: the daemon's shared size budget or file cap was hit, so files and counts are partial. */
 export interface DiffResult { files: DiffFile[]; truncated: boolean }
 
+/** One changed file in a worktree's own status read — GET /api/worktrees. Mirrors
+ *  `WorktreeFileStatus`/`WorktreeFileEntry` in src/git.ts. */
+export type WorktreeFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "untracked";
+/** `oldPath` is set for "renamed"/"copied". `overlaps`: other task slugs whose OWN
+ *  `files` list also has this exact `path` (set only when non-empty). */
+export interface WorktreeFileEntry { path: string; status: WorktreeFileStatus; oldPath?: string; overlaps?: string[] }
+
 /** Agent CLIs Baton can install a skill into (have a skill/rule directory). */
 export type SkillAgent = "claude" | "cursor" | "antigravity";
 
@@ -1155,6 +1162,11 @@ export interface WorktreeRow {
   lastActivityAt: string | null;
   unprotected: Unprotected;
   filesChanged: number | null;
+  /** null for every non-task row (orphan/main/external) — not read = not known. */
+  files: WorktreeFileEntry[] | null;
+  filesTruncated: boolean;
+  /** Count of this row's `files` entries carrying `overlaps`. */
+  overlapCount: number;
   ahead: number | null;
   behind: number | null;
   repoState: RepoState | null;

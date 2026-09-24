@@ -6,9 +6,11 @@ import { parseConflicts, CONFLICT_LABELS } from '../src/git.js';
 
 describe('hardenedArgs', () => {
   it('prepends -c config flags before the subcommand', () => {
-    const out = hardenedArgs(['status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all']);
+    // Mirrors worktreeStatus's real status call (git.ts), -z included: -z
+    // NUL-terminates records so a quoted path round-trips literally.
+    const out = hardenedArgs(['status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all', '-z']);
     // original args are preserved at the tail, in order
-    expect(out.slice(-4)).toEqual(['status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all']);
+    expect(out.slice(-5)).toEqual(['status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all', '-z']);
     // pager and credential helper are neutralized
     expect(out).toContain('core.pager=cat');
     expect(out).toContain('credential.helper=');

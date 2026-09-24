@@ -243,6 +243,14 @@ function WorktreeNodeInner({ data, selected }: NodeProps<WorktreeFlowNode>) {
             {row.unprotected.lines === 0 && !row.unprotected.commits ? "at risk" : ""}
           </Chip>
         )}
+        {/* Own color, not tied to health severity: overlap is a coordination
+            fact ("another agent also touches this path"), not a health rung. */}
+        {row.overlapCount > 0 && (
+          <Chip color="var(--accent)" icon="network"
+            title={`Also being edited in: ${[...new Set(row.files?.flatMap((f) => f.overlaps ?? []) ?? [])].join(", ")}`}>
+            {row.overlapCount} shared
+          </Chip>
+        )}
         {row.repoState && row.repoState !== "clean" && (
           <Chip color="var(--dirty)" icon="gitMerge" title="An in-progress git operation nobody has finished">
             {row.repoState}

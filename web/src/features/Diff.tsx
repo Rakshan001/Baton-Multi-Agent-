@@ -12,7 +12,7 @@ import { getAgent } from "../lib/registry";
 import { branchFor, BatonAPI } from "../lib/api";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useFocusTrap } from "../hooks/useFocusTrap";
-import type { StatusRow, DiffHunk, DiffLine, FileStatus, DiffFile } from "../types";
+import type { StatusRow, DiffHunk, DiffLine, FileStatus, DiffFile, WorktreeKind } from "../types";
 
 const SYN = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*)|(`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(import|export|from|const|let|var|return|async|await|function|new|type|interface|enum|if|else|for|while|do|switch|case|class|extends|implements|default|true|false|null|undefined|void|public|private|protected|readonly|this|in|of|as|CREATE|INDEX|ON|TABLE|SELECT|FROM|WHERE)\b|\b([A-Z][A-Za-z0-9_]*)\b|\b(\d[\d_.]*)\b/g;
 function highlight(code: string): ReactNode[] {
@@ -28,7 +28,10 @@ function highlight(code: string): ReactNode[] {
   return out;
 }
 
-const FILE_STATUS: Record<FileStatus, { c: string; soft: string; glyph: string; tip: string }> = {
+/** Exported so WorktreePanel.tsx's "Changed files" list reuses these glyphs
+ *  instead of a second copy — `WorktreeFileEntry.status`'s extra `untracked`/
+ *  `copied` values map onto `added`/`renamed` at render time (no new table). */
+export const FILE_STATUS: Record<FileStatus, { c: string; soft: string; glyph: string; tip: string }> = {
   added: { c: "var(--clean-text)", soft: "var(--clean-soft)", glyph: "A", tip: "Added" },
   modified: { c: "var(--dirty-text)", soft: "var(--dirty-soft)", glyph: "M", tip: "Modified" },
   deleted: { c: "var(--conflict-text)", soft: "var(--conflict-soft)", glyph: "D", tip: "Deleted" },
@@ -132,7 +135,7 @@ function SplitLines({ hunks }: { hunks: DiffHunk[] }) {
 }
 
 export function DiffViewer({
-  slug, session, onClose, onHandoff, writeEnabled, branch,
+  slug, session, onClose, onHandoff, writeEnabled, branch, kind = "task",
 }: {
   slug: string;
   session?: StatusRow;
@@ -142,6 +145,9 @@ export function DiffViewer({
   onClose: () => void;
   onHandoff: (slug: string) => void;
   writeEnabled: boolean;
+  /** The row's kind, so a non-task worktree (main/orphan/external) is diffed
+   *  via GET /api/worktrees/:id/diff instead of the task-only route. */
+  kind?: WorktreeKind;
 }) {
   const [files, setFiles] = useState<DiffFile[] | null>(null); // null = loading
   const [truncated, setTruncated] = useState(false);
@@ -150,11 +156,11 @@ export function DiffViewer({
   useEffect(() => {
     let on = true;
     setFiles(null); setTruncated(false); setLoadError(null); setActive(0);
-    BatonAPI.getDiff(slug)
+    BatonAPI.getDiff(slug, kind)
       .then((r) => { if (on) { setFiles(r.files); setTruncated(r.truncated); } })
       .catch((e) => { if (on) { setFiles([]); setLoadError((e as Error).message); } });
     return () => { on = false; };
-  }, [slug]);
+  }, [slug, kind]);
   const [mode, setMode] = useState<"unified" | "split">("unified");
   const isWide = useMediaQuery("(min-width: 980px)");
   const ref = useRef<HTMLDivElement>(null);
