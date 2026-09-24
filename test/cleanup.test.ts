@@ -41,6 +41,12 @@ describe('auditWorktrees', () => {
     expect(items).toHaveLength(1);
     expect(items[0].kind).toBe('orphan-worktree-disk');
   });
+  // A queued task (`baton task add`, plan apply) has no worktree until it is
+  // claimed. Flagging it would let `clean --fix` delete work nobody has started.
+  it('never flags a queued task that has no worktree yet', () => {
+    const queued = { ...task('later', root), baseCommit: null, state: 'queued' } as Task;
+    expect(auditWorktrees(root, [queued], [], () => false)).toHaveLength(0);
+  });
   it('ignores a healthy matched pair and the main worktree', () => {
     const t = task('ok', root);
     const items = auditWorktrees(root, [t], [wt(t.worktreePath, t.branch), wt(root, 'main')], () => true);

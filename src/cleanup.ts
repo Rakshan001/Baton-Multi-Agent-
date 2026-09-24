@@ -23,7 +23,7 @@ import {
   deleteBranch, hasUnsavedWork, listBatonBranches, listWorktrees, removeWorktree, worktreeStatus,
   type WorktreeEntry,
 } from './git.js';
-import { batonDir, loadTasksStrict, type Task } from './store.js';
+import { batonDir, isMaterialized, loadTasksStrict, type Task } from './store.js';
 import { detectTmux, killSessionFor, listSessions, repoPrefix, slugFromSession } from './util/tmux.js';
 import {
   DirtyWorktreeError, MainWorktreeError, removeTaskWorktree,
@@ -87,9 +87,9 @@ export function auditWorktrees(
   const mainPath = resolve(root);
   const taskByPath = new Map(tasks.map((t) => [resolve(t.worktreePath), t]));
 
-  // tasks.json entry whose worktree dir vanished.
+  // tasks.json entry whose worktree dir vanished. A queued task never had one.
   for (const t of tasks) {
-    if (!existsOnDisk(t.worktreePath)) {
+    if (isMaterialized(t) && !existsOnDisk(t.worktreePath)) {
       items.push({
         kind: 'orphan-worktree-task', id: t.slug, path: t.worktreePath, branch: t.branch,
         reason: 'recorded task, but its worktree directory no longer exists',
