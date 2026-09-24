@@ -19,9 +19,9 @@
       bus usePoll listens on), so rebuilding the node array from scratch
       would throw away every drag and every selection several times a
       minute. `mergeFlowNodes` (flow/layout.ts) merges into the existing
-      node objects and allocates a position only for a genuinely new
-      slug — and `fitView` is called exactly ONCE, guarded by a ref, so
-      no refresh can move the viewport.
+      node objects and keeps a stored position only for a node the
+      person dragged (`pinned`) — and `fitView` is called once per React Flow mount, never
+      on a poll, so no refresh can move the viewport.
    2. A layout that is not deterministic. `layoutWorktrees` is pure and
       sorted throughout: no simulation, no clock, no dependence on the
       order the daemon happened to serve (it sorts by RISK, which moves
@@ -66,7 +66,8 @@ import { GroupNode } from "../components/flow/GroupNode";
 import { HEALTH_META, healthColor, quietLabel } from "../components/flow/health";
 import { resolveToken, useFlowTheme } from "../components/flow/useFlowTheme";
 import {
-  layoutWorktrees, mergeFlowNodes, worktreeEdges, type WorktreeFlowNode, type XY,
+  dropRemovals, layoutWorktrees, mergeFlowNodes, uniqueSlugs, worktreeEdges,
+  type WorktreeFlowNode, type XY,
 } from "../components/flow/layout";
 import {
   composeFlowNodes, computeGroups, groupMembership, mergeGroupNodes, routeEdges,
@@ -121,7 +122,9 @@ export function WorktreesScreen({
   // refetches this immediately (useEvents → BatonAPI.notify → usePoll). When
   // the stream is live the net can be slack.
   const poll = usePoll<WorktreeRow[]>(() => BatonAPI.getWorktrees(), { interval: live ? 20000 : 5000 });
-  const rows = poll.data;
+  // Once per poll result, so every consumer below sees one set of node ids.
+  // `uniqueSlugs` hands back the same array when nothing collides.
+  const rows = useMemo(() => poll.data && uniqueSlugs(poll.data), [poll.data]);
   const isNarrow = useMediaQuery("(max-width: 760px)");
   const { tokens, mode } = useFlowTheme();
   // Collapse state, persisted per project through the one local-preference
@@ -225,8 +228,14 @@ export function WorktreesScreen({
   // which ids exist and `relayout` knows where each container belongs, without
   // either of them recomputing the layout a second time.
   const [groups, setGroups] = useState<GroupDescriptor[]>([]);
-  const rfRef = useRef<ReactFlowInstance<FlowNode, Edge> | null>(null);
-  const didFit = useRef(false);
+  // State, not a ref, so the fit below re-runs when React Flow mounts. It
+  // remounts whenever the screen drops to the ranked list and comes back.
+  const [rf, setRf] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
+  // The instance the one-time fit has already run for.
+  const fittedFor = useRef<ReactFlowInstance<FlowNode, Edge> | null>(null);
+  // Ids the person dragged. Only these keep a stored position across a
+  // rebuild; everything else follows the layout (flow/layout.ts:mergeFlowNodes).
+  const pinned = useRef(new Set<string>());
 
   /*
    * THE ONE REBUILD PATH. A poll and a collapse toggle both come through here,
@@ -245,9 +254,14 @@ export function WorktreesScreen({
     const positions = layoutWorktrees(rows);
     const descriptors = computeGroups(rows, positions);
     const prev = splitNodes(nodesRef.current);
-    const worktreeNodes = mergeFlowNodes(prev.worktrees, rows, positions);
-    const groupNodes = mergeGroupNodes(prev.groups, descriptors, collapsed);
-    const composed = composeFlowNodes(groupNodes, worktreeNodes, descriptors, collapsed);
+    // A pin outlives its node only as a stale id a later slug could inherit.
+    const present = new Set([...rows.map((r) => r.slug), ...descriptors.map((g) => g.id)]);
+    for (const id of pinned.current) if (!present.has(id)) pinned.current.delete(id);
+    const worktreeNodes = mergeFlowNodes(prev.worktrees, rows, positions, pinned.current);
+    const groupNodes = mergeGroupNodes(prev.groups, descriptors, collapsed, pinned.current);
+    const composed = composeFlowNodes(
+      groupNodes, worktreeNodes, descriptors, collapsed, pinned.current, positions,
+    );
 
     // Written straight back into the ref, not left to wait for React Flow's
     // first change event: `composeFlowNodes` is what turns an absolute position
@@ -282,24 +296,27 @@ export function WorktreesScreen({
     })));
   }, [rows, collapsed]);
 
-  // Exactly once, on first load. `didFit` is a ref rather than state because a
-  // re-render must not be able to re-arm it — every later refresh has to leave
-  // the viewport exactly where the person put it.
+  // Once per React Flow mount, as soon as there is something to fit. Keyed on
+  // the INSTANCE, not a boolean: a first load that was empty, or that landed
+  // on the narrow list, never mounted a canvas to fit, and a boolean set then
+  // would never re-arm. A poll changes neither, so it never moves the viewport.
+  const hasNodes = nodes.length > 0;
   useEffect(() => {
-    if (didFit.current || nodes.length === 0 || !rfRef.current) return;
-    didFit.current = true;
-    const inst = rfRef.current;
+    if (!rf || !hasNodes || fittedFor.current === rf) return;
+    fittedFor.current = rf;
     // One frame later: React Flow measures nodes after they paint, and fitting
     // against unmeasured nodes lands on the wrong zoom.
-    const id = requestAnimationFrame(() => inst.fitView({ padding: 0.2, duration: 0 }));
+    const id = requestAnimationFrame(() => rf.fitView({ padding: 0.2, duration: 0 }));
     return () => cancelAnimationFrame(id);
-  }, [nodes.length]);
+  }, [rf, hasNodes]);
 
   // React Flow's own changes — drag, selection, measurement — are written back
-  // into the ref so the next poll's merge preserves them.
+  // into the ref so the next poll's merge preserves them. Never a `remove`:
+  // a card is the only sign its directory is on disk (flow/layout.ts).
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
+    for (const c of changes) if (c.type === "position") pinned.current.add(c.id);
     setNodes((cur) => {
-      const next = applyNodeChanges(changes, cur);
+      const next = applyNodeChanges(dropRemovals(changes), cur);
       nodesRef.current = new Map(next.map((n) => [n.id, n]));
       return next;
     });
@@ -338,10 +355,11 @@ export function WorktreesScreen({
     for (const [id, n] of nodesRef.current) {
       next.set(id, { ...n, position: relative.get(id) ?? positions.get(id) ?? n.position });
     }
+    pinned.current.clear();
     nodesRef.current = next;
     setNodes([...next.values()]);
-    requestAnimationFrame(() => rfRef.current?.fitView({ padding: 0.2, duration: 200 }));
-  }, [rows, groups]);
+    requestAnimationFrame(() => rf?.fitView({ padding: 0.2, duration: 200 }));
+  }, [rows, groups, rf]);
 
   /** Health is the only thing the minimap can say at that size, so a container
    *  reports its ROLLED-UP health — the worst child's. A collapsed group that
@@ -419,7 +437,7 @@ export function WorktreesScreen({
       )}
       {!isNarrow && (
         <>
-          <button className="btn fr" onClick={() => rfRef.current?.fitView({ padding: 0.2, duration: 200 })}
+          <button className="btn fr" onClick={() => rf?.fitView({ padding: 0.2, duration: 200 })}
             data-tip="Fit every worktree in view">
             <Icon name="maximize" size={13} /> Fit
           </button>
@@ -483,6 +501,7 @@ export function WorktreesScreen({
     <>
       {overlay.kind === "diff" && (
         <DiffViewer slug={overlay.slug} session={overlaySession} writeEnabled={writeEnabled}
+          branch={rows?.find((r) => r.slug === overlay.slug)?.branch ?? undefined}
           onClose={() => setOverlay(null)}
           onHandoff={(slug) => setOverlay({ kind: "handoff", slug })} />
       )}
@@ -510,6 +529,15 @@ export function WorktreesScreen({
     );
   }
 
+  // A failed refresh must never render as fresh data — on either layout.
+  const staleBadge = poll.error != null && rows != null && (
+    <div className="mono" style={{
+      position: "absolute", top: 10, right: 10, padding: "4px 8px", borderRadius: "var(--r-sm)",
+      fontSize: "var(--fs-11)", color: "var(--dirty-text)", background: "var(--bg-elevated)",
+      border: "1px solid var(--dirty-border)",
+    }} data-tip={`The last refresh failed — ${failureReason(poll.error)}`}>may be stale</div>
+  );
+
   /*
    * Below 760px a flow canvas is unusable — the node is wider than the
    * viewport. The plan's own fallback for "no canvas" is a RANKED LIST over
@@ -520,6 +548,8 @@ export function WorktreesScreen({
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
         {header}
+        {/* The badge is absolutely placed, so it needs a positioned box. */}
+        {staleBadge && <div style={{ position: "relative", minHeight: 44, flex: "none" }}>{staleBadge}</div>}
         <RankedList rows={rows} loading={poll.isLoading} selected={selected} onSelect={setSelected} />
         {sheetPanel}
         {dialogs}
@@ -543,7 +573,10 @@ export function WorktreesScreen({
           nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange}
           onSelectionChange={onSelectionChange}
-          onInit={(inst) => { rfRef.current = inst; }}
+          onInit={setRf}
+          // No keyboard delete: a card is a view of a directory on disk, and
+          // removing the card would remove only the sign that it is there.
+          deleteKeyCode={null}
           // React Flow's own colour mode, kept in step with the shell's theme
           // rather than left on "light" forever.
           colorMode={mode}
@@ -574,14 +607,7 @@ export function WorktreesScreen({
             </span>
           </div>
         )}
-        {poll.error != null && rows != null && (
-          // A failed refresh must never render as fresh data.
-          <div className="mono" style={{
-            position: "absolute", top: 10, right: 10, padding: "4px 8px", borderRadius: "var(--r-sm)",
-            fontSize: "var(--fs-11)", color: "var(--dirty-text)", background: "var(--bg-elevated)",
-            border: "1px solid var(--dirty-border)",
-          }} data-tip={`The last refresh failed — ${failureReason(poll.error)}`}>may be stale</div>
-        )}
+        {staleBadge}
       </div>
       {inlinePanel}
       </div>

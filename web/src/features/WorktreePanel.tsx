@@ -29,13 +29,13 @@
      about to hand over a dirty worktree would be the one place a
      paraphrase does real damage.
    · ASSEMBLE PROMPT TEXT. Copy prompt copies the open brief's body as
-     the daemon built it, or the pickup command. There is no third
-     branch (flow/panel.ts:resolveCopyPrompt says why).
+     the daemon built it, or a CLI command (pickup, or inspect for an
+     orphan). Nothing is assembled (flow/panel.ts:resolveCopyPrompt).
    · DECIDE A WRITE IS IMPOSSIBLE. The gates check `--write` and
      "is there a task record at all", and stop. The stall barrier stays
      the daemon's.
    ============================================================ */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import {
   AgentBadge, ConfirmDialog, CopyButton, SyncChips,
@@ -158,21 +158,41 @@ export interface WorktreePanelProps {
   headingId: string;
 }
 
+/**
+ * One body PER WORKTREE: keyed by slug, so selecting another worktree mounts a
+ * fresh one. A refusal, an open dialog, a half-typed agent name or a busy flag
+ * all describe the worktree they were said about, and carried over they would
+ * sit under the next one's name.
+ */
 export function WorktreePanel(props: WorktreePanelProps) {
+  return <PanelBody key={props.row.slug} {...props} />;
+}
+
+function PanelBody(props: WorktreePanelProps) {
   const { row, pipeline, briefs, meta, writeEnabled, onClose, onRefresh, headingId } = props;
   const health = HEALTH_META[row.health] ?? HEALTH_META.unknown;
   const mayAnimate = useNodeMotion();
 
   // The ledger, per selected slug. `deps: [row.slug]` so switching selection
   // invalidates the response still in flight rather than painting the previous
-  // worktree's notes under the new one's name.
+  // worktree's notes under the new one's name. Only for a task row: an orphan
+  // has no ledger to read.
+  const isTask = !row.orphan;
   const progress = usePoll<WorktreeProgress>(
     () => BatonAPI.getWorktreeProgress(row.slug),
-    { interval: 15000, deps: [row.slug] },
+    { interval: 15000, deps: [row.slug], enabled: isTask },
   );
 
-  const brief = useMemo(() => briefFor(briefs, row.slug), [briefs, row.slug]);
-  const blocker = useMemo(() => blockerFor(pipeline, row.slug), [pipeline, row.slug]);
+  // Joined by slug, so only for a task row: no other row's id names a task,
+  // so a blocker or brief joined on it would not be this directory's.
+  const brief = useMemo(
+    () => (isTask ? briefFor(briefs, row.slug) : null),
+    [briefs, row.slug, isTask],
+  );
+  const blocker = useMemo(
+    () => (isTask ? blockerFor(pipeline, row.slug) : null),
+    [pipeline, row.slug, isTask],
+  );
   const copyPrompt = useMemo(
     () => resolveCopyPrompt(row, brief, writeEnabled),
     [row, brief, writeEnabled],
@@ -186,8 +206,13 @@ export function WorktreePanel(props: WorktreePanelProps) {
   // The daemon's own refusal sentence, kept on screen after the toast fades.
   // A 409 here is not a bug to swallow — it is the guard working.
   const [refusal, setRefusal] = useState<string | null>(null);
+  // `busy` is state, so a second Enter in the same frame still reads false.
+  // This ref is what makes one keypress one write.
+  const inFlight = useRef(false);
 
   const run = useCallback(async (label: string, fn: () => Promise<void>) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setRefusal(null);
     try {
@@ -203,6 +228,7 @@ export function WorktreePanel(props: WorktreePanelProps) {
       showToast({ kind: "error", title: `${label} refused`, desc: said });
       if (!(e instanceof ApiError)) setDialog(null);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }, [onRefresh]);
@@ -225,13 +251,14 @@ export function WorktreePanel(props: WorktreePanelProps) {
    * screen cannot afford.
    *
    * `landed` carries the slug it belongs to and is rendered only for a
-   * matching row: selecting a different worktree re-renders this same
-   * component rather than remounting it, so without that check a "landed on
-   * main" line would survive under another worktree's name.
+   * matching row. The body now remounts per slug (see `WorktreePanel`), so
+   * that check is belt and braces — and switching away and back drops the
+   * banner, which the refreshed row's `ahead: 0` still evidences.
    */
   const [landed, setLanded] = useState<{ slug: string; into: string; archivedRef: string | null } | null>(null);
   const doMerge = async () => {
-    if (!merge.enabled) return;
+    if (!merge.enabled || inFlight.current) return;
+    inFlight.current = true;
     const into = merge.target;
     setBusy(true);
     setRefusal(null);
@@ -254,6 +281,7 @@ export function WorktreePanel(props: WorktreePanelProps) {
       showToast({ kind: "error", title: "Merge failed — nothing landed, rolled back", desc: said });
       if (!(e instanceof ApiError)) setDialog(null);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -495,8 +523,8 @@ export function WorktreePanel(props: WorktreePanelProps) {
           <GatedButton gate={inspect} onClick={() => props.onOpenDiff(row.slug)}>
             <Icon name="columns" size={12} /> Diff
           </GatedButton>
-          {/* Copy prompt copies what the DAEMON wrote, or the pickup command.
-              `resolveCopyPrompt` has the only two answers there are. */}
+          {/* Copy prompt copies what the DAEMON wrote, or a CLI command.
+              `resolveCopyPrompt` has the only answers there are. */}
           <CopyButton value={copyPrompt.text} label={copyPrompt.label}
             className="btn btn-sm" title={copyPrompt.tip} />
         </div>
@@ -643,7 +671,7 @@ export function WorktreePanel(props: WorktreePanelProps) {
                   agent name nowhere (hooks/useFocusTrap.ts:31). */}
               <input data-autofocus list="baton-takeover-agents" value={agent}
                 placeholder="claude" onChange={(e) => setAgent(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && agent.trim()) doTakeover(); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !busy && agent.trim()) doTakeover(); }}
                 style={{
                   height: 32, padding: "0 10px", background: "var(--bg-input)", color: "var(--text-primary)",
                   border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)",
@@ -676,7 +704,7 @@ export function WorktreePanel(props: WorktreePanelProps) {
               Why it stopped <span style={{ color: "var(--text-quaternary)" }}>(optional, but a stop with no reason looks like a crash)</span>
               <input data-autofocus value={reason}
                 placeholder="out of context" onChange={(e) => setReason(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") doPause(); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !busy) doPause(); }}
                 style={{
                   height: 32, padding: "0 10px", background: "var(--bg-input)", color: "var(--text-primary)",
                   border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)",

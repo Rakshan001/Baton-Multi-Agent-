@@ -43,7 +43,7 @@
 import type { Node } from "@xyflow/react";
 import type { WorktreeHealth, WorktreeRow } from "../../types";
 import {
-  NODE_H, NODE_W, layoutWorktrees, type WorktreeFlowNode, type XY,
+  NODE_H, NODE_W, layoutWorktrees, samePosition, type WorktreeFlowNode, type XY,
 } from "./layout";
 
 /* ------------------------------------------------- group box geometry */
@@ -411,13 +411,14 @@ export type GroupFlowNode = Node<GroupNodeData, "worktreeGroup">;
 export type FlowNode = WorktreeFlowNode | GroupFlowNode;
 
 /**
- * MERGE, never re-seed — the same contract `mergeFlowNodes` (layout.ts:186)
- * holds for worktree nodes, and for the same reason: collapsing a group must
- * not move anything.
+ * MERGE, never re-seed — the same contract `mergeFlowNodes` (layout.ts) holds
+ * for worktree nodes, and for the same reason: collapsing a group must not
+ * move anything.
  *
- * A group id that was already here keeps its own `position` OBJECT (the
- * dragged one, or the one it was first laid out at) and everything React Flow
- * wrote onto it. Only `data` and the box `width`/`height` are refreshed —
+ * A group id that was already here keeps its own node object and everything
+ * React Flow wrote onto it. Its `position` is kept if it is PINNED (dragged);
+ * otherwise it follows the layout, as the same object while that is unchanged,
+ * so a container cannot sit on top of a band that has grown above it. Only `data` and the box `width`/`height` are refreshed —
  * `data` so the count and the rolled-up health redraw, the size because a
  * group that gained a member must grow or `extent: 'parent'` would clip the
  * new child inside a box that no longer fits it.
@@ -430,6 +431,7 @@ export function mergeGroupNodes(
   prev: Map<string, GroupFlowNode>,
   groups: GroupDescriptor[],
   collapsed: ReadonlySet<string>,
+  pinned: ReadonlySet<string> = new Set(),
 ): Map<string, GroupFlowNode> {
   const next = new Map<string, GroupFlowNode>();
   for (const group of groups) {
@@ -453,7 +455,8 @@ export function mergeGroupNodes(
       dragHandle: ".baton-group-handle",
     };
     if (existing) {
-      next.set(group.id, { ...existing, ...shared });
+      const position = pinned.has(group.id) ? existing.position : samePosition(existing.position, group.position);
+      next.set(group.id, { ...existing, ...shared, position });
     } else {
       next.set(group.id, {
         id: group.id,
@@ -480,12 +483,19 @@ export function mergeGroupNodes(
  * exactly what its tests describe, and so the decoration is derived fresh from
  * the current collapse set every render — the one thing that MUST NOT be
  * sticky, since it is what collapse changes.
+ *
+ * And it is where a child's PARENT-RELATIVE position is decided: its own only
+ * if it is pinned and still in the same box, else its slot in the box's grid.
+ * `absolute` (the full layout) is for a row that just LEFT a box: whatever it
+ * held was relative to that box and would read as absolute.
  */
 export function composeFlowNodes(
   groupNodes: Map<string, GroupFlowNode>,
   worktreeNodes: Map<string, WorktreeFlowNode>,
   groups: GroupDescriptor[],
   collapsed: ReadonlySet<string>,
+  pinned: ReadonlySet<string> = new Set(),
+  absolute: Map<string, XY> = new Map(),
 ): FlowNode[] {
   const membership = new Map<string, string>();
   const childPos = new Map<string, XY>();
@@ -509,9 +519,13 @@ export function composeFlowNodes(
       // A planId === null worktree. Top-level, never hidden, and any stale
       // parenting is stripped so a row that LOST its plan cannot keep
       // rendering inside a container it no longer belongs to.
-      out.push({ ...node, parentId: undefined, extent: undefined, hidden: false });
+      const position = node.parentId === undefined
+        ? node.position
+        : (absolute.get(slug) ?? node.position);
+      out.push({ ...node, position, parentId: undefined, extent: undefined, hidden: false });
       continue;
     }
+    const slot = childPos.get(slug);
     out.push({
       ...node,
       parentId: groupId,
@@ -519,11 +533,13 @@ export function composeFlowNodes(
       // neighbouring plan's box would assert a grouping the daemon never made.
       extent: "parent",
       hidden: hidden.has(slug),
-      // Only for a node that has just acquired a parent: its stored position is
-      // still the absolute one from layout.ts, which as a child would read as
-      // relative and put it far off to the right. Once parented, its own
-      // position is authoritative so drags survive.
-      position: node.parentId === groupId ? node.position : (childPos.get(slug) ?? node.position),
+      // A dragged child in the box it was dragged in keeps where it was put.
+      // Anything else takes its grid slot: a node that has just acquired a
+      // parent still holds an absolute position, which as a child would read
+      // as relative and put it far off to the right.
+      position: pinned.has(slug) && node.parentId === groupId
+        ? node.position
+        : (slot ? samePosition(node.position, slot) : node.position),
     });
   }
   return out;

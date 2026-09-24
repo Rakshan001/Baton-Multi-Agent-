@@ -213,6 +213,128 @@ const DIFFS: Record<string, DiffFile[]> = {
 +  ON "Order" ("userId", "createdAt" DESC);`),
     ]),
   ],
+
+  /* The Worktrees canvas's demo rows (lib/demoWorktrees.ts). One entry for
+     every row the panel lets you inspect that has work on it, shaped to match
+     what that row's ledger says it was doing. */
+  "wire-the-auth-api": [
+    file("src/auth/session.ts", "added", [
+      hunk(0, 1, "@@ new file @@", `
++import { randomUUID } from "node:crypto";
++import { db } from "@/lib/db";
++
++export async function createSession(userId: string) {
++  const id = randomUUID();
++  await db.session.create({ data: { id, userId } });
++  return id;
++}
++
++export async function deleteSession(id: string) {
++  await db.session.delete({ where: { id } });
++}`),
+    ]),
+    file("src/auth/routes.ts", "modified", [
+      hunk(4, 4, "@@ -4,6 +4,12 @@ import { router } from \"@/lib/router\";", `
+ export const auth = router();
+ 
+ auth.post("/session", async (req, res) => {
+-  res.status(501).end();
++  const id = await createSession(req.user.id);
++  res.cookie("sid", id, { httpOnly: true, sameSite: "lax" }).status(201).end();
++});
++
++auth.delete("/session", async (req, res) => {
++  await deleteSession(req.cookies.sid);
++  res.clearCookie("sid").status(204).end();
+ });`),
+    ]),
+  ],
+  "build-the-login-ui": [
+    file("web/src/routes/login.tsx", "added", [
+      hunk(0, 1, "@@ new file @@", `
++import { useSession } from "../lib/session";
++
++export function Login() {
++  const { signIn, error } = useSession();
++  return (
++    <form onSubmit={(e) => { e.preventDefault(); void signIn(new FormData(e.currentTarget)); }}>
++      <input name="email" type="email" autoComplete="username" />
++      <input name="password" type="password" autoComplete="current-password" />
++      {error && <p role="alert">{error}</p>}
++      <button type="submit">Sign in</button>
++    </form>
++  );
++}`),
+    ]),
+    file("web/src/lib/session.ts", "modified", [
+      hunk(10, 10, "@@ -10,7 +10,9 @@ export function useSession() {", `
+   const [error, setError] = useState<string | null>(null);
+   async function signIn(form: FormData) {
+-    await fetch("/session", { method: "POST", body: form });
++    const res = await fetch("/session", { method: "POST", body: form });
++    // TODO: an expired refresh token loops here on first paint.
++    if (res.status === 401) return setError("Session expired — sign in again.");
+   }`),
+    ]),
+  ],
+  "rotate-the-signing-key": [
+    file("src/auth/keys.ts", "modified", [
+      hunk(1, 1, "@@ -1,8 +1,12 @@", `
+-const SIGNING_KEY = process.env.SIGNING_KEY!;
++// Two keys during a rotation: sign with the new one, still verify the old.
++const CURRENT = process.env.SIGNING_KEY!;
++const PREVIOUS = process.env.SIGNING_KEY_PREVIOUS;
+ 
+-export const verify = (token: string) => jwt.verify(token, SIGNING_KEY);
++export function verify(token: string) {
++  try { return jwt.verify(token, CURRENT); }
++  catch (e) { if (!PREVIOUS) throw e; return jwt.verify(token, PREVIOUS); }
++}`),
+    ]),
+    file(".env.example", "modified", [
+      hunk(3, 3, "@@ -3,3 +3,4 @@", `
+ DATABASE_URL=
+ SIGNING_KEY=
++SIGNING_KEY_PREVIOUS=`),
+    ]),
+  ],
+  "cut-the-cold-start": [
+    file("src/boot.ts", "modified", [
+      hunk(1, 1, "@@ -1,9 +1,10 @@", `
+-import { buildRepoMap } from "./repo-map";
+ import { startServer } from "./server";
+ 
+ export async function boot() {
+-  const map = await buildRepoMap();
+-  await startServer({ map });
++  // Serve first; the repo map is only needed on the first search.
++  await startServer({ map: () => import("./repo-map").then((m) => m.buildRepoMap()) });
+ }`),
+    ]),
+  ],
+  "cache-the-repo-map": [
+    file("src/repo-map.ts", "modified", [
+      hunk(12, 12, "@@ -12,6 +12,14 @@ export async function buildRepoMap() {", `
++const CACHE = ".cache/repo-map.json";
++
++export async function cachedRepoMap(head: string) {
++  const hit = await readJson(CACHE).catch(() => null);
++  if (hit?.head === head) return hit.map;
++  const map = await buildRepoMap();
++  await writeJson(CACHE, { head, map });
++  return map;
++}`),
+    ]),
+  ],
+  "fix-the-flaky-test": [
+    file("test/checkout.e2e.ts", "modified", [
+      hunk(22, 22, "@@ -22,7 +22,7 @@ test(\"places an order\", async ({ page }) => {", `
+   await page.getByRole("button", { name: "Place order" }).click();
+-  await page.waitForTimeout(500);
++  await page.getByRole("status").filter({ hasText: "Order placed" }).waitFor();
+   await expect(page).toHaveURL(/\\/orders\\/\\d+/);`),
+    ]),
+  ],
 };
 
 const TOKENS: Record<string, Usage> = {

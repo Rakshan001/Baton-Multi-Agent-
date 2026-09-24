@@ -128,10 +128,13 @@ function SplitLines({ hunks }: { hunks: DiffHunk[] }) {
 }
 
 export function DiffViewer({
-  slug, session, onClose, onHandoff, writeEnabled,
+  slug, session, onClose, onHandoff, writeEnabled, branch,
 }: {
   slug: string;
   session?: StatusRow;
+  /** The branch the caller already knows. `baton/<slug>` is only a guess, and
+   *  a wrong one for any worktree whose branch was named some other way. */
+  branch?: string;
   onClose: () => void;
   onHandoff: (slug: string) => void;
   writeEnabled: boolean;
@@ -189,7 +192,7 @@ export function DiffViewer({
               {BatonAPI.demo && <span style={{ fontSize: "var(--text-micro)", fontWeight: "var(--fw-semibold)", letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--text-tertiary)", background: "var(--bg-surface)", border: "1px dashed var(--border-default)", borderRadius: 99, padding: "2px 7px" }} data-tip="Demo mode — this diff is illustrative.">Preview</span>}
             </div>
             <div className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 6 }}>
-              <Icon name="gitBranch" size={11} /> {branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <DiffStat add={totals.add} del={totals.del} size="sm" />
+              <Icon name="gitBranch" size={11} /> {branch ?? branchFor(slug)} <span style={{ color: "var(--text-quaternary)" }}>·</span> <DiffStat add={totals.add} del={totals.del} size="sm" />
             </div>
           </div>
           {isWide && <SegmentedControl size="sm" ariaLabel="Diff view" value={mode} onChange={setMode}

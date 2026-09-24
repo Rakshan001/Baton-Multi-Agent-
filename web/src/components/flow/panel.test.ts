@@ -248,6 +248,44 @@ describe("resolveCopyPrompt", () => {
     expect(out.tip).toContain("Hand off");
   });
 
+  it("an orphan copies an inspect command, not a take", () => {
+    // No task owns it, so `baton take <basename>` fails. Looking is what helps.
+    const orphan = row({ slug: "hotfix", orphan: true, state: null, worktreePath: "/repo/My Work/hotfix" });
+    const out = resolveCopyPrompt(orphan, null, true);
+    expect(out.text).toBe("cd '/repo/My Work/hotfix' && git status");
+    expect(out.text).not.toContain("baton take");
+    expect(out.label).toBe("Copy inspect command");
+  });
+
+  it("never copies a task's brief for an orphan that shares its basename", () => {
+    // A queued task with no worktree is not in `rows`, so nothing renames the
+    // orphan: the brief keyed on that slug is somebody else's.
+    const orphan = row({ slug: "stuck-thing", orphan: true, state: null });
+    const out = resolveCopyPrompt(orphan, brief(), true);
+    expect(out.kind).toBe("inspect");
+    expect(out.text).not.toContain("BODY FROM THE DAEMON");
+  });
+
+  it("says clean --fix deletes the orphan's branch and the other junk it listed", () => {
+    const tip = inspectGate(row({ slug: "h", orphan: true, state: null })).tip!;
+    expect(tip).toContain("deletes its branch");
+    expect(tip).toContain("any other junk the dry run listed");
+  });
+
+  it("quotes a path with spaces", () => {
+    const spaced = row({ slug: "stuck-thing", worktreePath: "/Users/me/My Repo/it's here" });
+    expect(pickupCommand(spaced)).toBe("cd '/Users/me/My Repo/it'\\''s here' && baton take stuck-thing");
+  });
+
+  it("adds --resume for a stalled holder", () => {
+    // `baton take` refuses a task somebody else holds unless told to resume
+    // it (src/commands/take.ts), so the copied command would just fail.
+    expect(pickupCommand(row({ slug: "a", claimedBy: "cursor", state: "active" }))).toMatch(/ --resume$/);
+    expect(pickupCommand(row({ slug: "a", claimedBy: "cursor", state: "claimed" }))).toMatch(/ --resume$/);
+    expect(pickupCommand(row({ slug: "a", claimedBy: null, state: "active" }))).not.toContain("--resume");
+    expect(pickupCommand(row({ slug: "a", claimedBy: "cursor", state: "queued" }))).not.toContain("--resume");
+  });
+
   it("never resolves to text neither the daemon nor the CLI produced", () => {
     const daemonBody = "BODY FROM THE DAEMON";
     const cases = [
@@ -291,7 +329,22 @@ describe("write gates", () => {
   it("refuse a worktree no task owns — there is no claim to move", () => {
     const orphan = row({ slug: "hotfix", orphan: true, state: null });
     expect(takeoverGate(orphan, true).enabled).toBe(false);
-    expect(pauseGate(orphan, true).tip).toContain("baton adopt");
+    expect(pauseGate(orphan, true).tip).toContain("baton clean");
+  });
+
+  it("never suggests a command that does not exist", () => {
+    // There is no `baton adopt`. An orphan is inspected, kept by committing or
+    // pushing, and then removed by `baton clean --fix`.
+    const orphan = row({ slug: "hotfix", orphan: true, state: null });
+    const tips = [
+      takeoverGate(orphan, true).tip, pauseGate(orphan, true).tip, handoffGate(orphan, true).tip,
+      inspectGate(orphan).tip, mergeGate(orphan, quietPipeline(), META, true).tip, MERGE_NO_TASK_TIP,
+    ];
+    for (const tip of tips) {
+      expect(tip).not.toContain("baton adopt");
+      expect(tip).toContain("baton clean");
+      expect(tip).toContain("--fix");
+    }
   });
 
   it("do NOT re-implement the stall barrier — a live holder is still offered", () => {

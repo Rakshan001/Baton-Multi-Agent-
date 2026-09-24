@@ -13,7 +13,10 @@
  *    React Flow tracks selection on the node object — every multi-selection.
  */
 import { describe, expect, it } from "vitest";
-import { layoutWorktrees, mergeFlowNodes, worktreeEdges, NODE_W, COL_GAP, type WorktreeFlowNode } from "./layout";
+import {
+  dropRemovals, layoutWorktrees, mergeFlowNodes, uniqueSlugs, worktreeEdges, NODE_W, COL_GAP,
+  type WorktreeFlowNode,
+} from "./layout";
 import type { WorktreeRow } from "../../types";
 
 const row = (over: Partial<WorktreeRow> & { slug: string }): WorktreeRow => ({
@@ -115,7 +118,7 @@ describe("a poll merges into the graph instead of re-seeding it", () => {
     const dragged = new Map(first);
     dragged.set("a", { ...first.get("a")!, position: { x: 999, y: -42 } });
 
-    const after = mergeFlowNodes(dragged, rows, layoutWorktrees(rows));
+    const after = mergeFlowNodes(dragged, rows, layoutWorktrees(rows), new Set(["a"]));
     expect(after.get("a")!.position).toEqual({ x: 999, y: -42 });
   });
 
@@ -149,9 +152,60 @@ describe("a poll merges into the graph instead of re-seeding it", () => {
     expect(after.get("b")!.position.x).toBe(COL);
   });
 
+  it("moves an undragged node when a band above it grows", () => {
+    // Nobody dragged `z`, so it has no position of its own to keep. Holding
+    // the one it was first laid at would leave it under the grown band.
+    const before = [row({ slug: "a" }), row({ slug: "z", planId: null, phase: null })];
+    const first = seed(before);
+    const grown = [...before, row({ slug: "b" }), row({ slug: "c" })];
+    const positions = layoutWorktrees(grown);
+    const after = mergeFlowNodes(first, grown, positions, new Set());
+    expect(after.get("z")!.position).toEqual(positions.get("z"));
+    expect(after.get("z")!.position.y).toBeGreaterThan(first.get("z")!.position.y);
+    // A dragged one stays put through the same change.
+    const pinned = mergeFlowNodes(first, grown, positions, new Set(["z"]));
+    expect(pinned.get("z")!.position).toBe(first.get("z")!.position);
+  });
+
   it("drops a worktree that is gone", () => {
     const first = seed([row({ slug: "a" }), row({ slug: "b" })]);
     const after = mergeFlowNodes(first, [row({ slug: "a" })], layoutWorktrees([row({ slug: "a" })]));
     expect([...after.keys()]).toEqual(["a"]);
+  });
+});
+
+describe("the canvas cannot lose a worktree", () => {
+  it("never lets the canvas delete a worktree", () => {
+    // Backspace on a selected card makes React Flow emit a `remove`. A card
+    // is a view of a directory on disk; deleting the card deletes nothing
+    // but the only sign the directory is there.
+    const kept = dropRemovals([
+      { type: "remove", id: "a" },
+      { type: "select", id: "b", selected: true },
+      { type: "position", id: "c", position: { x: 1, y: 2 } },
+    ]);
+    expect(kept.map((c) => c.type)).toEqual(["select", "position"]);
+  });
+
+  it("never emits two rows with one slug", () => {
+    // An orphan directory named like a task slug would give React Flow two
+    // nodes with one id; one of them would silently not render.
+    const rows = [
+      row({ slug: "auth" }),
+      row({ slug: "auth", orphan: true, state: null, planId: null, phase: null }),
+      row({ slug: "auth", orphan: true, state: null, planId: null, phase: null, worktreePath: "/x/auth" }),
+      row({ slug: "auth~orphan" }),
+    ];
+    const out = uniqueSlugs(rows);
+    expect(new Set(out.map((r) => r.slug)).size).toBe(out.length);
+    // The task keeps its own slug; only an orphan is renamed.
+    expect(out[0]!.slug).toBe("auth");
+    expect(out[3]!.slug).toBe("auth~orphan");
+    expect(out[1]!.slug).toMatch(/^auth~orphan-\d+$/);
+  });
+
+  it("hands back the same array when nothing collides", () => {
+    const rows = [row({ slug: "a" }), row({ slug: "b", orphan: true })];
+    expect(uniqueSlugs(rows)).toBe(rows);
   });
 });

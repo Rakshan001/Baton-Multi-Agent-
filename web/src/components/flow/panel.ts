@@ -24,7 +24,8 @@
       must not invent a second vocabulary for a refusal the CLI answers
       to"), and `resolveCopyPrompt` can only ever return text the
       DAEMON produced: a brief's body, or the CLI command that claims
-      the worktree. There is no third branch that assembles a brief,
+      the worktree (or, for an orphan, inspects it). There is no branch
+      that assembles a brief,
       because a fabricated handoff read as a real one is worse than no
       handoff at all.
 
@@ -285,8 +286,14 @@ export interface ActionGate {
   tip?: string;
 }
 
-const ORPHAN_TIP =
-  "No task owns this worktree, so there is no claim to move. Adopt it with `baton adopt` first.";
+/** What to DO with an orphan, in commands that exist. There is no adopt
+ *  command; `baton clean` (src/cleanup.ts) is what removes one. `--fix` also
+ *  deletes its branch (the tip is archived) and every other item the dry run
+ *  listed, so the sentence says both before anybody runs it. */
+const ORPHAN_NEXT =
+  "Inspect the directory, commit or push anything worth keeping, then run `baton clean` to see what it would remove. `baton clean --fix` removes it and deletes its branch (the tip is kept under refs/baton/archive/). It also removes any other junk the dry run listed. A dirty orphan is skipped unless you also pass `-f`.";
+
+const ORPHAN_TIP = `No task owns this worktree, so there is no claim to move. ${ORPHAN_NEXT}`;
 
 /**
  * Take over / Pause / Hand off all act on the TASK RECORD, and an orphan
@@ -363,7 +370,7 @@ export interface PanelMeta {
 }
 
 export const MERGE_NO_TASK_TIP =
-  "No task owns this worktree, so there is no task branch to merge. Adopt it with `baton adopt` first.";
+  `No task owns this worktree, so there is no task branch to merge. ${ORPHAN_NEXT}`;
 
 /**
  * What the Merge button may do — and, when it may not, the sentence saying so.
@@ -490,18 +497,34 @@ export function mergeGate(
 
 /* ---------- Copy prompt ---------------------------------------------- */
 
+/** A path as one shell word. Left bare when it is plainly safe, so the common
+ *  path copies exactly as it reads; single-quoted otherwise. */
+function shq(s: string): string {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 /**
  * The pickup command, in the CLI's own grammar (features/Handoff.tsx:153 and
  * :302 already copy this exact shape for a task brief). A worktree is a task
  * checkout, so `baton take` in its directory is what claims it.
+ *
+ * `--resume` when somebody still holds active work: `baton take` refuses a
+ * held task without it (src/commands/take.ts), so the copy would just fail.
  */
 export function pickupCommand(row: WorktreeRow): string {
-  return `cd ${row.worktreePath} && baton take ${row.slug}`;
+  const held = row.claimedBy !== null && (row.state === "active" || row.state === "claimed");
+  return `cd ${shq(row.worktreePath)} && baton take ${row.slug}${held ? " --resume" : ""}`;
+}
+
+/** An orphan has no task to take, so the useful command is the one that looks. */
+export function inspectCommand(row: WorktreeRow): string {
+  return `cd ${shq(row.worktreePath)} && git status`;
 }
 
 export type CopyPrompt =
   | { kind: "brief"; label: string; text: string; tip: string }
-  | { kind: "pickup"; label: string; text: string; tip: string };
+  | { kind: "pickup"; label: string; text: string; tip: string }
+  | { kind: "inspect"; label: string; text: string; tip: string };
 
 /**
  * WHAT COPY PROMPT RESOLVES TO, AND WHY THERE ARE ONLY TWO ANSWERS.
@@ -512,7 +535,10 @@ export type CopyPrompt =
  * copied here byte for byte. With no brief there is no prompt in existence, so
  * it copies the command that claims the worktree instead.
  *
- * There is deliberately no third branch. Assembling a plausible-looking brief
+ * An orphan has no task, so `baton take` would fail: it copies the command
+ * that inspects the directory instead.
+ *
+ * There is deliberately no branch that ASSEMBLES a prompt. Assembling a plausible-looking brief
  * in the browser would produce a document that reads exactly like one an agent
  * wrote and carries none of the evidence — the single worst thing this panel
  * could hand somebody. Writing a real brief is what Hand off does, through the
@@ -523,6 +549,16 @@ export function resolveCopyPrompt(
   brief: PanelBrief | null,
   writeEnabled: boolean,
 ): CopyPrompt {
+  // First, before any brief: an orphan's id names no task, and a brief
+  // joined on it would belong to some other worktree.
+  if (row.orphan) {
+    return {
+      kind: "inspect",
+      label: "Copy inspect command",
+      text: inspectCommand(row),
+      tip: `No task owns this worktree, so there is nothing to take. ${ORPHAN_NEXT}`,
+    };
+  }
   // `body` is the frontmatter-stripped brief; `markdown` is the whole file.
   // Preferring body, falling back to the file, means a brief that is somehow
   // all frontmatter still copies something real instead of an empty clipboard.

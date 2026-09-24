@@ -25,7 +25,7 @@ import {
   GROUP_PAD_BOTTOM, GROUP_PAD_TOP, GROUP_PAD_X, HEALTH_SEVERITY,
   composeFlowNodes, computeGroups, groupIdFor, groupLabel, groupMembership,
   healthSeverity, hiddenSlugs, mergeGroupNodes, routeEdges, worstHealth,
-  type GroupFlowNode,
+  type FlowNode, type GroupFlowNode,
 } from "./groups";
 import { HEALTH_META } from "./health";
 import type { WorktreeHealth, WorktreeRow } from "../../types";
@@ -227,6 +227,20 @@ describe("worktrees group by plan and phase", () => {
     expect(GROUP_PAD_TOP + GROUP_PAD_BOTTOM).toBeLessThan(BAND_GAP);
   });
 
+  it("never overlaps a plan's no-phase and phase-0 containers", () => {
+    // Two different groups (see above), so they must also be two different
+    // layers — laid in one, both boxes were drawn at the same origin.
+    const mixed = [
+      row({ slug: "unphased", planId: "p", phase: null }),
+      row({ slug: "zeroth", planId: "p", phase: 0 }),
+    ];
+    const [a, b] = computeGroups(mixed, layoutWorktrees(mixed));
+    const disjoint =
+      a!.position.x + a!.width <= b!.position.x || b!.position.x + b!.width <= a!.position.x ||
+      a!.position.y + a!.height <= b!.position.y || b!.position.y + b!.height <= a!.position.y;
+    expect(disjoint).toBe(true);
+  });
+
   it("rolls up the worst health and the at-risk count per group", () => {
     const mixed = [
       row({ slug: "a", phase: 1, health: "working" }),
@@ -380,12 +394,21 @@ describe("collapse does not re-seed the graph", () => {
   ];
   const P1 = groupIdFor(rows[0]!)!;
 
-  const build = (collapsed: Set<string>, prevWt = new Map<string, WorktreeFlowNode>(), prevG = new Map<string, GroupFlowNode>()) => {
-    const positions = layoutWorktrees(rows);
-    const descriptors = computeGroups(rows, positions);
-    const wt = mergeFlowNodes(prevWt, rows, positions);
-    const groupNodes = mergeGroupNodes(prevG, descriptors, collapsed);
-    return { composed: composeFlowNodes(groupNodes, wt, descriptors, collapsed), wt, groupNodes };
+  const build = (
+    collapsed: Set<string>,
+    prevWt = new Map<string, WorktreeFlowNode>(),
+    prevG = new Map<string, GroupFlowNode>(),
+    pinned: ReadonlySet<string> = new Set(),
+    input: WorktreeRow[] = rows,
+  ) => {
+    const positions = layoutWorktrees(input);
+    const descriptors = computeGroups(input, positions);
+    const wt = mergeFlowNodes(prevWt, input, positions, pinned);
+    const groupNodes = mergeGroupNodes(prevG, descriptors, collapsed, pinned);
+    return {
+      composed: composeFlowNodes(groupNodes, wt, descriptors, collapsed, pinned, positions),
+      wt, groupNodes, descriptors, positions,
+    };
   };
 
   it("lists every parent before its children", () => {
@@ -436,7 +459,8 @@ describe("collapse does not re-seed the graph", () => {
     const dragged = { ...composedSchema, position: { x: 31, y: 77 } };
     wt.set("schema", dragged);
 
-    const collapsed = build(new Set([P1]), wt, gr);
+    const pinned = new Set(["schema"]);
+    const collapsed = build(new Set([P1]), wt, gr, pinned);
     expect(collapsed.composed.find((n) => n.id === "schema")!.position).toEqual({ x: 31, y: 77 });
     const wt2 = new Map(collapsed.composed
       .filter((n) => n.type === "worktree")
@@ -444,8 +468,51 @@ describe("collapse does not re-seed the graph", () => {
     const gr2 = new Map(collapsed.composed
       .filter((n) => n.type === "worktreeGroup")
       .map((n) => [n.id, n as GroupFlowNode]));
-    const expanded = build(new Set(), wt2, gr2);
+    const expanded = build(new Set(), wt2, gr2, pinned);
     expect(expanded.composed.find((n) => n.id === "schema")!.position).toEqual({ x: 31, y: 77 });
+  });
+
+  it("moves an undragged container and its children when a band above grows, but not a pinned one", () => {
+    // `perf` sorts after `auth`, so a taller auth band pushes perf's box down.
+    // Holding the box where it was first laid would draw it over the new rows.
+    const base = [...rows, row({ slug: "cold", planId: "perf", phase: 1 })];
+    const grown = [...base, row({ slug: "extra-1", phase: 1 }), row({ slug: "extra-2", phase: 1 })];
+    const PERF = groupIdFor(row({ slug: "cold", planId: "perf", phase: 1 }))!;
+    const toMaps = (c: FlowNode[]) => ({
+      wt: new Map(c.filter((n) => n.type === "worktree").map((n) => [n.id, n as WorktreeFlowNode])),
+      gr: new Map(c.filter((n) => n.type === "worktreeGroup").map((n) => [n.id, n as GroupFlowNode])),
+    });
+
+    const first = build(new Set(), undefined, undefined, new Set(), base);
+    const { wt, gr } = toMaps(first.composed);
+    const moved = build(new Set(), wt, gr, new Set(), grown);
+    const box = moved.descriptors.find((g) => g.id === PERF)!;
+    expect(moved.groupNodes.get(PERF)!.position).toEqual(box.position);
+    expect(box.position.y).toBeGreaterThan(first.groupNodes.get(PERF)!.position.y);
+    // An unmoved child keeps its very position object: nothing repaints.
+    const cold = moved.composed.find((n) => n.id === "cold")!;
+    expect(cold.position).toBe(first.composed.find((n) => n.id === "cold")!.position);
+    // A plan-less row below every band moves down with them.
+    const flaky = moved.composed.find((n) => n.id === "flaky")!;
+    expect(flaky.position).toEqual(moved.positions.get("flaky"));
+
+    const held = build(new Set(), wt, gr, new Set([PERF]), grown);
+    expect(held.groupNodes.get(PERF)!.position).toBe(first.groupNodes.get(PERF)!.position);
+  });
+
+  it("puts a pinned child that lost its plan back on the absolute layout", () => {
+    // Its stored position is relative to the box it just left; read as
+    // absolute it would land near the canvas origin.
+    const first = build(new Set());
+    const wt = new Map(first.composed
+      .filter((n) => n.type === "worktree")
+      .map((n) => [n.id, n as WorktreeFlowNode]));
+    wt.set("store", { ...wt.get("store")!, position: { x: 5, y: 5 } });
+    const next = [rows[0]!, row({ slug: "store", planId: null, phase: null }), ...rows.slice(2)];
+    const after = build(new Set(), wt, first.groupNodes, new Set(["store"]), next);
+    const store = after.composed.find((n) => n.id === "store")!;
+    expect(store.parentId).toBeUndefined();
+    expect(store.position).toEqual(after.positions.get("store"));
   });
 
   it("keeps a container's own position object across a collapse", () => {

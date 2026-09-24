@@ -18,7 +18,7 @@
    Nothing here touches React Flow beyond its `Node` type, so all of it
    is testable without a DOM.
    ============================================================ */
-import type { Node } from "@xyflow/react";
+import type { Node, NodeChange } from "@xyflow/react";
 import type { WorktreeRow } from "../../types";
 
 /** Node box. Wide enough for a slug plus a branch at the 11px floor. */
@@ -55,9 +55,11 @@ function compareBands(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-/** Phase order within a band. `null` phase sorts first and shares one layer. */
+/** Phase order within a band. `null` phase sorts first, in a layer of its own:
+ *  groups.ts keeps "no phase" and "phase 0" as two containers, and two
+ *  containers laid in one layer were drawn on top of each other. */
 function phaseOf(row: WorktreeRow): number {
-  return row.phase ?? 0;
+  return row.phase ?? -1;
 }
 
 /**
@@ -180,39 +182,94 @@ export function worktreeEdges(rows: WorktreeRow[]): Array<{ id: string; source: 
 }
 
 /**
+ * The same position object when the coordinates have not changed, the new one
+ * when they have. React Flow compares by identity, so handing back an equal
+ * but fresh object on every poll would repaint every card for nothing.
+ */
+export function samePosition(current: XY, next: XY): XY {
+  return current.x === next.x && current.y === next.y ? current : next;
+}
+
+/**
+ * React Flow's changes minus every `remove`.
+ *
+ * A card is a VIEW of a directory on disk. Backspace on a selected card makes
+ * React Flow emit a `remove`, and applying it deletes nothing but the only
+ * sign on this screen that the directory is there. `deleteKeyCode={null}`
+ * stops the key; this stops any other path to the same change.
+ */
+export function dropRemovals<N extends Node>(changes: NodeChange<N>[]): NodeChange<N>[] {
+  return changes.filter((c) => c.type !== "remove");
+}
+
+/**
+ * Rows with every slug unique — the node id React Flow keys on.
+ *
+ * An orphan's slug is its directory's basename, so an orphan directory named
+ * like a task slug arrives as a second row with the same slug, and React Flow
+ * silently renders only one of the two. The task keeps its slug; a colliding
+ * orphan is renamed `~orphan`, then `~orphan-2`, … until it is unique. An
+ * orphan has no task record, so nothing reads that slug back from the daemon.
+ *
+ * Hands back the SAME array when nothing collides.
+ */
+export function uniqueSlugs(rows: WorktreeRow[]): WorktreeRow[] {
+  const taken = new Set(rows.filter((r) => !r.orphan).map((r) => r.slug));
+  let changed = false;
+  const out = rows.map((r) => {
+    if (!r.orphan) return r;
+    if (!taken.has(r.slug)) { taken.add(r.slug); return r; }
+    let slug = `${r.slug}~orphan`;
+    for (let n = 2; taken.has(slug); n++) slug = `${r.slug}~orphan-${n}`;
+    taken.add(slug);
+    changed = true;
+    return { ...r, slug };
+  });
+  return changed ? out : rows;
+}
+
+/**
  * MERGE, never re-seed. This is the function the screen's usability rests on.
  *
- * A fresh `layoutWorktrees(...)` on every poll would be deterministic but would
- * still throw away anything the person had done: a dragged node would snap
- * back, and — because React Flow tracks selection ON the node object — a
- * multi-selection would evaporate every few seconds.
+ * A fresh node array on every poll would be deterministic but would still
+ * throw away anything the person had done — because React Flow tracks
+ * selection ON the node object, a multi-selection would evaporate every few
+ * seconds. So an existing slug keeps its own node object and everything React
+ * Flow wrote onto it (`selected`, `dragging`, measured size); `data` is
+ * replaced, which is what makes the card redraw.
  *
- * So an existing slug keeps its own node object's `position` (the dragged one,
- * or the one it was first laid out at) and everything React Flow wrote onto it
- * (`selected`, `dragging`, measured size). Only `data` is replaced, which is
- * what makes the card redraw. A layout position is allocated ONLY for a slug
- * that was not here before — and a slug that has gone is dropped.
+ * POSITION is kept only for a PINNED slug — one the person dragged. Every
+ * other node takes its layout position (the same object when that has not
+ * moved), because holding the position it was FIRST laid at would leave it
+ * underneath a band that has since grown above it. `pinned` is the screen's
+ * record of drags, and Re-layout clears it.
  *
- * Nothing in here touches the viewport, which is the other half of the promise:
- * the canvas cannot move on a refresh if no code path asks it to.
+ * Nothing in here touches the viewport: the canvas cannot move on a refresh if
+ * no code path asks it to.
  */
 export function mergeFlowNodes(
   prev: Map<string, WorktreeFlowNode>,
   rows: WorktreeRow[],
   positions: Map<string, XY>,
+  pinned: ReadonlySet<string> = new Set(),
 ): Map<string, WorktreeFlowNode> {
   const next = new Map<string, WorktreeFlowNode>();
   for (const row of rows) {
     const existing = prev.get(row.slug);
+    const laid = positions.get(row.slug) ?? { x: 0, y: 0 };
     if (existing) {
       // New object (React Flow compares node identity to decide what to
-      // repaint) but the SAME position object, so no move is even expressible.
-      next.set(row.slug, { ...existing, data: { row } });
+      // repaint), and a position that moves only if the layout moved it. A
+      // node inside a group box holds a box-relative position, which only
+      // `composeFlowNodes` (groups.ts) can judge, so it is passed through.
+      const keep = pinned.has(row.slug) || existing.parentId !== undefined;
+      const position = keep ? existing.position : samePosition(existing.position, laid);
+      next.set(row.slug, { ...existing, position, data: { row } });
     } else {
       next.set(row.slug, {
         id: row.slug,
         type: "worktree",
-        position: positions.get(row.slug) ?? { x: 0, y: 0 },
+        position: laid,
         data: { row },
       });
     }
