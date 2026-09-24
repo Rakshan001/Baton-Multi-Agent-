@@ -50,7 +50,7 @@ import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
 import { cancelCmd } from './commands/cancel.js';
-import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
+import { memoryAddCmd, memoryConsolidateCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
@@ -368,9 +368,16 @@ memory
   .action(() => run(memoryRepairCmd));
 
 memory
+  .command('consolidate')
+  .description('merge duplicate facts and flag contradictions (the pass the daemon runs when idle)')
+  .action(() => run(memoryConsolidateCmd));
+
+memory
   .command('gc')
+  .option('--dry-run', 'show what would be removed, delete nothing')
+  .option('--yes', 'skip the confirmation (required when not run from a terminal)')
   .description('repair what is mechanically verifiable, then drop the still-stale facts')
-  .action(() => run(memoryGcCmd));
+  .action((opts: { dryRun?: boolean; yes?: boolean }) => run(() => memoryGcCmd(opts)));
 
 memory
   .command('log')

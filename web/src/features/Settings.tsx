@@ -11,13 +11,14 @@ import { BatonMark } from "../components/BatonMark";
 import { ScreenHeader } from "./shared";
 import { AGENT_REGISTRY, ACCENTS } from "../lib/registry";
 import { showToast } from "../lib/toast";
-import { BatonAPI } from "../lib/api";
+import { BatonAPI, failureReason } from "../lib/api";
 import { fetchMeta, loadConnections, updateConnectionUrl } from "../lib/connections";
 import type { Prefs } from "../hooks/usePrefs";
-import type { AgentId, FleetDaemon, Meta, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
+import type { AgentId, FleetDaemon, Meta, MemoryConsolidation, MemoryDelegateSpend, MemoryMechanicalPass, MemoryProducedFact, RoutingConfig, RoutingInfo, RoutingMode, TierEntry } from "../types";
 import { auth } from "../lib/auth";
 import { usePoll } from "../hooks/usePoll";
 import { fleetOrder, folderName, middleTruncate, uptimeLabel } from "../lib/fleet";
+import { timeAgo } from "../lib/format";
 
 const MODE_HINTS: Record<RoutingMode, string> = {
   auto: "Rules first, then severity picks a tier automatically.",
@@ -550,6 +551,306 @@ function AboutSettings({ meta }: { meta?: Meta | null }) {
   );
 }
 
+/* ============================================================
+   Memory consolidation — the free pass, and the one that costs money
+   ============================================================ */
+
+/** Read-only mode says the same sentence everywhere it appears, for the reason
+ *  quarantine.ts gives about copies of a security explanation drifting apart. */
+const READ_ONLY_TIP = "Read-only — enable Write actions (the daemon needs baton serve --write)";
+
+/**
+ * What the switch is actually asking for. One constant, because this is the
+ * sentence the whole feature turns on: someone flipping it is agreeing to let
+ * Baton start a coding agent on their account, under their own credentials,
+ * spending their tokens, while they are not watching. It belongs AT the switch
+ * — a person who has to open the docs to learn what a setting costs has already
+ * been charged by the time they find out.
+ */
+const DELEGATE_CONSENT =
+  "Turning this on lets Baton launch a coding agent under your own credentials and spend your tokens — it starts on your account while you are not watching, and you pay for what it uses.";
+
+/** Why it is still safe to point a model at the knowledge base. Enforced in
+ *  code (`validateDelegateResponse`), which is the only reason it can be said. */
+const DELEGATE_LIMIT =
+  "The agent may only merge, supersede and re-anchor facts that already exist. A produced fact that cites nothing, or that introduces a claim no input fact made, is rejected by Baton — not by asking the model nicely. Nothing is ever deleted: the older fact is superseded and kept.";
+
+/** Mechanical consolidation is not a fallback for the switch being off — it is
+ *  the default product, and it runs for everyone regardless. */
+const MECHANICAL_ALWAYS =
+  "Mechanical consolidation still runs. It merges duplicate facts with no model, no agent and no tokens — on idle, and whenever you run `baton memory consolidate`.";
+
+/** A dollar amount, or the same dash the token counts use when nothing was
+ *  reported. `$0.000` is reserved for a run that really did cost nothing —
+ *  "we were not told" and "it was free" are different facts. */
+const usd = (n: number | null | undefined) =>
+  typeof n === "number" && Number.isFinite(n) ? (n < 1 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`) : "—";
+const tokens = (n: number | null) => (typeof n === "number" ? n.toLocaleString() : "—");
+/** A counted thing, or the same dash. `lastDelegateRun` validates only `at` and
+ *  hands the rest of a ledger line straight through, so a line an older build
+ *  wrote arrives with fields simply missing — and `{run.produced}` then put the
+ *  word "undefined" where a number goes, beside token counts that were honest
+ *  about the same gap. */
+const count = (n: number | null | undefined) =>
+  typeof n === "number" && Number.isFinite(n) ? n.toLocaleString() : "—";
+/** How long it took, or the dash. `(undefined / 1000).toFixed(1)` is the string
+ *  "NaN": the screen read "Took NaNs" for a run whose duration nobody wrote
+ *  down. Same rule as the cost beside it — an absent measurement is not a
+ *  measurement of zero, and it is not a number at all. */
+const seconds = (ms: number | null | undefined) =>
+  typeof ms === "number" && Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : "—";
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** A quiet full-width row under a setting — used for the "last pass" receipts
+ *  and for the read-only explanation. Never a control. */
+function NoteRow({ children, tone = "quiet" }: { children: ReactNode; tone?: "quiet" | "warn" }) {
+  return (
+    <div style={{
+      padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)",
+      fontSize: "var(--fs-12)", color: tone === "warn" ? "var(--conflict-text)" : "var(--text-tertiary)",
+      background: tone === "warn" ? "var(--conflict-soft)" : "transparent", textWrap: "pretty",
+    }}>{children}</div>
+  );
+}
+
+/** One machine-written fact from the last agent pass.
+ *
+ *  SECURITY: `fact` was produced by a model out of text other agents wrote, so
+ *  it is the least trustworthy string on this screen. It goes through React
+ *  children into a <div>, which escapes it — no dangerouslySetInnerHTML, no
+ *  markdown renderer, no innerHTML, not now and not when someone adds "just
+ *  bold the fact ids". The `machine` badge is beside it for the same reason:
+ *  a reader must be able to tell this sentence from one an agent wrote. */
+function ProducedFactRow({ f }: { f: MemoryProducedFact }) {
+  return (
+    <div style={{ padding: "9px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+        <span className="tag" data-tip="Written by a model, not by an agent doing the work">machine</span>
+        <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{f.id}</span>
+        {/* `cites` empty means NOT RECORDED, never "derived from nothing" — a
+            fact file carries no cites, so this route serves [] for every fact
+            that reached disk. Rendering "from " with nothing after it claimed
+            provenance had been shown and then showed none; the same rule the
+            token counts follow, applied to attribution. */}
+        {f.cites.length > 0 ? (
+          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }} data-tip="The existing facts this text was derived from">
+            from {f.cites.join(", ")}
+          </span>
+        ) : (
+          <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)", fontStyle: "italic" }}
+            data-tip="A saved fact records no citation list, so which facts this was derived from was never written down. Not recorded — not 'derived from nothing'.">
+            provenance not recorded
+          </span>
+        )}
+        {/* Who wrote it, when that was recorded. `null` today on every fact, so
+            this is silent rather than inventing a byline. */}
+        {f.generator && (
+          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }} data-tip="The agent and model that produced this sentence">
+            by {f.generator}
+          </span>
+        )}
+      </div>
+      <div style={{ marginTop: 4, fontSize: "var(--fs-12)", color: "var(--text-secondary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {f.fact}
+      </div>
+    </div>
+  );
+}
+
+/** The receipt for the last agent pass: what it changed, and what it cost. */
+function DelegateReceipt({ run, runsInWindow, usdInWindow, maxRuns, maxUsd, windowMs }: {
+  run: MemoryDelegateSpend; runsInWindow: number; usdInWindow: number; maxRuns: number; maxUsd: number; windowMs: number;
+}) {
+  const hours = Math.round(windowMs / 3_600_000);
+  const cell = { display: "flex", justifyContent: "space-between", gap: 12 } as const;
+  return (
+    <div style={{ padding: "11px 16px", borderBottom: "1px solid var(--border-subtle)", fontSize: "var(--fs-12)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+        <span style={{ fontWeight: "var(--fw-semibold)", fontSize: "var(--fs-13)" }}>Last agent pass</span>
+        <span style={{ color: "var(--text-tertiary)" }}>{timeAgo(run.at)}</span>
+        {!run.ok && <span className="tag" style={{ color: "var(--conflict-text)" }}>failed</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "4px 20px", color: "var(--text-tertiary)" }}>
+        <span style={cell}>Agent<span className="mono" style={{ color: "var(--text-secondary)" }}>{run.model ? `${run.agent}:${run.model}` : run.agent}</span></span>
+        <span style={cell}>Facts read<span className="mono" style={{ color: "var(--text-secondary)" }}>{count(run.inputFacts)}</span></span>
+        <span style={cell} data-tip="Produced facts kept, and produced facts the validator threw away">
+          Changed<span className="mono" style={{ color: "var(--text-secondary)" }}>{count(run.produced)} kept · {count(run.rejected)} rejected</span>
+        </span>
+        <span style={cell}>Tokens<span className="mono" style={{ color: "var(--text-secondary)" }}>{tokens(run.inputTokens)} in · {tokens(run.outputTokens)} out</span></span>
+        <span style={cell}>Cost<span className="mono" style={{ color: "var(--text-secondary)" }}>{usd(run.costUsd)}</span></span>
+        <span style={cell}>Took<span className="mono" style={{ color: "var(--text-secondary)" }}>{seconds(run.durationMs)}</span></span>
+      </div>
+      {/* The agent's own error text — rendered as characters, same rule as a
+          produced fact: it came out of a process Baton does not control. */}
+      {run.error && (
+        <div style={{ marginTop: 6, color: "var(--conflict-text)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{run.error}</div>
+      )}
+      <div style={{ marginTop: 7, color: "var(--text-quaternary)" }}>
+        {plural(runsInWindow, "run")} and {usd(usdInWindow)} spent in the last {hours}h — the cap is {maxRuns} and {usd(maxUsd)}.
+      </div>
+    </div>
+  );
+}
+
+/** What the free pass did last time. Its cost line is not decoration: it is the
+ *  contrast that makes the paid switch below a decision rather than a habit. */
+function MechanicalReceipt({ pass }: { pass: MemoryMechanicalPass }) {
+  const changed = pass.status === "ran" && pass.superseded.length > 0
+    ? `retired ${plural(pass.superseded.length, "duplicate")}`
+    : pass.status === "failed" ? "failed" : "nothing to merge";
+  return (
+    <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+      <span style={{ color: "var(--text-secondary)" }}>Last mechanical pass</span> · {pass.at ? timeAgo(pass.at) : "not yet run"} · {changed}
+      {pass.contradictions.length > 0 && <> · {plural(pass.contradictions.length, "contradiction")} left for you to read</>}
+      {" · "}<span data-tip="No model was involved, so there is nothing to charge">no tokens, no cost</span>
+      {pass.error && <div style={{ marginTop: 4, color: "var(--conflict-text)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{pass.error}</div>}
+    </div>
+  );
+}
+
+/**
+ * The switch, and the honest label on it.
+ *
+ * Three things this card must never do, each of which it got wrong in an
+ * earlier draft of the same idea: hide the price behind a link; grey the switch
+ * out in read-only mode without saying why; or imply that turning the switch
+ * off stops memory maintenance. Mechanical consolidation runs either way, and
+ * a user who concludes otherwise turns it back on to buy something they were
+ * already getting free.
+ */
+function MemoryConsolidationCard({ writeEnabled }: { writeEnabled: boolean }) {
+  // undefined = still loading · null = this daemon does not report it (404)
+  const [state, setState] = useState<MemoryConsolidation | null | undefined>(undefined);
+  // Why the read failed, when it failed for any reason OTHER than a 404. Kept
+  // apart from `state` on purpose: folding it back into null would re-collapse
+  // the distinction the API layer now draws, and this card would go back to
+  // blaming an old daemon for a refused token.
+  const [failure, setFailure] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let on = true;
+    BatonAPI.getMemoryConsolidation()
+      .then((s) => { if (on) { setState(s); setFailure(null); } })
+      .catch((e) => { if (on) setFailure(failureReason(e)); });
+    return () => { on = false; };
+  }, []);
+
+  // The read failed for a reason that is NOT "no such endpoint". Name the
+  // reason we actually have, and claim nothing about the setting itself, which
+  // is exactly what we could not read. Checked before the loading branch
+  // because a failure leaves `state` undefined.
+  if (failure) {
+    return (
+      <SettingsBlock title="Memory consolidation" desc="Merging duplicate facts in your shared memory.">
+        <NoteRow tone="warn">
+          Couldn't read consolidation status — {failure}. Whether agent-assisted consolidation is on is
+          unknown from here, and nothing about it has been changed.
+        </NoteRow>
+      </SettingsBlock>
+    );
+  }
+
+  if (state === undefined) return null;
+
+  // An older daemon serves no consolidation endpoint (404, and only 404). Say
+  // that, and say what still happens — a card that vanished would read as
+  // "this feature is gone".
+  if (state === null) {
+    return (
+      <SettingsBlock title="Memory consolidation" desc="Merging duplicate facts in your shared memory.">
+        <NoteRow>
+          This daemon doesn't report consolidation yet, so the agent-assisted setting can't be changed from here.{" "}
+          {MECHANICAL_ALWAYS}
+        </NoteRow>
+      </SettingsBlock>
+    );
+  }
+
+  const { config, lastRun, produced, runsInWindow, usdInWindow, noPassReason } = state.delegate;
+  const on = config.enabled;
+
+  const toggle = async (next: boolean) => {
+    // Guarded as well as visually disabled: the switch is a focusable button,
+    // and a keyboard press must not reach a daemon that will refuse it.
+    if (!writeEnabled || busy) return;
+    setBusy(true);
+    try {
+      setState(await BatonAPI.setMemoryDelegateEnabled(next));
+      showToast(next
+        ? { kind: "ok", title: "Agent-assisted consolidation on", desc: `Baton may now launch your own agent, on your credentials, up to ${config.maxRunsPerDay}× and ${usd(config.maxUsdPerDay)} a day.` }
+        : { kind: "ok", title: "Agent-assisted consolidation off", desc: "No agent will be launched. The free mechanical pass keeps running." });
+    } catch (e) {
+      showToast({ kind: "error", title: "Could not change the setting", desc: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsBlock
+      title="Memory consolidation"
+      desc="Merging duplicate facts in your shared memory. Nothing is ever deleted — the older fact is superseded and kept."
+    >
+      <SettingRow
+        label="Mechanical consolidation"
+        hint="Zero-LLM, free, and always on: it merges duplicate facts by fingerprint and reports contradictions for a person. Runs when the machine is idle, or on demand with `baton memory consolidate`."
+      >
+        <span className="tag" data-tip="Not a setting — this pass has no cost to opt out of">Always on</span>
+      </SettingRow>
+      {state.mechanical && <MechanicalReceipt pass={state.mechanical} />}
+
+      <SettingRow
+        label="Agent-assisted consolidation — spends your tokens"
+        hint={`${DELEGATE_CONSENT} Capped at ${config.maxRunsPerDay} runs and ${usd(config.maxUsdPerDay)} a day, ${config.maxFactsPerJob} facts per job. Off by default.`}
+      >
+        {/* Disabled AND explained: the wrapper stops the pointer, `toggle`
+            stops the keyboard, the tooltip names the reason, and the row
+            below spells out how to change it. Greying it out on its own
+            would leave the user guessing which of the two it was. */}
+        <span data-tip={writeEnabled ? undefined : READ_ONLY_TIP} style={{ display: "inline-flex", opacity: writeEnabled ? 1 : 0.45, pointerEvents: writeEnabled ? "auto" : "none" }}>
+          <Switch checked={on} onChange={(v) => void toggle(v)} label="Agent-assisted consolidation — launches a coding agent on your account and spends your tokens" />
+        </span>
+      </SettingRow>
+
+      {!writeEnabled && (
+        <NoteRow tone="warn">
+          Read-only — this daemon is running without <span className="mono">--write</span>, so Baton won't turn a paid
+          setting on from a dashboard that can't be trusted to write anything else. Restart it with{" "}
+          <span className="mono">baton serve --write</span> to change this. {MECHANICAL_ALWAYS}
+        </NoteRow>
+      )}
+
+      {/* The reassurance a switched-off toggle owes the user, and the limit a
+          switched-on one owes them. */}
+      <NoteRow>{on ? DELEGATE_LIMIT : MECHANICAL_ALWAYS}</NoteRow>
+
+      {/* Why `produced` cannot have come from an agent pass — the daemon's own
+          sentence, verbatim. Non-null on every real reply today, because no
+          launcher is wired. Without it an empty list below reads as "a pass ran
+          and merged nothing", and the toast on flipping the switch promises a
+          launch that cannot happen. The demo sends null here, so the showcase
+          still shows the screen a working pass would fill. */}
+      {noPassReason && <NoteRow tone="warn">{noPassReason}</NoteRow>}
+
+      {lastRun && (
+        <DelegateReceipt
+          run={lastRun}
+          runsInWindow={runsInWindow}
+          usdInWindow={usdInWindow}
+          maxRuns={config.maxRunsPerDay}
+          maxUsd={config.maxUsdPerDay}
+          windowMs={config.windowMs}
+        />
+      )}
+      {lastRun && produced.length > 0 && produced.map((f) => <ProducedFactRow key={f.id} f={f} />)}
+      {!lastRun && (
+        <NoteRow>No agent pass has ever run on this repo — nothing has been spent.</NoteRow>
+      )}
+    </SettingsBlock>
+  );
+}
+
 export function SettingsScreen({ prefs, repo, viewer, meta }: { prefs: Prefs; repo: string | null; viewer?: Meta["viewer"]; meta?: Meta | null }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -589,6 +890,8 @@ export function SettingsScreen({ prefs, repo, viewer, meta }: { prefs: Prefs; re
           <SessionSettings viewer={viewer} />
 
           <RoutingSettings />
+
+          <MemoryConsolidationCard writeEnabled={prefs.writeEnabled} />
 
           <SettingsBlock title="Agent registry" desc="Color, label, and glyph for each agent. Drives badges across the app.">
             {AGENT_REGISTRY.map((a) => (

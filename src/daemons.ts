@@ -25,8 +25,13 @@
  */
 import { readdir, readFile, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { listMemories, mainRepoRoot, supersedeMemory, type MemoryFact } from './memory.js';
+import { consolidateFacts, type ReportOp } from './memory/consolidate.js';
+import { tasksFile, type Task } from './store.js';
+import { stateOf } from './pipeline.js';
 
 export interface DaemonRecord {
   pid: number;
@@ -288,4 +293,275 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
   while (pidAlive(pid) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 100));
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Idle memory consolidation                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Somewhere for the mechanical consolidation pass to run without anyone
+ * asking for it.
+ *
+ * `consolidateFacts` is pure — facts in, operations out, no clock and no I/O —
+ * and nothing below re-decides anything it decides. This is the runner, and it
+ * owns exactly three judgements the pure pass cannot make:
+ *
+ *   1. **Idle means idle.** The pass never starts while a task is active, and
+ *      work starting mid-pass CANCELS it rather than queueing behind it. A
+ *      background sweep that competes with an agent for CPU makes Baton slower
+ *      at the exact moment it is being used, and an agent that has to wait for
+ *      housekeeping learns to distrust the tool.
+ *   2. **Unchanged store, no pass.** The plan is a pure function of the facts,
+ *      so re-running it over a store nothing has touched can only produce the
+ *      operations already applied. Skipping is not an optimisation, it is the
+ *      difference between a daemon that idles and one that grinds.
+ *   3. **A failure is a log line.** This runs unattended next to the dashboard
+ *      and the SSE bus; it may never throw into that event loop.
+ *
+ * Cancelled and busy passes are deliberately NOT recorded as passes, so the
+ * work they skipped is picked up the next time the machine is quiet.
+ */
+export type ConsolidationStatus = 'ran' | 'unchanged' | 'busy' | 'cancelled' | 'failed';
+
+export interface ConsolidationPassResult {
+  status: ConsolidationStatus;
+  /** Ids actually retired, in the order they were retired. */
+  superseded: string[];
+  /** Disagreements for a person. Never resolved here — see consolidate.ts. */
+  contradictions: ReportOp[];
+  error?: string;
+}
+
+export interface ConsolidationOptions {
+  /** "Is the machine busy?" Defaults to: any task claimed or active. */
+  isBusy?: () => boolean | Promise<boolean>;
+  log?: (msg: string) => void;
+}
+
+/** Where the last completed pass is recorded — gitignored, per-machine. */
+function consolidateStampFile(mainRoot: string): string {
+  return join(mainRoot, '.baton', 'memory', 'consolidate.json');
+}
+
+/**
+ * What the plan depends on, and nothing else. Re-anchoring rewrites fact files
+ * without changing any of this, so a repair pass does not make consolidation
+ * think there is work to do.
+ */
+function storeSignature(facts: MemoryFact[]): string {
+  const h = createHash('sha1');
+  for (const f of [...facts].sort((a, b) => a.id.localeCompare(b.id))) {
+    h.update(`${f.id}\u0000${f.fingerprint}\u0000${f.createdAt}\u0000${f.supersedes ?? ''}\n`);
+  }
+  return h.digest('hex');
+}
+
+async function lastSignature(mainRoot: string): Promise<string | null> {
+  try {
+    const raw = JSON.parse(await readFile(consolidateStampFile(mainRoot), 'utf-8')) as { signature?: unknown };
+    return typeof raw.signature === 'string' ? raw.signature : null;
+  } catch {
+    return null; // never run here, or the stamp was lost — do the pass
+  }
+}
+
+async function stampPass(
+  mainRoot: string,
+  signature: string,
+  result?: Pick<ConsolidationPassResult, 'status' | 'superseded' | 'contradictions'>,
+): Promise<void> {
+  const file = consolidateStampFile(mainRoot);
+  await mkdir(dirname(file), { recursive: true });
+  // The OUTCOME is recorded beside the signature, not just the fact that a pass
+  // happened. Without it "what did the last pass change?" is unanswerable the
+  // moment the call returns, and the dashboard can only say a pass ran.
+  const body = `${JSON.stringify({
+    at: new Date().toISOString(),
+    signature,
+    ...(result ? {
+      status: result.status,
+      superseded: result.superseded,
+      contradictions: result.contradictions,
+    } : {}),
+  }, null, 2)}\n`;
+  // tmp + rename, like saveTasks / setBriefStatusAt / releaseSkill. Writing at
+  // the destination opens it with O_TRUNC, so for the width of that call the
+  // stamp on disk is a zero-byte file — and this file has more than one writer:
+  // two daemons on one repo, or an idle tick racing `baton memory consolidate`,
+  // which passes `isBusy: () => false` and so waits for nobody. A reader in that
+  // window gets a parse error, which `lastConsolidationPass` reports as "no pass
+  // has ever run here" and `lastSignature` reads as "do the pass again". The
+  // pid keeps two DAEMONS' staging files apart; nothing here needs a lock,
+  // because a pass stamps once and `startIdleConsolidation` will not overlap
+  // itself.
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, body, 'utf-8');
+  await rename(tmp, file);
+}
+
+/**
+ * The last recorded pass, for a reader that wants the outcome rather than the
+ * signature — `GET /api/memory/consolidation`.
+ *
+ * Returns null when no pass has run here. A stamp written before outcomes were
+ * recorded still parses: its status reads as 'unchanged' with nothing retired,
+ * which is the honest reading of "a pass happened and we did not keep what it
+ * did" — better than inventing a status it never reported.
+ */
+export async function lastConsolidationPass(root: string): Promise<{
+  status: ConsolidationStatus; at: number | null;
+  superseded: string[]; contradictions: ReportOp[];
+} | null> {
+  const mainRoot = await mainRepoRoot(root);
+  try {
+    const raw = JSON.parse(await readFile(consolidateStampFile(mainRoot), 'utf-8')) as Record<string, unknown>;
+    const at = typeof raw.at === 'string' ? Date.parse(raw.at) : NaN;
+    return {
+      status: (typeof raw.status === 'string' ? raw.status : 'unchanged') as ConsolidationStatus,
+      at: Number.isFinite(at) ? at : null,
+      superseded: Array.isArray(raw.superseded) ? raw.superseded.filter((x): x is string => typeof x === 'string') : [],
+      contradictions: Array.isArray(raw.contradictions) ? raw.contradictions as ReportOp[] : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The default sense of "someone is working": a task claimed or in flight. */
+async function tasksInFlight(root: string): Promise<boolean> {
+  // `tasksFile` for the path — never a hand-built one. The two agreed, which is
+  // exactly why the drift would be silent: if the store moves its file, a
+  // duplicated path reads somewhere nothing writes, gets ENOENT, and calls that
+  // "no tasks", re-opening this gate with nothing failing to say so.
+  //
+  // Read the store HERE rather than through `loadTasks`, which catches its own
+  // errors and returns [] for a missing, empty OR CORRUPT file. Routed through
+  // it, "unreadable" arrived as "no tasks", which reads as "nobody is working"
+  // — so a truncated tasks.json opened the gate and the pass rewrote memory
+  // underneath a live agent. The comment below claimed the opposite for as long
+  // as the catch was unreachable.
+  //
+  // Absent is knowable and means no tasks. Only UNREADABLE is unknown, and
+  // unknown is treated as BUSY: skipping a pass costs nothing, running one over
+  // a repo whose state we cannot see is the risk this gate exists to avoid.
+  const mainRoot = await mainRepoRoot(root);
+  let raw: string;
+  try {
+    raw = await readFile(tasksFile(mainRoot), 'utf-8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    return true;
+  }
+  // An EMPTY file is not the absent case. `saveTasks` writes tmp-then-rename,
+  // so no reader ever observes a half-written store: a zero-byte or
+  // whitespace-only tasks.json means something else truncated it, and that is a
+  // state we cannot see rather than a store with no tasks in it. It falls to
+  // the same rule as unparseable content one line down — `JSON.parse('')`
+  // throws — and this short-circuit used to exempt it.
+  if (!raw.trim()) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return true;
+  }
+  if (!Array.isArray(parsed)) return true;
+  return (parsed as Task[]).some((t) => stateOf(t) === 'claimed' || stateOf(t) === 'active');
+}
+
+/**
+ * Run the pass once, here, now. Shared by the daemon's idle timer and by
+ * `baton memory consolidate` — one code path, so the manual command cannot
+ * drift into being a different (or lesser) feature than the background one.
+ */
+export async function consolidateOnce(
+  root: string,
+  opts: ConsolidationOptions = {},
+): Promise<ConsolidationPassResult> {
+  const log = opts.log ?? ((m: string) => console.warn(m));
+  const isBusy = opts.isBusy ?? (() => tasksInFlight(root));
+  const superseded: string[] = [];
+  let contradictions: ReportOp[] = [];
+  try {
+    if (await isBusy()) return { status: 'busy', superseded, contradictions };
+    const mainRoot = await mainRepoRoot(root);
+    const facts = await listMemories(root);
+    const signature = storeSignature(facts);
+    if (signature === (await lastSignature(mainRoot))) {
+      return { status: 'unchanged', superseded, contradictions };
+    }
+    const ops = consolidateFacts(facts, { startedAt: Date.now() });
+    contradictions = ops.filter((o): o is ReportOp => o.op === 'report');
+    for (const op of ops) {
+      if (op.op !== 'supersede') continue;
+      // Checked before EVERY write, not once at the top: the pass is a series
+      // of small writes precisely so it can stop between them.
+      if (await isBusy()) return { status: 'cancelled', superseded, contradictions };
+      // A refusal is REPORTED, not swallowed. `supersedeMemory` returns false
+      // when the fact is already gone, or when the file's frontmatter names a
+      // different fact than its name does — and the stamp below records the
+      // post-pass signature either way, so the next tick reads `unchanged` and
+      // this op is never retried. Silence would make a fact that cannot be
+      // retired look exactly like one that was.
+      if (await supersedeMemory(root, op.id, op.supersededBy, op.reason)) superseded.push(op.id);
+      else log(`baton: consolidation could not retire '${op.id}' — it will not be retried until the store changes`);
+    }
+    // Stamp what the store looks like NOW — the pass just changed it, and the
+    // pre-pass signature would make the next run redo a settled store.
+    await stampPass(mainRoot, storeSignature(await listMemories(root)), {
+      status: 'ran', superseded, contradictions,
+    });
+    return { status: 'ran', superseded, contradictions };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    log(`baton: memory consolidation failed — ${error}`);
+    return { status: 'failed', superseded, contradictions, error };
+  }
+}
+
+/** Half an hour. Long enough that the pass is invisible, short enough that a
+ *  store which just went quiet is tidy before anyone looks at it. */
+export const CONSOLIDATE_INTERVAL_MS = 1_800_000;
+
+export interface IdleConsolidation {
+  /** One attempt. Exposed so the behaviour is testable without a clock. */
+  tick(): Promise<ConsolidationPassResult>;
+  stop(): void;
+}
+
+/**
+ * Wire the pass to an idle timer. Never overlaps itself, never throws, and the
+ * timer is unref'd so it cannot hold the process open on its own.
+ */
+export function startIdleConsolidation(
+  opts: ConsolidationOptions & {
+    root: string;
+    intervalMs?: number;
+    /** Injectable for tests; the daemon always gets `consolidateOnce`. */
+    run?: (root: string, o: ConsolidationOptions) => Promise<ConsolidationPassResult>;
+  },
+): IdleConsolidation {
+  const log = opts.log ?? ((m: string) => console.warn(m));
+  const run = opts.run ?? consolidateOnce;
+  let inFlight = false;
+  const tick = async (): Promise<ConsolidationPassResult> => {
+    if (inFlight) return { status: 'busy', superseded: [], contradictions: [] };
+    inFlight = true;
+    try {
+      return await run(opts.root, { ...(opts.isBusy ? { isBusy: opts.isBusy } : {}), log });
+    } catch (e) {
+      // `consolidateOnce` handles its own failures; this catches the ones it
+      // cannot — an injected runner, or a bug in the runner itself. Either way
+      // the daemon keeps its timer and its other duties.
+      const error = e instanceof Error ? e.message : String(e);
+      log(`baton: memory consolidation failed — ${error}`);
+      return { status: 'failed', superseded: [], contradictions: [], error };
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = setInterval(() => { void tick(); }, opts.intervalMs ?? CONSOLIDATE_INTERVAL_MS);
+  timer.unref();
+  return { tick, stop: () => clearInterval(timer) };
 }

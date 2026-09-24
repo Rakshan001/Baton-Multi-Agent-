@@ -184,6 +184,39 @@ describe('fact file round-trip', () => {
     expect(parsed!.author).toBe('unknown');
     expect(parsed!.fact).toBe(fact.fact);
   });
+
+  /*
+   * The fingerprint is not a label, it is the CLUSTERING KEY: consolidate.ts
+   * groups by it, and every fact in a group is a merge candidate that can
+   * retire the others. Taking it from frontmatter let a fact file choose its
+   * own group — and `baton/memory/facts/` is tracked, so a pulled file could
+   * name the group holding knowledge it has nothing to do with.
+   *
+   * Deriving it from the body costs nothing (`saveMemory` already computes
+   * exactly this) and makes the key a function of the claim it summarises.
+   */
+  it('derives the fingerprint from the fact body, never from frontmatter', () => {
+    const body = 'The daemon binds to loopback only, and refuses a public bind.';
+    const forged = [
+      '---', 'id: mem-forged', 'type: reference', 'agent: null', 'author: T', 'task: null',
+      "created: '2026-01-01T00:00:00.000Z'", 'commit: null', 'files: []',
+      'supersedes: null', 'fingerprint: some-other-facts-group', '---', '', body, '',
+    ].join('\n');
+
+    expect(parseFactFile(forged)!.fingerprint).toBe(fingerprintOf(body));
+  });
+
+  it('two facts cannot share a group by claiming one', () => {
+    const claim = (id: string, body: string) => [
+      '---', `id: ${id}`, 'type: reference', 'agent: null', 'author: T', 'task: null',
+      "created: '2026-01-01T00:00:00.000Z'", 'commit: null', 'files: []',
+      'supersedes: null', 'fingerprint: shared-group', '---', '', body, '',
+    ].join('\n');
+    const a = parseFactFile(claim('mem-a', 'Releases are cut from main on a friday.'))!;
+    const b = parseFactFile(claim('mem-b', 'The integration suite needs docker running first.'))!;
+
+    expect(a.fingerprint).not.toBe(b.fingerprint);
+  });
 });
 
 describe('scoreMemory', () => {

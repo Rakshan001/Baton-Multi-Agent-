@@ -6,6 +6,8 @@
  * dashboard); this command is the human curation surface.
  */
 import { activeBatonRoot } from '../store.js';
+import { askYesNo } from './setup-prompts.js';
+import { consolidateOnce } from '../daemons.js';
 import {
   gcMemories, listMemories, migrateMemory, readJournal, removeMemory, repairMemories, saveMemory,
   MemoryValidationError, type MemoryStatus,
@@ -118,12 +120,87 @@ export async function memoryRepairCmd(): Promise<void> {
   if (!r.reanchored.length && !r.needsReview.length) console.log('nothing stale — memory is healthy');
 }
 
-export async function memoryGcCmd(): Promise<void> {
+/**
+ * The manual half of the background pass. The daemon runs exactly this when
+ * the machine is idle; someone who never leaves `baton serve` running gets the
+ * same feature by typing it, rather than silently getting a lesser product.
+ *
+ * The idle gate is deliberately NOT applied here: a person asking for the pass
+ * has already decided it is a good moment, and refusing because an agent is
+ * mid-task would make the manual equivalent useless on exactly the machines
+ * that need it.
+ */
+export async function memoryConsolidateCmd(): Promise<void> {
+  const root = await activeBatonRoot();
+  const r = await consolidateOnce(root, { isBusy: () => false, log: (m) => console.error(m) });
+  if (r.status === 'failed') {
+    process.exitCode = 1;
+    return;
+  }
+  if (r.status === 'unchanged') {
+    console.log('nothing new since the last pass — memory is already consolidated');
+    return;
+  }
+  if (r.superseded.length) {
+    console.log(`↻ superseded ${r.superseded.length} duplicate fact${r.superseded.length === 1 ? '' : 's'} (archived, not deleted): ${r.superseded.join(', ')}`);
+  }
+  for (const c of r.contradictions) {
+    // Reported, never resolved — picking a winner mechanically is how a store
+    // starts asserting things nobody wrote.
+    console.log(`⚠ contradiction for a human: ${c.ids.join(' vs ')} — ${c.reason}`);
+  }
+  if (!r.superseded.length && !r.contradictions.length) console.log('nothing to consolidate — no duplicates or contradictions');
+}
+
+/**
+ * `baton memory gc [--dry-run] [--yes]` — the only command that destroys
+ * knowledge, so it is the one that shows its work first.
+ *
+ * The order is repair → preview → ask → remove. Repair runs even under
+ * `--dry-run`: it is the rescue, not the deletion, and a preview computed
+ * without it would name facts real gc would never touch — a preview that
+ * over-reports is a preview nobody can act on.
+ *
+ * Everything still listed after the repair is, by definition, what gc cannot
+ * mechanically justify keeping. That is precisely what the plan says a person
+ * must sign off on, so the confirmation covers all of it.
+ */
+export async function memoryGcCmd(opts: { dryRun?: boolean; yes?: boolean } = {}): Promise<void> {
   const root = await activeBatonRoot();
   // Rescue what is mechanically verifiable BEFORE dropping anything (M3) —
   // gc used to be the knowledge-loss path for facts that were still true.
   const repaired = await repairMemories(root);
   if (repaired.reanchored.length) console.log(`⚓ re-anchored ${repaired.reanchored.length} still-true fact${repaired.reanchored.length === 1 ? '' : 's'} instead of dropping`);
+
+  const doomed = await gcMemories(root, { dryRun: true });
+  if (!doomed.length) {
+    console.log('nothing stale to remove');
+    return;
+  }
+  const plural = doomed.length === 1 ? '' : 's';
+  console.log(`${doomed.length} stale fact${plural} would be removed (archived under .baton/memory/archive, not destroyed):`);
+  for (const id of doomed) console.log(`  · ${id}`);
+
+  if (opts.dryRun) {
+    console.log('\n(dry run — nothing removed)');
+    return;
+  }
+
+  if (!opts.yes) {
+    // A pipe or a CI job cannot answer, and askYesNo would take the safe
+    // default silently — which reads as "it worked" to a script. Say so.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(`✗ not a terminal, so nothing was removed — re-run with --yes if you meant it (or --dry-run to look first)`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log('  Recover one afterwards with `baton memory log` + the archive.');
+    if (!(await askYesNo(`\n  Remove ${doomed.length} stale fact${plural}?`, false))) {
+      console.log('  Nothing removed.');
+      return;
+    }
+  }
+
   const removed = await gcMemories(root);
   console.log(removed.length ? `✓ removed ${removed.length} stale fact${removed.length === 1 ? '' : 's'}: ${removed.join(', ')}` : 'nothing stale to remove');
 }

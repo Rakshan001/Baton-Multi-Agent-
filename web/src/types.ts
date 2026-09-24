@@ -249,6 +249,130 @@ export interface RetentionPolicy {
   dropAging?: boolean;
 }
 
+/* ---- memory consolidation (src/memory/consolidate.ts + src/memory/delegate.ts) ----
+   Two passes over the fact store, with very different prices.
+
+   The MECHANICAL one is zero-LLM, free, and always on — the daemon runs it when
+   the machine is idle (`startIdleConsolidation`) and `baton memory consolidate`
+   runs it on demand. Nothing a user can switch off here stops it.
+
+   The AGENT-ASSISTED one launches the user's OWN coding agent under their OWN
+   credentials and spends their tokens, which is why `DELEGATE_DEFAULTS.enabled`
+   is `false` and why the UI states the cost at the switch rather than in docs.
+
+   These mirror the daemon exactly: `ConsolidationPassResult` (src/daemons.ts),
+   `DelegateConfig`, `DelegateSpend` and `ProducedFact` (src/memory/delegate.ts).
+   Nothing here is widened — if the daemon does not send a field, it is null. */
+
+/** Mirrors `ConsolidationStatus`. `busy`/`cancelled` are not recorded as passes. */
+export type MemoryConsolidationStatus = "ran" | "unchanged" | "busy" | "cancelled" | "failed";
+
+/** Two facts that disagree. Reported for a person, never resolved by the pass. */
+export interface MemoryContradiction { ids: string[]; reason: string }
+
+/** The last mechanical pass, plus when it ran. */
+export interface MemoryMechanicalPass {
+  status: MemoryConsolidationStatus;
+  /** Epoch ms; null when the daemon has not recorded a pass yet. */
+  at: number | null;
+  /** Ids retired — superseded, never deleted. */
+  superseded: string[];
+  contradictions: MemoryContradiction[];
+  error?: string;
+}
+
+/** Mirrors `DelegateConfig`. `enabled` is the only field the dashboard sets.
+ *
+ *  The caps are read-only here, and they are NOT user configuration: they come
+ *  from `DELEGATE_DEFAULTS` in src/memory/delegate.ts, clamped to their legal
+ *  range by `resolveDelegateConfig`. The only file involved is
+ *  `.baton/memory/delegate.json`, and `saveDelegateSetting` rewrites that whole
+ *  file as `{ enabled }` — so caps hand-edited into it survive only until the
+ *  next time someone flips this switch, which silently discards them. Do not
+ *  render them as something the reader can change. */
+export interface MemoryDelegateConfig {
+  enabled: boolean;
+  maxRunsPerDay: number;
+  minIntervalMs: number;
+  maxFactsPerJob: number;
+  maxUsdPerDay: number;
+  windowMs: number;
+}
+
+/** One line of `.baton/memory-delegate.jsonl` — mirrors `DelegateSpend`. A run
+ *  is recorded whether or not the agent succeeded, so a crashing agent cannot
+ *  spend money forever without showing up here. */
+export interface MemoryDelegateSpend {
+  at: number;
+  ok: boolean;
+  agent: string;
+  model: string | null;
+  inputFacts: number;
+  promptChars: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Cost as REPORTED, so `null` means the agent priced nothing and `0` means
+   *  it reported a free run. Same rule as the token counts either side of it:
+   *  never render a missing measurement as 0. A ledger line written by an older
+   *  build (or hand-edited) can simply omit the field, and `lastDelegateRun`
+   *  hands that line straight through — so this arrives absent in practice. */
+  costUsd: number | null;
+  durationMs: number;
+  produced: number;
+  rejected: number;
+  error?: string;
+}
+
+/**
+ * A fact the agent pass produced — mirrors `ProducedFact`.
+ *
+ * `fact` is MACHINE-GENERATED text derived from facts other agents wrote, which
+ * makes it the least trustworthy string this dashboard displays. It is rendered
+ * as React text children only: no `dangerouslySetInnerHTML`, no markdown
+ * renderer, no `innerHTML`, not here and not in whatever screen shows it next.
+ */
+export interface MemoryProducedFact {
+  id: string;
+  fact: string;
+  /**
+   * Input fact ids this text derives from. The VALIDATOR rejects an empty one,
+   * but this route can still serve one: a fact FILE records no `cites`, so a
+   * fact that reached disk arrives here with the provenance already dropped.
+   * Empty means "not recorded", never "derived from nothing".
+   */
+  cites: string[];
+  /**
+   * Which agent/model wrote it, for the person deciding whether to keep it —
+   * and `null` when that was never recorded, which is every fact today. A fact
+   * file carries no generator, and the `baton-machine` author constant that
+   * used to be reported here named no agent and no model while looking like
+   * attribution. Render the absence; do not fill it in.
+   */
+  generator: string | null;
+}
+
+/** GET/POST /api/memory/consolidation. */
+export interface MemoryConsolidation {
+  /** null when no pass has run yet on this machine. */
+  mechanical: MemoryMechanicalPass | null;
+  delegate: {
+    config: MemoryDelegateConfig;
+    /** Runs and dollars already spent inside `config.windowMs`. */
+    runsInWindow: number;
+    usdInWindow: number;
+    /** The ledger outlives the switch, so this survives being turned off. */
+    lastRun: MemoryDelegateSpend | null;
+    produced: MemoryProducedFact[];
+    /**
+     * Why `produced` cannot have come from an agent pass. Non-null today on
+     * every reply: no launcher is wired, so turning the switch on records
+     * consent and starts nothing. Without this, an empty `produced` reads as
+     * "a pass ran and merged nothing", which is a different fact.
+     */
+    noPassReason: string | null;
+  };
+}
+
 /** Disk footprint — GET /api/storage (src/storage.ts). */
 export interface StorageBucket { id: string; label: string; bytes: number; count?: number }
 export interface StorageBreakdown {

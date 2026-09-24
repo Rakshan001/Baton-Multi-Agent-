@@ -119,12 +119,18 @@ import {
 } from './teams.js';
 import {
   type DaemonRecord, listDaemonRecords, listVerifiedDaemons, removeDaemonRecord,
-  removeDaemonRecordSync, stopDaemon, sweepDeadDaemonRecords, verifyDaemon, writeDaemonRecord,
+  lastConsolidationPass, removeDaemonRecordSync, startIdleConsolidation, stopDaemon,
+  sweepDeadDaemonRecords, verifyDaemon,
+  writeDaemonRecord,
 } from './daemons.js';
 import { buildManifest } from './commands/workspace.js';
 import { assessReachability } from './reachability.js';
 import { canSeeWarnings, decideAccess, requiresOwner, type AccessDecision } from './access.js';
 import { loadTrust, planDigest, recordApproval, trustVerdict } from './plan-trust.js';
+import {
+  DELEGATE_NO_LAUNCHER, isMachineGenerated, lastDelegateRun, loadDelegateSetting, readDelegateLedger,
+  saveDelegateSetting,
+} from './memory/delegate.js';
 import { parsePlan } from './plan.js';
 import { runDispatch } from './dispatch-run.js';
 import {
@@ -2915,6 +2921,102 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       return send(res, 200, { policy: saved, removed }, origin);
     }
   }
+  // GET/POST /api/memory/consolidation — the two consolidation modes.
+  //
+  // GET is read-only and works on a read-only daemon: someone needs to be able
+  // to SEE what the mechanical pass did, and what a paid pass cost, without
+  // being able to change anything.
+  //
+  // POST RECORDS A PREFERENCE. It does not launch anything, and it must not be
+  // described as if it did. `runDelegatePass` takes an injected launcher and
+  // nothing in Baton supplies one; nothing applies a `ProposeOp` either. So the
+  // switch is consent stored ahead of a launcher that has not shipped, and
+  // `delegate.noPassReason` says exactly that in the payload — otherwise an
+  // empty `produced` reads as "a pass ran and merged nothing".
+  //
+  // It is still write-gated, and for the right reason: this writes state a
+  // future launcher will read as authorisation, so a read-only daemon has no
+  // business setting it. `enabled` is honoured only for boolean `true` — the
+  // strictness `resolveDelegateConfig` documents must not be widened here.
+  //
+  // If a launcher is ever wired, it goes behind the same human approval
+  // `baton dispatch` requires. Enabling a setting is not a person deciding to
+  // start a process on their own account, and this endpoint must never become
+  // the place where that decision is made.
+  if (path === '/api/memory/consolidation') {
+    if (method === 'GET' || method === 'POST') {
+      if (method === 'POST' && !opts.writeEnabled) return denyReadOnly(res, origin);
+      if (method === 'POST') {
+        /*
+         * Same rule as the retention route above, and it matters more here: the
+         * only thing this endpoint stores is consent, and `?? {}` let a body
+         * that failed to parse be recorded as "consent withdrawn" with a 200.
+         *
+         * Note what is NOT loosened. A body we DID read whose `enabled` is
+         * anything but boolean `true` still means off — that strictness is the
+         * point of the switch, and refusing `{"enabled":"yes"}` would move a
+         * consent decision into the parser. The distinction is between a body
+         * that says something we disagree with and a body that says nothing.
+         */
+        const body = await readJsonBody<{ enabled?: unknown }>(req);
+        if (!body) return send(res, 400, { error: 'invalid JSON body' }, origin);
+        await saveDelegateSetting(root, body.enabled === true);
+      }
+      const [config, pass, ledger, lastRun] = await Promise.all([
+        loadDelegateSetting(root),
+        lastConsolidationPass(root),
+        readDelegateLedger(root),
+        lastDelegateRun(root),
+      ]);
+      const since = Date.now() - config.windowMs;
+      const inWindow = ledger.runs.filter((r) => r.at >= since);
+      return send(res, 200, {
+        mechanical: pass,
+        delegate: {
+          config,
+          runsInWindow: inWindow.length,
+          usdInWindow: Math.round(inWindow.reduce((a, r) => a + r.costUsd, 0) * 1000) / 1000,
+          lastRun,
+          // Non-null whenever an agent pass cannot have produced anything, and
+          // it is non-null unconditionally today. See DELEGATE_NO_LAUNCHER.
+          noPassReason: DELEGATE_NO_LAUNCHER,
+          // Read from the STORE, not the ledger. The ledger records how many
+          // facts a run produced, never their text — so the store, where a
+          // produced fact is provenance-tagged, is the only honest source. It
+          // also means these survive the switch being turned back off, which
+          // is right: turning it off does not un-write what it wrote.
+          //
+          // Empty in practice, and `noPassReason` above is why: nothing applies
+          // a ProposeOp, so the only machine-marked facts here are ones someone
+          // wrote by hand.
+          produced: (await listMemories(root))
+            .filter((f) => isMachineGenerated(f))
+            .map((f) => ({
+              id: f.id,
+              fact: f.fact,
+              // Both of these are provenance the fact FILE would have to carry,
+              // and `parseFactFile` carries neither — a MemoryFact has no
+              // `cites` and no `generator`. So they are honestly empty and
+              // honestly null, never a placeholder dressed as attribution.
+              //
+              // `author` is what was here, and it is the constant
+              // `baton-machine` on every machine fact by construction: it says
+              // "a machine wrote this", which `isMachineGenerated` already
+              // established, and names no agent and no model. Reporting it as
+              // `generator` attributed the sentence to nothing while looking
+              // like attribution — worse than saying nothing, because a reader
+              // deciding whether to keep a machine-written fact would have
+              // believed the question was answered.
+              cites: Array.isArray((f as unknown as { cites?: unknown }).cites)
+                ? (f as unknown as { cites: string[] }).cites : [],
+              generator: typeof (f as unknown as { generator?: unknown }).generator === 'string'
+                ? (f as unknown as { generator: string }).generator : null,
+            })),
+        },
+      }, origin);
+    }
+  }
+
   // DELETE /api/memory/:id (write-gated)
   const memDel = path.match(/^\/api\/memory\/([^/]+)$/);
   if (memDel && method === 'DELETE') {
@@ -3249,6 +3351,12 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   // rewrites hit the memory watcher above, so the dashboard follows live.
   void repairMemories(root).catch(() => undefined);
   setInterval(() => { void repairMemories(root).catch(() => undefined); }, 600_000).unref();
+  // …and its sibling: mechanical consolidation of duplicate facts, on the same
+  // sleep-time principle but stricter about when. It only ever runs with no
+  // task claimed or active, cancels itself if work starts mid-pass, and skips
+  // entirely when the store has not changed — see startIdleConsolidation. The
+  // manual equivalent is `baton memory consolidate`.
+  startIdleConsolidation({ root });
 
   /*
    * Publish this machine's claims to a linked host, if one is configured.

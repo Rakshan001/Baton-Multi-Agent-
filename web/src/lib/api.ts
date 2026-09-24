@@ -18,7 +18,7 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, QuarantineView, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, WorktreeRow } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, QuarantineView, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, MemoryConsolidation, MemoryDelegateSpend, MemoryProducedFact, WorktreeRow } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
@@ -1414,6 +1414,129 @@ class BatonClient {
     const r = await this.request<{ reanchored: string[]; needsReview: string[] }>("/api/memory/repair", { method: "POST", body: "{}" });
     this.emit();
     return r;
+  }
+
+
+  /* ---- memory consolidation: mechanical (always on) + agent-assisted (opt-in) ----
+     The only setting in this client that can spend the user's money, so it is
+     the one place a silent default would be worst: `enabled` is never inferred
+     here — it is whatever the daemon says, and the daemon's own default
+     (DELEGATE_DEFAULTS, src/memory/delegate.ts) is false. */
+
+  /** Demo only. The switch position the fixtures are rendered against. */
+  private demoDelegateEnabled = false;
+
+  /**
+   * Fixtures for BOTH switch positions — no daemon is contacted either way.
+   *
+   * The ledger deliberately carries a run in the OFF state too: turning the
+   * setting off does not un-spend the tokens or erase what the pass produced,
+   * and a showcase that hid the receipt when the switch went off would teach
+   * the opposite.
+   */
+  private demoConsolidation(enabled: boolean): MemoryConsolidation {
+    const min = 60_000;
+    const lastRun: MemoryDelegateSpend = {
+      at: Date.now() - 96 * min,
+      ok: true,
+      agent: "aider",
+      model: "local/qwen2.5-coder",
+      inputFacts: 41,
+      promptChars: 8_642,
+      inputTokens: 11_204,
+      outputTokens: 1_386,
+      costUsd: 0.031,
+      durationMs: 42_500,
+      produced: 2,
+      rejected: 3,
+    };
+    const produced: MemoryProducedFact[] = [
+      {
+        id: "mc-worktree-branch-naming",
+        // Plain text on purpose, including the angle brackets: this string is
+        // written by a model and the screen must render it as characters.
+        fact: "[machine-consolidated] Worktrees are created at ../<repo>-<slug> and never inside the repo, so a stray build never walks into another agent's tree.",
+        cites: ["mem-worktree-path", "mem-worktree-nested"],
+        generator: "aider:local/qwen2.5-coder",
+      },
+      {
+        id: "mc-sse-not-socketio",
+        fact: "[machine-consolidated] Realtime is SSE through the bus in src/events.ts — <script>-free, one event type per publisher, and socket.io was ruled out by decision rather than by accident.",
+        cites: ["mem-sse-decision", "mem-events-bus", "mem-no-socketio"],
+        generator: "aider:local/qwen2.5-coder",
+      },
+    ];
+    return {
+      mechanical: {
+        status: "ran",
+        at: Date.now() - 12 * min,
+        superseded: ["mem-dup-graphify-cmd", "mem-dup-serve-port"],
+        contradictions: [
+          { ids: ["mem-preflight-node18", "mem-preflight-node20"], reason: "same claim, different version number" },
+        ],
+      },
+      delegate: {
+        config: {
+          enabled,
+          maxRunsPerDay: 4,
+          minIntervalMs: 60 * 60 * 1000,
+          maxFactsPerJob: 60,
+          maxUsdPerDay: 0.5,
+          windowMs: 24 * 60 * 60 * 1000,
+        },
+        runsInWindow: 1,
+        usdInWindow: lastRun.costUsd ?? 0,
+        lastRun,
+        produced,
+        // null = "a pass ran", which is the fiction this fixture already tells:
+        // the facts above carry generators and cites that only a completed
+        // agent pass could produce. Real mode reports DELEGATE_NO_LAUNCHER here
+        // instead, because no launcher is wired — so the demo is showing the
+        // screen a working pass WOULD fill, not what a real daemon returns.
+        noPassReason: null,
+      },
+    };
+  }
+
+  /** Both passes' state. null = this daemon does not report it (an older build,
+   *  which answers 404); the card then explains that the mechanical pass still
+   *  runs, rather than drawing a switch that could only fail.
+   *
+   *  ONLY a 404 means that, and the distinction is the whole point. A bare
+   *  `catch { return null }` here turned a refused credential (401), a
+   *  read-only refusal (403) and a dropped connection into the same confident
+   *  sentence — "this daemon doesn't report consolidation yet" — which the
+   *  code cannot tell apart from any of them, and which is false for all
+   *  three. D-009: what cannot be measured is reported as absent, never
+   *  guessed. Everything but 404 is rethrown so the card can name what
+   *  actually happened. */
+  async getMemoryConsolidation(): Promise<MemoryConsolidation | null> {
+    if (this.demo) {
+      await delay(60);
+      return this.demoConsolidation(this.demoDelegateEnabled);
+    }
+    try {
+      return await this.request<MemoryConsolidation>("/api/memory/consolidation");
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "NOT_FOUND") return null;
+      throw e;
+    }
+  }
+
+  /** Turn agent-assisted consolidation on or off. Write-gated like every other
+   *  mutation — a read-only daemon refuses it, and the screen says so BEFORE
+   *  the click rather than after. */
+  async setMemoryDelegateEnabled(enabled: boolean): Promise<MemoryConsolidation> {
+    this.assertWrite();
+    if (this.demo) {
+      await this.demoGate(120);
+      this.demoDelegateEnabled = enabled;
+      return this.demoConsolidation(enabled);
+    }
+    return this.request<MemoryConsolidation>("/api/memory/consolidation", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   /* ---- real token usage (Claude session files) ---- */

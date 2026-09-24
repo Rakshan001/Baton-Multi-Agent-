@@ -139,9 +139,35 @@ export function fingerprintOf(fact: string): string {
     .join('-') || 'fact';
 }
 
+/**
+ * Longest slug body `slugifyId` may return, so that every id it mints is one
+ * `SAFE_FACT_ID` accepts — INCLUDING after `saveMemory` appends its 5-character
+ * `-<sha1>` suffix to break a slug collision. 128 - `mem-` - `-xxxx`.
+ *
+ * Without this the minter and the validator disagreed, and the disagreement was
+ * silent: six long camelCase tokens (an ordinary way to write a fact about this
+ * codebase) minted a 150-character id, the file was written into the TRACKED
+ * store and pushed, and then `parseFactFile` refused it on the way back in. The
+ * fact was never served, never recalled, and could not be retired. Worse, being
+ * unservable also hid it from the collision check above, so the NEXT fact
+ * minting the same slug overwrote it.
+ */
+const SLUG_BASE_MAX = 128 - 'mem-'.length - '-0000'.length;
+
 export function slugifyId(fact: string): string {
-  const base = fact.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').split('-').slice(0, 6).join('-') || 'fact';
-  return `mem-${base}`;
+  const words = fact.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').split('-').slice(0, 6);
+  // Whole tokens while they fit — a truncated word reads as a typo, and the
+  // suffix `saveMemory` adds is what keeps two facts sharing a prefix apart.
+  let base = '';
+  for (const w of words) {
+    if (!w) continue;
+    const next = base ? `${base}-${w}` : w;
+    if (next.length > SLUG_BASE_MAX) break;
+    base = next;
+  }
+  // A single token longer than the whole budget still has to yield an id.
+  if (!base) base = (words[0] ?? '').slice(0, SLUG_BASE_MAX);
+  return `mem-${base || 'fact'}`;
 }
 
 const sigWords = (s: string): Set<string> =>
@@ -251,7 +277,10 @@ export function normalizeAnchorPaths(files: unknown): string[] {
   return files
     .filter((f): f is string => typeof f === 'string')
     .map((f) => f.trim().replace(/^\.\//, ''))
-    .filter((f) => f && !isAbsolute(f) && !f.includes('..'))
+    // `..` as a SEGMENT, not a substring — `test/fixtures/v1..v2.diff` is a
+    // real file, and dropping its anchor means the fact silently stops being
+    // re-checked when that file changes.
+    .filter((f) => f && !isAbsolute(f) && !f.split(/[\\/]/).includes('..'))
     .slice(0, 8);
 }
 
@@ -303,10 +332,31 @@ async function writeFactFile(dir: string, id: string, body: string): Promise<voi
   await rename(tmp, join(dir, `${id}.md`));
 }
 
+/**
+ * A fact id is a FILE NAME.
+ *
+ * `writeFactFile` joins it straight onto the store directory, and this
+ * frontmatter is not Baton's: `baton/memory/facts/` is TRACKED, so a fact file
+ * arrives by `git pull` from a branch nobody on this machine read — the same
+ * provenance `handoff/untrusted.ts` exists for. An id of `../../../escaped`
+ * therefore wrote a file wherever it pointed, from `repairMemories` and
+ * `pruneUnclaimedAnchors`, neither of which asks a human first.
+ *
+ * Every id Baton itself mints comes from `slugifyId` (`mem-` + `[a-z0-9-]`),
+ * so refusing anything that could not have come from there costs nothing. It
+ * also refuses `__proto__` for free, by the leading character alone.
+ *
+ * The FACT is refused, not the id sanitised: a fact whose file name is a lie
+ * about where it lives is not knowledge worth serving, and a silently renamed
+ * id would collide with whatever real fact it renamed itself into.
+ */
+const SAFE_FACT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 export function parseFactFile(raw: string): MemoryFact | null {
   try {
     const { data, content } = parseFrontmatter(raw);
-    if (typeof data.id !== 'string' || !content.trim()) return null;
+    const body = content.trim();
+    if (typeof data.id !== 'string' || !SAFE_FACT_ID.test(data.id) || !body) return null;
     const files: FileAnchor[] = Array.isArray(data.files)
       ? (data.files as unknown[]).flatMap((s) => {
           if (typeof s !== 'string') return [];
@@ -317,14 +367,28 @@ export function parseFactFile(raw: string): MemoryFact | null {
     return {
       id: data.id,
       type: MEMORY_TYPES.includes(data.type as MemoryType) ? (data.type as MemoryType) : 'reference',
-      fact: content.trim(),
+      fact: body,
       agent: typeof data.agent === 'string' ? data.agent : null,
       author: readAuthor(data.author),
       task: typeof data.task === 'string' ? data.task : null,
       createdAt: typeof data.created === 'string' ? data.created : new Date(0).toISOString(),
       anchors: { commit: typeof data.commit === 'string' ? data.commit : null, files },
       supersedes: typeof data.supersedes === 'string' ? data.supersedes : null,
-      fingerprint: typeof data.fingerprint === 'string' ? data.fingerprint : fingerprintOf(content),
+      // COMPUTED, never read from the file. The fingerprint is not a label,
+      // it is the clustering key: `consolidateFacts` groups by it, and every
+      // fact in a group is a merge candidate that can retire the others. Taken
+      // from frontmatter, a fact file chose its own group — and
+      // `baton/memory/facts/` is tracked, so a file arriving by `git pull`
+      // could name the group holding knowledge it has nothing to do with.
+      // Deriving it costs nothing: `saveMemory` computes exactly this.
+      //
+      // Consequence worth knowing: for a fact whose stored fingerprint diverges
+      // from its body, the next `repairMemories` / `pruneUnclaimedAnchors` pass
+      // rewrites the frontmatter with the computed value — in TRACKED files, so
+      // it lands in `git status` as a one-line diff nobody asked for. That is a
+      // silent migration, and it is the accepted cost: the alternative is a
+      // grouping key that can be dictated by the file being grouped.
+      fingerprint: fingerprintOf(body),
       ...(data.local_only === true ? { localOnly: true } : {}),
     };
   } catch {
@@ -434,10 +498,46 @@ async function appendJournal(mainRoot: string, entry: JournalEntry): Promise<voi
 }
 
 /**
+ * The file name a retire will actually act on, or `''` for an id that names no
+ * file at all. One definition, because a guard that inspects a fact and the
+ * rename that retires it must never disagree about which file they mean.
+ *
+ * This REJECTS rather than sanitises, and the difference is the whole point.
+ * Stripping is not injective: `mem-a_b`, `mem-a.b` and `m.em-ab` all collapsed
+ * onto `mem-ab.md`, so retiring any one of them destroyed whichever unrelated
+ * fact happened to live at that name — and the journal line named the id that
+ * was asked for, not the fact that went. `../../../escaped` was worse: it
+ * stripped to `escaped`, a perfectly usable relative path.
+ *
+ * `''` is not a new state — `factFileId` could already return it — and it dead
+ * -ends safely: `areaOf(root, '')` looks for `.md`, finds nothing, and
+ * `archiveFact` reports the clean "no such fact" it reports for any id the
+ * store does not hold.
+ */
+const factFileId = (id: string): string => (SAFE_FACT_ID.test(id) ? id : '');
+
+/**
+ * Does the file at `src` declare `id` as its own? Reads the frontmatter only —
+ * NOT `parseFactFile` — because this asks one narrow question ("is this the
+ * fact I was told to retire?") and must not become a second, stricter opinion
+ * about what a valid fact is. A file that is unreadable, has no frontmatter, or
+ * names some other fact answers no.
+ */
+async function declaresId(src: string, id: string): Promise<boolean> {
+  try {
+    const { data } = parseFrontmatter(await readFile(src, 'utf-8'));
+    return data.id === id;
+  } catch {
+    return false; // unreadable, gone, or not YAML — nothing to vouch for
+  }
+}
+
+/**
  * Retire a fact: move its file into the archive and append a journal line.
  * Replaces every hard-delete in the module. Returns false if the file was
- * already gone (idempotent). The move overwrites any same-id archive file so a
- * reused slug re-archives cleanly.
+ * already gone (idempotent), and false when the file does not declare the id
+ * being retired. The move overwrites any same-id archive file so a reused slug
+ * re-archives cleanly.
  */
 async function archiveFact(
   mainRoot: string,
@@ -446,19 +546,52 @@ async function archiveFact(
   reason: string,
   supersededBy: string | null = null,
 ): Promise<boolean> {
-  const safeId = id.replace(/[^a-z0-9-]/gi, '');
+  const safeId = factFileId(id);
   // Whichever area holds it. Retiring a TRACKED fact deletes it from the
   // working tree, which is what removal has to mean once memory is in git —
   // leaving the file behind would keep serving it to every other clone.
   const from = areaOf(mainRoot, safeId);
   if (!from) return false;
   const src = join(memoryDirFor(mainRoot, from), `${safeId}.md`);
+  // A fact's identity has TWO independent sources and nothing else reconciles
+  // them: `areaOf` above resolved the file NAME, while everything that reads
+  // the store — `listMemoryFacts`, recall, the dashboard — serves the
+  // frontmatter `id`. A file whose name and contents disagree therefore had one
+  // identity for reads and another for deletes, and `baton/memory/facts/` is
+  // TRACKED, so such a file arrives by `git pull` from a branch nobody read.
+  //
+  // So the retire asks the file what it is before destroying it, and refuses
+  // when the answer is not the id it was told to retire. FAIL CLOSED: an
+  // unreadable or mislabelled file is knowledge this pass cannot account for,
+  // and archiving it would delete a fact that was never named — invisible in
+  // the journal, which would record the id that was asked for.
+  //
+  // Deliberately the ONLY place this tightens. Reads stay exactly as they were:
+  // a fact that quietly stops being served is the same knowledge loss with no
+  // journal line at all.
+  if (!(await declaresId(src, safeId))) return false;
   // The archive stays under gitignored `.baton/` for both areas. It is an
   // on-disk audit substrate, not history to replicate across clones — and a
   // retired fact that travelled in git would be a fact removal did not remove.
   const dir = archiveDir(mainRoot);
   await mkdir(dir, { recursive: true });
-  await rename(src, join(dir, `${safeId}.md`));
+  // The rename IS the existence check. `areaOf` above only narrows which area
+  // to move from: between it and here, a concurrent retire (the daemon's
+  // consolidation tick vs. a manual `baton memory consolidate`) can win the
+  // race, and re-checking would only shrink the window, never close it. ENOENT
+  // therefore means "someone else already archived it" — the false this
+  // function's contract promises. Everything else still throws: a rename that
+  // failed for any other reason left the fact in place, and reporting that as
+  // a clean retire would lose it silently.
+  try {
+    await rename(src, join(dir, `${safeId}.md`));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      factCache.delete(src);
+      return false;
+    }
+    throw e;
+  }
   factCache.delete(src);
   await appendJournal(mainRoot, { op, id: safeId, supersededBy, reason, at: new Date().toISOString() });
   return true;
@@ -1018,6 +1151,69 @@ export async function recallMemories(
 export async function removeMemory(root: string, id: string, reason = 'manual removal'): Promise<boolean> {
   const mainRoot = await resolveRoot(root);
   return archiveFact(mainRoot, id, 'remove', reason);
+}
+
+/** The fact wearing `id` in the live store right now, or null if nothing does.
+ *  Reads the file instead of the cached listing: the caller is about to act on
+ *  that exact file, and a listing built moments ago is the thing in question. */
+async function liveFactById(mainRoot: string, id: string): Promise<MemoryFact | null> {
+  const area = areaOf(mainRoot, id);
+  if (!area) return null;
+  try {
+    return parseFactFile(await readFile(join(memoryDirFor(mainRoot, area), `${id}.md`), 'utf-8'));
+  } catch {
+    return null; // raced with a retire — nothing live to compare
+  }
+}
+
+/**
+ * Retire `id` in favour of `supersededBy`. The ONLY write the consolidation
+ * pass can ask for, and deliberately the same archive-plus-journal path
+ * `saveMemory` already takes when a write supersedes an older fact — so a fact
+ * retired by the background pass is recoverable exactly like any other, and no
+ * second notion of "retired" exists to drift from the first. Returns false when
+ * the fact is already gone (a concurrent pass got there first).
+ *
+ * It also returns false when the fact wearing `id` is NEWER than the fact named
+ * as its successor, and that check is the one keeping knowledge in the store.
+ * The pass names IDS, and an id is a reusable slug: `saveMemory` only suffixes
+ * a slug that a LIVE fact already holds, so the moment a fact is retired its
+ * name is free for the next fact opening with the same six words — which is
+ * exactly what an agent writes when it records an update to that knowledge.
+ *
+ * Two daemons on one repo (main checkout plus a worktree, or one that survived
+ * a crash) both read the store, both plan "retire x in favour of y", and there
+ * is no cross-process interlock between them. The first applies it; an agent
+ * then saves the updated knowledge, which re-takes the freed slug `x`; the
+ * second daemon's write arrives late and, without this check, archives THAT
+ * fact — brand-new knowledge, retired in favour of an older fact, gone from
+ * `listMemories` with nothing but a duplicated journal line to show for it. The
+ * plan itself is careful never to touch a fact written after the pass began;
+ * the id it travels as is what defeats that care.
+ *
+ * So the rule the planner applies is re-applied here against the store as it is
+ * at the instant of the write: a fact is retired only when it is at least as
+ * old as the knowledge replacing it. An unknown successor (nothing live by that
+ * name) leaves the behaviour as it was — there is nothing to compare against,
+ * and refusing on that ground would turn "I cannot tell" into a lost retire.
+ */
+export async function supersedeMemory(
+  root: string,
+  id: string,
+  supersededBy: string,
+  reason: string,
+): Promise<boolean> {
+  const mainRoot = await resolveRoot(root);
+  const target = await liveFactById(mainRoot, factFileId(id));
+  const successor = await liveFactById(mainRoot, factFileId(supersededBy));
+  if (target && successor) {
+    const targetAt = Date.parse(target.createdAt);
+    const successorAt = Date.parse(successor.createdAt);
+    // Unparseable either side: the planner skips such facts entirely, so an op
+    // naming one is already outside what it can vouch for — leave it alone.
+    if (!Number.isFinite(targetAt) || !Number.isFinite(successorAt) || targetAt > successorAt) return false;
+  }
+  return archiveFact(mainRoot, id, 'supersede', reason, supersededBy);
 }
 
 /* ------------------------------------------------------------------ */
