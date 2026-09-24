@@ -23,7 +23,7 @@ import {
   deleteBranch, hasUnsavedWork, listBatonBranches, listWorktrees, removeWorktree, worktreeStatus,
   type WorktreeEntry,
 } from './git.js';
-import { batonDir, loadTasks, type Task } from './store.js';
+import { batonDir, loadTasksStrict, type Task } from './store.js';
 import { detectTmux, killSessionFor, listSessions, repoPrefix, slugFromSession } from './util/tmux.js';
 import {
   DirtyWorktreeError, MainWorktreeError, removeTaskWorktree,
@@ -214,7 +214,14 @@ const auditTmpUploads = (root: string, now: number): Promise<JunkItem[]> =>
   scanTmpDir(join(batonDir(root), 'tmp'), 'tmp-upload', now, false);
 
 export async function auditJunk(root: string, now = Date.now()): Promise<AuditReport> {
-  const tasks = await loadTasks(root);
+  // Strict: every item below is "not owned by a task", and `reclaim` force-
+  // deletes them. A store we cannot read must stop the audit, not empty it.
+  const tasks = await loadTasksStrict(root);
+  const partial = tasks.find((t) =>
+    typeof t?.slug !== 'string' || typeof t.branch !== 'string' || typeof t.worktreePath !== 'string');
+  if (partial !== undefined) {
+    throw new Error(`tasks.json has a row without slug/branch/worktreePath (${JSON.stringify(partial).slice(0, 80)}) — refusing to judge anything orphaned`);
+  }
   const worktrees = await listWorktrees(root);
   const [branches, sessions, tmpFiles, tmpUploads] = await Promise.all([
     listBatonBranches(root),

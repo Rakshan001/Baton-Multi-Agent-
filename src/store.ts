@@ -190,14 +190,37 @@ export function tasksFile(gitRoot: string): string {
   return join(batonDir(gitRoot), 'tasks.json');
 }
 
-export async function loadTasks(gitRoot: string): Promise<Task[]> {
+/**
+ * The store, or a throw when it exists but cannot be read. Only ABSENT means
+ * "no tasks". For callers that act destructively on the answer — to them an
+ * unreadable store read as `[]` makes every baton/* branch look orphaned.
+ */
+export async function loadTasksStrict(gitRoot: string): Promise<Task[]> {
+  const file = tasksFile(gitRoot);
+  // The way out, and the trap next to it: an absent store reads as "no tasks",
+  // which makes every task's branch look orphaned to `baton clean --fix`.
+  const unreadable = (why: string) => new Error(
+    `tasks.json at ${file} is unreadable: ${why}. Repair or restore it from a backup — ` +
+    'do NOT delete it or run `baton clean --fix` until it is restored.');
+  let raw: string;
   try {
-    const raw = await readFile(tasksFile(gitRoot), 'utf-8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as Task[]) : [];
-  } catch {
-    return []; // missing/empty/corrupt → start fresh
+    raw = await readFile(file, 'utf-8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw unreadable((e as Error).message);
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw unreadable((e as Error).message);
+  }
+  if (!Array.isArray(parsed)) throw unreadable('not a task list');
+  return parsed as Task[];
+}
+
+export async function loadTasks(gitRoot: string): Promise<Task[]> {
+  return loadTasksStrict(gitRoot).catch(() => []); // unreadable → start fresh
 }
 
 export async function saveTasks(gitRoot: string, tasks: Task[]): Promise<void> {

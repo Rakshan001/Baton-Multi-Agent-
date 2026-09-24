@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Rakshan Shetty
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, utimes } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, utimes, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ import {
 } from '../src/cleanup.js';
 import { createTask } from '../src/commands/new.js';
 import { createWorktree } from '../src/git.js';
-import { loadTasks } from '../src/store.js';
+import { loadTasks, tasksFile } from '../src/store.js';
 import { repoPrefix } from '../src/util/tmux.js';
 import type { Task } from '../src/store.js';
 import type { WorktreeEntry } from '../src/git.js';
@@ -126,6 +126,24 @@ describe('cleanup against a real repo', () => {
     const done = await cleanJunk(root, await auditJunk(root), { apply: true });
     expect(done.removed.some((i) => i.id === t.slug)).toBe(true);
     expect((await loadTasks(root)).some((x) => x.slug === t.slug)).toBe(false);
+  });
+
+  // An unreadable store used to read as "no tasks", which made every baton/*
+  // worktree and branch look orphaned — and `clean --fix` force-deletes those.
+  it('refuses to audit an unreadable tasks.json, and deletes nothing', async () => {
+    const t = await createTask('keep my work', root);
+    const good = await readFile(tasksFile(root), 'utf-8');
+    try {
+      for (const bad of ['{ truncated', '[{}]']) {
+        await writeFile(tasksFile(root), bad, 'utf-8');
+        await expect(auditJunk(root)).rejects.toThrow(/tasks\.json/);
+      }
+      const br = await execa('git', ['branch', '--list', t.branch], { cwd: root });
+      expect(br.stdout).toContain(t.branch);
+      expect(existsSync(t.worktreePath)).toBe(true);
+    } finally {
+      await writeFile(tasksFile(root), good, 'utf-8');
+    }
   });
 
   it('skips a dirty orphan worktree unless forced', async () => {
