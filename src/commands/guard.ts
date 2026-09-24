@@ -16,7 +16,9 @@ import { relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
 import { activeBatonRoot, batonDir } from '../store.js';
-import { canonicalSignalPath, checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
+import { canonicalSignalPath, checkFiles, recordHookEdit, registerHookSession, sessionSlug, type FileCheck } from '../signals.js';
+import { detectAncestry } from '../agents.js';
+import { sanitizeAuthor, type AncestryHit } from '../identity.js';
 import { snapshotDue } from './snapshot.js';
 import { guardrailReminderDue, formatGuardrailReminder } from '../handoff/guardrails.js';
 
@@ -233,23 +235,63 @@ export async function checkoutForEdit(cwd: string, file: string | undefined, roo
   return fromFile === canonRoot || fromFile.startsWith(canonRoot + sep) ? fromFile : null;
 }
 
-async function runGuard(agent: string): Promise<string | null> {
+/**
+ * Give a root session's hook row its host pid — the nearest agent ancestor, the
+ * SAME walk the MCP server uses, so the board can fold the two rows of one
+ * session. Also ranks the agent: an explicit `--agent`/BATON_AGENT is `env`;
+ * the hook's default is `ancestry` only when the walk confirms it.
+ */
+export async function recordSessionHost(
+  root: string,
+  slug: string,
+  session: { agent: string; sessionRoot: string },
+  declared: boolean,
+  ancestry: (signal?: AbortSignal) => Promise<AncestryHit | null> = (signal) => detectAncestry(root, undefined, { signal }),
+  signal?: AbortSignal,
+): Promise<void> {
+  const hit = await ancestry(signal).catch(() => null);
+  if (signal?.aborted) return; // budget spent: leave the edit write's row as it is
+  const source = declared ? 'env' : hit?.strict && hit.agent === session.agent ? 'ancestry' : 'ancestry-inferred';
+  registerHookSession(root, slug, session.agent, session.sessionRoot, undefined, { source, hostPid: hit?.pid ?? null });
+}
+
+interface GuardResult { message: string | null; host?: (signal: AbortSignal) => Promise<void> }
+
+/**
+ * Run the host walk in what is left of the budget, then abort it: a pending
+ * `ps` child would keep the hook process alive past the budget.
+ */
+export async function hostWithinBudget(host: (signal: AbortSignal) => Promise<void>, ms: number): Promise<void> {
+  const ac = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([host(ac.signal).catch(() => {}), new Promise<void>((res) => { timer = setTimeout(res, Math.max(0, ms)); })]);
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
+}
+
+async function runGuard(agent: string, declared: boolean): Promise<GuardResult> {
   const raw = await readStdin();
-  if (!raw.trim()) return null; // no payload: a TTY, or a writer that never sent one
+  if (!raw.trim()) return { message: null }; // no payload: a TTY, or a writer that never sent one
   const payload = await canonicalTarget(normalizeGuardPayload(JSON.parse(raw) as GuardPayload));
   const cwd = payload.cwd ?? process.cwd();
   const root = await activeBatonRoot(cwd);
   const worktreeRoot = await checkoutForEdit(cwd, payload.tool_input?.file_path, root);
-  if (!worktreeRoot) return null;
+  if (!worktreeRoot) return { message: null };
   const rel = guardTarget(payload, worktreeRoot);
-  if (!rel) return null;
+  if (!rel) return { message: null };
   const self = selfIdentity(payload, worktreeRoot, process.env.BATON_SLUG, agent);
   // G2: the guard WRITES the signal too — the daemon-less path that makes
   // sessions at the repo root (and worktree sessions with no daemon) visible
   // to each other. Never let recording break the advisory.
   if (self.slug) {
     try {
-      recordHookEdit(root, { slug: self.slug, path: rel, session: self.session });
+      recordHookEdit(root, {
+        slug: self.slug, path: rel,
+        session: self.session && { ...self.session, meta: { source: declared ? 'env' : 'ancestry-inferred' } },
+      });
     } catch { /* advisory still runs */ }
     // ISS-03: keep a resumable HANDOFF.md fresh DURING the session. Only for a
     // real task worktree (self.session is set only for a synthetic root
@@ -268,7 +310,13 @@ async function runGuard(agent: string): Promise<string | null> {
     ? await maybeGuardrailReminder(root, self.slug).catch(() => null)
     : null;
   const combined = [collision, reminder].filter(Boolean).join('\n\n');
-  return combined || null;
+  // The host walk runs AFTER the signal write and the advisory, inside whatever
+  // budget is left (guardCmd): a slow `ps` must never cost either of them.
+  const { slug, session } = self;
+  return {
+    message: combined || null,
+    ...(slug && session ? { host: (signal: AbortSignal) => recordSessionHost(root, slug, session, declared, undefined, signal) } : {}),
+  };
 }
 
 /**
@@ -294,10 +342,18 @@ async function maybeSnapshot(slug: string, worktreeRoot: string, root: string, a
 
 export async function guardCmd(opts: { agent?: string } = {}): Promise<void> {
   const agent = opts.agent ?? 'claude';
-  const timeout = new Promise<null>((res) => setTimeout(res, GUARD_BUDGET_MS, null).unref?.());
+  // Only an explicit declaration ranks as `env`; the hook's default is a guess
+  // until the ancestry walk confirms it (recordSessionHost).
+  const declared = opts.agent !== undefined || sanitizeAuthor(process.env.BATON_AGENT ?? '') === agent;
+  const deadline = Date.now() + GUARD_BUDGET_MS;
+  const budget = <T>(p: Promise<T>): Promise<T | null> =>
+    Promise.race([p, new Promise<null>((res) => setTimeout(res, Math.max(0, deadline - Date.now()), null).unref?.())]);
   let message: string | null = null;
+  let host: GuardResult['host'];
   try {
-    message = await Promise.race([runGuard(agent), timeout]);
+    const r = await budget(runGuard(agent, declared));
+    message = r?.message ?? null;
+    host = r?.host;
   } catch {
     /* fail open — a broken guard must never stall an edit */
   }
@@ -307,5 +363,6 @@ export async function guardCmd(opts: { agent?: string } = {}): Promise<void> {
   if (message && agent === 'claude') {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: message } }));
   }
+  if (host) await hostWithinBudget(host, deadline - Date.now());
   process.exitCode = 0;
 }

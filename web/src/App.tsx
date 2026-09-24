@@ -733,7 +733,7 @@ export default function App() {
 
   const screen = (() => {
     switch (route) {
-      case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
+      case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} agentDetection={meta.data?.agentDetection} />;
       case "pipeline": return <PipelineScreen writeEnabled={prefs.writeEnabled} />;
       case "worktrees": return <WorktreesScreen live={events.live} />;
       case "recover": return <RecoverScreen writeEnabled={prefs.writeEnabled} />;

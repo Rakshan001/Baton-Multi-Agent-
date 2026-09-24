@@ -367,7 +367,11 @@ export async function createTerminal(
   await tmuxTry(['set-option', '-t', exactPane(sessionName), 'status', 'off']);
   await tmuxTry(['set-option', '-t', exactPane(sessionName), 'history-limit', '5000']);
   await tmuxTry(['set-option', '-t', exactPane(sessionName), 'window-size', 'manual']);
-  await tmuxTry(['set-environment', '-t', exactSession(sessionName), 'BATON_AGENT', agent]);
+  // A user option, not session env: every pane/window opened later in this tmux
+  // session inherits session env, so a `codex` started in a second pane would
+  // register as this agent. The pane itself already has BATON_AGENT (prefix above);
+  // this tag exists only so adoptSession can re-read the agent after a restart.
+  await tmuxTry(['set-option', '-t', exactPane(sessionName), '@baton_agent', agent]);
 
   const session: TerminalSession = {
     slug, agent, sessionName,
@@ -430,16 +434,24 @@ export async function killTerminal(slug: string): Promise<boolean> {
 /* Daemon restart: adopt tmux sessions that outlived the old process   */
 /* ------------------------------------------------------------------ */
 
+/** The agent a Baton tmux session was launched with: the @baton_agent tag, else
+ *  the pre-phase-7 session env var (sessions created before the upgrade), else
+ *  null. Parses the full `show-options` line rather than `-v`: version-independent. */
+export function agentFromTmux(showOptions: string, showEnv: string): string | null {
+  return /^@baton_agent\s+"?([^"\s]+)/m.exec(showOptions)?.[1] ?? /^BATON_AGENT=(\S+)/m.exec(showEnv)?.[1] ?? null;
+}
+
 async function adoptSession(root: string, sessionName: string): Promise<TerminalSession | null> {
   const slug = slugFromSession(root, sessionName);
   if (!slug || terminals.has(slug)) return terminals.get(slug ?? '') ?? null;
 
-  let agent = 'claude';
-  try {
-    const { stdout } = await tmux(['show-environment', '-t', exactSession(sessionName), 'BATON_AGENT']);
-    const m = stdout.match(/^BATON_AGENT=(\S+)/m);
-    if (m) agent = m[1];
-  } catch { /* default stands */ }
+  const read = async (args: string[]): Promise<string> => {
+    try { return (await tmux(args)).stdout; } catch { return ''; }
+  };
+  const agent = agentFromTmux(
+    await read(['show-options', '-t', exactPane(sessionName), '@baton_agent']),
+    await read(['show-environment', '-t', exactSession(sessionName), 'BATON_AGENT']),
+  ) ?? 'claude';
 
   const session: TerminalSession = {
     slug, agent, sessionName,

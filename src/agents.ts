@@ -11,27 +11,37 @@
  */
 import { sep } from 'node:path';
 import { execa } from 'execa';
-import { AGENTS, agentsFor } from './agents/registry.js';
+import { AGENTS, agentsFor, type AgentDef } from './agents/registry.js';
+import type { AncestryHit } from './identity.js';
+
+export type { AncestryHit } from './identity.js';
+
+/** A detect pattern. `project` = from a repo's `.baton/agents.json` — the lower
+ *  classification tier (see classify). */
+interface Pattern { id: string; re: RegExp; project?: true }
+
+const toPatterns = (defs: AgentDef[], host = false): Pattern[] =>
+  defs.flatMap((a) => [
+    { id: a.id, re: a.detect, ...(a.fromProject ? { project: true as const } : {}) },
+    ...(host && a.hostDetect ? [{ id: a.id, re: a.hostDetect }] : []),
+  ]);
 
 /** Agent CLIs we recognise (from the registry), matched against process command lines. */
-const AGENT_PATTERNS: Array<{ id: string; re: RegExp }> = Object.values(AGENTS).map((a) => ({
-  id: a.id,
-  re: a.detect,
-}));
+const AGENT_PATTERNS: Pattern[] = toPatterns(Object.values(AGENTS));
 
 /** The per-root pattern list — global patterns plus any agents the project's
  *  own `.baton/agents.json` teaches. Accepts several roots because a hub scans
  *  its sub-projects' checkouts too, and each sub-project may teach its own
  *  agents; the union is deduped by id, first root wins. Cheap: the underlying
- *  load is stat-cached. */
-function patternsFor(root?: string | string[]): Array<{ id: string; re: RegExp }> {
+ *  load is stat-cached. `host` adds IDE host patterns — ancestry only. */
+function patternsFor(root?: string | string[], host = false): Pattern[] {
   const roots = root === undefined ? [] : Array.isArray(root) ? root : [root];
-  if (!roots.length) return AGENT_PATTERNS;
-  const seen = new Map<string, RegExp>();
+  if (!roots.length) return host ? toPatterns(Object.values(AGENTS), true) : AGENT_PATTERNS;
+  const seen = new Map<string, AgentDef>();
   for (const r of roots) {
-    for (const a of Object.values(agentsFor(r))) if (!seen.has(a.id)) seen.set(a.id, a.detect);
+    for (const a of Object.values(agentsFor(r))) if (!seen.has(a.id)) seen.set(a.id, a);
   }
-  return [...seen.entries()].map(([id, re]) => ({ id, re }));
+  return toPatterns([...seen.values()], host);
 }
 
 /** Cache-key fragment for a root or root set — NUL-joined, no path collisions. */
@@ -66,75 +76,203 @@ export function matchAgentToWorktree(cwd: string, worktreePath: string): boolean
   return cwd.startsWith(worktreePath + sep);
 }
 
-function classify(command: string, patterns: Array<{ id: string; re: RegExp }> = AGENT_PATTERNS): string | null {
+/** Leftmost match of `patterns` in `cmd`, ties → table order. */
+function leftmost(cmd: string, patterns: Pattern[]): string | null {
+  let best: { id: string; at: number } | null = null;
   for (const { id, re } of patterns) {
-    if (re.test(command)) return id;
+    const at = re.exec(cmd)?.index;
+    if (at !== undefined && (!best || at < best.at)) best = { id, at };
+  }
+  return best?.id ?? null;
+}
+
+/** [built-in, project] tiers per pattern list — split once, not per scanned line. */
+const tierCache = new WeakMap<Pattern[], [Pattern[], Pattern[]]>();
+
+/**
+ * Which agent a command line is. Two tiers: the leftmost built-in (and
+ * ~/.baton) match first; only if none matches, the leftmost project pattern —
+ * so a repo's loose `acme` pattern can never rename `…/acme-dev/…/claude`.
+ */
+export function classify(command: string, patterns: Pattern[] = AGENT_PATTERNS): string | null {
+  let t = tierCache.get(patterns);
+  if (!t) tierCache.set(patterns, (t = [patterns.filter((p) => !p.project), patterns.filter((p) => p.project)]));
+  return leftmost(command, t[0]) ?? leftmost(command, t[1]);
+}
+
+/**
+ * An IDE extension-host's title ends in the WORKSPACE it has open
+ * (`Code Helper (Plugin): extension-host (user) codex [1-1]`), so a workspace
+ * named after an agent would strict-match that agent. Drop the tail for every
+ * `* Helper (Plugin):` title — VS Code, Cursor, Windsurf and other forks.
+ */
+function stripHostTitle(command: string): string {
+  return command.replace(/^(.+? Helper \(Plugin\): extension-host)\b.*$/s, '$1');
+}
+
+/**
+ * The lenient fallback: an id that equals the executable's basename (extension
+ * stripped) or the first `.app` bundle name — nothing else. Matching any path
+ * segment read `bash ~/src/cursor/run.sh` as Cursor.
+ */
+export function lenientAgent(command: string, ids: string[]): string | null {
+  const argv0 = command.trim().split(/\s+/)[0] ?? '';
+  const names = [argv0.split(/[/\\]/).pop()!.replace(/\.[^.]+$/, ''), /([^/]+)\.app\//.exec(command)?.[1]]
+    .filter((n): n is string => !!n)
+    .map((n) => n.toLowerCase());
+  return ids.find((id) => names.includes(id.toLowerCase())) ?? null;
+}
+
+export interface Ancestor { pid: number; command: string }
+
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh']);
+
+/**
+ * A `zsh -c '…'` wrapper (how an agent's Bash tool runs a command). Its text is
+ * the agent's OWN command, so `baton review approve x && echo codex` would
+ * strict-match codex. Only the flags before the first operand count, so an
+ * interactive shell (`-zsh`, `/bin/zsh script`) is not one.
+ */
+function isShellWrapper(command: string): boolean {
+  const [argv0 = '', ...rest] = command.trim().split(/\s+/);
+  if (!SHELLS.has(argv0.split('/').pop()!.replace(/^-/, ''))) return false;
+  const end = rest.findIndex((a) => !a.startsWith('-'));
+  return rest.slice(0, end < 0 ? rest.length : end).some((f) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(f));
+}
+
+/** Nearest agent in an ancestor chain (nearest first): per ancestor, a strict
+ *  match (agent or IDE host pattern), else a lenient one, else move up. A
+ *  `shell -c` wrapper is never classified. */
+export function nearestAgent(chain: Ancestor[], root?: string): AncestryHit | null {
+  const patterns = patternsFor(root, true);
+  const ids = [...new Set(patterns.map((p) => p.id))];
+  for (const { pid, command } of chain) {
+    if (isShellWrapper(command)) continue;
+    const cmd = stripHostTitle(command);
+    const strict = classify(cmd, patterns);
+    if (strict) return { agent: strict, strict: true, pid };
+    const loose = lenientAgent(cmd, ids);
+    if (loose) return { agent: loose, strict: false, pid };
   }
   return null;
 }
 
-/**
- * Which agent owns a process, given its ancestor command lines (M1). Registry
- * detect patterns first (strict, tuned for CLI process scans), then a lenient
- * id-in-path pass — IDE hosts spawn MCP servers from paths like
- * /Applications/Cursor.app/… that the strict CLI patterns don't cover. Safe to
- * be lenient here: the chain is OUR OWN ancestry, not the whole process table.
- */
+/** The agent id for an ancestor command chain (nearest first). */
 export function firstAgentIn(commands: string[], root?: string): string | null {
-  const patterns = patternsFor(root);
-  for (const cmd of commands) {
-    const strict = classify(cmd, patterns);
-    if (strict) return strict;
+  return nearestAgent(commands.map((command, pid) => ({ pid, command })), root)?.agent ?? null;
+}
+
+/* ------------------- ps: one place, one flag (I12) ------------------- */
+
+let psMissing = false;
+/** True once `ps` proved absent on this OS (win32, or ENOENT). Never set by a timeout. */
+export function agentDetectionUnavailable(): boolean {
+  return psMissing;
+}
+
+async function runPs(args: string[], timeoutMs?: number, cancelSignal?: AbortSignal): Promise<string | null> {
+  if (process.platform === 'win32') { psMissing = true; return null; }
+  try {
+    return (await execa('ps', args, { ...(timeoutMs ? { timeout: timeoutMs } : {}), ...(cancelSignal ? { cancelSignal } : {}) })).stdout;
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ENOENT') psMissing = true;
+    return null;
   }
-  for (const cmd of commands) {
-    for (const { id } of patterns) {
-      // Bounded at BOTH ends, like every `detect` pattern: unbounded, an id
-      // matched any longer word starting with it — `/x/aider-notes/index.js`
-      // read as the aider agent. `/`, `.` and whitespace end a program name;
-      // `-` continues a different one.
-      if (id && new RegExp(`(^|[/\\\\\\s])${id}([\\s/.]|$)`, 'i').test(cmd)) return id;
-    }
+}
+
+/** Rows of `ps -axo pid=,ppid=,command=` output. */
+function parsePsRows(stdout: string | null): Array<{ pid: number; ppid: number; command: string }> {
+  const out: Array<{ pid: number; ppid: number; command: string }> = [];
+  for (const line of stdout?.split('\n') ?? []) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+    if (m) out.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
   }
-  return null;
+  return out;
+}
+
+/** stdout of `ps -axo pid=,ppid=,command=`, or null when it could not be read.
+ *  An aborted `signal` kills the `ps` child. */
+export type PsRunner = (signal?: AbortSignal) => Promise<string | null>;
+const psTable: PsRunner = (signal) => runPs(['-axo', 'pid=,ppid=,command='], 1000, signal);
+const MAX_WALK_ATTEMPTS = 3;
+
+/**
+ * This process's ancestors, nearest first, from ONE `ps` call walked in memory.
+ * A successful walk is memoized (ancestry cannot change); a failure or timeout
+ * is not — the next call retries, at most MAX_WALK_ATTEMPTS times per process.
+ * Concurrent callers share the in-flight walk.
+ */
+export function ancestryWalker(run: PsRunner = psTable, ppid = process.ppid, maxDepth = 6): (signal?: AbortSignal) => Promise<Ancestor[]> {
+  let memo: Promise<Ancestor[]> | undefined;
+  let failures = 0;
+  return (signal) => {
+    if (memo) return memo;
+    if (failures >= MAX_WALK_ATTEMPTS) return Promise.resolve([]);
+    memo = run(signal).then((out) => {
+      if (out == null) throw new Error('ps unavailable');
+      const byPid = new Map(parsePsRows(out).map((r) => [r.pid, r]));
+      const chain: Ancestor[] = [];
+      const seen = new Set<number>();
+      for (let pid = ppid; chain.length < maxDepth && pid > 1 && !seen.has(pid); ) {
+        const row = byPid.get(pid);
+        if (!row) break;
+        seen.add(pid);
+        chain.push({ pid, command: row.command });
+        pid = row.ppid;
+      }
+      return chain;
+    }).catch(() => {
+      failures++;
+      memo = undefined;
+      return [];
+    });
+    return memo;
+  };
+}
+
+let ownAncestry = ancestryWalker();
+
+/** Test-only: forget the ps-missing flag and this process's memoized walk
+ *  (optionally walking with an injected ps runner). */
+export function resetAgentDetectionForTests(run?: PsRunner): void {
+  psMissing = false;
+  ownAncestry = ancestryWalker(run);
 }
 
 /**
  * The agent that spawned this process — `baton mcp` runs as a child of the
  * agent session it serves, so walking parent pids identifies the agent with
  * zero configuration. Null when the chain holds no known agent (fail open).
- * `root` lets the project's own `.baton/agents.json` agents claim the session
- * too — without it a project-defined CLI registers with a null identity.
+ * `root` lets the project's own `.baton/agents.json` agents claim the session.
+ * `pid` is the matched ancestor — the session's host, shared by its MCP server
+ * and its edit hook.
+ *
+ * `retry` awaits a failed walk's retries inline (up to the walker's cap) — for
+ * a caller that resolves once, like a CLI command, where a single slow `ps`
+ * would otherwise mean `unknown`. A memoized empty walk just repeats, free.
+ * `signal` kills a pending `ps` (the guard's budget).
  */
-export async function detectParentAgent(maxDepth = 6, root?: string): Promise<string | null> {
-  const chain: string[] = [];
-  let pid = process.ppid;
-  for (let i = 0; i < maxDepth && pid > 1; i++) {
-    try {
-      const { stdout } = await execa('ps', ['-o', 'ppid=,command=', '-p', String(pid)]);
-      const m = stdout.trim().match(/^(\d+)\s+(.*)$/);
-      if (!m) break;
-      chain.push(m[2]);
-      pid = parseInt(m[1], 10);
-    } catch {
-      break;
-    }
+export async function detectAncestry(
+  root?: string,
+  chain: (signal?: AbortSignal) => Promise<Ancestor[]> = ownAncestry,
+  opts: { retry?: boolean; signal?: AbortSignal } = {},
+): Promise<AncestryHit | null> {
+  let ancestors = await chain(opts.signal);
+  for (let i = 1; opts.retry && !ancestors.length && i < MAX_WALK_ATTEMPTS && !opts.signal?.aborted; i++) {
+    ancestors = await chain(opts.signal);
   }
-  return firstAgentIn(chain, root);
+  return nearestAgent(ancestors, root);
 }
 
 async function listProcesses(): Promise<Array<{ pid: number; command: string }>> {
-  try {
-    // `ps -axo pid=,command=` works on macOS and Linux; '=' suppresses headers.
-    const { stdout } = await execa('ps', ['-axo', 'pid=,command=']);
-    const out: Array<{ pid: number; command: string }> = [];
-    for (const line of stdout.split('\n')) {
-      const m = line.trim().match(/^(\d+)\s+(.*)$/);
-      if (m) out.push({ pid: parseInt(m[1], 10), command: m[2] });
-    }
-    return out;
-  } catch {
-    return [];
+  // `ps -axo pid=,command=` works on macOS and Linux; '=' suppresses headers.
+  const stdout = await runPs(['-axo', 'pid=,command=']);
+  const out: Array<{ pid: number; command: string }> = [];
+  for (const line of stdout?.split('\n') ?? []) {
+    const m = line.trim().match(/^(\d+)\s+(.*)$/);
+    if (m) out.push({ pid: parseInt(m[1], 10), command: m[2] });
   }
+  return out;
 }
 
 async function pidCwd(pid: number): Promise<string | null> {
@@ -221,17 +359,7 @@ export interface RootAgentSession {
 
 /** ps with ppid, so we can collapse a launcher/worker pair into one session. */
 async function listProcessesWithPpid(): Promise<Array<{ pid: number; ppid: number; command: string }>> {
-  try {
-    const { stdout } = await execa('ps', ['-axo', 'pid=,ppid=,command=']);
-    const out: Array<{ pid: number; ppid: number; command: string }> = [];
-    for (const line of stdout.split('\n')) {
-      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
-      if (m) out.push({ pid: parseInt(m[1], 10), ppid: parseInt(m[2], 10), command: m[3] });
-    }
-    return out;
-  } catch {
-    return [];
-  }
+  return parsePsRows(await runPs(['-axo', 'pid=,ppid=,command=']));
 }
 
 /** Every agent-matching process, with cwd resolved — the raw material for root-level (non-task) visibility. */

@@ -18,10 +18,13 @@
 import { blockers, eligibleFor, isContributor, isStalled, isTerminal, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
 import type { BatonEvent } from './events.js';
 import type { Task } from './store.js';
+import { UNKNOWN_AUTHOR, type IdentitySource } from './identity.js';
 
 export interface Who {
   agent: string;
   sessionSlug: string;
+  /** How `agent` was resolved. Absent = a caller that never gives a verdict. */
+  source?: IdentitySource;
 }
 
 export type Refusal =
@@ -32,7 +35,8 @@ export type Refusal =
   | { code: 'not-stalled'; message: string }
   | { code: 'self-review'; message: string }
   | { code: 'open-findings'; message: string }
-  | { code: 'wrong-state'; message: string };
+  | { code: 'wrong-state'; message: string }
+  | { code: 'unidentified'; message: string };
 
 export type Outcome =
   | { ok: true; tasks: Task[]; task: Task }
@@ -270,14 +274,32 @@ export function block(tasks: readonly Task[], slug: string, who: Who, reason: st
   return { ok: true, tasks: replace(tasks, next), task: next };
 }
 
-/** Shared by both verdicts: the task must be awaiting one, and the agent giving
- *  it must not be the agent who wrote the code. */
-function gateReview(tasks: readonly Task[], slug: string, who: Who): Task | Outcome {
+/**
+ * May this identity give a verdict? Not `unknown`, not a lenient ancestry guess —
+ * either could be the author under another name, which is exactly what the
+ * self-review ban exists to stop. Honor system, not a boundary: anyone can set
+ * BATON_AGENT (docs/security.md).
+ */
+export function mayReview(who: Pick<Who, 'agent' | 'source'>): boolean {
+  return who.agent !== UNKNOWN_AUTHOR && who.source !== 'none' && who.source !== 'ancestry-inferred';
+}
+
+/** Shared by both verdicts: the task must be awaiting one, the reviewer must be
+ *  identified, and must not be the agent who wrote the code. */
+function gateReview(tasks: readonly Task[], slug: string, who: Who, verdict: 'approve' | 'reject'): Task | Outcome {
   const t = tasks.find((x) => x.slug === slug);
   if (!t) return fail('missing', `No task '${slug}'.`);
   const state = stateOf(t);
   if (state !== 'review') {
     return fail('wrong-state', `'${slug}' is ${state} — only work awaiting a verdict can be reviewed.`);
+  }
+  if (!mayReview(who)) {
+    const seen = who.source === 'ancestry-inferred' ? `guessed "${who.agent}"` : 'unknown agent';
+    return fail(
+      'unidentified',
+      `Baton cannot tell who you are (${seen}), so it cannot rule out that you wrote this. `
+        + `Run it again as: BATON_AGENT=<your name> baton review ${verdict} ${slug}`,
+    );
   }
   if (isContributor(t as PipelineTask, who.agent)) {
     // The one rule that makes the gate worth having. An author reviewing their
@@ -307,7 +329,7 @@ export interface VerdictOpts {
  * too. This reduces the chance of wrong code landing; it does not eliminate it.
  */
 export function approve(tasks: readonly Task[], slug: string, who: Who, now: string, opts: VerdictOpts = {}): Outcome {
-  const gated = gateReview(tasks, slug, who);
+  const gated = gateReview(tasks, slug, who, 'approve');
   if (isOutcome(gated)) return gated;
 
   const open = opts.openFindings ?? 0;
@@ -335,7 +357,7 @@ export function approve(tasks: readonly Task[], slug: string, who: Who, now: str
  * the gate accepted, and nothing is accepted now.
  */
 export function reject(tasks: readonly Task[], slug: string, who: Who, notes: string, now: string): Outcome {
-  const gated = gateReview(tasks, slug, who);
+  const gated = gateReview(tasks, slug, who, 'reject');
   if (isOutcome(gated)) return gated;
   if (!notes.trim()) {
     // Same rule as `block`: a verdict with no reason sends the agent back to

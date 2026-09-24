@@ -17,6 +17,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { CURSOR_RULE_REL, HANDOFF_REL } from './baton-artifacts.js';
 import { liveSessions } from './signals.js';
+import { presenceSlugOf } from './identity.js';
 import type { PipelineTask } from './pipeline.js';
 import type { Task } from './store.js';
 
@@ -87,7 +88,8 @@ export function livenessProbe(root: string, opts: { mtime?: (dir: string) => num
     // The claim time is a floor, so a task claimed one minute ago is never
     // "silent for two hours" just because nothing has been written yet.
     const beat = Math.max(
-      heartbeat.get(t.claimedBy?.sessionSlug ?? '') ?? 0,
+      // presenceSlugOf: a pre-phase-7 claim recorded `pid-<n>` for the `sess-p<n>` row.
+      heartbeat.get(presenceSlugOf(t.claimedBy?.sessionSlug ?? '')) ?? 0,
       heartbeat.get(t.slug) ?? 0,
       t.claimedBy ? Date.parse(t.claimedBy.at) || 0 : 0,
     );

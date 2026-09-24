@@ -8,7 +8,8 @@ import { detectAgents, detectionRoots, detectRootAgents, type RootAgentSession }
 import { computeConflicts } from './conflicts.js';
 import { aheadBehindOrNull, worktreeStatus, type RepoState, type WorktreeFileEntry } from './git.js';
 import { isMaterialized, loadTasks } from './store.js';
-import { liveSessions, WATCHER_HEARTBEAT_STALE_MS } from './signals.js';
+import { isMcpSessionSlug, liveSessions, WATCHER_HEARTBEAT_STALE_MS, type LiveSession } from './signals.js';
+import type { IdentitySource } from './identity.js';
 import { runningHeadless } from './spawn.js';
 
 export interface StatusRow {
@@ -118,6 +119,34 @@ export interface PresenceSession {
   lastSeen: string;
   /** Seen within the heartbeat-fresh window ⇒ actively working, not just idle-connected. */
   live: boolean;
+  /** How `agent` was resolved; null on pre-phase-7 rows. `ancestry-inferred` is a guess. */
+  agentSource: IdentitySource | null;
+}
+
+/**
+ * One Claude root session writes TWO rows — its MCP server's `sess-p<pid>` and
+ * its edit hook's `sess-<id8>`. Fold the hook rows into the MCP row when they
+ * share an exact (agent, host_pid) and that group has exactly ONE MCP row:
+ * Cursor runs one MCP process per app, so several rows can share a host pid and
+ * folding into one of them would be a guess. Keeps the latest `at`.
+ */
+function mergeSessionRows(rows: LiveSession[]): LiveSession[] {
+  const groups = new Map<string, LiveSession[]>();
+  for (const r of rows) {
+    if (r.agent === null || r.hostPid === null) continue;
+    const k = `${r.agent}\u0000${r.hostPid}`;
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  const drop = new Set<LiveSession>();
+  const bump = new Map<LiveSession, string>();
+  for (const g of groups.values()) {
+    const mcp = g.filter((r) => isMcpSessionSlug(r.slug));
+    if (mcp.length !== 1 || g.length < 2) continue;
+    const latest = g.reduce((a, r) => (r.at > a ? r.at : a), mcp[0].at);
+    bump.set(mcp[0], latest);
+    for (const r of g) if (r !== mcp[0]) drop.add(r);
+  }
+  return rows.filter((r) => !drop.has(r)).map((r) => (bump.has(r) ? { ...r, at: bump.get(r)! } : r));
 }
 
 /**
@@ -131,13 +160,13 @@ export async function collectPresence(root: string): Promise<PresenceSession[]> 
   const tasks = await loadTasks(root);
   const taskSlugs = new Set(tasks.map((t) => t.slug));
   const now = Date.now();
-  return liveSessions(root)
-    .filter((s) => !taskSlugs.has(s.slug))
+  return mergeSessionRows(liveSessions(root).filter((s) => !taskSlugs.has(s.slug)))
     .map((s) => ({
       slug: s.slug,
       agent: s.agent,
       root: s.root,
       lastSeen: s.at,
       live: now - Date.parse(s.at) < WATCHER_HEARTBEAT_STALE_MS,
+      agentSource: s.agentSource,
     }));
 }

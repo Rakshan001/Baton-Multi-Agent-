@@ -28,11 +28,11 @@ import type { DiffStamp } from './handoff/progress-ledger.js';
 import { blockers, eligibleFor, integrationHold, isTerminal, phaseOf, reviewableBy, stateOf, takeable } from './pipeline.js';
 import { INLINE_MAX, quotedInline } from './handoff/untrusted.js';
 import { resolveGate } from './gate.js';
-import { block, nextFor, type Who } from './lifecycle.js';
+import { block, mayReview, nextFor, type Who } from './lifecycle.js';
 import { claimTask, ClaimRefused } from './commands/claim.js';
 import { finishTask } from './commands/finish.js';
 import { livenessProbe } from './liveness.js';
-import { resolveAgentId, resolveSessionSlug } from './identity.js';
+import { resolveIdentity, resolveSessionSlug } from './identity.js';
 import { mutateTasks } from './store.js';
 import { bus } from './events.js';
 
@@ -144,9 +144,10 @@ export async function diffStampFor(root: string, slug: string): Promise<DiffStam
   }
 }
 
-/** Who is calling. Same resolution as the CLI, so both agree about ownership. */
-async function caller(): Promise<Who> {
-  return { agent: await resolveAgentId(), sessionSlug: resolveSessionSlug() };
+/** Who is calling. Same resolver as the CLI, so both agree about ownership.
+ *  Re-resolved per call; the real server passes its own memoized `who`. */
+async function defaultCaller(root: string): Promise<Who> {
+  return { ...(await resolveIdentity(process.env, root)), sessionSlug: resolveSessionSlug() };
 }
 
 const holds = (t: Task, who: Who): boolean =>
@@ -193,12 +194,16 @@ function resolveOwn(tasks: Task[], who: Who, slug?: string): { task: Task } | { 
   return { error: `You hold ${mine.length} tasks (${mine.map((t) => t.slug).join(', ')}) — name the one you mean.` };
 }
 
-export function registerPipelineTools(reg: RegisterTool, root: string): void {
+export function registerPipelineTools(
+  reg: RegisterTool,
+  root: string,
+  whoIs: () => Promise<Who> = () => defaultCaller(root),
+): void {
   reg(
     'my_tasks',
     { description: TOOL_HELP.my_tasks, inputSchema: {} },
     async () => {
-      const who = await caller();
+      const who = await whoIs();
       const tasks = await loadTasks(root);
       const liveness = livenessProbe(root);
       const now = Date.now();
@@ -208,7 +213,8 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
       // how an agent ends up in a retry loop against a locked phase.
       const gate = await resolveGate(root, tasks);
       const startable = eligibleFor(who.agent, tasks, gate) as Task[];
-      const toReview = reviewableBy(who.agent, tasks) as Task[];
+      // An unidentified caller is refused at the verdict, so it is not offered one.
+      const toReview = (mayReview(who) ? reviewableBy(who.agent, tasks) : []) as Task[];
       // Someone else's work that went quiet. Offered, not taken: adopting it is
       // an explicit act, because two agents in one worktree is the failure the
       // whole claim mechanism exists to prevent.
@@ -266,7 +272,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
     },
     async (args: ToolArgs) => {
       const { slug, resume } = args as { slug?: string; resume?: boolean };
-      const who = await caller();
+      const who = await whoIs();
       const tasks = await loadTasks(root);
 
       let target = slug;
@@ -321,7 +327,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
     },
     async (args: ToolArgs) => {
       const { slug, attest } = args as { slug?: string; attest?: boolean };
-      const who = await caller();
+      const who = await whoIs();
       const tasks = await loadTasks(root);
       const found = resolveOwn(tasks, who, slug);
       if ('error' in found) return asText({ completed: false, refused: found.error });
@@ -368,7 +374,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
     },
     async (args: ToolArgs) => {
       const { reason, slug } = args as { reason: string; slug?: string };
-      const who = await caller();
+      const who = await whoIs();
 
       type Blocked = { ok: true; slug: string; reason: string } | { ok: false; message: string };
       const out = await mutateTasks<Blocked>(root, (tasks) => {

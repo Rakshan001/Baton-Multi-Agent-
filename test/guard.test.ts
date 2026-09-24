@@ -7,7 +7,9 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
-import { checkoutForEdit, guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder } from '../src/commands/guard.js';
+import { checkoutForEdit, guardTarget, formatGuardMessage, slugFromWorktreePath, selfIdentity, normalizeGuardPayload, maybeGuardrailReminder, recordSessionHost, hostWithinBudget } from '../src/commands/guard.js';
+import { ancestryWalker, detectAncestry } from '../src/agents.js';
+import { liveSessions } from '../src/signals.js';
 import { GUARDRAIL_REINJECT_MS } from '../src/handoff/guardrails.js';
 import type { FileCheck } from '../src/signals.js';
 
@@ -170,6 +172,38 @@ describe('selfIdentity — agent parameter (M2)', () => {
     const id = selfIdentity({ session_id: 'conv-42' }, '/repo', undefined, 'cursor');
     expect(id.slug).toBe('sess-conv-42');
     expect(id.session).toEqual({ agent: 'cursor', sessionRoot: '/repo' });
+  });
+});
+
+describe('recordSessionHost — the hook row learns its host pid after the advisory (I10)', () => {
+  let root: string;
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'baton-guardhost-')); });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+  const session = { agent: 'claude', sessionRoot: '/repo' };
+  const row = () => liveSessions(root).find((s) => s.slug === 'sess-abcd1234');
+
+  it('writes the nearest agent ancestor pid; a confirmed default agent is ancestry-ranked', async () => {
+    await recordSessionHost(root, 'sess-abcd1234', session, false, async () => ({ agent: 'claude', strict: true, pid: 777 }));
+    expect(row()).toMatchObject({ agent: 'claude', hostPid: 777, agentSource: 'ancestry' });
+  });
+  it('an unconfirmed default agent is ancestry-inferred, never env', async () => {
+    await recordSessionHost(root, 'sess-abcd1234', session, false, async () => null);
+    expect(row()).toMatchObject({ agent: 'claude', hostPid: null, agentSource: 'ancestry-inferred' });
+  });
+  it('an explicit --agent is env', async () => {
+    await recordSessionHost(root, 'sess-abcd1234', session, true, async () => ({ agent: 'cursor', strict: true, pid: 5 }));
+    expect(row()).toMatchObject({ agent: 'claude', hostPid: 5, agentSource: 'env' });
+  });
+  it('a slow ps is aborted when the budget elapses, so the hook exits on time', async () => {
+    let aborted = false;
+    const slow = (signal?: AbortSignal) => new Promise<string | null>((res) => {
+      signal?.addEventListener('abort', () => { aborted = true; res(null); });
+    });
+    const walk = ancestryWalker(slow, 40);
+    const t0 = Date.now();
+    await hostWithinBudget((signal) => recordSessionHost(root, 'sess-abcd1234', session, false, (s) => detectAncestry(root, walk, { signal: s }), signal), 50);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(aborted).toBe(true);
   });
 });
 

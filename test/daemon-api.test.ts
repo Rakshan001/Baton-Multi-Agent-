@@ -142,6 +142,11 @@ describe.runIf(hasDist)('fleet endpoints', () => {
     expect((await api(PORT_A, '/api/meta')).body.pid).toBe(body.daemons.find((d: any) => d.self).pid);
   });
 
+  it('/api/meta says whether agent detection works on this OS (phase 7 / I12)', async () => {
+    // A timeout never flips this; only a missing `ps` does, so on macOS/Linux it is ok.
+    expect((await api(PORT_A, '/api/meta')).body.agentDetection).toBe('ok');
+  });
+
   it('/api/meta reports a detection-only project agent that no launch list can hold', async () => {
     // The bug: the dashboard's handoff picker was built from headless ∪
     // interactive, so an agent Baton can RECOGNISE but not START was invisible

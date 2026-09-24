@@ -5,8 +5,8 @@
  *
  * `resolveAgentId()` reads BATON_AGENT first and only then falls back to
  * sniffing the parent process. `terminals.ts` sets it; `spawn.ts` did not — so a
- * headless run launched as `codex` introduced itself by whatever
- * `detectParentAgent()` guessed, or as `unknown`.
+ * headless run launched as `codex` introduced itself by whatever the ancestry
+ * walk (`detectAncestry()`) guessed, or as `unknown`.
  *
  * That string is what `assignee` is matched against, so a dispatcher that
  * launches Cursor on a task assigned to Cursor would watch the agent get

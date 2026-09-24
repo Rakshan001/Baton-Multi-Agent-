@@ -34,6 +34,11 @@ export interface AgentDef {
   binary: string;
   /** Matched against `ps` command lines for local agent detection. */
   detect: RegExp;
+  /** The agent's IDE HOST processes (app executable, helper titles). Matched only
+   *  when walking our own ancestry — never in the board's process-table scan,
+   *  where ~30 helpers would each cost an lsof and fold real agent sessions away
+   *  as their "workers" (detectRootAgents' launcher/worker collapse). */
+  hostDetect?: RegExp;
   headless?: HeadlessLauncher;
   interactive?: InteractiveLauncher;
   /** Set only on entries from a project's `.baton/agents.json`. Those arrive
@@ -69,7 +74,14 @@ export const AGENTS: Record<string, AgentDef> = {
   },
   cursor: {
     id: 'cursor', label: 'Cursor Agent', binary: 'cursor-agent',
-    detect: /cursor-agent/,
+    // The terminal CLI, anchored to the executable or its versioned install dir
+    // (unverified here — kept so a `node …/cursor-agent/versions/<v>/index.js`
+    // launch still resolves). A bare substring matched `ls ~/cursor-agent/notes`.
+    detect: /(^|[/\s])cursor-agent(\s|$)|\/cursor-agent\/versions\//,
+    // The IDE: its main executable and the helper titles observed on macOS
+    // (`Cursor Helper: mcp-process`, `Cursor Helper (Plugin): extension-host …`).
+    // Linux/Windows IDE executable names are unverified, left to the lenient pass.
+    hostDetect: /(^|\/)Cursor\.app\/Contents\/MacOS\/Cursor(\s|$)|^Cursor Helper( \([A-Za-z]+\))?:/,
     // `cursor` opens the IDE; Cursor's terminal agent is the separate cursor-agent CLI.
     interactive: { cmd: 'cursor-agent', args: (p, m) => [...modelFlag('--model', m), ...positional(p)] },
   },
@@ -84,13 +96,15 @@ export const AGENTS: Record<string, AgentDef> = {
     // The CLI is `agy`; the IDE runs as Antigravity.app (Electron + helpers).
     // Detection-only for now: launcher flags are inherited-from-gemini per the
     // migration docs but unverified on a real install — don't guess spawn args.
-    // Both alternatives are anchored. The second used to be a bare `antigravity`
-    // substring, which matched any command line that merely CONTAINED the word —
-    // a shell applying a plan with `@antigravity` in it, a directory named
-    // `antigravity-docs` — and `resolveAgentId` then handed that process every
-    // task assigned to the real agent. `.app` is allowed after the name so the
-    // Electron bundle path still resolves.
-    detect: /(^|[/\s])(agy|antigravity)([\s/.]|$)/i,
+    // Anchored to the executable. An unanchored `antigravity` matched any command
+    // line that merely CONTAINED the word — a shell applying a plan with
+    // `@antigravity` in it, `vim ~/proj/antigravity/x.md` — and `resolveAgentId`
+    // then handed that process every task assigned to the real agent.
+    detect: /(^|[/\s])agy(\s|$)/,
+    // The IDE (a VS Code fork, like Cursor): its bundle executable, and helper
+    // titles by analogy with Cursor (unverified). A Linux `antigravity`
+    // executable falls to the lenient basename pass.
+    hostDetect: /(^|\/)Antigravity\.app\/Contents\/MacOS\/|^Antigravity Helper( \([A-Za-z]+\))?:/,
   },
   aider: {
     id: 'aider', label: 'Aider', binary: 'aider',

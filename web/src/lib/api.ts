@@ -36,7 +36,7 @@ import { demoDiscardRefusal, demoDoctorReport } from "./demoRecover";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
 import {
-  SCENARIOS, statusFrom, historyFrom, detailFrom, br,
+  SCENARIOS, statusFrom, historyFrom, detailFrom, br, demoPresence,
   type ScenarioName, type DemoSession,
 } from "./demoData";
 import { WORKSPACE, getDiff as demoDiff, type DemoProject } from "./preview";
@@ -875,7 +875,7 @@ class BatonClient {
   async getSessions(): Promise<PresenceSession[]> {
     if (this.demo) {
       await this.demoGate();
-      return []; // presence is a real-daemon view; the demo showcase fabricates no connected agents
+      return demoPresence(); // one row per identity label; the panel tags them as demo
     }
     try {
       return await this.request<PresenceSession[]>("/api/sessions");

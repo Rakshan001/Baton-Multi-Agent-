@@ -11,7 +11,7 @@
    This is the honesty boundary: real `baton serve` data flows through
    the unchanged fetch path in lib/api.ts when demo mode is OFF.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, CommitInfo } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, CommitInfo, PresenceSession } from "../types";
 
 /** A demo session = a contract StatusRow plus the per-branch commits
  *  that /api/tasks/:slug would return. */
@@ -237,3 +237,15 @@ export const SCENARIOS: Record<ScenarioName, Scenario> = {
   empty: { sessions: [], history: [] },
   offline: { sessions: busySessions, history: busyHistory, offline: true },
 };
+
+/** /api/sessions — one session per identity outcome, so the demo shows every
+ *  Connected-agents label: named for sure, guessed from a process name, and
+ *  unidentified. */
+export function demoPresence(): PresenceSession[] {
+  const ago = (m: number) => new Date(Date.now() - m * MIN).toISOString();
+  return [
+    { slug: "sess-p41822", agent: "claude", agentSource: "env", root: REPO, lastSeen: ago(0), live: true },
+    { slug: "sess-p41907", agent: "cursor", agentSource: "ancestry-inferred", root: REPO, lastSeen: ago(3), live: true },
+    { slug: "sess-p42016", agent: null, agentSource: "none", root: REPO, lastSeen: ago(14), live: false },
+  ];
+}

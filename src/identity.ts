@@ -80,27 +80,79 @@ export async function resolveAuthor(cwd?: string): Promise<string> {
   return email || systemAuthor();
 }
 
+/** Where an agent id came from, strongest first. */
+export type IdentitySource = 'env' | 'ancestry' | 'client' | 'ancestry-inferred' | 'none';
+export interface Identity { agent: string; source: IdentitySource }
+/** Nearest agent in this process's ancestry (agents.ts). Declared here so identity
+ *  stays cheap to load: agents.js is imported only when a walk is needed. */
+export interface AncestryHit { agent: string; strict: boolean; pid: number }
+
+/** Exact MCP `clientInfo.name` → agent id. Seeded ONLY with names actually logged
+ *  (hook_sessions.client_name). Empty at ship is correct, not a gap. */
+export const CLIENT_NAMES: Readonly<Record<string, string>> = {};
+
 /**
- * Which tool is running right now, and which session it is.
- *
- * `agent` decides what work is offered (assignee matching); `sessionSlug` is the
- * claim's owner and is what a takeover compares against — two Claude windows are
- * one agent and two sessions, and only the session distinction stops the second
- * one from adopting the first one's task as if it were its own.
- *
- * Both fall back rather than throw: an unidentified caller still gets to work,
- * it just lands in the open pool.
+ * A session running at the repo root (no worktree, no task) is identified by
+ * the agent's own session id — stable for the session, meaningless after it.
  */
-export async function resolveAgentId(env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  const declared = sanitizeAuthor(env.BATON_AGENT ?? '');
-  if (declared) return declared;
-  const { detectParentAgent } = await import('./agents.js');
-  return (await detectParentAgent().catch(() => null)) ?? 'unknown';
+export function sessionSlug(sessionId: string): string {
+  const clean = sessionId.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 8) || 'unknown';
+  return `sess-${clean}`;
 }
 
-/** This process's session identity. Stable for the life of the process. */
+// Retries inline: a CLI command resolves once, so a single timed-out `ps` would
+// otherwise make it `unknown` for the whole call.
+const defaultAncestry = async (root?: string): Promise<AncestryHit | null> =>
+  (await import('./agents.js')).detectAncestry(root, undefined, { retry: true });
+
+/**
+ * Which tool is running right now. ONE resolver for CLI and MCP, so the
+ * self-review ban compares ids produced the same way.
+ *
+ * Order: declared `BATON_AGENT` → a strict ancestry match → the MCP client's
+ * name → a lenient ancestry guess → none. Every source goes through
+ * sanitizeAuthor. Never throws: an unidentified caller still gets to work, it
+ * just lands in the open pool (and may not review — lifecycle.mayReview).
+ */
+export async function resolveIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  root?: string,
+  clientName?: string,
+  ancestry: (root?: string) => Promise<AncestryHit | null> = defaultAncestry,
+  clientNames: Readonly<Record<string, string>> = CLIENT_NAMES,
+): Promise<Identity> {
+  const declared = sanitizeAuthor(env.BATON_AGENT ?? '');
+  if (declared) return { agent: declared, source: 'env' };
+  const hit = await ancestry(root).catch(() => null);
+  const guessed = hit ? sanitizeAuthor(hit.agent) : '';
+  if (hit?.strict && guessed) return { agent: guessed, source: 'ancestry' };
+  const client = sanitizeAuthor(clientName ? (clientNames[sanitizeAuthor(clientName)] ?? '') : '');
+  if (client) return { agent: client, source: 'client' };
+  if (guessed) return { agent: guessed, source: 'ancestry-inferred' };
+  return { agent: UNKNOWN_AUTHOR, source: 'none' };
+}
+
+/**
+ * The agent id only — the contract every CLI caller already had. Pass `root`
+ * when you hold one: without it a project-defined agent (`.baton/agents.json`)
+ * is never recognised.
+ */
+export async function resolveAgentId(env: NodeJS.ProcessEnv = process.env, root?: string): Promise<string> {
+  return (await resolveIdentity(env, root)).agent;
+}
+
+/** This process's session identity — the SAME `sess-p<pid>` slug its MCP
+ *  presence row uses, so a claim's heartbeat is found. Stable for the process.
+ *  Known edge (not fixed): a short-lived CLI's pid, later reused by an MCP
+ *  server, makes that CLI's old `sess-p<pid>` claim look alive. Rare. */
 export function resolveSessionSlug(env: NodeJS.ProcessEnv = process.env): string {
-  return sanitizeAuthor(env.BATON_SLUG ?? '') || `pid-${process.pid}`;
+  return sanitizeAuthor(env.BATON_SLUG ?? '') || sessionSlug(`p${process.pid}`);
+}
+
+/** A pre-phase-7 claim slug `pid-<n>` → the presence slug it always meant. */
+export function presenceSlugOf(claimSlug: string): string {
+  const m = /^pid-(\d+)$/.exec(claimSlug);
+  return m ? sessionSlug(`p${m[1]}`) : claimSlug;
 }
 
 /** Read an author off a persisted record. Absent/!string → `unknown` (no migration). */

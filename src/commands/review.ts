@@ -30,7 +30,7 @@ import {
 // Aliased: `reject` is already the name of a Promise callback in this file, and
 // a shadowed import is the kind of thing that reads fine and behaves wrong.
 import { approve as approveTask, reject as rejectTask, type Outcome, type Who } from '../lifecycle.js';
-import { resolveAgentId, resolveSessionSlug } from '../identity.js';
+import { resolveIdentity, resolveSessionSlug } from '../identity.js';
 
 const AXIS_LABEL: Record<ReviewAxis, string> = {
   standards: 'Standards',
@@ -231,7 +231,7 @@ async function verdictCmd(
   opts: { notes?: string; force?: boolean },
 ): Promise<void> {
   const root = await activeBatonRoot();
-  const who: Who = { agent: await resolveAgentId(), sessionSlug: resolveSessionSlug() };
+  const who: Who = { ...(await resolveIdentity(process.env, root)), sessionSlug: resolveSessionSlug() };
   // Read the findings record outside the lock: it is a different file, and
   // holding the task lock across it would serialize reviews for no gain.
   const open = verdict === 'approve' ? openFindings(await loadReview(root, slug)).length : 0;
@@ -247,7 +247,8 @@ async function verdictCmd(
   if (!out.ok) {
     console.error(`✗ ${out.refusal.message}`);
     if (out.refusal.code === 'self-review') {
-      console.error('  Ask another agent to run this, or judge it yourself as a person (unset BATON_AGENT).');
+      // Unsetting BATON_AGENT no longer works: an unidentified reviewer is refused.
+      console.error(`  Ask another agent to run this. To judge it yourself as a person: BATON_AGENT=<your name> baton review ${verdict} ${slug}`);
     }
     process.exitCode = 1;
     return;

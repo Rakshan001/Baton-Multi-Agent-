@@ -45,6 +45,7 @@ import { allSnippets } from './kb/mcp.js';
 import { collectAgents } from './agents/roster.js';
 import { connectAgentMcp, McpConfigParseError, McpUnsupportedError } from './agents/connect.js';
 import { agentsFor, knownAgentIdsFor } from './agents/registry.js';
+import { agentDetectionUnavailable } from './agents.js';
 import {
   importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, loadCatalog,
   resolveSkillRoot, scanStoredSkill, skillFilesOf, uninstallSkill,
@@ -2474,6 +2475,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       // and root alone can't distinguish "that daemon" from "a new daemon in
       // the same repo on the same port" (verifyDaemon, src/daemons.ts).
       pid: process.pid,
+      // 'unavailable' once `ps` proved absent (win32/ENOENT; never a timeout), so an
+      // "Unknown agent" presence row can say detection is off rather than guess.
+      agentDetection: agentDetectionUnavailable() ? 'unavailable' : 'ok',
       // In a hub, the dashboard must ask which project a new task targets.
       hub: hubProjects.length > 0, projects: hubProjects,
       // Per root, not the module-level lists: the project's own

@@ -20,12 +20,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { collectStatus } from './board.js';
-import { detectParentAgent } from './agents.js';
+import { detectAncestry } from './agents.js';
+import { resolveIdentity, resolveSessionSlug, type Identity } from './identity.js';
 import { gitRoot } from './git.js';
 import { activeBatonRoot, loadTasks, projectOf } from './store.js';
 import { diffStampFor, groundMovedNotice, quoted, registerPipelineTools, type RegisterTool } from './mcp-pipeline.js';
 import { queryFile, searchHistory } from './history.js';
-import { canonicalSignalPath, checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, sessionSlug, setProgress, touchHookSession } from './signals.js';
+import { canonicalSignalPath, checkFiles, getSignals, isWatcherActive, recordHookEdit, registerHookSession, setProgress, touchHookSession } from './signals.js';
 import { getReport, listReports, reportSummary } from './reports.js';
 import { remoteClaims, remoteHoldersFor, remoteNote } from './remote-claims.js';
 import { MemoryValidationError, MEMORY_TYPES, recallMemories, recallRows, saveMemory } from './memory.js';
@@ -358,17 +359,52 @@ export async function startMcpServer(): Promise<void> {
   // `baton mcp` runs one process per agent session, so the pid is the session
   // and the parent process chain says which agent spawned us (M1, zero config).
   const taskSlug = process.env.BATON_SLUG?.trim() || undefined;
-  const selfSlug = taskSlug ?? sessionSlug(`p${process.pid}`);
-  if (!taskSlug) {
-    try {
-      const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent(6, root));
-      registerHookSession(root, selfSlug, agent, memRoot);
-    } catch { /* identity is best-effort — tools still work anonymously */ }
-  }
+  // ONE slug function with the CLI (identity.ts), so a claim made through
+  // take_task names the same presence row this process keeps fresh.
+  const selfSlug = resolveSessionSlug();
   const server = new McpServer(
     { name: 'baton', version: '0.1.0' },
     { instructions: 'New to this repo? Call orient() first for a budgeted project brief (memory, recent work, structure), then recall_memory before exploring, and check_files before editing shared files.' },
   );
+
+  // Who this session is — resolved AFTER the handshake (the client's name is
+  // one input, and a slow `ps` must never delay the `initialize` answer), then
+  // memoized. An unresolved answer (`none`, e.g. a timed-out ps) is not frozen:
+  // the next call retries, and the ancestry walker bounds how often. One walk
+  // attempt per call (no inline retry): this process lives on, so later tool
+  // calls retry instead of one call waiting out all three attempts.
+  let idMemo: Promise<Identity> | undefined;
+  const whoAmI = (): Promise<Identity> =>
+    (idMemo ??= resolveIdentity(process.env, root, server.server.getClientVersion()?.name, (r) => detectAncestry(r)).then((id) => {
+      if (id.source === 'none') idMemo = undefined;
+      return id;
+    }));
+  // Presence row: written once, and again only when the identity improves from
+  // `none`. One in-flight registration shared by every early caller.
+  let registeredAs: Identity['source'] | undefined;
+  let registering: Promise<void> | undefined;
+  const register = (): Promise<void> => {
+    if (taskSlug || (registeredAs && registeredAs !== 'none')) return Promise.resolve();
+    return (registering ??= (async () => {
+      try {
+        const id = await whoAmI();
+        if (registeredAs === undefined || id.source !== 'none') {
+          // host = the nearest agent ancestor, from the SAME memoized walk; the
+          // edit hook computes it the same way, so the board can fold the two rows.
+          const host = await detectAncestry(root).catch(() => null);
+          registerHookSession(root, selfSlug, id.source === 'none' ? null : id.agent, memRoot, undefined, {
+            source: id.source, clientName: server.server.getClientVersion()?.name ?? null, hostPid: host?.pid ?? null,
+          });
+          registeredAs = id.source;
+        }
+      } catch { /* identity is best-effort — tools still work anonymously */ }
+      finally { registering = undefined; }
+    })());
+  };
+  // The SDK never assigns this itself (checked: sdk 1.30 server/index.js), so
+  // setting it clobbers nothing. A client that skips the notification is
+  // registered on its first tool call instead (presenceTouch).
+  server.server.oninitialized = () => { void register(); };
 
   // Keep presence fresh on ANY tool call, not just edits (finding #5): an agent
   // that only reads (orient/check_files/recall) is still connected, but
@@ -381,6 +417,7 @@ export async function startMcpServer(): Promise<void> {
   let lastPresenceTouch = 0;
   const presenceTouch = (): void => {
     if (taskSlug) return; // only non-task sessions have a hook_sessions row to touch
+    void register();
     const now = Date.now();
     if (now - lastPresenceTouch < PRESENCE_TOUCH_MS) return;
     lastPresenceTouch = now;
@@ -649,7 +686,9 @@ export async function startMcpServer(): Promise<void> {
       // MCP rather than an edit hook (Codex/Gemini). Only for a real task
       // (taskSlug); debounced + best-effort so it never blocks or fails the tool.
       if (taskSlug && touched.length) {
-        void snapshotTask(taskSlug, { root, from: process.env.BATON_AGENT?.trim() }).catch(() => {});
+        void whoAmI()
+          .then((id) => snapshotTask(taskSlug, { root, from: id.source === 'none' ? undefined : id.agent }))
+          .catch(() => {});
       }
       return asText({
         touched,
@@ -696,7 +735,8 @@ export async function startMcpServer(): Promise<void> {
     },
     async ({ title, done, pending, next, decisions, suggested_skills, to }) => {
       try {
-        const agent = process.env.BATON_AGENT?.trim() || (await detectParentAgent(6, root).catch(() => undefined)) || undefined;
+        const id = await whoAmI();
+        const agent = id.source === 'none' ? undefined : id.agent;
         const brief = await createSessionHandoff(root, {
           slug: selfSlug, agent, title, done, pending, next, decisions, suggestedSkills: suggested_skills, to, cwd: process.cwd(),
         });
@@ -825,7 +865,8 @@ export async function startMcpServer(): Promise<void> {
       },
     },
     async ({ slug, note }) => {
-      const by = process.env.BATON_AGENT?.trim() || selfSlug;
+      const id = await whoAmI();
+      const by = id.source === 'none' ? selfSlug : id.agent;
       const r = await resolveBriefBySlug(root, slug, { by, note });
       if (!r.closed) {
         // Not an error to throw at an agent reporting finished work — the brief
@@ -845,7 +886,7 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  registerPipelineTools(reg as unknown as RegisterTool, root);
+  registerPipelineTools(reg as unknown as RegisterTool, root, async () => ({ ...(await whoAmI()), sessionSlug: selfSlug }));
 
   // Every answer goes out through here, so the tools/list trim happens once,
   // at the one place that sees the finished payload.

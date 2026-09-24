@@ -35,7 +35,7 @@ export async function pauseCmd(slug: string | undefined, opts: { reason?: string
     process.exitCode = 1;
     return;
   }
-  const who = { agent: await resolveAgentId(), sessionSlug: resolveSessionSlug() };
+  const who = { agent: await resolveAgentId(process.env, root), sessionSlug: resolveSessionSlug() };
   const now = new Date().toISOString();
 
   const out = await mutateTasks(root, (tasks) => {
@@ -78,7 +78,7 @@ export async function blockCmd(slug: string | undefined, reason: string): Promis
     process.exitCode = 1;
     return;
   }
-  const who = { agent: await resolveAgentId(), sessionSlug: resolveSessionSlug() };
+  const who = { agent: await resolveAgentId(process.env, root), sessionSlug: resolveSessionSlug() };
 
   const out = await mutateTasks(root, (tasks) => {
     const o = block(tasks, target, who, reason, new Date().toISOString());

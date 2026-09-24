@@ -4,8 +4,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildSessionCommand, parseControlLine, repoPrefix, ScrollbackRing, sessionNameFor,
   shQuote, slugFromSession, toHexArgs, unescapeControlOutput,
-  INTERACTIVE_LAUNCHERS,
+  INTERACTIVE_LAUNCHERS, agentFromTmux,
 } from '../src/terminals.js';
+import { readFileSync } from 'node:fs';
 import { bus } from '../src/events.js';
 import { detectTmux, exactPane, exactSession, killSessionFor, tmuxSessionExists, tmuxTry } from '../src/util/tmux.js';
 
@@ -237,5 +238,23 @@ describe.runIf(HAS_TMUX)('tmux targeting against a live server', () => {
   it('killing the exact slug still works', async () => {
     expect(await killSessionFor(root, 'fix-login')).toBe(true);
     expect(await tmuxSessionExists(root, 'fix-login')).toBe(false);
+  });
+});
+
+describe('agentFromTmux — the agent a Baton tmux session was launched with (I8)', () => {
+  it('reads the @baton_agent user option', () => {
+    expect(agentFromTmux('@baton_agent codex\n', '')).toBe('codex');
+    expect(agentFromTmux('@baton_agent "aider"\n', '')).toBe('aider');
+  });
+  it('falls back to the pre-phase-7 session env var', () => {
+    expect(agentFromTmux('', 'BATON_AGENT=gemini\n')).toBe('gemini');
+  });
+  it('null when neither is set', () => {
+    expect(agentFromTmux('', '')).toBeNull();
+    expect(agentFromTmux('', '-BATON_AGENT\n')).toBeNull();
+  });
+  it('terminals.ts never sets session-level env (every new pane would inherit BATON_AGENT)', () => {
+    const src = readFileSync(new URL('../src/terminals.ts', import.meta.url), 'utf-8');
+    expect(src).not.toMatch(/'set-environment'/);
   });
 });

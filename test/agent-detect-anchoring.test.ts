@@ -37,6 +37,16 @@ describe('agent detection is about programs, not words', () => {
     expect(firstAgentIn(['node build.js --out ~/antigravity-docs/site'])).toBeNull();
   });
 
+  it('does not read a path segment named after antigravity or cursor-agent', () => {
+    expect(firstAgentIn(['vim ~/proj/antigravity/x.md'])).toBeNull();
+    expect(firstAgentIn(['ls ~/cursor-agent/notes'])).toBeNull();
+  });
+
+  it('still detects the cursor-agent CLI', () => {
+    expect(firstAgentIn(['/usr/local/bin/cursor-agent --resume'])).toBe('cursor');
+    expect(firstAgentIn(['node /Users/me/.local/share/cursor-agent/versions/1.2/index.js'])).toBe('cursor');
+  });
+
   it('leaves every other agent\'s anchoring alone', () => {
     expect(firstAgentIn(['/usr/local/bin/claude --print'])).toBe('claude');
     expect(firstAgentIn(['node /x/aider-notes/index.js'])).toBeNull();

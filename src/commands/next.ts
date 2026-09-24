@@ -11,9 +11,9 @@
 import { activeBatonRoot, loadTasks, type Task } from '../store.js';
 import { blockers, integrationHold, isDeadlocked, isStalled, openPhase, phaseOf, reviewableBy, stateOf, STALL_GRACE_MS } from '../pipeline.js';
 import { resolveGate } from '../gate.js';
-import { nextFor } from '../lifecycle.js';
+import { mayReview, nextFor } from '../lifecycle.js';
 import { livenessProbe } from '../liveness.js';
-import { resolveAgentId } from '../identity.js';
+import { resolveIdentity, type Identity } from '../identity.js';
 import { quotedInline } from '../handoff/untrusted.js';
 
 export function describeTask(t: Task): string[] {
@@ -32,7 +32,9 @@ export function describeTask(t: Task): string[] {
 export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
   const root = await activeBatonRoot();
   const tasks = await loadTasks(root);
-  const agent = opts.agent ?? (await resolveAgentId());
+  // `--agent X` is a declaration, ranked like BATON_AGENT.
+  const id: Identity = opts.agent ? { agent: opts.agent, source: 'env' } : await resolveIdentity(process.env, root);
+  const agent = id.agent;
   // Both git-backed halves of "may this start", resolved once: an unlanded
   // phase, and a dependency whose commits have not reached this machine. Asked
   // at the edge because the pure layer has no business talking to git.
@@ -73,7 +75,8 @@ export async function nextCmd(opts: { agent?: string } = {}): Promise<void> {
   // Reviewing comes first, and not out of politeness: a task in `review` holds
   // its phase exactly like an unfinished one, so clearing the verdict is what
   // lets the barrier lift. Starting yet another task does not.
-  const toReview = reviewableBy(agent, tasks) as Task[];
+  // An unidentified caller is refused at the verdict, so it is not offered one.
+  const toReview = (mayReview(id) ? reviewableBy(agent, tasks) : []) as Task[];
   if (toReview.length) {
     console.log(`Awaiting your verdict (${toReview.length}) — you did not write ${toReview.length === 1 ? 'it' : 'these'}:\n`);
     for (const t of toReview) {

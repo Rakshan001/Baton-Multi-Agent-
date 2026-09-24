@@ -19,6 +19,7 @@ import { detectAgents, detectionRoots } from './agents.js';
 import { canCollide, changedFiles, taskRepos } from './conflicts.js';
 import { gitTry } from './util/exec.js';
 import { bus } from './events.js';
+import { sanitizeAuthor, type IdentitySource } from './identity.js';
 
 const nodeRequire = createRequire(import.meta.url);
 let _sqlite: typeof import('node:sqlite') | null = null;
@@ -48,7 +49,10 @@ CREATE TABLE IF NOT EXISTS hook_sessions (
   slug TEXT PRIMARY KEY,
   agent TEXT,
   root TEXT,
-  at TEXT
+  at TEXT,
+  agent_source TEXT,
+  client_name TEXT,
+  host_pid INTEGER
 );
 CREATE TABLE IF NOT EXISTS watched_roots (
   slug TEXT PRIMARY KEY,
@@ -72,7 +76,7 @@ function getDb(root: string): DatabaseSync {
     // are millisecond-scale; a short busy-wait absorbs the contention entirely.
     db.exec('PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
-    migrate(db);
+    migrateHistoryDb(db);
     conns.set(path, db);
   }
   return db;
@@ -83,9 +87,19 @@ function getDb(root: string): DatabaseSync {
  * added after the fact has to be applied by hand. Additive and idempotent: an
  * older daemon reading the same file simply ignores the column.
  */
-function migrate(db: DatabaseSync): void {
+export function migrateHistoryDb(db: DatabaseSync): void {
   const cols = db.prepare(`PRAGMA table_info(edit_signals)`).all() as unknown as Array<{ name: string }>;
   if (!cols.some((c) => c.name === 'settledAt')) db.exec(`ALTER TABLE edit_signals ADD COLUMN settledAt TEXT`);
+  // Several `baton mcp` processes and the daemon open one DB at once on first
+  // run, so a check-then-ALTER races. Just ALTER; the loser's only possible
+  // error is "duplicate column name", which means the winner already did it.
+  for (const col of ['agent_source TEXT', 'client_name TEXT', 'host_pid INTEGER']) {
+    try {
+      db.exec(`ALTER TABLE hook_sessions ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!/duplicate column/i.test((e as Error).message)) throw e;
+    }
+  }
 }
 
 /**
@@ -314,14 +328,11 @@ function uncheckedNote(reason: string | null): string {
 
 /* ------------------- hook-written signals (root sessions, G2) ------------------- */
 
-/**
- * A session running at the repo root (no worktree, no task) is identified by
- * the agent's own session id — stable for the session, meaningless after it.
- */
-export function sessionSlug(sessionId: string): string {
-  const clean = sessionId.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 8) || 'unknown';
-  return `sess-${clean}`;
-}
+// Lives in identity.ts (resolveSessionSlug returns it); re-exported for its callers.
+export { sessionSlug } from './identity.js';
+
+/** An MCP server's presence slug (`sess-p<pid>`). Hook slugs are UUID hex, never a `p`. */
+export const isMcpSessionSlug = (s: string): boolean => /^sess-p\d+$/.test(s);
 
 interface HookSession { agent: string | null; root: string | null; at: string }
 
@@ -346,7 +357,7 @@ interface HookSession { agent: string | null; root: string | null; at: string }
  */
 export function recordHookEdit(
   root: string,
-  opts: { slug: string; path: string; at?: string; session?: { agent: string; sessionRoot: string } },
+  opts: { slug: string; path: string; at?: string; session?: { agent: string; sessionRoot: string; meta?: SessionMeta } },
 ): string | null {
   const at = opts.at ?? new Date().toISOString();
   const path = canonicalSignalPath(opts.path).key;
@@ -360,7 +371,7 @@ export function recordHookEdit(
   }
   // Registered even when the path had no key: the SESSION is real either way,
   // and presence is what makes it attributable and reconcilable.
-  if (opts.session) registerHookSession(root, opts.slug, opts.session.agent, opts.session.sessionRoot, at);
+  if (opts.session) registerHookSession(root, opts.slug, opts.session.agent, opts.session.sessionRoot, at, opts.session.meta);
   return path;
 }
 
@@ -369,19 +380,47 @@ export function recordHookEdit(
  * edit — the MCP server calls this at startup (M1) so cursor/codex/gemini
  * sessions are attributable before they touch anything.
  */
+export interface SessionMeta {
+  /** Where `agent` came from (identity.resolveIdentity). */
+  source?: IdentitySource;
+  /** The MCP client's self-reported `clientInfo.name` — logged to seed CLIENT_NAMES. */
+  clientName?: string | null;
+  /** Pid of the nearest agent ancestor: shared by a session's MCP server and edit hook. */
+  hostPid?: number | null;
+}
+
+/*
+ * A null never replaces a known name on the SAME host (a failed ancestry walk
+ * must not erase a good registration). A different host pid is a different
+ * process that reused the slug's pid, so it replaces. `IS` is NULL-safe.
+ * KEEP_SOURCE: a host-less write naming the SAME agent (the guard's per-edit
+ * write, before its host walk) keeps the stored source — a walk cut short by
+ * the budget must not leave a confirmed row "(inferred)". host_pid is kept by
+ * its COALESCE.
+ */
+const KEEP_NAME = `hook_sessions.host_pid IS excluded.host_pid AND excluded.agent IS NULL`;
+const KEEP_SOURCE = `(${KEEP_NAME}) OR (excluded.host_pid IS NULL AND excluded.agent = hook_sessions.agent)`;
+
 export function registerHookSession(
   root: string,
   slug: string,
   agent: string | null,
   sessionRoot: string,
   at: string = new Date().toISOString(),
+  meta: SessionMeta = {},
 ): void {
+  const clientName = meta.clientName ? sanitizeAuthor(meta.clientName) || null : null;
   getDb(root)
     .prepare(
-      `INSERT INTO hook_sessions (slug, agent, root, at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(slug) DO UPDATE SET agent = excluded.agent, root = excluded.root, at = excluded.at`,
+      `INSERT INTO hook_sessions (slug, agent, root, at, agent_source, client_name, host_pid) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET
+         agent = CASE WHEN ${KEEP_NAME} THEN hook_sessions.agent ELSE excluded.agent END,
+         agent_source = CASE WHEN ${KEEP_SOURCE} THEN hook_sessions.agent_source ELSE excluded.agent_source END,
+         client_name = COALESCE(excluded.client_name, hook_sessions.client_name),
+         host_pid = COALESCE(excluded.host_pid, hook_sessions.host_pid),
+         root = excluded.root, at = excluded.at`,
     )
-    .run(slug, agent, sessionRoot, at);
+    .run(slug, agent, sessionRoot, at, meta.source ?? null, clientName, meta.hostPid ?? null);
 }
 
 /**
@@ -473,6 +512,10 @@ export interface LiveSession {
   root: string | null;
   /** Last time the session was seen — connect time or last edit. */
   at: string;
+  /** Where `agent` came from; null on rows written before phase 7. */
+  agentSource: IdentitySource | null;
+  clientName: string | null;
+  hostPid: number | null;
 }
 
 /**
@@ -484,7 +527,10 @@ export interface LiveSession {
 export function liveSessions(root: string, windowMin = PRESENCE_WINDOW_MIN): LiveSession[] {
   const cutoff = new Date(Date.now() - windowMin * 60_000).toISOString();
   return getDb(root)
-    .prepare(`SELECT slug, agent, root, at FROM hook_sessions WHERE at >= ? ORDER BY at DESC`)
+    .prepare(
+      `SELECT slug, agent, root, at, agent_source AS agentSource, client_name AS clientName, host_pid AS hostPid
+       FROM hook_sessions WHERE at >= ? ORDER BY at DESC`,
+    )
     .all(cutoff) as unknown as LiveSession[];
 }
 

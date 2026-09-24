@@ -53,7 +53,7 @@ async function claimAndReport(root: string, target: string, who: { agent: string
 
 /** Did this call reach the pipeline? Returns false to fall through to briefs. */
 async function tryPipeline(root: string, slug: string | undefined, resume: boolean): Promise<boolean> {
-  const agent = await resolveAgentId();
+  const agent = await resolveAgentId(process.env, root);
   const who = { agent, sessionSlug: resolveSessionSlug() };
 
   let target = slug;
@@ -188,7 +188,7 @@ export async function doneCmd(slug: string | undefined, opts: { attest?: boolean
       process.exitCode = 1;
       return;
     }
-    const who = { agent: await resolveAgentId(), sessionSlug: resolveSessionSlug() };
+    const who = { agent: await resolveAgentId(process.env, root), sessionSlug: resolveSessionSlug() };
     if (task.claimedBy && task.claimedBy.agent !== who.agent) {
       // Marking someone else's task done is the "wrong task" hallucination in
       // its most damaging form: it closes work nobody checked.

@@ -14,7 +14,8 @@ import { progressEstimate, timeAgo } from "../lib/format";
 import { getUsage, fmtTokens, fmtUsd } from "../lib/preview";
 import { BatonAPI, failureReason } from "../lib/api";
 import { usePoll, type PollState } from "../hooks/usePoll";
-import type { StatusRow, EditSignal, PresenceSession, AgentId, RepoUsage, SessionUsage, UsageTotals } from "../types";
+import { presenceLabel, SET_AGENT_HINT } from "../lib/presenceLabel";
+import type { StatusRow, EditSignal, PresenceSession, AgentId, RepoUsage, SessionUsage, UsageTotals, Meta } from "../types";
 
 export function Sparkline({ data, color = "var(--accent)", w = 64, h = 22 }: { data: number[]; color?: string; w?: number; h?: number }) {
   const max = Math.max(1, ...data); const n = data.length;
@@ -69,7 +70,7 @@ function DemoSignalsNote() {
         <span className="tag" style={{ marginLeft: "auto" }}>demo</span>
       </div>
       <div style={{ padding: "14px 16px", fontSize: "var(--fs-13)", color: "var(--text-tertiary)", textWrap: "pretty" }}>
-        Demo data is on, so this panel isn't querying the daemon — live edits and connected agents are
+        Demo data is on, so this panel isn't querying the daemon — live edits are
         only ever shown from a real <span className="mono">baton serve</span>. Turn off <b style={{ color: "var(--text-secondary)", fontWeight: 600 }}>Demo data</b> in
         the ⌘K palette to see <span className="mono">/api/signals</span> for this repo.
       </div>
@@ -120,11 +121,29 @@ function LiveSignalsSection() {
   );
 }
 
-/** Real mode: agents connected right now that have no task worktree — the plain
-   terminal / MCP sessions the worktree-only board can't show (ISS-12/ISS-14). */
-function ConnectedAgentsSection() {
+/** Agents connected right now that have no task worktree — the plain
+   terminal / MCP sessions the worktree-only board can't show (ISS-12/ISS-14).
+   Each is named only as surely as Baton knows it (lib/presenceLabel). In demo
+   mode the rows are fixtures and the header says so. */
+export function ConnectedAgentsSection({ agentDetection }: { agentDetection?: Meta["agentDetection"] }) {
   const presence = usePoll<PresenceSession[]>(() => BatonAPI.getSessions(), { interval: 5000 });
   const rows = presence.data ?? [];
+  // "Nothing connected" and "we could not find out" are different answers, and
+  // only the first one earns silence. On a FIRST-load failure `data` is still
+  // null, so returning null here hid the panel and swallowed the error the API
+  // layer deliberately rethrows — the caller saw an empty board and read it as
+  // a measured zero. Once a list has arrived the "may be stale" badge covers it.
+  if (rows.length === 0 && presence.error != null) {
+    return (
+      <section className="card" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon name="bot" size={14} style={{ color: "var(--text-tertiary)" }} />
+        <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Connected agents</h2>
+        <span style={{ fontSize: "var(--fs-12)", color: "var(--dirty-text)" }} data-tip="Could not reach the daemon — this is not the same as nobody being connected">
+          couldn't load
+        </span>
+      </section>
+    );
+  }
   if (rows.length === 0) return null; // nothing connected outside worktrees — stay quiet
   const shortRoot = (p: string | null) => (p ? p.split("/").filter(Boolean).slice(-2).join("/") : "");
   return (
@@ -132,11 +151,17 @@ function ConnectedAgentsSection() {
       <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8 }}>
         <Icon name="bot" size={14} style={{ color: "var(--text-tertiary)" }} />
         <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Connected agents</h2>
+        {BatonAPI.demo && <span className="tag">demo</span>}
         {presence.error != null && rows.length > 0 && (<span style={{ fontSize: "var(--fs-12)", color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>)}
         <span style={{ marginLeft: "auto", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }} data-tip="Sessions connected via MCP or edit hooks, working outside a Baton task worktree">{rows.length} session{rows.length === 1 ? "" : "s"}</span>
       </div>
+      {agentDetection === "unavailable" && (
+        <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-subtle)", fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+          Agent detection unavailable on this OS — {SET_AGENT_HINT} in each agent's environment.
+        </div>
+      )}
       <div>
-        {rows.slice(0, 10).map((s) => (
+        {rows.slice(0, 10).map((s) => { const label = presenceLabel(s); return (
           <div key={s.slug} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
             <span style={{ position: "relative", width: 7, height: 7, flex: "none" }} data-tip={s.live ? "active recently" : `last seen ${timeAgo(new Date(s.lastSeen).getTime())}`}>
               <span style={{ position: "absolute", inset: 0, borderRadius: 99, background: s.live ? "var(--ready)" : "var(--idle)" }} />
@@ -144,12 +169,16 @@ function ConnectedAgentsSection() {
             </span>
             <AgentBadge id={(s.agent as AgentId) ?? null} size="sm" showLabel={false} />
             <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: "var(--fs-12)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span data-tip={label.tip}>{label.text}</span>
+                {label.hint && <span className="mono" style={{ marginLeft: 8, fontSize: "var(--text-micro)", color: "var(--text-tertiary)" }}>{label.hint}</span>}
+              </div>
               <div className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.slug}</div>
               {s.root && <div className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortRoot(s.root)}</div>}
             </div>
             <span style={{ flex: "none", fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{timeAgo(new Date(s.lastSeen).getTime())}</span>
           </div>
-        ))}
+        ); })}
       </div>
     </section>
   );
@@ -541,9 +570,10 @@ function SpendSection({ usage, boardAgents, demo, failure }: { usage: RepoUsage 
  */
 
 export function ActivityScreen({
-  status, onOpen, onOpenDiff, onHandoff, onLive,
+  status, onOpen, onOpenDiff, onHandoff, onLive, agentDetection,
 }: {
   status: PollState<StatusRow[]>;
+  agentDetection?: Meta["agentDetection"];
   onOpen: (slug: string) => void;
   onOpenDiff: (slug: string) => void;
   onHandoff: (slug: string) => void;
@@ -666,7 +696,7 @@ export function ActivityScreen({
               </div>
 
               {demo ? <DemoSignalsNote /> : <LiveSignalsSection />}
-              {!demo && <ConnectedAgentsSection />}
+              <ConnectedAgentsSection agentDetection={agentDetection} />
 
               {/* Where the money went, per agent and per task — the one place on
                   this screen that can tell "measured zero" from "never measured". */}

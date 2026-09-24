@@ -132,6 +132,10 @@ export interface Meta {
     name: string | null;
     role: MemberRole | null;
   };
+  /** `unavailable` when the host can't walk process ancestry (no `ps`, or
+   *  Windows), so agents are identified only by BATON_AGENT or their MCP
+   *  client name. Absent on daemons older than this. */
+  agentDetection?: "ok" | "unavailable";
 }
 
 /** One Baton daemon on this machine — GET /api/daemons (src/daemons.ts).
@@ -641,6 +645,10 @@ export interface PresenceSession {
   lastSeen: string;
   /** Actively working (seen very recently), vs idle-but-connected. */
   live: boolean;
+  /** How `agent` was learned. `ancestry-inferred` is a guess from a process
+   *  name; `none` means unidentified (`agent` is null). `null` = a row written
+   *  before sources were recorded. Optional: older daemons omit it. */
+  agentSource?: "env" | "ancestry" | "client" | "ancestry-inferred" | "none" | null;
 }
 
 /** A live edit signal — GET /api/signals. warning = 2+ sessions on one path. */
