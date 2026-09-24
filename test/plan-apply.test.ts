@@ -7,7 +7,10 @@ import type { Task } from '../src/store.js';
 
 const OPTS = { wtRoot: '/repo/.baton/wt', now: '2026-08-05T10:00:00.000Z', actor: 'me' };
 
-const plan = (body: string) => loadPlan(`---\nplan: auth\n---\n${body}`);
+/** A plan as it exists on disk: `baton/plans/auth.md`, declaring the same name.
+ *  A frontmatter `plan:` that disagrees with the file name is an issue now —
+ *  one plan, one name, because approval is filed under it. */
+const plan = (body: string) => loadPlan(`---\nplan: auth\n---\n${body}`, 'auth');
 
 const P1 = plan('## Phase 1\n\n### auth-schema\n**scope:** `src/db/**`\n\nTables.\n');
 const P2 = plan('## Phase 1\n\n### auth-schema\n**scope:** `src/db/**`\n\nTables.\n\n## Phase 2\n\n### auth-api\n**after:** auth-schema\n\nTokens.\n');

@@ -25,6 +25,25 @@ const TASK_SLUG_MAX = 40;
 /** An assignee is matched against agent ids, which are slugs of the same shape. */
 const AGENT_ID_MAX = 40;
 
+/**
+ * A plan id, as ONE safe path segment.
+ *
+ * Defined here, next to the parser that decides a plan's identity, because
+ * every other surface has to agree with it: the plans directory filters on it,
+ * `GET /api/plans` and the approve and dispatch routes refuse anything else,
+ * and the trust store is keyed by it. Two copies of this grammar would drift,
+ * and the drift would be an id that one surface accepts and another does not.
+ *
+ * The charset stops two different things: an ESCAPE (`../../.baton/host`) and a
+ * dotfile INSIDE the directory (`baton/plans/.env.md` never leaves the
+ * directory, so containment has nothing to object to).
+ */
+const PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+
+export function isSafePlanId(id: string): boolean {
+  return PLAN_ID.test(id) && !id.includes('..');
+}
+
 export interface PlanTask {
   slug: string;
   task: string;
@@ -80,6 +99,17 @@ function parseFrontmatter(text: string): { meta: Record<string, string>; body: s
   return { meta, body: text.slice(m[0].length) };
 }
 
+/**
+ * An untrusted scrap of a plan file, short enough to put in a message.
+ *
+ * Issue messages quote what the file said so the person fixing it can see it,
+ * and they are rendered on a dashboard row. A plan file can hold a megabyte on
+ * one line; quoting it whole would put that in every listing.
+ */
+function brief(s: string, max = 60): string {
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
+}
+
 /** `**scope:** a, b` → ['a','b']. Backticks are formatting, not content. */
 function listField(raw: string): string[] {
   return raw
@@ -99,8 +129,14 @@ const SECTION_HEADING = /^##(?!#)\s/;
  * indistinguishable from prose — so `### add auth schema` and everything under
  * it vanished from the plan silently. Capture it all, then peel a trailing
  * `@agent`, and let the slug rule below reject what it must with a message.
+ *
+ * Greedy, and the trailing whitespace is trimmed in code instead. The lazy
+ * `(.+?)\s*$` this replaces was quadratic: `### a`, a long run of spaces and one
+ * more word took 1.5s at 60k characters and minutes at a megabyte — on the
+ * daemon's only thread, with every dashboard read behind it, for a file that
+ * arrives by `git pull`.
  */
-const TASK_HEADING = /^###\s+(.+?)\s*$/;
+const TASK_HEADING = /^###\s+(.+)$/;
 const TRAILING_ASSIGNEE = /\s@(\S+)$/;
 const FIELD = /^\*\*([a-z]+):\*\*\s*(.*)$/i;
 /** A model reaches a CLI as argv, and a plan can arrive by `git pull`. Refuse
@@ -125,9 +161,44 @@ export function parsePlan(text: string, fallbackId = 'plan'): { plan: Plan; issu
   const issues: PlanIssue[] = [];
   const { meta, body } = parseFrontmatter(text);
 
-  const rawId = meta.plan || fallbackId;
-  const id = slugify(rawId, PLAN_ID_MAX);
-  if (!id) issues.push({ where: 'plan', message: `plan id '${rawId}' is not usable as a name` });
+  /*
+   * ONE PLAN, ONE NAME — and the name is the file's.
+   *
+   * `plan:` used to win here, which gave a plan two ids whenever it disagreed
+   * with the file name, and the four surfaces that gate on approval each keyed
+   * off a different one: the CLI off this id, the dashboard's list off the file
+   * name, its approve and dispatch routes off whatever the request said. So an
+   * approval made in one place did not exist in another. Nothing ran that
+   * should not have — approval is bound to the bytes, so every mismatch failed
+   * closed — but a gate that asks again after you have already approved is a
+   * gate people learn to click through.
+   *
+   * The file name wins because it is the only one that is unique by
+   * construction and the only one every surface already has in hand: a URL
+   * path, a directory entry, a CLI argument. `plan:` is now a declaration that
+   * has to agree, and a disagreement is an issue rather than a silent choice —
+   * refusing costs a rename, and guessing costs an approval nobody made.
+   */
+  const declared = (meta.plan ?? '').trim();
+  const named = isSafePlanId(fallbackId);
+  const id = named ? fallbackId : slugify(fallbackId, PLAN_ID_MAX);
+  if (!named) {
+    const suggestion = id ? ` — call it '${id}.md'` : '';
+    issues.push({
+      where: 'plan',
+      message: `'${brief(fallbackId)}' is not usable as a plan name: letters, digits, dot,`
+        + ` dash and underscore only, starting with a letter or digit${suggestion}`,
+    });
+  }
+  if (declared && declared !== id) {
+    issues.push({
+      where: 'plan',
+      message: `the frontmatter says 'plan: ${brief(declared)}' but this file is '${id}.md'.`
+        + ' A plan is identified by its file name, and its approval is filed under that name.'
+        + ` Rename the file to '${brief(declared)}.md' — the bytes do not change, so an approval of them still stands —`
+        + ` or change the frontmatter to 'plan: ${id}', which edits the file and so needs approving again.`,
+    });
+  }
 
   const tasks: PlanTask[] = [];
   const phases: Array<{ number: number; name: string }> = [];
@@ -171,7 +242,7 @@ export function parsePlan(text: string, fallbackId = 'plan'): { plan: Plan; issu
     const th = TASK_HEADING.exec(trimmed);
     if (th) {
       flush();
-      let raw = th[1];
+      let raw = th[1].trimEnd();
       let assignee: string | null = null;
       const at = TRAILING_ASSIGNEE.exec(raw);
       if (at) {

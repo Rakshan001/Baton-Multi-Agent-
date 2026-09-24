@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
@@ -196,6 +196,117 @@ describe.runIf(hasDist)('plan approval over HTTP', () => {
     it('refuses to dispatch a plan nobody approved', async () => {
       const r = await post(PORT_RW, '/api/dispatch', { plan: 'nope' });
       expect(r.status).toBeGreaterThanOrEqual(400);
+    });
+  });
+
+  /*
+   * One plan, one name.
+   *
+   * Approval was keyed four ways at once — this route used the name in the
+   * request, `GET /api/plans` used the frontmatter's `plan:`, `GET
+   * /api/pipeline/plans` used the file name, and the CLI used the frontmatter
+   * again. Each mismatch failed closed, so nothing ran unapproved; what it cost
+   * was an approve button that did not stick, which is how a person learns to
+   * press it without reading.
+   */
+  describe('plan identity across the surfaces', () => {
+    it('shows one approval on every surface that reports one', async () => {
+      await post(PORT_RW, '/api/pipeline/plans/auth/approve', { sha256: digest });
+
+      const phone = await api(PORT_RW, '/api/pipeline/plans');
+      const doc = await api(PORT_RW, '/api/pipeline/plans/auth');
+      const board = await api(PORT_RW, '/api/plans?plan=auth');
+
+      expect(phone.body.plans.find((p: any) => p.id === 'auth').approved).toBe(true);
+      expect(doc.body.approved).toBe(true);
+      expect(board.body.plans[0].planId).toBe('auth');
+      expect(board.body.plans[0].approval.state).toBe('approved');
+    });
+
+    it('refuses a plan whose frontmatter names something other than its file', async () => {
+      // Two ids for one file is what made the four surfaces disagree. Refused
+      // at the parser, so the CLI and the daemon refuse it identically.
+      await writeFile(join(rw, 'baton', 'plans', 'renamed.md'), PLAN);   // declares `plan: auth`
+
+      const listed = (await api(PORT_RW, '/api/plans?plan=renamed')).body.plans[0];
+      expect(listed.parses).toBe(false);
+      expect(JSON.stringify(listed.issues)).toContain('renamed.md');
+      expect(listed.approval.state).toBe('unapproved');
+
+      const approve = await post(PORT_RW, '/api/pipeline/plans/renamed/approve', {
+        sha256: planDigest(PLAN),
+      });
+      expect(approve.status).toBe(422);
+      expect(approve.body.code).toBe('plan-invalid');
+
+      const dispatched = await post(PORT_RW, '/api/dispatch', { plan: 'renamed' });
+      expect(dispatched.status).toBe(422);
+      await rm(join(rw, 'baton', 'plans', 'renamed.md'));
+    });
+
+    it('never approves or dispatches a file outside the plans directory', async () => {
+      // `auth.md` passes the id grammar, and `readPlanFile` reads a spelling
+      // that ends in `.md` relative to the repo root and the daemon's cwd
+      // instead of `baton/plans/`. The approval recorded for it named an id no
+      // other route resolves to that file.
+      await writeFile(join(rw, 'elsewhere.md'), PLAN.replace('plan: auth', 'plan: elsewhere'));
+
+      const approve = await post(PORT_RW, '/api/pipeline/plans/elsewhere.md/approve', {
+        sha256: planDigest(PLAN.replace('plan: auth', 'plan: elsewhere')),
+      });
+      expect(approve.status).toBe(404);
+
+      const dispatched = await post(PORT_RW, '/api/dispatch', { plan: 'elsewhere.md' });
+      expect(dispatched.status).toBe(404);
+    });
+
+    it('carries a CLI approval to every screen, and back', async () => {
+      // The shape of the original bug, from the other end: `baton plan approve`
+      // recorded the frontmatter's id while the dashboard read the file name,
+      // so approving in a terminal left the screen saying "unapproved" and
+      // dispatching from the screen said the plan had never been approved.
+      const text = PLAN.replace('plan: auth', 'plan: from-cli');
+      await writeFile(join(rw, 'baton', 'plans', 'from-cli.md'), text);
+      await execa('node', [DIST_CLI, 'plan', 'approve', 'from-cli'], { cwd: rw, reject: false });
+
+      const board = (await api(PORT_RW, '/api/plans?plan=from-cli')).body.plans[0];
+      const phone = (await api(PORT_RW, '/api/pipeline/plans')).body.plans
+        .find((p: any) => p.id === 'from-cli');
+      const doc = (await api(PORT_RW, '/api/pipeline/plans/from-cli')).body;
+
+      expect(board.approval.state).toBe('approved');
+      expect(phone.approved).toBe(true);
+      expect(doc.approved).toBe(true);
+      // And the daemon dispatches it without asking for an approval again.
+      const r = await post(PORT_RW, '/api/dispatch', { plan: 'from-cli', dryRun: true });
+      expect(r.status).toBe(200);
+      await rm(join(rw, 'baton', 'plans', 'from-cli.md'));
+    }, 30_000);
+
+    it('never puts the operator\'s absolute paths in a refusal', async () => {
+      // A refusal reaches a browser and, through Orca's relay, a phone. Naming
+      // the file it read as `/Users/<someone>/code/...` tells all of them where
+      // this repo lives — the same rule the plan inventory already keeps for
+      // its unreadable rows.
+      await writeFile(join(rw, 'baton', 'plans', 'invalid.md'), '---\nplan: invalid\n---\n\n# nothing\n');
+      const r = await api(PORT_RW, '/api/pipeline/plans/invalid?resolve=1');
+      expect(r.status).toBe(422);
+      expect(JSON.stringify(r.body)).not.toContain(rw);
+      expect(JSON.stringify(r.body)).toContain('invalid.md');
+      await rm(join(rw, 'baton', 'plans', 'invalid.md'));
+    });
+
+    it('does not follow a symlink out of the plans directory', async () => {
+      // The charset guard and the containment check both work on the path
+      // STRING. A symlink is neither — and git carries symlinks, which is the
+      // way a plan file arrives here in the first place.
+      await writeFile(join(base, 'secret.txt'), 'token=hunter2\n');
+      await symlink(join(base, 'secret.txt'), join(rw, 'baton', 'plans', 'leak.md'));
+
+      const r = await api(PORT_RW, '/api/pipeline/plans/leak');
+      expect(r.status).toBeGreaterThanOrEqual(400);
+      expect(JSON.stringify(r.body)).not.toContain('hunter2');
+      await rm(join(rw, 'baton', 'plans', 'leak.md'));
     });
   });
 

@@ -36,7 +36,7 @@ import { createTask, EmptyTaskError, ProjectRequiredError, UnknownProjectError }
 import { mergeTaskBranch, MergeConflictError } from './commands/merge.js';
 import { removeTaskWorktree, MainWorktreeError, DirtyWorktreeError } from './commands/rm.js';
 import { createReadStream } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { buildGraph, detectGraphify, mergeGraphs, update } from './kb/graphify.js';
 import { ensureGraphifyIgnores } from './kb/graphifyignore.js';
 import { buildQueue, graphPathFor, kbStatus, loadKb, saveKb } from './kb/state.js';
@@ -133,7 +133,7 @@ import {
   DELEGATE_NO_LAUNCHER, isMachineGenerated, lastDelegateRun, loadDelegateSetting, readDelegateLedger,
   saveDelegateSetting,
 } from './memory/delegate.js';
-import { parsePlan } from './plan.js';
+import { isSafePlanId, planInventory } from './plans/inventory.js';
 import { runDispatch } from './dispatch-run.js';
 import {
   dispatchDeps, resolvePlanDispatch, DispatchUnresolvable, type ResolveOpts, type ResolvedDispatch,
@@ -671,58 +671,74 @@ function isOperator(access: AccessDecision, opts: ServeOptions): boolean {
 }
 
 
-/** A plan id becomes a file path under `baton/plans/`. The grammar is the
- *  traversal guard — `../../LEAKME` is not a plan name, and normalizing it
- *  would only move the question. */
-const SAFE_PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
-
-/** Every plan file on disk, with whether it is approved as it now stands. */
+/**
+ * The phone's plan list — the same inventory `GET /api/plans` serves, in the
+ * shape P10 shipped.
+ *
+ * It used to be a second implementation over the same directory, and the two
+ * disagreed about the one thing that matters: this one keyed approval off the
+ * FILE NAME while the other keyed it off the frontmatter's `plan:`, so one
+ * screen said approved and the other said not. Composing them is the fix that
+ * cannot come apart again — a plan is identified by its file name, and
+ * `parsePlan` refuses a frontmatter that disagrees.
+ */
 async function listPlansForApi(root: string): Promise<Array<Record<string, unknown>>> {
-  let names: string[] = [];
-  try {
-    names = (await readdir(join(root, PLANS_DIR))).filter((f: string) => f.endsWith('.md'));
-  } catch {
-    return [];                       // no plans directory is "no plans", not an error
-  }
-  const trust = await loadTrust(root);
-  const out: Array<Record<string, unknown>> = [];
-  for (const file of names.sort()) {
-    const id = file.replace(/\.md$/, '');
-    if (!SAFE_PLAN_ID.test(id)) continue;
-    let digest: string | null = null;
-    let goal = '';
-    let tasks = 0;
-    try {
-      const text = await readFile(join(root, PLANS_DIR, file), 'utf-8');
-      digest = planDigest(text);
-      const parsed = parsePlan(text, id);
-      goal = parsed.plan.goal;
-      tasks = parsed.plan.tasks.length;
-    } catch { /* an unreadable plan is still worth listing by name */ }
-    const record = trust[id] ?? null;
-    out.push({
-      id, goal, tasks, sha256: digest,
-      approved: digest !== null && trustVerdict(record, digest).ok,
-      approvedBy: record?.approvedBy ?? null,
-    });
-  }
-  return out;
+  return (await planInventory(root)).map((p) => ({
+    id: p.id,
+    goal: p.goal,
+    tasks: p.tasks,
+    sha256: p.sha256,
+    approved: p.approval.state === 'approved',
+    approvedBy: p.approval.approvedBy,
+  }));
 }
 
-/** Resolve one plan, turning every refusal into an HTTP-shaped answer. */
+/**
+ * Resolve one plan, turning every refusal into an HTTP-shaped answer.
+ *
+ * The id names a file in `baton/plans/` and nothing else. `readPlanFile`
+ * accepts several spellings on the CLI's behalf — a path, a name that already
+ * ends in `.md` — and tries them against the daemon's CWD as well as the repo,
+ * so `auth.md` reads a file OUTSIDE the plans directory. Every other route
+ * resolves that same id to `baton/plans/auth.md.md`, which means an approval
+ * recorded here would have described a file nothing else could find.
+ *
+ * Checked against the path actually opened rather than against the spelling
+ * asked for: a spelling nobody has thought of yet cannot widen it.
+ */
 async function resolvePlanForApi(
   root: string,
   planId: string,
   opts: ResolveOpts = {},
 ): Promise<{ r: ResolvedDispatch } | { status: number; error: Record<string, unknown> }> {
+  const notFound = {
+    status: 404,
+    error: { error: `No plan '${planId}'`, code: 'plan-not-found', hint: `plans live in ${PLANS_DIR}/` },
+  };
+  // An id names a plan, never a file. Refused BEFORE anything is opened, so a
+  // spelling that would have escaped the directory cannot even report whether
+  // the file it would have read exists.
+  if (planId.endsWith('.md')) return notFound;
+  /*
+   * The operator's disk stays out of the answer. `DispatchUnresolvable` names
+   * the file it read as an absolute path — right on a terminal, wrong on a
+   * route that answers a browser and, through Orca's relay, a phone. The plan
+   * inventory already keeps this rule for its unreadable rows.
+   */
+  const scrub = (text: string): string => text.split(`${root}${sep}`).join('');
   try {
-    return { r: await resolvePlanDispatch(root, planId, opts) };
+    const r = await resolvePlanDispatch(root, planId, opts);
+    if (relative(join(root, PLANS_DIR), r.path) !== `${planId}.md`) return notFound;
+    return { r };
   } catch (e) {
     if (e instanceof DispatchUnresolvable) {
-      return { status: 422, error: { error: e.message, code: e.code, detail: e.detail } };
+      return {
+        status: 422,
+        error: { error: scrub(e.message), code: e.code, detail: e.detail.map(scrub) },
+      };
     }
     // `readPlanFile` throws a plain Error when no candidate spelling exists.
-    return { status: 404, error: { error: `No plan '${planId}'`, code: 'plan-not-found' } };
+    return notFound;
   }
 }
 
@@ -1661,6 +1677,47 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   }
 
   /*
+   * GET /api/plans — every plan ON DISK, and whether a human approved it.
+   *
+   * The counterpart to the route above, not a replacement for it: `/api/pipeline`
+   * derives its plan list from the TASKS, so a plan file nobody has applied
+   * appears nowhere in it — which hides the one checkpoint the whole safety
+   * model rests on. Each row here says whether it is also running
+   * (`applied`/`appliedTasks`), because "on disk" and "running" are different
+   * states and merging them loses the distinction this is for.
+   *
+   * Deliberately NOT owner- or write-gated. Seeing what is waiting for your
+   * approval must not require write access, and a read-only daemon is exactly
+   * where somebody looks first. It reads plan files and the trust store and
+   * writes neither — a GET with a side effect on this surface would be an
+   * approval nobody made.
+   *
+   * `?plan=<id>` narrows it to one. The id is hostile input on this path — it
+   * becomes a filename — so the grammar refuses it before anything is joined,
+   * exactly as the markdown route below does.
+   *
+   * The plan BODY is not here. `GET /api/pipeline/plans/:id` serves that, one
+   * deliberate request at a time; shipping every plan's markdown in a list
+   * would put untrusted prose in front of a renderer that never asked for it.
+   */
+  if (method === 'GET' && path === '/api/plans') {
+    const only = url.searchParams.get('plan');
+    if (only !== null && !isSafePlanId(only)) {
+      return send(res, 400, {
+        error: `'${only}' is not a plan name`, code: 'bad-plan-id',
+        hint: 'letters, digits, dot, dash and underscore only',
+      }, origin);
+    }
+    const plans = await planInventory(root);
+    if (only === null) return send(res, 200, { dir: PLANS_DIR, plans }, origin);
+    const one = plans.filter((p) => p.id === only);
+    if (!one.length) {
+      return send(res, 404, { error: `no plan '${only}'`, hint: `plans live in ${PLANS_DIR}/` }, origin);
+    }
+    return send(res, 200, { dir: PLANS_DIR, plans: one }, origin);
+  }
+
+  /*
    * GET /api/pipeline/plans/:id — the plan document, as markdown.
    *
    * Served as source text, never as HTML. The dashboard renders it, and a plan
@@ -1693,13 +1750,26 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
      * them to a browser; an escape here is not a plan render, it is
      * `GET /api/pipeline/plans/..%2f..%2f.baton%2fhost` reading a live token.
      */
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) || id.includes('..')) {
+    if (!isSafePlanId(id)) {
       return send(res, 400, { error: 'bad plan id', hint: 'letters, digits, dot, dash and underscore only' }, origin);
     }
     const dir = join(root, PLANS_DIR);
     const file = normalize(join(dir, `${id}.md`));
     if (!file.startsWith(dir + sep)) return send(res, 403, { error: 'forbidden' }, origin);
-    const markdown = await readFile(file, 'utf-8').catch(() => null);
+    /*
+     * And a THIRD guard, because the two above both reason about a path
+     * STRING and a symlink is not one. `baton/plans/leak.md → ~/.ssh/id_rsa`
+     * passes the charset, passes containment, and hands the file to a browser
+     * — and git carries symlinks, which is exactly how a plan file arrives
+     * here. Resolve the link, then ask the containment question again of the
+     * path that will actually be read.
+     */
+    const realDir = await realpath(dir).catch(() => null);
+    const real = realDir === null ? null : await realpath(file).catch(() => null);
+    if (real !== null && !real.startsWith(realDir! + sep)) {
+      return send(res, 403, { error: 'forbidden' }, origin);
+    }
+    const markdown = real === null ? null : await readFile(real, 'utf-8').catch(() => null);
     if (markdown === null) {
       return send(res, 404, { error: `no plan '${id}'`, hint: `plans live in ${PLANS_DIR}/` }, origin);
     }
@@ -1822,8 +1892,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (planMatch && method === 'POST') {
     const planId = decodeURIComponent(planMatch[1]!);
     // A plan id becomes a file path. `../../LEAKME` must never be one, and the
-    // grammar is the guard rather than a normalize-and-hope.
-    if (!SAFE_PLAN_ID.test(planId)) {
+    // grammar is the guard rather than a normalize-and-hope. Same rule the
+    // parser and the plans directory apply, from the same function.
+    if (!isSafePlanId(planId)) {
       return send(res, 400, { error: `'${planId}' is not a plan name`, code: 'bad-plan-id' }, origin);
     }
 
@@ -1853,14 +1924,20 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
           sha256: digest,
         }, origin);
       }
+      // The id the PARSER settled on, which is this file's name — the same key
+      // `baton plan approve` records and `baton dispatch` reads. Equal to the
+      // URL segment, because `resolvePlanForApi` refuses anything that did not
+      // resolve to `baton/plans/<that segment>.md`; taking it from the plan is
+      // what says where a plan's identity comes from.
+      const key = resolved.r.plan.id;
       // P10-E3. A retry and a double tap are the same event; re-stamping `at`
       // would make an audit trail that says a human approved twice.
-      const existing = (await loadTrust(root))[planId] ?? null;
+      const existing = (await loadTrust(root))[key] ?? null;
       if (existing && existing.sha256 === digest) {
         return send(res, 200, { ok: true, alreadyApproved: true, ...existing }, origin);
       }
       const record = {
-        planId, sha256: digest, approvedBy: actorLabel(access), at: new Date().toISOString(),
+        planId: key, sha256: digest, approvedBy: actorLabel(access), at: new Date().toISOString(),
       };
       await recordApproval(root, record);
       return send(res, 200, { ok: true, alreadyApproved: false, ...record }, origin);
@@ -1872,7 +1949,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     if (!opts.writeEnabled) return denyReadOnly(res, origin);
     const body = await readJsonBody<{ plan?: string; max?: number; dryRun?: boolean; agent?: string }>(req);
     const planId = typeof body?.plan === 'string' ? body.plan.trim() : '';
-    if (!SAFE_PLAN_ID.test(planId)) {
+    if (!isSafePlanId(planId)) {
       return send(res, 400, { error: `'${planId}' is not a plan name`, code: 'bad-plan-id' }, origin);
     }
     const resolved = await resolvePlanForApi(root, planId, {
@@ -1881,7 +1958,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     });
     if ('error' in resolved) return send(res, resolved.status, resolved.error, origin);
 
-    const verdict = trustVerdict((await loadTrust(root))[planId] ?? null, resolved.r.digest);
+    // Keyed off the plan, not off the request: the same key the approve route
+    // above records and `baton dispatch` gates on, so an approval made anywhere
+    // is the approval read here.
+    const verdict = trustVerdict((await loadTrust(root))[resolved.r.plan.id] ?? null, resolved.r.digest);
     if (!verdict.ok) {
       return send(res, 409, { error: verdict.reason, code: verdict.code, sha256: resolved.r.digest }, origin);
     }

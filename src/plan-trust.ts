@@ -15,10 +15,11 @@
  * This is also the plan-trust gate `docs/superpowers/specs/
  * 2026-08-05-task-pipeline-design.md` §7.2 specified and never implemented.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { batonDir } from './store.js';
+import { withLock } from './util/lock.js';
 
 export const TRUST_FILE = 'trusted-plans.json';
 
@@ -80,30 +81,60 @@ function trustPath(root: string): string {
   return join(batonDir(root), TRUST_FILE);
 }
 
-/** Every approval on this machine. Anything unreadable or misshapen is absent. */
+/**
+ * Every approval on this machine. Anything unreadable or misshapen is absent.
+ *
+ * The map has NO PROTOTYPE, because its keys are plan names — which come off a
+ * directory listing and out of an HTTP path, and `constructor.md` is a legal
+ * plan name under the id grammar. On a plain `{}`, `trust['constructor']` hands
+ * back the Object constructor instead of undefined, and `trustVerdict` reads
+ * that record's missing `sha256` as drift: "the plan changed since undefined
+ * approved it on undefined", on a machine where nobody approved anything. It
+ * failed closed, which is the only reason this was a lie rather than a hole.
+ */
 export async function loadTrust(root: string): Promise<Record<string, TrustRecord>> {
+  const empty = (): Record<string, TrustRecord> => Object.create(null) as Record<string, TrustRecord>;
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(trustPath(root), 'utf8'));
   } catch {
-    return {};
+    return empty();
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-  const out: Record<string, TrustRecord> = {};
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty();
+  const out = empty();
   for (const [id, rec] of Object.entries(parsed as Record<string, unknown>)) {
+    // A null-prototype target also makes `out['__proto__'] = rec` an ordinary
+    // key rather than a prototype swap. `isRecord` would still have to accept
+    // it, but the assignment is no longer the interesting part.
     if (isRecord(rec, id)) out[id] = rec;
   }
   return out;
 }
 
-/** Write one approval. tmp + rename, so a crash never leaves a half-read file. */
+/**
+ * Write one approval. tmp + rename, so a crash never leaves a half-read file.
+ *
+ * Serialized on the file it writes, because this is a read-modify-write with an
+ * await in the middle and the daemon serves concurrent requests. Two approvals
+ * made at the same moment used to collide on the same tmp path: one of them
+ * renamed the OTHER one's file into place and the loser crashed with ENOENT,
+ * having told a human their approval was recorded. Same lock every other
+ * registry file in this repo uses, keyed by path.
+ *
+ * In-process only, which is where the daemon's race lives. A CLI writing this
+ * file while a daemon runs is still last-write-wins between processes; the
+ * random tmp suffix keeps that case to a lost approval rather than a corrupt
+ * file or a thrown rename.
+ */
 export async function recordApproval(root: string, record: TrustRecord): Promise<void> {
-  const all = await loadTrust(root);
-  all[record.planId] = record;
   const path = trustPath(root);
-  const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(all, null, 2)}\n`, 'utf8');
-  await rename(tmp, path);
+  return withLock(path, async () => {
+    const all = await loadTrust(root);
+    all[record.planId] = record;
+    const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+    await writeFile(tmp, `${JSON.stringify({ ...all }, null, 2)}\n`, 'utf8');
+    await rename(tmp, path);
+  });
 }
 
 /** How git names one person: a display name and an address. Either may be absent. */

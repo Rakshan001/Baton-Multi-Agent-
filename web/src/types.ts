@@ -1041,6 +1041,74 @@ export interface CancelResult {
 export type CancelScopeInput =
   | { slug: string } | { phase: number } | { plan: string };
 
+/* ---- plan inventory — GET /api/plans (src/plans/inventory.ts) ----
+
+   The counterpart to PipelineView.plans, which is derived from the TASKS: a
+   plan file nobody has applied has no tasks and so appears nowhere in it. That
+   hid the one checkpoint the safety model rests on — a human running
+   `baton plan approve`, recorded against the plan's exact bytes.
+
+   Every field here is data the daemon judged. The browser re-judges none of
+   it: a second opinion about "approved" would eventually disagree with the CLI
+   that actually refuses to dispatch. */
+
+/** One problem with a plan file, in the parser's own words. */
+export interface PlanIssue {
+  /** Where it is, as a human reads the file: a task slug, a phase, or 'plan'. */
+  where: string;
+  message: string;
+}
+
+/**
+ * `void` is the case the byte-exact gate exists to catch: somebody approved
+ * this plan and then the file moved underneath the approval. It is not a
+ * weaker "approved".
+ *
+ * `unknown` is a file that could not be read — no bytes, so nothing to vouch
+ * for, and "unapproved" would imply we had looked.
+ */
+export interface PlanApproval {
+  state: "approved" | "unapproved" | "void" | "unknown";
+  /** The daemon's own wording, including how to fix it. Rendered as text. */
+  reason: string | null;
+  approvedBy: string | null;
+  at: string | null;
+  /** The digest that was APPROVED — for `void`, not the one on disk. */
+  sha256: string | null;
+}
+
+export interface PlanInventoryEntry {
+  /** The filename stem, and what a URL names. */
+  id: string;
+  /** The id the frontmatter declares — the key `baton plan approve` uses. */
+  planId: string;
+  /** Repo-relative, for display. */
+  path: string;
+  goal: string;
+  /** Tasks the FILE declares — not rows on the board. */
+  tasks: number;
+  phases: number;
+  parses: boolean;
+  issues: PlanIssue[];
+  /** False when the file could not be read at all. */
+  readable: boolean;
+  /** Has this plan created tasks? "On disk" and "running" are different states. */
+  applied: boolean;
+  appliedTasks: number;
+  /** The digest of the bytes on disk right now. */
+  sha256: string | null;
+  approval: PlanApproval;
+}
+
+export interface PlanInventory {
+  /** Where the plans live, repo-relative — part of the answer to "why is mine
+   *  not listed?". */
+  dir: string;
+  plans: PlanInventoryEntry[];
+}
+
+/* ---- worktree read-model — GET /api/worktrees (src/worktrees.ts) ---- */
+
 /**
  * `health` is the evidence layer under `state`, never a peer of it
  * (src/worktrees.ts:48-58). `state` is the lifecycle value the daemon was told;

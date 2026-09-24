@@ -21,13 +21,13 @@
    ============================================================ */
 import { useCallback, useMemo, useState } from "react";
 import { Icon, type IconName } from "../components/Icon";
-import { CardSkeleton, ConfirmDialog, EmptyState, ErrorState, Sheet } from "../components/primitives";
+import { CardSkeleton, CommandLine, ConfirmDialog, EmptyState, ErrorState, Sheet } from "../components/primitives";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ScreenHeader } from "./shared";
 import { BatonAPI } from "../lib/api";
 import { usePoll } from "../hooks/usePoll";
 import { showToast } from "../lib/toast";
-import type { CancelResult, CancelScopeInput, Lane, LaneStatus, LaneTask, PipelineView, TaskState } from "../types";
+import type { CancelResult, CancelScopeInput, Lane, LaneStatus, LaneTask, PipelineView, PlanInventory, PlanInventoryEntry, TaskState } from "../types";
 
 /* ---------- lane + state vocabulary ---------- */
 
@@ -227,6 +227,7 @@ function PlanMarkdown({ text }: { text: string }) {
             fontSize: level === 1 ? "var(--fs-16)" : level === 2 ? "var(--fs-14)" : "var(--fs-13)",
             fontWeight: "var(--fw-semibold)", marginTop: out.length ? 16 : 0, marginBottom: 4,
             color: level <= 2 ? "var(--text-primary)" : "var(--text-secondary)",
+            overflowWrap: "anywhere",
           }}>{h[2]}</div>,
         );
         return;
@@ -238,8 +239,8 @@ function PlanMarkdown({ text }: { text: string }) {
         out.push(
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "3px 0", fontSize: "var(--fs-13)" }}>
             <Icon name={checked ? "checkCircle" : "square"} size={14}
-              style={{ flex: "none", marginTop: 2, color: checked ? "var(--ok)" : "var(--text-tertiary)" }} />
-            <span style={{ color: checked ? "var(--text-tertiary)" : "var(--text-secondary)", textDecoration: checked ? "line-through" : "none" }}>
+              style={{ flex: "none", marginTop: 2, color: checked ? "var(--clean)" : "var(--text-tertiary)" }} />
+            <span style={{ minWidth: 0, overflowWrap: "anywhere", color: checked ? "var(--text-tertiary)" : "var(--text-secondary)", textDecoration: checked ? "line-through" : "none" }}>
               {box[2]}
             </span>
           </div>,
@@ -249,13 +250,18 @@ function PlanMarkdown({ text }: { text: string }) {
 
       const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
       if (bullet) {
-        out.push(<div key={i} style={{ display: "flex", gap: 8, fontSize: "var(--fs-13)", color: "var(--text-secondary)", padding: "2px 0" }}><span style={{ color: "var(--text-tertiary)" }}>·</span><span>{bullet[1]}</span></div>);
+        out.push(<div key={i} style={{ display: "flex", gap: 8, fontSize: "var(--fs-13)", color: "var(--text-secondary)", padding: "2px 0" }}><span style={{ color: "var(--text-tertiary)" }}>·</span><span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{bullet[1]}</span></div>);
         return;
       }
 
       if (!line.trim()) { out.push(<div key={i} style={{ height: 6 }} />); return; }
-      out.push(<div key={i} style={{ fontSize: "var(--fs-13)", color: "var(--text-secondary)", lineHeight: "var(--lh-normal)", padding: "2px 0" }}>{line}</div>);
+      out.push(<div key={i} style={{ fontSize: "var(--fs-13)", color: "var(--text-secondary)", lineHeight: "var(--lh-normal)", padding: "2px 0", overflowWrap: "anywhere" }}>{line}</div>);
     });
+    // An unclosed ``` used to swallow every remaining line in silence: a plan
+    // with an odd number of fences simply stopped rendering part-way down, with
+    // nothing to say it had. Show what was collected — an unterminated fence is
+    // a malformed plan, and the reader needs to SEE the rest to notice that.
+    if (fence) out.push(<pre key="unterminated-fence" style={{ margin: "8px 0", padding: 10, background: "var(--bg-input)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-sm)", fontSize: "var(--fs-12)", overflowX: "auto" }}>{(fence as string[]).join("\n")}</pre>);
     return out;
   }, [text]);
 
@@ -284,6 +290,274 @@ function PlanSheet({ planId, onClose }: { planId: string; onClose: () => void })
             : <CardSkeleton />}
       </div>
     </Sheet>
+  );
+}
+
+
+/* ---------- plans on disk ---------- */
+
+/**
+ * What is waiting for a human, from GET /api/plans (src/plans/inventory.ts).
+ *
+ * The pipeline's own plan list is derived from the TASKS, so a plan file that
+ * has never been applied has no tasks and appears NOWHERE — which hid the one
+ * checkpoint the whole safety model rests on. This section is the other half:
+ * what exists on disk, and whether the bytes on disk are the bytes somebody
+ * approved.
+ *
+ * Two rules hold this component together, and both are security decisions
+ * rather than taste:
+ *
+ *   1. READ-ONLY. An unapproved plan shows the exact command that approves it,
+ *      as selectable text — never a button. Approval is recorded against bytes
+ *      a person is meant to have READ, and a button in a dashboard is an
+ *      approval given without reading, which is the whole check gone.
+ *
+ *   2. Everything a plan file says — its goal, its validation issues, the
+ *      daemon's reason string — is UNTRUSTED. A plan can arrive by `git pull`
+ *      from a branch nobody reviewed, so every one of those strings is rendered
+ *      as a React text child and nothing else. No markdown, no
+ *      dangerouslySetInnerHTML: "who can open a PR" must not become "who can
+ *      run script in the operator's dashboard".
+ */
+
+type ApprovalState = PlanInventoryEntry["approval"]["state"];
+
+const APPROVAL_META: Record<ApprovalState, { label: string; color: string; icon: IconName }> = {
+  // `--clean`: the green that actually exists in src/styles/tokens.css. This
+  // row got it right first and the lane table above has now been corrected to
+  // match — a `color-mix` built on an undefined variable is invalid, so the
+  // whole declaration is dropped rather than falling back to anything.
+  approved: { label: "Approved", color: "var(--clean)", icon: "checkCircle" },
+  unapproved: { label: "Not approved", color: "var(--dirty)", icon: "lock" },
+  // The case the byte-exact digest exists to catch, in the loudest words the
+  // screen has. It is not a weaker "approved".
+  void: { label: "Approval void — the file changed", color: "var(--conflict)", icon: "alertOctagon" },
+  unknown: { label: "Unreadable", color: "var(--idle)", icon: "fileWarning" },
+};
+
+/**
+ * The same plan-id grammar the daemon enforces (src/plans/inventory.ts —
+ * SAFE_PLAN_ID), re-checked here because this id is interpolated into a shell
+ * command a person is invited to COPY. The daemon already refuses anything
+ * else, so this can only ever fire if that guard is loosened or bypassed — and
+ * on the day it is, the failure must not be a dashboard handing somebody
+ * `baton plan approve x; curl …` on their clipboard.
+ */
+const SAFE_PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+
+function approveCommand(id: string): string | null {
+  return SAFE_PLAN_ID.test(id) && !id.includes("..") ? `baton plan approve ${id}` : null;
+}
+
+/** Attention first, then byte order — deterministic either way, and the same
+ *  list on every machine. A void approval or a broken plan is what somebody
+ *  opened this screen for; twenty healthy plans must not bury one. */
+function planRank(p: PlanInventoryEntry): number {
+  if (p.approval.state === "void") return 0;
+  if (!p.readable) return 1;
+  if (!p.parses) return 2;
+  if (p.approval.state === "unapproved") return 3;
+  return 4;
+}
+
+function ApprovalPill({ state }: { state: ApprovalState }) {
+  const meta = APPROVAL_META[state];
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5, height: 20, padding: "0 8px",
+      borderRadius: 999, fontSize: "var(--fs-11)", fontWeight: "var(--fw-medium)", letterSpacing: "var(--ls-snug)",
+      color: meta.color, background: `color-mix(in srgb, ${meta.color} 13%, transparent)`,
+      border: `1px solid color-mix(in srgb, ${meta.color} 30%, transparent)`, flex: "none",
+    }}>
+      <Icon name={meta.icon} size={11} />
+      {meta.label}
+    </span>
+  );
+}
+
+/**
+ * One plan. A healthy, approved, applied plan is one line — it needs nothing
+ * from anybody. Everything else opens up in place with what is wrong and the
+ * command that fixes it.
+ */
+function PlanRow({ plan, onOpen }: { plan: PlanInventoryEntry; onOpen: () => void }) {
+  const meta = APPROVAL_META[plan.approval.state];
+  const needsAttention = plan.approval.state !== "approved" || !plan.parses;
+  const isVoid = plan.approval.state === "void";
+  const command = approveCommand(plan.id);
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 8, padding: "10px 16px",
+      borderBottom: "1px solid var(--border-subtle)",
+      borderLeft: `3px solid ${needsAttention ? meta.color : "transparent"}`,
+      background: isVoid ? "color-mix(in srgb, var(--conflict) 7%, transparent)" : "transparent",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button className="fr" onClick={onOpen} data-tip="Read the plan"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left", display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+          <Icon name="list" size={13} style={{ color: "var(--text-tertiary)", flex: "none" }} />
+          <span className="mono" style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-medium)", color: "var(--text-primary)" }}>{plan.id}</span>
+        </button>
+
+        {/* The plan's own words. A text child, never markup. */}
+        {plan.goal && (
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)", flex: "1 1 200px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {plan.goal}
+          </span>
+        )}
+
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap", marginLeft: "auto" }}>
+          {/* "On disk" and "running" are different states — say which. */}
+          {plan.applied
+            ? <Chip title={`${plan.appliedTasks} task${plan.appliedTasks === 1 ? "" : "s"} of this plan are on the board`}>
+                applied · {plan.appliedTasks}/{plan.tasks}
+              </Chip>
+            : plan.readable
+              ? <Chip title="On disk, but no tasks have been created from it">{plan.tasks} task{plan.tasks === 1 ? "" : "s"} · not applied</Chip>
+              : null}
+          {plan.readable && !plan.parses && (
+            <Chip tone="warn" title="This plan cannot be applied until these are fixed">
+              {plan.issues.length} problem{plan.issues.length === 1 ? "" : "s"}
+            </Chip>
+          )}
+          <ApprovalPill state={plan.approval.state} />
+        </span>
+      </div>
+
+      {/* The daemon's own reason, verbatim and as text — it is the same
+          sentence the CLI prints, so someone who reads it here and types the
+          command there is talking about the same thing. */}
+      {plan.approval.reason && (
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: "var(--fs-11)", color: isVoid ? "var(--conflict)" : "var(--text-tertiary)", lineHeight: "var(--lh-snug)" }}>
+          <Icon name={isVoid ? "alertOctagon" : "lock"} size={12} style={{ flex: "none", marginTop: 1 }} />
+          <span>{plan.approval.reason}</span>
+        </div>
+      )}
+
+      {/* Shown for an unreadable plan too: the errno IS the issue, and it is the
+          actionable half of that row. */}
+      {plan.issues.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          {plan.issues.map((issue, i) => (
+            <div key={`${issue.where}-${i}`} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: "var(--fs-11)", color: "var(--conflict)", lineHeight: "var(--lh-snug)" }}>
+              <Icon name="alertTriangle" size={12} style={{ flex: "none", marginTop: 1 }} />
+              <span><span className="mono">{issue.where}</span> — {issue.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/*
+        The command, not a button. `baton plan approve <id>` looks the file up
+        in baton/plans/, prints exactly what dispatch would launch, and records
+        the approval against the bytes that are there at that moment. Doing that
+        from here would record an approval nobody read.
+      */}
+      {(plan.approval.state === "unapproved" || plan.approval.state === "void") && plan.readable && (
+        command ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <CommandLine command={command} />
+            <span style={{ fontSize: "var(--fs-11)", color: "var(--text-quaternary)" }}>
+              {isVoid ? "Read what changed first — the approval is recorded against the file's exact bytes."
+                : "Read the plan first — the approval is recorded against the file's exact bytes."}
+            </span>
+          </div>
+        ) : (
+          <div style={{ fontSize: "var(--fs-11)", color: "var(--conflict)" }}>
+            This plan's name is not one a command can safely name. Rename the file in {plan.path} before approving it.
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function PlansOnDisk({ onOpen }: { onOpen: (id: string) => void }) {
+  const inv = usePoll<PlanInventory>(() => BatonAPI.getPlanInventory(), { interval: 15000 });
+  const data = inv.data;
+  const plans = useMemo(
+    () => [...(data?.plans ?? [])].sort((a, b) => planRank(a) - planRank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    [data],
+  );
+  const voided = plans.filter((p) => p.approval.state === "void");
+  const waiting = plans.filter((p) => p.approval.state === "unapproved").length;
+  const dir = data?.dir ?? "baton/plans";
+
+  if (inv.error && !data) {
+    return (
+      <section className="card" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+        <Icon name="alertTriangle" size={13} style={{ color: "var(--conflict)", flex: "none" }} />
+        Could not read the plans in <span className="mono">{dir}</span>.
+        <button className="btn btn-sm fr" onClick={inv.refetch} style={{ marginLeft: "auto" }}>Retry</button>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      {/*
+        A voided approval is the one state that must be impossible to miss: the
+        plan a person believes they vetted is not the plan on disk. Named up
+        here as well as in the row, because with twenty plans the row can be
+        below the fold.
+      */}
+      {voided.length > 0 && (
+        <div style={{
+          display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 13px", borderRadius: "var(--r-md)",
+          background: "color-mix(in srgb, var(--conflict) 10%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--conflict) 32%, transparent)", color: "var(--conflict)",
+        }}>
+          <Icon name="alertOctagon" size={16} style={{ flex: "none", marginTop: 1 }} />
+          <div style={{ fontSize: "var(--fs-13)", lineHeight: "var(--lh-snug)" }}>
+            <strong>
+              {voided.length === 1 ? "One plan changed after it was approved." : `${voided.length} plans changed after they were approved.`}
+            </strong>{" "}
+            The approval no longer covers what is on disk, and dispatch will refuse until it is re-approved:{" "}
+            {voided.map((p, i) => (
+              <span key={p.id}>
+                {i > 0 ? ", " : ""}<span className="mono">{p.id}</span>
+              </span>
+            ))}.
+          </div>
+        </div>
+      )}
+
+      <section className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <Icon name="folder" size={14} style={{ color: "var(--text-tertiary)" }} />
+          <h2 style={{ margin: 0, fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)" }}>Plans on disk</h2>
+          <span className="mono" style={{ fontSize: "var(--fs-11)", color: "var(--text-tertiary)" }}>{dir}</span>
+          {inv.error != null && plans.length > 0 && (
+            <span style={{ fontSize: "var(--fs-11)", color: "var(--dirty-text)" }} data-tip="The last refresh failed — this list may be stale">may be stale</span>
+          )}
+          <span style={{ marginLeft: "auto", fontSize: "var(--fs-11)", color: "var(--text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
+            {plans.length} plan{plans.length === 1 ? "" : "s"}
+            {waiting > 0 ? ` · ${waiting} awaiting approval` : ""}
+          </span>
+        </div>
+
+        {!data ? (
+          <div style={{ padding: 16 }}><CardSkeleton /></div>
+        ) : plans.length === 0 ? (
+          <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+            <div style={{ fontSize: "var(--fs-13)", color: "var(--text-tertiary)", textWrap: "pretty" }}>
+              No plan files in <span className="mono">{dir}</span>. A plan is a markdown file with a phase per
+              heading; check one before applying it.
+            </div>
+            <CommandLine command="baton plan check <file>" />
+          </div>
+        ) : (
+          <div>
+            {plans.map((p) => <PlanRow key={p.id} plan={p} onOpen={() => onOpen(p.id)} />)}
+            <div style={{ padding: "9px 16px", fontSize: "var(--fs-11)", color: "var(--text-quaternary)", textWrap: "pretty" }}>
+              Read-only. Approving is a command you run in a terminal after reading the plan — it is recorded
+              against the file's exact bytes, so a click here would be an approval nobody read.
+            </div>
+          </div>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -459,6 +733,8 @@ export function PipelineScreen({ writeEnabled }: { writeEnabled: boolean }) {
             </div>
           </div>
         )}
+
+        <PlansOnDisk onOpen={setPlanOpen} />
 
         {!view && <CardSkeleton />}
 

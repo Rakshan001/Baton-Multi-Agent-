@@ -119,6 +119,53 @@ describe('the trust file', () => {
   });
 });
 
+/**
+ * The trust store is a lookup keyed by a name that comes off a directory
+ * listing and out of an HTTP path. Both of those are hostile input, and a plain
+ * `{}` answers questions nobody asked it.
+ */
+describe('the trust store as a lookup', () => {
+  it('has no opinion about a plan named after an Object property', async () => {
+    // `baton/plans/constructor.md` is a legal plan name — the id grammar
+    // accepts it, so the daemon will serve and dispatch it. On a plain object
+    // `trust['constructor']` returns the Object constructor rather than
+    // undefined, and `trustVerdict` then reads its missing `sha256` as drift:
+    // the screen said "the plan changed since undefined approved it on
+    // undefined" about a machine where nobody had approved anything. Fails
+    // closed either way; it is the story that is a lie.
+    const trust = await loadTrust(root);
+    for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(trust[name], name).toBeUndefined();
+      expect(trustVerdict(trust[name] ?? null, planDigest(PLAN)), name)
+        .toMatchObject({ ok: false, code: 'unapproved' });
+    }
+  });
+
+  it('a __proto__ key in the file does not become the map\'s prototype', async () => {
+    // Written as raw JSON on purpose: an object literal's `__proto__:` sets the
+    // prototype instead of adding a key, so building this with an object would
+    // have tested nothing at all.
+    const rec = (id: string) => `{"planId":"${id}","sha256":"${'a1'.repeat(32)}","approvedBy":"me","at":"t"}`;
+    await writeFile(join(root, '.baton', TRUST_FILE), `{"__proto__":${rec('__proto__')},"a":${rec('a')}}`);
+    const trust = await loadTrust(root);
+    expect(trust['a']).toBeTruthy();
+    expect(trust['whatever-else']).toBeUndefined();
+  });
+
+  it('records two approvals made at the same moment, losing neither', async () => {
+    // Read-modify-write with no lock: both calls read the same map, and the
+    // second rename overwrites the first record — an approval a human made,
+    // gone, with a success printed for it. Two people on one dashboard, or a
+    // double-click, is enough.
+    await Promise.all([
+      recordApproval(root, { planId: 'a', sha256: 'a1'.repeat(32), approvedBy: 'me', at: 't1' }),
+      recordApproval(root, { planId: 'b', sha256: 'b2'.repeat(32), approvedBy: 'me', at: 't2' }),
+      recordApproval(root, { planId: 'c', sha256: 'c3'.repeat(32), approvedBy: 'me', at: 't3' }),
+    ]);
+    expect(Object.keys(await loadTrust(root)).sort()).toEqual(['a', 'b', 'c']);
+  });
+});
+
 describe('authorWarning — P3-E2', () => {
   it('warns when the plan\'s last committer is nobody this machine knows as itself', () => {
     expect(authorWarning({ name: 'someone-else', email: 'them@corp.com' }, 'rakshan@laptop')).toMatch(/someone-else/);

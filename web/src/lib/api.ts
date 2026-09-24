@@ -19,7 +19,7 @@
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
 import { DEMO_BRIEF_BODY, demoResumePrompt } from "./demoHandoff";
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, QuarantineView, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, MemoryConsolidation, MemoryDelegateSpend, MemoryProducedFact, WorktreeRow } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, QuarantineView, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, PlanInventory, MemoryConsolidation, MemoryDelegateSpend, MemoryProducedFact, WorktreeRow } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
@@ -55,6 +55,19 @@ export type ApiErrorCode =
   /** A repo held several skills and none was named — details.choices lists them. */
   | "AMBIGUOUS"
   | "SERVER";
+
+export class ApiError extends Error {
+  code: ApiErrorCode;
+  status?: number;
+  details?: unknown;
+  constructor(code: ApiErrorCode, message: string, status?: number, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
 
 /**
  * One clause naming what actually stopped a read — for a screen that would
@@ -129,18 +142,97 @@ export interface DoctorReport {
   counts: Record<JunkKind, number>;
 }
 
-export class ApiError extends Error {
-  code: ApiErrorCode;
-  status?: number;
-  details?: unknown;
-  constructor(code: ApiErrorCode, message: string, status?: number, details?: unknown) {
-    super(message);
-    this.name = "ApiError";
-    this.code = code;
-    this.status = status;
-    this.details = details;
-  }
-}
+/* ============================================================
+   DEMO FIXTURES — plan inventory
+
+   It lives here rather than beside the daemon shape it mirrors, because
+   demo mode is the showcase: these are the values a person sees before they
+   ever run `baton serve`, and they have to teach the real states.
+
+   Everything below is invented. Nothing here is fetched, and no daemon is
+   contacted when demo mode is on.
+   ============================================================ */
+
+/**
+ * Every plan state on one screen, because the states are the point:
+ * approved-and-running, waiting for a human, VOID because the file changed
+ * after approval, broken, and unreadable. A fixture that only showed the happy
+ * plan would teach nothing about the checkpoint this screen exists to expose.
+ */
+const DEMO_PLAN_INVENTORY: PlanInventory = {
+  dir: "baton/plans",
+  plans: [
+    {
+      id: "auth", planId: "auth", path: "baton/plans/auth.md",
+      goal: "Ship API-key auth end to end",
+      tasks: 6, phases: 3, parses: true, issues: [], readable: true,
+      applied: true, appliedTasks: 6,
+      sha256: "9f2b41c7e8a05d3b6c1f4a92e7d08b53c6a1f9e42d7b0c85a3e6f1d94b7c20a8e",
+      approval: {
+        state: "approved", reason: null, approvedBy: "you@example.com",
+        at: "2026-09-02T09:14:00.000Z",
+        sha256: "9f2b41c7e8a05d3b6c1f4a92e7d08b53c6a1f9e42d7b0c85a3e6f1d94b7c20a8e",
+      },
+    },
+    {
+      // The blind spot: on disk, never applied, and until now invisible.
+      id: "billing", planId: "billing", path: "baton/plans/billing.md",
+      goal: "Metered billing with Stripe usage records",
+      tasks: 4, phases: 2, parses: true, issues: [], readable: true,
+      applied: false, appliedTasks: 0,
+      sha256: "1a7c05e93b8d4f26a0c71e8b52d4396f7a0b1c8e35d92f47b6a0c3e8d15f92b74",
+      approval: {
+        state: "unapproved",
+        reason: "this plan has not been approved. Read it, then run `baton plan approve <plan>`.",
+        approvedBy: null, at: null, sha256: null,
+      },
+    },
+    {
+      // Approved, then edited. The one case the byte-exact gate exists for.
+      id: "search-rework", planId: "search-rework", path: "baton/plans/search-rework.md",
+      goal: "Replace the search index and re-rank results",
+      tasks: 5, phases: 2, parses: true, issues: [], readable: true,
+      applied: true, appliedTasks: 5,
+      sha256: "c4e08b7a13f95d6208e7b4c1a9f30d582b7e6c04a1d93f8b5e2c7a06d41b98f3c",
+      approval: {
+        state: "void",
+        reason: "the plan changed since you@example.com approved it on 2026-08-29T16:02:00.000Z"
+          + " (approved 55d1f0a9b3c2…, on disk c4e08b7a13f9…)."
+          + " Read the change, then run `baton plan approve <plan>` again.",
+        approvedBy: "you@example.com", at: "2026-08-29T16:02:00.000Z",
+        sha256: "55d1f0a9b3c264e7180a9c3b5d2e7f406a8b1c9d3e5f70a2b4c68d1e93f0a7b5",
+      },
+    },
+    {
+      id: "flaky-tests", planId: "flaky-tests", path: "baton/plans/flaky-tests.md",
+      goal: "Stop the checkout e2e suite flaking",
+      tasks: 3, phases: 1, parses: false,
+      issues: [
+        { where: "phase 1", message: "'retry-harness' and 'quarantine-list' both claim test/e2e/checkout.spec.ts — two agents, one file, same phase" },
+        { where: "smoke-run", message: "no scope: a task must say which files it may touch" },
+      ],
+      readable: true, applied: false, appliedTasks: 0,
+      sha256: "7b2d9c04a15e386f0b7c2a9d4e81f35062a7c1b8d90e4f37a5c2b6d08e91f4a20",
+      approval: {
+        state: "unapproved",
+        reason: "this plan has not been approved. Read it, then run `baton plan approve <plan>`.",
+        approvedBy: null, at: null, sha256: null,
+      },
+    },
+    {
+      // Listed, not swallowed: the row somebody has to go and look at.
+      id: "perf-budget", planId: "perf-budget", path: "baton/plans/perf-budget.md",
+      goal: "", tasks: 0, phases: 0, parses: false,
+      issues: [{ where: "plan", message: "baton/plans/perf-budget.md could not be read (EACCES)" }],
+      readable: false, applied: false, appliedTasks: 0, sha256: null,
+      approval: {
+        state: "unknown",
+        reason: "this plan could not be read, so nothing can be vouched for.",
+        approvedBy: null, at: null, sha256: null,
+      },
+    },
+  ],
+};
 
 /** Branch convention from the CLI (src/commands/new.ts). */
 export function branchFor(slug: string): string {
@@ -1696,6 +1788,23 @@ class BatonClient {
     return this.request<{ id: string; markdown: string; path: string }>(
       `/api/pipeline/plans/${encodeURIComponent(id)}`,
     );
+  }
+
+  /**
+   * Every plan ON DISK and whether a human approved the bytes that are there
+   * now — GET /api/plans (src/plans/inventory.ts).
+   *
+   * Read-only, and it stays that way. There is no approve method here on
+   * purpose: approval is recorded against bytes somebody is supposed to have
+   * read, and a one-click approval in a browser is a checkpoint that has
+   * stopped checking anything.
+   */
+  async getPlanInventory(): Promise<PlanInventory> {
+    if (this.demo) {
+      await this.demoGate(80);
+      return DEMO_PLAN_INVENTORY;
+    }
+    return this.request<PlanInventory>("/api/plans");
   }
 
   /**

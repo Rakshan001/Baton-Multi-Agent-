@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Rakshan Shetty
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
-import { loadPlan, parsePlan, PlanError, scopesOverlap, validatePlan } from '../src/plan.js';
+import { isSafePlanId, loadPlan, parsePlan, PlanError, scopesOverlap, validatePlan } from '../src/plan.js';
 
 const PLAN = `---
 plan: 2026-08-05-auth
@@ -32,8 +32,12 @@ Issue and verify tokens.
 Throttle the login route.
 `;
 
+/** The name `PLAN` would have on disk. A plan is identified by its file name,
+ *  and its frontmatter has to agree — see 'plan identity' below. */
+const PLAN_FILE = '2026-08-05-auth';
+
 describe('parsePlan', () => {
-  const { plan, issues } = parsePlan(PLAN);
+  const { plan, issues } = parsePlan(PLAN, PLAN_FILE);
 
   it('reads the frontmatter', () => {
     expect(issues).toEqual([]);
@@ -159,10 +163,6 @@ describe('slug safety on ingest', () => {
     expect(traversal('auth-schema').plan.tasks.map((t) => t.slug)).toEqual(['auth-schema']);
   });
 
-  it('sanitises the plan id, which becomes a filename', () => {
-    expect(parsePlan('---\nplan: ../../../evil\n---\n## Phase 1\n\n### a\n\nw\n').plan.id).toBe('evil');
-  });
-
   it('refuses a path-shaped assignee, and does not keep it as a value', () => {
     // An assignee is matched against agent ids and written into tasks.json.
     const { plan, issues } = parsePlan('## Phase 1\n\n### a @../../etc/passwd\n\nwork\n');
@@ -177,11 +177,98 @@ describe('slug safety on ingest', () => {
   });
 });
 
+/**
+ * One plan, one name.
+ *
+ * Approval is recorded against a plan's id, and that id used to have two
+ * sources: the file name, and whatever the frontmatter declared. When the two
+ * disagreed the four surfaces that gate on approval each keyed off a different
+ * one — approving on the CLI left the dashboard saying "unapproved", approving
+ * on the dashboard made `baton dispatch` refuse, and the two dashboard routes
+ * contradicted each other. Every mismatch failed closed, so nothing ran that
+ * should not have; what it cost was an approval UX that teaches people to
+ * approve again without reading, which is the only thing the gate is made of.
+ *
+ * The FILE NAME is the identity. It is what a URL path names, what the plans
+ * directory lists, what an approval is filed under, and it is unique by
+ * construction — two files cannot share one name, whereas two files can declare
+ * the same `plan:`. Frontmatter now has to agree with it.
+ */
+describe('plan identity', () => {
+  const src = (declared: string | null) =>
+    `${declared === null ? '' : `---\nplan: ${declared}\n---\n`}## Phase 1\n\n### a\n\nw\n`;
+
+  it('takes its id from the file name', () => {
+    const { plan, issues } = parsePlan(src('auth'), 'auth');
+    expect(plan.id).toBe('auth');
+    expect(issues).toEqual([]);
+  });
+
+  it('uses the file name when the frontmatter declares nothing', () => {
+    const { plan, issues } = parsePlan(src(null), 'auth');
+    expect(plan.id).toBe('auth');
+    expect(issues).toEqual([]);
+  });
+
+  it('refuses a declared id that disagrees with the file name, and names both', () => {
+    const { plan, issues } = parsePlan(src('auth'), 'foo');
+    expect(plan.id).toBe('foo');                        // the file name wins
+    const message = issues.map((i) => i.message).join('\n');
+    expect(message).toContain('auth');
+    expect(message).toContain('foo.md');
+  });
+
+  it('says what the mismatch costs, because renaming and editing are not the same fix', () => {
+    // Renaming the file keeps the bytes, so an approval of them survives.
+    // Editing the frontmatter changes the bytes, so it does not. Someone who
+    // has already approved this plan needs to be told which is which.
+    const { issues } = parsePlan(src('auth'), 'foo');
+    const message = issues.map((i) => i.message).join('\n');
+    expect(message).toMatch(/approv/i);
+    expect(message).toContain('auth.md');
+  });
+
+  it('refuses to load a plan whose two names disagree', () => {
+    expect(() => loadPlan(src('auth'), 'foo')).toThrow(PlanError);
+  });
+
+  it('never lets an unusable file name become the id', () => {
+    // The id becomes a file path, a trust-store key and a task's planId.
+    const { plan, issues } = parsePlan(src(null), '../../../evil');
+    expect(plan.id).toBe('evil');
+    expect(issues.some((i) => /not usable as a plan name/.test(i.message))).toBe(true);
+  });
+
+  it('agrees with the grammar the plans directory and the daemon enforce', () => {
+    for (const ok of ['auth', 'agent-visibility', '2026-08-05-auth', 'plan.v2', 'A_1']) {
+      expect(isSafePlanId(ok), ok).toBe(true);
+    }
+    for (const bad of [
+      '', '.', '..', '../x', '..%2f..%2f.baton', 'a/b', 'a\\b', '.env', '-lead',
+      'a..b', 'plans\0', 'x'.repeat(200), 'a b', '__proto__', 'constructor.x/y',
+    ]) {
+      expect(isSafePlanId(bad), bad).toBe(false);
+    }
+  });
+
+  it('parses a pathological heading in linear time', () => {
+    // `### a`, a long run of spaces, one more word. The lazy `(.+?)\s*$` in the
+    // task-heading pattern backtracked quadratically over it: 60k characters
+    // took 1.5s, and a megabyte-long line would have held the daemon's single
+    // thread for minutes — with every dashboard read, SSE stream and MCP call
+    // behind it. Plan files arrive by `git pull`.
+    const text = `## Phase 1\n\n### a${' '.repeat(80_000)}b\n\nw\n`;
+    const started = Date.now();
+    parsePlan(text, 'p');
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
 describe('validatePlan', () => {
   const base = (body: string) => parsePlan(`## Phase 1\n\n${body}`).plan;
 
   it('accepts a well-formed plan', () => {
-    expect(validatePlan(parsePlan(PLAN).plan)).toEqual([]);
+    expect(validatePlan(parsePlan(PLAN, PLAN_FILE).plan)).toEqual([]);
   });
 
   it('rejects a duplicate task name', () => {
@@ -290,7 +377,7 @@ describe('scopesOverlap', () => {
 
 describe('loadPlan', () => {
   it('returns the plan when everything holds', () => {
-    expect(loadPlan(PLAN).tasks).toHaveLength(3);
+    expect(loadPlan(PLAN, PLAN_FILE).tasks).toHaveLength(3);
   });
 
   it('throws with EVERY problem at once, not just the first', () => {
