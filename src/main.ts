@@ -51,7 +51,7 @@ import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
 import { cancelCmd } from './commands/cancel.js';
 import { memoryAddCmd, memoryConsolidateCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
-import { connectCmd } from './commands/connect.js';
+import { connectCmd, disconnectCmd } from './commands/connect.js';
 import { guardCmd } from './commands/guard.js';
 import { snapshotCmd } from './commands/snapshot.js';
 import { orientCmd } from './commands/orient.js';
@@ -131,6 +131,12 @@ program
   .option('--yes', 'also write global ($HOME) configs for codex/gemini')
   .description('wire the baton coordination MCP server into every agent, so they can see each other')
   .action((opts: { agents?: string; yes?: boolean }) => run(() => connectCmd(opts)));
+
+program
+  .command('disconnect')
+  .option('--agents <list>', 'comma-separated: claude,cursor,codex,gemini (default: all four)')
+  .description('remove the baton session-start instruction from each agent\'s own instruction file')
+  .action((opts: { agents?: string }) => run(() => disconnectCmd(opts)));
 
 program
   .command('new')

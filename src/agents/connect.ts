@@ -19,7 +19,7 @@
  * Writes are non-destructive: JSON files keep every existing key and merge our
  * servers into `mcpServers`; the TOML file only gets server blocks it lacks.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -264,6 +264,17 @@ export interface AgentConnectOutcome {
   status: AgentConnectStatus;
   scope: McpScope | null;
   path: string | null;
+  /**
+   * Whether the agent's session-start instruction file now tells it to call
+   * `orient`. Reported separately from `status` because the two can disagree:
+   * an agent can be wired to the MCP server and still be unbindable, and an
+   * agent whose MCP config is a global file awaiting confirmation can still
+   * have its project-level instruction written.
+   */
+  orient: OrientBindStatus;
+  orientPath: string | null;
+  /** Backup of a pre-existing instruction file, when one was modified. */
+  orientBackup?: string;
 }
 
 /**
@@ -277,31 +288,306 @@ export interface AgentConnectOutcome {
 export async function connectAgents(
   root: string,
   agents: string[],
-  opts: { confirmGlobal?: boolean } = {},
+  opts: { confirmGlobal?: boolean; bindOrient?: boolean } = {},
   home = homedir(),
 ): Promise<AgentConnectOutcome[]> {
   const out: AgentConnectOutcome[] = [];
   for (const agent of agents) {
+    /* Binding runs for EVERY agent, including ones with no MCP config Baton can
+       write. `orient` is a project-level markdown instruction, so an agent that
+       cannot be wired automatically can still be told where to start — and an
+       agent Baton cannot bind either is reported as such rather than skipped. */
+    const bound = opts.bindOrient === false
+      ? { agent, status: 'unbound' as OrientBindStatus, path: null, backup: null }
+      : await bindOrient(agent, root);
+    const orient = {
+      orient: bound.status, orientPath: bound.path,
+      ...(bound.backup ? { orientBackup: bound.backup } : {}),
+    };
+
     const target = mcpTargetFor(agent, root, home);
     if (!target) {
-      out.push({ agent, status: 'unsupported', scope: null, path: null });
+      out.push({ agent, status: 'unsupported', scope: null, path: null, ...orient });
       continue;
     }
     try {
       const status = await readMcpStatus(agent, root, home);
       if (status.connected) {
-        out.push({ agent, status: 'already', scope: target.scope, path: target.path });
+        out.push({ agent, status: 'already', scope: target.scope, path: target.path, ...orient });
         continue;
       }
       const r = await connectAgentMcp(agent, root, null, { confirmGlobal: opts.confirmGlobal }, home);
-      out.push({ agent, status: r.wrote ? 'connected' : 'needs-confirm', scope: target.scope, path: target.path });
+      out.push({ agent, status: r.wrote ? 'connected' : 'needs-confirm', scope: target.scope, path: target.path, ...orient });
     } catch (e) {
       if (e instanceof McpConfigParseError) {
-        out.push({ agent, status: 'parse-error', scope: target.scope, path: target.path });
+        out.push({ agent, status: 'parse-error', scope: target.scope, path: target.path, ...orient });
       } else {
         throw e;
       }
     }
   }
+  return out;
+}
+
+/* ---------------------------------------------------------------------------
+   Binding an agent to orient()
+
+   `orient()` already returns a budgeted brief — project memory, recent work,
+   structure. The gap is that only some clients ever call it. The MCP server
+   carries an `instructions` field saying to call it first, and that is not
+   enough on its own: not every client surfaces it, so an agent from another
+   vendor can join a repo knowing nothing while the brief sits there unread.
+
+   So the instruction also goes in the file that agent actually reads at session
+   start. Which means writing into files the USER owns, and the three rules that
+   follow from that are the whole design:
+
+     - MERGE, never overwrite. Clobbering someone's CLAUDE.md loses work Baton
+       did not create and cannot restore.
+     - Remove EXACTLY what was added. A disconnect that takes a neighbouring
+       line with it is worse than one that does nothing.
+     - Say when an agent cannot be bound. A silent skip reads as success.
+   --------------------------------------------------------------------------- */
+
+/** Delimiters, so unbind can find precisely what bind wrote. HTML comments
+ *  because every one of these files is markdown, and they render as nothing. */
+export const ORIENT_START = '<!-- baton:orient:start -->';
+/**
+ * The line that marks a block as BATON'S, rather than as any marker pair.
+ *
+ * The markers alone are not identity. Baton's own block invites the reader to
+ * "delete the block (both marker comments included) to remove it", so a team
+ * runbook quoting that recipe contains a real, correctly-formed pair — and
+ * pairing by position deleted THEIR span, left Baton's block installed, and
+ * reported success. Membership has to be decided by content.
+ */
+export const BLOCK_SIGNATURE = 'Added by Baton.';
+
+export const ORIENT_END = '<!-- baton:orient:end -->';
+
+/**
+ * The file each agent reads at session start.
+ *
+ * Several agents share `AGENTS.md` deliberately — it is the convention they
+ * converged on, and one file bound once is better than three saying the same
+ * thing. Agents absent from this map are UNBINDABLE and reported as such:
+ * `aider` takes its conventions from an explicit `--read` flag rather than a
+ * file it finds on its own, so there is nothing here to write.
+ */
+const ORIENT_FILES: Record<string, string> = {
+  claude: 'CLAUDE.md',
+  codex: 'AGENTS.md',
+  cursor: 'AGENTS.md',
+  antigravity: 'AGENTS.md',
+  opencode: 'AGENTS.md',
+  gemini: 'GEMINI.md',
+};
+
+/** An agent id is a KEY here, never a path segment — but ids can reach us from
+ *  a repo's own `.baton/agents.json`, which arrives by `git pull`, so the shape
+ *  is checked rather than trusted. */
+const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9._-]*$/i;
+
+export interface OrientTarget { agent: string; file: string; path: string }
+
+/** Where this agent's session-start instruction lives, or null if none exists. */
+export function orientTargetFor(agent: string, root: string): OrientTarget | null {
+  if (!SAFE_AGENT_ID.test(agent)) return null;
+  if (!Object.hasOwn(ORIENT_FILES, agent)) return null;
+  const file = ORIENT_FILES[agent]!;
+  return { agent, file, path: join(root, file) };
+}
+
+/**
+ * The instruction itself.
+ *
+ * Deliberately short and free of anything that changes between runs — a block
+ * carrying a timestamp or a version would rewrite the user's file on every
+ * connect and show up as a diff in their repo for no reason.
+ */
+export function orientBlock(): string {
+  return [
+    ORIENT_START,
+    '## Baton — start here',
+    '',
+    'At the start of a session in this repo, call the `orient` MCP tool before',
+    'exploring. It returns a budgeted brief: what this project is, the decisions',
+    'and gotchas already recorded, what shipped recently, and where things live.',
+    '',
+    'Then `recall_memory` before you go looking, and `check_files` before editing',
+    'a file others may be in. Other agents are working here too.',
+    '',
+    `${BLOCK_SIGNATURE} Edit freely outside this block; delete the block (both marker`,
+    'comments included) to remove it. Re-running `baton connect` restores it.',
+    ORIENT_END,
+  ].join('\n');
+}
+
+export type OrientBindStatus =
+  | 'bound'    // written (file created, or the block appended)
+  | 'updated'  // an older Baton block was refreshed in place
+  | 'already'  // the current block was already there; nothing written
+  | 'unbound'  // no instruction file Baton knows how to write for this agent
+  | 'failed';  // the path exists but could not be read or written
+
+export interface OrientBindResult {
+  agent: string;
+  status: OrientBindStatus;
+  path: string | null;
+  /** Copy of the user's file as it was, when Baton modified one it did not
+   *  create. Null when there was nothing to lose. */
+  backup: string | null;
+  error?: string;
+}
+
+/** Both markers, in order — anything less is not a block Baton wrote. */
+/**
+ * The span Baton wrote, or null.
+ *
+ * Pairs the end marker with the NEAREST PRECEDING start, not the first start in
+ * the file. Those differ exactly when the user has written the start marker in
+ * their own prose above Baton's block — documenting it, quoting it, explaining
+ * their conventions — and the difference is destructive: pairing their mention
+ * with Baton's terminator removes every paragraph in between, in a file Baton
+ * did not create, while `disconnect` reports success.
+ *
+ * Verified before the fix against the real CLI: a five-line CLAUDE.md whose
+ * third line mentioned the marker came back truncated mid-sentence.
+ *
+ * A start with no end after it is still not a block — that is prose, and is
+ * left alone.
+ */
+function blockRange(text: string): { start: number; end: number } | null {
+  // Every well-formed pair, then the LAST one that is actually Baton's. Last,
+  // because bind appends: a user's quoted copy sits above the block Baton
+  // maintains. A pair without the signature is somebody else's text and is
+  // left exactly where it is.
+  let best: { start: number; end: number } | null = null;
+  let from = 0;
+  for (;;) {
+    const start = text.indexOf(ORIENT_START, from);
+    if (start === -1) break;
+    const end = text.indexOf(ORIENT_END, start + ORIENT_START.length);
+    if (end === -1) break;
+    // A nested start means the outer one is prose introducing this pair.
+    const nested = text.indexOf(ORIENT_START, start + ORIENT_START.length);
+    const realStart = nested !== -1 && nested < end ? nested : start;
+    const range = { start: realStart, end: end + ORIENT_END.length };
+    if (text.slice(range.start, range.end).includes(BLOCK_SIGNATURE)) best = range;
+    from = range.end;
+  }
+  return best;
+}
+
+/** Write the session-start instruction into the file this agent reads. */
+export async function bindOrient(agent: string, root: string): Promise<OrientBindResult> {
+  const target = orientTargetFor(agent, root);
+  if (!target) return { agent, status: 'unbound', path: null, backup: null };
+
+  const block = orientBlock();
+  try {
+    const existed = existsSync(target.path);
+    const before = existed ? await readFile(target.path, 'utf-8') : '';
+
+    const at = blockRange(before);
+    let next: string;
+    let status: OrientBindStatus;
+    if (at) {
+      next = before.slice(0, at.start) + block + before.slice(at.end);
+      status = next === before ? 'already' : 'updated';
+    } else {
+      // Appended, never prepended: the user's own first line is the one they
+      // wrote, and Baton's housekeeping does not belong above it.
+      const head = before.length && !before.endsWith('\n') ? `${before}\n` : before;
+      next = `${head}${head ? '\n' : ''}${block}\n`;
+      status = 'bound';
+    }
+    if (status === 'already') return { agent, status, path: target.path, backup: null };
+
+    // Only when there was something of the user's to lose. Taken before the
+    // write, so a crash mid-write still leaves the original recoverable.
+    let backup: string | null = null;
+    if (existed) {
+      backup = `${target.path}.baton-bak`;
+      await writeFile(backup, before, 'utf-8');
+    }
+    await writeFile(target.path, next, 'utf-8');
+    return { agent, status, path: target.path, backup };
+  } catch (e) {
+    // A path that cannot be read or written is left exactly as it is. Baton
+    // never removes something in its way to make room.
+    return { agent, status: 'failed', path: target.path, backup: null, error: (e as Error).message };
+  }
+}
+
+export type OrientUnbindStatus =
+  | 'unbound'  // the block was removed, or there is no file Baton could bind
+  | 'absent'   // the file has no block Baton wrote — left untouched
+  | 'failed';
+
+export interface OrientUnbindResult {
+  agent: string; status: OrientUnbindStatus; path: string | null;
+  /** Where the file was copied before anything was removed from it. */
+  backup?: string | null;
+  error?: string;
+}
+
+/** Remove exactly the block bind wrote, and nothing adjacent to it. */
+export async function unbindOrient(agent: string, root: string): Promise<OrientUnbindResult> {
+  const target = orientTargetFor(agent, root);
+  if (!target) return { agent, status: 'unbound', path: null };
+
+  try {
+    if (!existsSync(target.path)) return { agent, status: 'absent', path: target.path };
+    const before = await readFile(target.path, 'utf-8');
+    const at = blockRange(before);
+    // A start marker with no end is prose that happens to mention it, not a
+    // block. Treating it as one would delete the rest of the user's file.
+    if (!at) return { agent, status: 'absent', path: target.path };
+
+    // Remove exactly what the append introduced, so the file is restored byte
+    // for byte rather than keeping the block's footprint — or losing a line to
+    // it. bindOrient writes `<head>\n` + `\n` + block + `\n`, so its footprint
+    // is ONE blank line before and ONE newline after. `\n+` on the tail was a
+    // character too greedy: a user who wrote notes below the block lost the
+    // blank line separating them, which is the opposite of "removes exactly
+    // what was added".
+    const head = before.slice(0, at.start).replace(/\n+$/, '\n');
+    const tail = before.slice(at.end).replace(/^\n/, '');
+    const rest = (head.trim() ? head : '') + tail;
+
+    // Nothing of the user's left: Baton created this file, so it removes it
+    // rather than leaving an empty one behind.
+    // bind backs the file up before writing; removal is at least as destructive,
+    // and until now it took none — so a mistake here was unrecoverable.
+    const backup = `${target.path}.baton-bak`;
+    await writeFile(backup, before, 'utf-8');
+
+    if (!rest.trim()) await rm(target.path, { force: true });
+    else await writeFile(target.path, rest, 'utf-8');
+    return { agent, status: 'unbound', path: target.path, backup };
+  } catch (e) {
+    return { agent, status: 'failed', path: target.path, error: (e as Error).message };
+  }
+}
+
+/**
+ * Unbind every agent, so `connect`'s writes into the user's own files are
+ * reversible by a command rather than by hand-editing CLAUDE.md.
+ *
+ * Defaults to the same roster `connect` defaults to. Anything narrower leaves
+ * behind exactly what connect wrote, which is the failure that makes people
+ * stop trusting an uninstall.
+ */
+export const DEFAULT_ORIENT_AGENTS = ['claude', 'cursor', 'codex', 'gemini'];
+
+export async function disconnectOrient(
+  root: string,
+  agents: readonly string[] = DEFAULT_ORIENT_AGENTS,
+): Promise<OrientUnbindResult[]> {
+  const out: OrientUnbindResult[] = [];
+  // Sequential on purpose: several agents share AGENTS.md, and two concurrent
+  // read-modify-writes of one file would race to drop each other's edit.
+  for (const agent of agents) out.push(await unbindOrient(agent, root));
   return out;
 }
