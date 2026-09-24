@@ -78,6 +78,20 @@ describe('doctor — hub coherence (shadow .baton detection)', () => {
     expect(shadows[0].tasks).toBe(1);
   });
 
+  // Read as "0 tasks", an unreadable shadow store was classified removable,
+  // and `doctor --fix` deleted it.
+  it('never classifies a shadow with an unreadable tasks.json as removable', async () => {
+    const h = await initHub(); hub = h.hub;
+    await mkdir(join(h.web, '.baton'), { recursive: true });
+    await writeFile(join(h.web, '.baton', 'tasks.json'), '[{"slug":"x",', 'utf-8');
+    const [s] = await scanShadowBatons(h.hub);
+    expect(s.tasksUnreadable).toBe(true);
+    expect(s.removable).toBe(false);
+    const { removed } = await reconcileShadowBatons(h.hub, true);
+    expect(removed).toEqual([]);
+    expect(await exists(join(h.web, '.baton', 'tasks.json'))).toBe(true);
+  });
+
   it('returns nothing when no sub-project has a shadow', async () => {
     const h = await initHub(); hub = h.hub;
     expect(await scanShadowBatons(h.hub)).toEqual([]);

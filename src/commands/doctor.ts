@@ -8,7 +8,7 @@ import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { auditJunk, cleanJunk, type AuditReport, type JunkItem } from '../cleanup.js';
 import { scanDocSprawl, listRepoFiles, lastCommitDate, type SprawlFinding } from '../kb/sprawl.js';
-import { batonDir, loadTasks, activeBatonRoot } from '../store.js';
+import { batonDir, loadTasks, loadTasksStrict, activeBatonRoot } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { auditKb, type KbFinding } from '../kb/health.js';
 import {
@@ -61,11 +61,21 @@ function printKb(findings: KbFinding[]): void {
 
 export async function doctorCmd(opts: { docs?: boolean; fix?: boolean } = {}): Promise<void> {
   if (opts.docs) return doctorDocsCmd();
-  const report = await auditJunk(await activeBatonRoot());
-  printReport(report);
-  if (report.items.length) {
-    const dirty = report.items.some((i) => i.blocked === 'dirty');
-    console.log(`\n  Reclaim with: baton clean --fix${dirty ? '   (add --force to remove worktrees with uncommitted changes)' : ''}`);
+  // An audit that cannot run is itself the finding — report it and carry on to
+  // the sections that do not depend on the task store.
+  let report: AuditReport | null = null;
+  try {
+    report = await auditJunk(await activeBatonRoot());
+  } catch (e) {
+    console.log(`✗ junk audit skipped: ${(e as Error).message}`);
+    process.exitCode = 1;
+  }
+  if (report) {
+    printReport(report);
+    if (report.items.length) {
+      const dirty = report.items.some((i) => i.blocked === 'dirty');
+      console.log(`\n  Reclaim with: baton clean --fix${dirty ? '   (add --force to remove worktrees with uncommitted changes)' : ''}`);
+    }
   }
   // activeBatonRoot, matching the line above. resolveBatonRoot alone is
   // defeated by the very thing reportShadowBatons exists to find: inside a
@@ -124,6 +134,8 @@ export interface ShadowBaton {
   path: string;        // the shadow `.baton` dir
   projectPath: string; // the sub-project checkout it sits in
   tasks: number;
+  /** Its tasks.json exists but could not be read — contents unknown, never removable. */
+  tasksUnreadable: boolean;
   hasMemory: boolean;
   hasKb: boolean;
   /** No durable state (only ephemeral presence / locks) → safe to delete. */
@@ -154,7 +166,9 @@ export async function scanShadowBatons(hubRoot: string): Promise<ShadowBaton[]> 
     if ((await realpath(p.path).catch(() => p.path)) === hubReal) continue; // the hub's own store
     const shadow = batonDir(p.path);
     if (!(await exists(shadow))) continue;
-    const tasks = (await loadTasks(p.path)).length;
+    let tasks = 0;
+    let tasksUnreadable = false;
+    try { tasks = (await loadTasksStrict(p.path)).length; } catch { tasksUnreadable = true; }
     const facts = await readdir(join(shadow, 'memory', 'facts')).catch(() => [] as string[]);
     const hasMemory = facts.some((f) => f.endsWith('.md'));
     const hasKb = await exists(join(shadow, 'kb.json'));
@@ -163,9 +177,10 @@ export async function scanShadowBatons(hubRoot: string): Promise<ShadowBaton[]> 
       path: shadow,
       projectPath: p.path,
       tasks,
+      tasksUnreadable,
       hasMemory,
       hasKb,
-      removable: tasks === 0 && !hasMemory && !hasKb,
+      removable: tasks === 0 && !tasksUnreadable && !hasMemory && !hasKb,
     });
   }
   return shadows;
@@ -193,6 +208,7 @@ export async function reconcileShadowBatons(
 function describeState(s: ShadowBaton): string {
   if (s.removable) return 'ephemeral presence only';
   return [
+    s.tasksUnreadable ? 'unreadable tasks.json' : '',
     s.tasks ? `${s.tasks} task${s.tasks === 1 ? '' : 's'}` : '',
     s.hasMemory ? 'memory facts' : '',
     s.hasKb ? 'kb.json' : '',

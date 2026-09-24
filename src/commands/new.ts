@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { branchExists, createWorktree, currentBranch, headCommit, isGitRepo } from '../git.js';
 import { installCommitHook } from '../hooks-git.js';
 import { recordTask } from '../history.js';
-import { addTask, batonDir, loadTasks, resolveBatonRoot, slugify, type Task } from '../store.js';
+import { addTask, batonDir, loadTasks, loadTasksStrict, resolveBatonRoot, slugify, type Task } from '../store.js';
 import { loadKb } from '../kb/state.js';
 import { overlappingScopes } from '../conflicts.js';
 import { bus } from '../events.js';
@@ -79,7 +79,8 @@ export async function createTask(taskText: string, root?: string, projectId?: st
     throw new ProjectRequiredError(kb?.projects.map((p) => p.id) ?? []);
   }
 
-  const existing = await loadTasks(batonRoot);
+  // Strict: fail here, before a worktree exists, rather than at addTask after.
+  const existing = await loadTasksStrict(batonRoot);
   // Dedupe against recorded tasks first, then against actual git branches so we
   // never collide with a `baton/<slug>` branch baton didn't record.
   const taken = existing.map((t) => t.slug);

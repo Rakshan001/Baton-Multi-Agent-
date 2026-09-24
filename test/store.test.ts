@@ -8,6 +8,8 @@ import {
   addTask,
   getTask,
   loadTasks,
+  loadTasksStrict,
+  mutateTasks,
   removeTask,
   resolveBatonRoot,
   slugify,
@@ -75,6 +77,32 @@ describe('task store', () => {
     const { writeFile } = await import('node:fs/promises');
     await writeFile(tasksFile(root), 'not json', 'utf-8');
     expect(await loadTasks(root)).toEqual([]);
+  });
+
+  // Reading an unreadable store as [] and saving that back wiped every task —
+  // and a fresh, valid store then made every task's branch look orphaned.
+  it('a write never replaces an unreadable store', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    await mkdir(join(root, '.baton'), { recursive: true });
+    const corrupt = '[{"slug":"a",';
+    await writeFile(tasksFile(root), corrupt, 'utf-8');
+    await expect(addTask(root, mkTask('d'))).rejects.toThrow(/tasks\.json/);
+    await expect(removeTask(root, 'zzz')).rejects.toThrow(/tasks\.json/);
+    await expect(mutateTasks(root, (tasks) => ({ tasks, result: null }))).rejects.toThrow(/do NOT delete it/);
+    expect(await readFile(tasksFile(root), 'utf-8')).toBe(corrupt);
+  });
+
+  // The strict reader is for callers that act destructively on the answer: to
+  // them "unreadable" must never look like "no tasks".
+  it('strict: a missing store is no tasks, an unreadable one throws', async () => {
+    expect(await loadTasksStrict(root)).toEqual([]);
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    await mkdir(join(root, '.baton'), { recursive: true });
+    for (const bad of ['not json', '', '{"slug":"x"}']) {
+      await writeFile(tasksFile(root), bad, 'utf-8');
+      await expect(loadTasksStrict(root)).rejects.toThrow(/tasks\.json/);
+      expect(await loadTasks(root)).toEqual([]);
+    }
   });
 });
 

@@ -307,7 +307,7 @@ async function withTasksLock<T>(gitRoot: string, fn: () => Promise<T>): Promise<
 export async function addTask(gitRoot: string, task: Task): Promise<void> {
   await serialized(() =>
     withTasksLock(gitRoot, async () => {
-      const tasks = await loadTasks(gitRoot);
+      const tasks = await loadTasksStrict(gitRoot); // never overwrite a store we could not read
       tasks.push(task);
       await saveTasks(gitRoot, tasks);
     }),
@@ -325,6 +325,9 @@ export async function addTask(gitRoot: string, task: Task): Promise<void> {
  *
  * Returning `tasks: null` writes nothing, which is how a dry run and a refused
  * apply share exactly one code path with a real one.
+ *
+ * An unreadable store throws before `fn` runs — dry runs included — so no
+ * write path can replace a store it could not read with a guess.
  */
 export async function mutateTasks<T>(
   gitRoot: string,
@@ -332,7 +335,7 @@ export async function mutateTasks<T>(
 ): Promise<T> {
   return serialized(() =>
     withTasksLock(gitRoot, async () => {
-      const { tasks, result } = await fn(await loadTasks(gitRoot));
+      const { tasks, result } = await fn(await loadTasksStrict(gitRoot));
       if (tasks) await saveTasks(gitRoot, tasks);
       return result;
     }),
@@ -342,7 +345,7 @@ export async function mutateTasks<T>(
 export async function removeTask(gitRoot: string, slug: string): Promise<void> {
   await serialized(() =>
     withTasksLock(gitRoot, async () => {
-      const tasks = (await loadTasks(gitRoot)).filter((t) => t.slug !== slug);
+      const tasks = (await loadTasksStrict(gitRoot)).filter((t) => t.slug !== slug);
       await saveTasks(gitRoot, tasks);
     }),
   );
