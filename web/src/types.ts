@@ -723,8 +723,9 @@ export interface BlameResult {
 export type DiffLineType = "add" | "del" | "ctx";
 export interface DiffLine { t: DiffLineType; o: number | null; n: number | null; s: string }
 export interface DiffHunk { header: string; lines: DiffLine[] }
-export type FileStatus = "added" | "modified" | "deleted";
-export interface DiffFile { path: string; status: FileStatus; hunks: DiffHunk[]; add: number; del: number; lang: string }
+export type FileStatus = "added" | "modified" | "deleted" | "renamed";
+/** `oldPath` is set only when `status` is "renamed". */
+export interface DiffFile { path: string; status: FileStatus; oldPath?: string; hunks: DiffHunk[]; add: number; del: number; lang: string }
 
 /** Agent CLIs Baton can install a skill into (have a skill/rule directory). */
 export type SkillAgent = "claude" | "cursor" | "antigravity";

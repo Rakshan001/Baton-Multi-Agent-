@@ -6,9 +6,9 @@ import { parseConflicts, CONFLICT_LABELS } from '../src/git.js';
 
 describe('hardenedArgs', () => {
   it('prepends -c config flags before the subcommand', () => {
-    const out = hardenedArgs(['status', '--porcelain=v2', '--ignore-submodules=none']);
+    const out = hardenedArgs(['status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all']);
     // original args are preserved at the tail, in order
-    expect(out.slice(-3)).toEqual(['status', '--porcelain=v2', '--ignore-submodules=none']);
+    expect(out.slice(-4)).toEqual(['status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all']);
     // pager and credential helper are neutralized
     expect(out).toContain('core.pager=cat');
     expect(out).toContain('credential.helper=');
@@ -79,6 +79,7 @@ describe('parseConflicts', () => {
 
   it('returns [] when there are no unmerged entries', () => {
     expect(parseConflicts('1 M. N... 100644 100644 100644 a a foo.ts')).toEqual([]);
+    expect(parseConflicts('2 R. N... 100644 100644 100644 a a R100 new.ts\told.ts')).toEqual([]);
     expect(parseConflicts('')).toEqual([]);
   });
 

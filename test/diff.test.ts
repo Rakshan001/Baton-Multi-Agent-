@@ -40,6 +40,24 @@ index 1111111..2222222 100644
 Binary files a/logo.png and b/logo.png differ
 `;
 
+const RENAME = `diff --git a/keep.txt b/moved.txt
+similarity index 100%
+rename from keep.txt
+rename to moved.txt
+`;
+
+const RENAME_EDIT = `diff --git a/edit.txt b/edited2.txt
+similarity index 94%
+rename from edit.txt
+rename to edited2.txt
+index 1111111..2222222 100644
+--- a/edit.txt
++++ b/edited2.txt
+@@ -20,1 +20,2 @@
+ line 20
++one more
+`;
+
 describe('parseUnifiedDiff', () => {
   it('returns [] for empty output', () => {
     expect(parseUnifiedDiff('')).toEqual([]);
@@ -92,5 +110,22 @@ index 1111111..2222222 100644
     expect(files).toHaveLength(1);
     expect(files[0].add).toBe(1);
     expect(files[0].hunks[0].lines[1].s).toBe('diff --git a/fake b/fake');
+  });
+
+  it('reports a pure rename as renamed, with its old path', () => {
+    const [f] = parseUnifiedDiff(RENAME);
+    expect(f).toMatchObject({ status: 'renamed', path: 'moved.txt', oldPath: 'keep.txt', add: 0, del: 0, hunks: [] });
+  });
+
+  it('reports a rename with an edit as renamed, with counts', () => {
+    const [f] = parseUnifiedDiff(RENAME_EDIT);
+    expect(f).toMatchObject({ status: 'renamed', path: 'edited2.txt', oldPath: 'edit.txt', add: 1, del: 0 });
+  });
+
+  it('does not carry a rename into the next file', () => {
+    const [r, m] = parseUnifiedDiff(RENAME + MODIFIED);
+    expect(r.status).toBe('renamed');
+    expect(m.status).toBe('modified');
+    expect(m.oldPath).toBeUndefined();
   });
 });

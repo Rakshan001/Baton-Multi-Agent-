@@ -22,10 +22,12 @@ export interface DiffHunk {
   header: string;
   lines: DiffLine[];
 }
-export type FileStatus = 'added' | 'modified' | 'deleted';
+export type FileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 export interface DiffFile {
   path: string;
   status: FileStatus;
+  /** The path before a rename; set only when `status` is 'renamed'. */
+  oldPath?: string;
   hunks: DiffHunk[];
   add: number;
   del: number;
@@ -68,6 +70,7 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   let cur: DiffFile | null = null;
   let oldPath = '';
   let newPath = '';
+  let renamed = false;
   let hunk: DiffHunk | null = null;
   let o = 0;
   let n = 0;
@@ -78,6 +81,10 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   const flush = () => {
     if (!cur) return;
     cur.path = (cur.status === 'deleted' ? oldPath : newPath) || oldPath || newPath;
+    if (renamed && cur.status === 'modified' && oldPath && oldPath !== cur.path) {
+      cur.status = 'renamed';
+      cur.oldPath = oldPath;
+    }
     cur.lang = cur.path.includes('.') ? cur.path.split('.').pop()! : '';
     files.push(cur);
     cur = null;
@@ -113,6 +120,7 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       const seed = gitHeaderPath(line.slice('diff --git '.length));
       oldPath = seed;
       newPath = seed;
+      renamed = false;
       continue;
     }
     if (!cur) continue;
@@ -123,6 +131,7 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       cur.status = 'deleted';
     } else if (line.startsWith('rename from ')) {
       oldPath = line.slice('rename from '.length);
+      renamed = true;
     } else if (line.startsWith('rename to ')) {
       newPath = line.slice('rename to '.length);
     } else if (line.startsWith('--- ')) {

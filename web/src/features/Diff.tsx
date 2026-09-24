@@ -32,7 +32,11 @@ const FILE_STATUS: Record<FileStatus, { c: string; soft: string; glyph: string; 
   added: { c: "var(--clean-text)", soft: "var(--clean-soft)", glyph: "A", tip: "Added" },
   modified: { c: "var(--dirty-text)", soft: "var(--dirty-soft)", glyph: "M", tip: "Modified" },
   deleted: { c: "var(--conflict-text)", soft: "var(--conflict-soft)", glyph: "D", tip: "Deleted" },
+  renamed: { c: "var(--dirty-text)", soft: "var(--dirty-soft)", glyph: "R", tip: "Renamed" },
 };
+
+/** "old → new" for a rename, else just the path. */
+const shownPath = (f: DiffFile) => (f.oldPath ? `${f.oldPath} → ${f.path}` : f.path);
 
 export function DiffStat({ add, del, size = "md" }: { add: number; del: number; size?: "sm" | "md" }) {
   const total = Math.max(1, add + del); const blocks = 5;
@@ -226,7 +230,7 @@ export function DiffViewer({
                       onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}>
                       <span style={{ width: 16, height: 16, flex: "none", borderRadius: 4, display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", fontWeight: 700, color: st.c, background: st.soft }} data-tip={st.tip}>{st.glyph}</span>
                       <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: "block", fontSize: "var(--fs-12)", color: on ? "var(--text-primary)" : "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}>{file.path}</span>
+                        <span style={{ display: "block", fontSize: "var(--fs-12)", color: on ? "var(--text-primary)" : "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}>{shownPath(file)}</span>
                       </span>
                       <span className="mono" style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)", flex: "none" }}>+{file.add}</span>
                     </button>
@@ -244,7 +248,7 @@ export function DiffViewer({
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--code-bg)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderBottom: "1px solid var(--border-subtle)", flex: "none", background: "var(--bg-surface)" }}>
                 <span style={{ width: 16, height: 16, flex: "none", borderRadius: 4, display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: "var(--text-micro)", fontWeight: 700, color: FILE_STATUS[f.status].c, background: FILE_STATUS[f.status].soft }}>{FILE_STATUS[f.status].glyph}</span>
-                <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</span>
+                <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shownPath(f)}</span>
                 <DiffStat add={f.add} del={f.del} size="sm" />
                 <CopyButton value={f.path} iconOnly className="btn btn-sm btn-ghost" title="Copy path" />
               </div>

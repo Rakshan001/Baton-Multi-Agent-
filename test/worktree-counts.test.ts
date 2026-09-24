@@ -146,3 +146,51 @@ describe('work that config hid from git status still counts as unsaved', () => {
     });
   });
 });
+
+/** C3: the count is one entry per file, and a rename is its new path. */
+describe('worktreeStatus counts files, not directories or rename records', () => {
+  let repo: string;
+
+  beforeEach(async () => {
+    repo = await initRepo('baton-counts-c3-');
+    for (const f of ['keep.txt', 'edit.txt', 'has space.txt']) await writeFile(join(repo, f), `${f}\n${BODY}`, 'utf-8');
+    await git(['add', '-A'], repo);
+    await git(['commit', '-qm', 'init'], repo);
+  });
+  afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
+
+  it('lists every file in an untracked directory', async () => {
+    await mkdir(join(repo, 'newdir', 'sub'), { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'sub/c.ts']) await writeFile(join(repo, 'newdir', f), 'x\n', 'utf-8');
+    const st = await worktreeStatus(repo);
+    expect(st.changedFiles.sort()).toEqual(['newdir/a.ts', 'newdir/b.ts', 'newdir/sub/c.ts']);
+  });
+
+  it('a pure rename is one entry: the new path, with no score or tab', async () => {
+    await git(['mv', 'keep.txt', 'moved.txt'], repo);
+    const st = await worktreeStatus(repo);
+    expect(st.changedFiles).toEqual(['moved.txt']);
+  });
+
+  it('a rename plus an edit is one entry, with its insertions counted', async () => {
+    await git(['mv', 'edit.txt', 'edited2.txt'], repo);
+    await appendFile(join(repo, 'edited2.txt'), 'one more\n', 'utf-8');
+    await git(['add', 'edited2.txt'], repo);
+    const st = await worktreeStatus(repo);
+    expect(st.changedFiles).toEqual(['edited2.txt']);
+    expect(st.insertions).toBe(1);
+  });
+
+  it('a rename with spaces keeps the whole new path', async () => {
+    await git(['mv', 'has space.txt', 'now spaced name.txt'], repo);
+    const st = await worktreeStatus(repo);
+    expect(st.changedFiles).toEqual(['now spaced name.txt']);
+  });
+
+  it('collectDiff reports a git mv as renamed, with its old path', async () => {
+    await git(['mv', 'keep.txt', 'moved.txt'], repo);
+    const { files } = await collectDiff(task(repo, repo, { baseBranch: 'main' }));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({ status: 'renamed', path: 'moved.txt', oldPath: 'keep.txt', add: 0, del: 0 });
+  });
+});

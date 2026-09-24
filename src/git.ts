@@ -398,7 +398,9 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   const repo = await repoState(path);
   // --ignore-submodules=none: a `diff.ignoreSubmodules=all` (or `.gitmodules`
   // ignore=all) hid submodule edits, and removal passes `--force`.
-  const r = await gitTry(['-C', path, 'status', '--porcelain=v2', '--ignore-submodules=none']);
+  // --untracked-files=all: one entry per untracked file, not `? dir/`, and it
+  // overrides a `status.showUntrackedFiles=no` config.
+  const r = await gitTry(['-C', path, 'status', '--porcelain=v2', '--ignore-submodules=none', '--untracked-files=all']);
   if (!r.ok || r.stdout === '') {
     // `!r.ok` means git could not answer at all — the directory was deleted, or
     // it is no longer a worktree. Reporting that as `clean` (which is what this
@@ -435,10 +437,14 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   }
 
   // Changed paths: ordinary ("1"/"2") and untracked ("?") porcelain v2 entries.
+  // A "2" (rename/copy) record has 9 fields before its path, then a tab and
+  // the old path; keep the new path only, one entry per rename.
   const changedFiles: string[] = [];
   for (const line of r.stdout.split('\n').filter(Boolean)) {
-    if (line.startsWith('1 ') || line.startsWith('2 ')) {
+    if (line.startsWith('1 ')) {
       changedFiles.push(line.split(' ').slice(8).join(' '));
+    } else if (line.startsWith('2 ')) {
+      changedFiles.push(line.split(' ').slice(9).join(' ').split('\t')[0]!);
     } else if (line.startsWith('? ')) {
       changedFiles.push(line.slice(2));
     }
