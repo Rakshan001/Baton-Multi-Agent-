@@ -24,7 +24,7 @@ import { collectDiff } from './diff.js';
 import { currentBranch, headCommit, isGitRepo, listWorktrees } from './git.js';
 import { countByAxis, isReviewStale, listReviews, openFindings, resolveFinding, reviewHeads } from './reviews.js';
 import { listHistory, ingestGitLog } from './history.js';
-import { batonDir, loadTasks, mutateTasks, resolveBatonRoot, TaskNotFoundError } from './store.js';
+import { batonDir, loadTasks, mutateTasks, TaskNotFoundError } from './store.js';
 import { cancelTasks, claim, releaseClaim } from './lifecycle.js';
 import { agentsStopped, blastRadius, type CancelScope, type PipelineTask } from './pipeline.js';
 import { pipelineView } from './pipeline-view.js';
@@ -120,7 +120,7 @@ import {
   TeamError, addTeam, findTeam, loadTeams, removeTeam, teamId as slugTeamId, updateTeam,
 } from './teams.js';
 import {
-  type DaemonRecord, listDaemonRecords, listVerifiedDaemons, removeDaemonRecord,
+  type DaemonRecord, listDaemonRecords, listVerifiedDaemons, liveDaemonFor, removeDaemonRecord, servedRoot,
   lastConsolidationPass, removeDaemonRecordSync, startIdleConsolidation, stopDaemon,
   sweepDeadDaemonRecords, verifyDaemon,
   writeDaemonRecord,
@@ -3438,7 +3438,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   const opts: ServeOptions = typeof portOrOpts === 'number' ? { port: portOrOpts } : portOrOpts;
   // The Baton root owns `.baton/` — a single git repo OR a (non-git) multi-repo hub.
-  const root = await resolveBatonRoot();
+  // Resolved from the cwd ALONE: a worktree maps to its main repo (never its
+  // empty shadow store), and BATON_ROOT — which Baton sets for every agent it
+  // spawns — must not make a serve started in one repo serve another.
+  const root = await servedRoot(process.cwd());
+  // One root, one daemon. Checked before anything starts, and whatever port was
+  // asked for: a twin splits the SSE bus and the fleet between two dashboards.
+  const twin = await liveDaemonFor(root).catch(() => null);
+  if (twin) {
+    console.error(`baton serve: port ${twin.port} is already serving ${twin.root} — stop it with: baton daemon stop ${twin.port} ${twin.pid}`);
+    process.exit(1);
+  }
   // Capture KB state at startup for the graphify pool's graph resolver.
   // Note: adding a new project via `baton kb init` after daemon start requires
   // a daemon restart for the pool to discover the new project's graph path.
@@ -3641,6 +3651,13 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
   });
 
   try {
+    // The default port must be free on BOTH stacks, not just the one we bind:
+    // `localhost` is ::1 first on macOS, so an IPv6-only holder would own the
+    // dashboard URL and `kb mcp`'s prediction would point past us. Enter the
+    // advance path below before the first listen rather than after.
+    if (!opts.portExplicit && !(await portFree(opts.port))) {
+      throw Object.assign(new Error(`port ${opts.port} is busy`), { code: 'EADDRINUSE' });
+    }
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen(opts.port, bindAddr, () => {
@@ -3710,6 +3727,15 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
     } else {
       throw e;
     }
+  }
+  // Two serves of one root racing past the startup guard both reach here. The
+  // loser's record is not written yet, so any live daemon for this root now is
+  // the other one: step aside instead of becoming its twin.
+  const raced = await liveDaemonFor(root).catch(() => null);
+  if (raced && raced.pid !== process.pid) {
+    console.error(`baton serve: port ${raced.port} is already serving ${raced.root} — stop it with: baton daemon stop ${raced.port} ${raced.pid}`);
+    server.close();
+    process.exit(1);
   }
   // Announce to the fleet — after listen succeeds, so a record always names a
   // port this pid actually holds. Best-effort: the fleet is a convenience,

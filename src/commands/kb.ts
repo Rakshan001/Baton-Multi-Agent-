@@ -26,6 +26,8 @@ import { batonFootprint, ensureBatonGitignore, untrackCommand } from '../kb/bato
 import { exportKb, importKb, writeShareDir } from '../kb/transfer.js';
 import { buildContextPack, UnknownProjectError } from '../kb/contextpack.js';
 import { resolveBatonRoot , activeBatonRoot } from '../store.js';
+import { liveDaemonFor, servedRoot } from '../daemons.js';
+import { nextFreePort, portFree } from '../util/port.js';
 import { runSelect } from './interactive-select.js';
 
 /** Exported for the T2 budget/trigger invariant test — every session reads this. */
@@ -137,6 +139,41 @@ async function reportTrackedFootprint(root: string): Promise<void> {
   console.log(`    ${untrackCommand(stale)}`);
 }
 
+/**
+ * The daemon port to embed in MCP URLs for `root`: an explicit `--port`, else
+ * the live daemon already serving this repo, else the port `baton serve` would
+ * take next (it advances past busy ones from 7077). The root is matched as the
+ * daemon sees it (`servedRoot`), so a worktree maps to the root actually served.
+ *
+ * `used` lets one setup run hand several repos distinct predictions: a port in
+ * it is never returned, the one returned is added, and a large individual setup
+ * keeps scanning past serve's 21-port window rather than repeating a port.
+ * Without `used` (one repo: kb mcp / kb init) a full window falls back to 7077.
+ */
+export async function mcpPortFor(root: string, explicit?: string, used?: Set<number>): Promise<number> {
+  if (explicit !== undefined) {
+    used?.add(Number(explicit));
+    return Number(explicit);
+  }
+  const live = await liveDaemonFor(await servedRoot(root));
+  if (live && !used?.has(live.port)) {
+    used?.add(live.port);
+    return live.port;
+  }
+  try {
+    return await nextFreePort(7077, used);
+  } catch {
+    if (!used) return 7077; // all busy: serve fails too; keep the old default
+  }
+  for (let p = Math.max(7077, ...used) + 1; p <= 65535; p++) {
+    if (!used.has(p) && (await portFree(p))) {
+      used.add(p);
+      return p;
+    }
+  }
+  throw new Error('no free port at or above 7077 for baton serve');
+}
+
 export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean; docs?: boolean; share?: boolean; local?: boolean; port?: string } = {}): Promise<void> {
   let root: string;
   try {
@@ -212,10 +249,9 @@ export async function kbInitCmd(path: string | undefined, opts: { mcp?: boolean;
   console.log(`✓ knowledge base ready (.baton/kb.json)`);
 
   // Project-scoped .mcp.json is picked up by Claude Code in every worktree.
-  // Outside a running daemon, default to port 7077 (the baton serve default).
   const mcpPath = join(root, '.mcp.json');
   if (opts.mcp !== false) {
-    const port = Number(opts.port ?? 7077);
+    const port = await mcpPortFor(root, opts.port);
     const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
     const existing = existsSync(mcpPath) ? await readFile(mcpPath, 'utf-8') : '';
     try {
@@ -373,8 +409,7 @@ export async function kbMcpCmd(opts: { agent?: string; port?: string } = {}): Pr
     codex: '~/.codex/config.toml',
     gemini: '~/.gemini/settings.json',
   };
-  // Outside a running daemon, default to port 7077 (the baton serve default).
-  const port = Number(opts.port ?? 7077);
+  const port = await mcpPortFor(root, opts.port);
   const mcpOpts: McpOpts = { baseUrl: `http://127.0.0.1:${port}`, token: getMcpToken(root) };
   console.log(`# ${agent} → add to ${dest[agent] ?? dest.claude}`);
   console.log(snippetFor(agent, state, mcpOpts));

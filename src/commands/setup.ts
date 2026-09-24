@@ -18,7 +18,7 @@ import { nextFreePort } from '../util/port.js';
 import { gitTry } from '../util/exec.js';
 import { isGitRepo } from '../git.js';
 import { detectProjects, findNestedGitRepos, PROJECT_MARKERS, type SubProject } from '../kb/projects.js';
-import { askChoice, kbInitCmd } from './kb.js';
+import { askChoice, kbInitCmd, mcpPortFor } from './kb.js';
 import { connectAgents, type AgentConnectOutcome } from '../agents/connect.js';
 import { DEFAULT_CONNECT_AGENTS } from './connect.js';
 import { askMultiSelect, askYesNo, shouldOfferGlobalInstall } from './setup-prompts.js';
@@ -111,7 +111,7 @@ export function batonAsDependency(pkg: unknown): string | null {
 
 /** Closing next-steps for a single-root setup (single repo or hub). */
 async function finishSingle(root: string, opts: SetupOpts, headline: string, agents: string[], graphOk: boolean): Promise<void> {
-  const port = await nextFreePort(7077, new Set());
+  const port = await mcpPortFor(root);
   for (const line of closingLines(root, headline, port, graphOk)) console.log(line);
   await connectAllAgents(root, opts, agents);
 }
@@ -483,9 +483,9 @@ async function confirmGraphify(line: string): Promise<boolean> {
  * being skipped and what still works, rather than letting kb init print its own
  * failure into the middle of a setup that then claims success.
  */
-async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boolean): Promise<void> {
+async function initKnowledgeBase(target: string, opts: SetupOpts, graphOk: boolean, port?: number): Promise<void> {
   if (graphOk) {
-    await kbInitCmd(target, kbOpts(opts));
+    await kbInitCmd(target, { ...kbOpts(opts), ...(port !== undefined ? { port: String(port) } : {}) });
     return;
   }
   console.log('\n  · Knowledge base skipped — it needs the graphify CLI.');
@@ -763,8 +763,11 @@ async function setupIndividual(repos: SubProject[], opts: SetupOpts, agents: str
   const built: { path: string; port: number }[] = [];
   for (const r of repos) {
     console.log(`\n=== ${r.name} ===`);
-    await initKnowledgeBase(r.path, opts, graphOk);
-    built.push({ path: r.path, port: await nextFreePort(7077, used) }); // skip taken ports
+    // One prediction per repo, shared with kb init so .mcp.json and the
+    // printed `baton serve -p` agree; `used` keeps two repos off one port.
+    const port = await mcpPortFor(r.path, undefined, used);
+    await initKnowledgeBase(r.path, opts, graphOk, port);
+    built.push({ path: r.path, port });
   }
   console.log('\n✓ all repos set up. Agents read each repo’s KB over MCP already.');
   console.log('  To watch them, start each daemon and add the ports as connections (top-left → Add connection…):');

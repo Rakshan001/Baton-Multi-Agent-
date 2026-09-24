@@ -23,8 +23,8 @@
  * the target predates that endpoint (404) or cannot answer does a SIGTERM go
  * to the verified pid. SIGKILL is never automatic.
  */
-import { readdir, readFile, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
-import { unlinkSync } from 'node:fs';
+import { readdir, readFile, mkdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { existsSync, statSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -32,6 +32,8 @@ import { listMemories, mainRepoRoot, supersedeMemory, type MemoryFact } from './
 import { consolidateFacts, type ReportOp } from './memory/consolidate.js';
 import { tasksFile, type Task } from './store.js';
 import { stateOf } from './pipeline.js';
+import { sep } from 'node:path';
+import { activeBatonRoot, resolveBatonRoot } from './store.js';
 
 export interface DaemonRecord {
   pid: number;
@@ -228,6 +230,45 @@ export async function verifyDaemon(rec: DaemonRecord, timeoutMs = 1500): Promise
 export async function listVerifiedDaemons(dir = daemonsDir(), timeoutMs = 1500): Promise<VerifiedDaemon[]> {
   const recs = await listDaemonRecords(dir);
   return Promise.all(recs.map(async (r) => ({ ...r, status: await verifyDaemon(r, timeoutMs) })));
+}
+
+/**
+ * The live daemon already serving `root`, or null — what `baton serve` asks
+ * before starting a twin, and what MCP wiring asks for the port to embed.
+ * Roots are compared by realpath, so a symlinked or `/./`-spelled path is the
+ * same root; a record whose root no longer exists is skipped. Only records for
+ * this root are probed, so other projects' daemons cost nothing here.
+ */
+export async function liveDaemonFor(root: string, dir = daemonsDir(), timeoutMs = 1500): Promise<DaemonRecord | null> {
+  const real = (p: string) => realpath(p).catch(() => null);
+  const want = (await real(root)) ?? resolve(root);
+  for (const rec of await listDaemonRecords(dir)) {
+    if ((await real(rec.root)) !== want) continue;
+    if ((await verifyDaemon(rec, timeoutMs)) === 'live') return rec;
+  }
+  return null;
+}
+
+/**
+ * The root a daemon started in `cwd` serves — shared by `serve` and by MCP port
+ * prediction, so the two can never disagree about which daemon is "this repo's".
+ *
+ * `activeBatonRoot` with no env (BATON_ROOT must not redirect a serve) escapes a
+ * worktree to its main repo. But it walks up from the enclosing GIT repo, so a
+ * non-git hub whose own `.baton` sits inside an outer repo resolves to the outer
+ * repo. The nearest-`.baton` walk wins in exactly that case: strictly inside the
+ * active root, owning a `.baton`, and not a worktree — never one under the main
+ * repo's `.baton/wt/`, never a checkout whose `.git` is a file (a linked
+ * worktree's shadow store, the trap `activeBatonRoot` exists to avoid).
+ */
+export async function servedRoot(cwd: string): Promise<string> {
+  const a = await activeBatonRoot(cwd, {});
+  const r = await resolveBatonRoot(cwd).catch(() => a);
+  const [ra, rr] = await Promise.all([realpath(a).catch(() => a), realpath(r).catch(() => r)]);
+  const linkedWorktree = (() => { try { return statSync(join(rr, '.git')).isFile(); } catch { return false; } })();
+  if (rr !== ra && rr.startsWith(ra + sep) && !rr.startsWith(join(ra, '.baton') + sep)
+    && existsSync(join(rr, '.baton')) && !linkedWorktree) return r;
+  return a;
 }
 
 /* ------------------------------------------------------------------ */

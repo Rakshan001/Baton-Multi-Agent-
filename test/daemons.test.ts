@@ -12,11 +12,12 @@
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { execa } from 'execa';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  type DaemonRecord, cleanDaemonRecord, listDaemonRecords, listVerifiedDaemons, pidAlive,
+  type DaemonRecord, cleanDaemonRecord, listDaemonRecords, listVerifiedDaemons, liveDaemonFor, pidAlive, servedRoot,
   probeMeta, recordPath, removeDaemonRecord, stopDaemon, sweepDeadDaemonRecords, verifyDaemon,
   writeDaemonRecord,
 } from '../src/daemons.js';
@@ -183,6 +184,79 @@ describe('verification — a record is a claim', () => {
       expect(byPort.get(d.port)).toBe('live');
       expect(byPort.get(1)).toBe('stale');
     } finally { await d.close(); }
+  });
+});
+
+describe('liveDaemonFor — is this root already served?', () => {
+  it('returns the live daemon for the same root, however the path is spelled', async () => {
+    const repo = join(dir, 'repo');
+    await mkdir(repo);
+    const alias = join(dir, 'alias');
+    await symlink(repo, alias);
+    const d = await fakeDaemon(repo, process.pid);
+    try {
+      await writeDaemonRecord(rec({ port: d.port, root: repo }), dir);
+      expect((await liveDaemonFor(alias, dir, 1000))?.port).toBe(d.port);
+      expect((await liveDaemonFor(join(repo, '.'), dir, 1000))?.port).toBe(d.port);
+    } finally { await d.close(); }
+  });
+
+  it('returns null for another root, a stale record, or a root that no longer exists', async () => {
+    const repo = join(dir, 'repo');
+    const other = join(dir, 'other');
+    await mkdir(repo);
+    await mkdir(other);
+    const d = await fakeDaemon(repo, process.pid);
+    try {
+      await writeDaemonRecord(rec({ port: d.port, root: repo }), dir);
+      // A dead pid claiming `other` — stale, never "already served".
+      await writeDaemonRecord(rec({ pid: 2 ** 24, port: 1, root: other }), dir);
+      expect(await liveDaemonFor(other, dir, 1000)).toBeNull();
+      expect(await liveDaemonFor(join(dir, 'gone'), dir, 1000)).toBeNull();
+    } finally { await d.close(); }
+    // The daemon is gone now: its record is stale.
+    expect(await liveDaemonFor(repo, dir, 300)).toBeNull();
+  });
+
+  it("skips a record whose root has been deleted, even while a daemon answers for that path", async () => {
+    const gone = join(dir, 'gone');
+    await mkdir(gone);
+    const d = await fakeDaemon(gone, process.pid);
+    try {
+      await writeDaemonRecord(rec({ port: d.port, root: gone }), dir);
+      await rm(gone, { recursive: true });
+      expect(await liveDaemonFor(gone, dir, 1000)).toBeNull();
+    } finally { await d.close(); }
+  });
+});
+
+describe('servedRoot — the root a daemon started here serves', () => {
+  async function repo(path: string): Promise<string> {
+    await execa('git', ['init', '-q', '-b', 'main', path]);
+    await execa('git', ['-c', 'user.email=t@t.dev', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: path });
+    return path;
+  }
+
+  it('a non-git hub with its own .baton inside an outer repo is served as the hub', async () => {
+    const mono = await repo(join(await realpath(dir), 'mono'));
+    const hub = join(mono, 'hub');
+    await mkdir(join(hub, '.baton'), { recursive: true });
+    await repo(join(hub, 'a'));
+    await repo(join(hub, 'b'));
+    expect(await servedRoot(hub)).toBe(hub);
+  });
+
+  it('a linked worktree maps to main, even with a shadow .baton of its own', async () => {
+    const main = await repo(join(await realpath(dir), 'main'));
+    await mkdir(join(main, '.baton'));
+    const inside = join(main, '.baton', 'wt', 'side');
+    const outside = join(await realpath(dir), 'sibling');
+    await execa('git', ['worktree', 'add', '-q', '-b', 'side', inside], { cwd: main });
+    await execa('git', ['worktree', 'add', '-q', '-b', 'side2', outside], { cwd: main });
+    await mkdir(join(inside, '.baton'));
+    await mkdir(join(outside, '.baton'));
+    expect(await servedRoot(inside)).toBe(main);
+    expect(await servedRoot(outside)).toBe(main);
   });
 });
 
