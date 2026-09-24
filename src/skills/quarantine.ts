@@ -25,6 +25,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { withLock } from '../util/lock.js';
 import type { SkillSource } from './catalog.js';
 
 export const QUARANTINE_VERSION = 1;
@@ -108,9 +109,23 @@ export async function isReleased(id: string, hash: string): Promise<boolean> {
  * Written via temp file + rename so an interrupted write cannot leave a
  * half-serialised file — which, failing closed, would quarantine the user's
  * whole library rather than corrupting it open.
+ *
+ * Serialised on the file, because this is a read-modify-write and the daemon
+ * serves requests concurrently. Two releases at once used to stage to the same
+ * pid-scoped temp path, so the first rename moved it out from under the second
+ * and the second threw ENOENT — a raw errno out of a route that had reported
+ * nothing wrong, and a release the reviewer believed they had granted. The pid
+ * in the name keeps two AGENTS apart; the lock is what keeps two requests
+ * inside ONE agent apart, and it also stops the later write from erasing the
+ * row the earlier one added. Same reasoning as members.json / teams.json —
+ * see util/lock.ts.
  */
 export async function releaseSkill(id: string, hash: string, by: string): Promise<void> {
   if (!id || !hash) throw new Error('a release needs both a skill id and the hash being released');
+  return withLock(quarantinePath(), () => recordRelease(id, hash, by));
+}
+
+async function recordRelease(id: string, hash: string, by: string): Promise<void> {
   const all = await listReleases();
   if (!(id in all) && Object.getOwnPropertyNames(all).length >= MAX_RELEASES) return;
   all[id] = { hash, by: by || 'unknown', at: new Date().toISOString() };

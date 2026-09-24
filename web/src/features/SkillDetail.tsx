@@ -13,6 +13,7 @@
    in the list or your search.
    ============================================================ */
 import { useEffect, useRef, useState } from "react";
+import { HeldButton } from "./SkillReview";
 import { Icon } from "../components/Icon";
 import { AgentGlyph, getAgent } from "../lib/registry";
 import { ApiError, BatonAPI } from "../lib/api";
@@ -20,6 +21,7 @@ import { showToast } from "../lib/toast";
 import { ConfirmDialog } from "../components/primitives";
 import { Label, rule } from "./shared";
 import { isUserSkill, type SkillStatus } from "../types";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 /** One sidebar block. Renders nothing when it has nothing to say, so a skill
  *  with no reference files doesn't show an empty "Ships" heading. */
@@ -35,13 +37,18 @@ function Facet({ title, children }: { title: string; children?: React.ReactNode 
   );
 }
 
-export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete, onBookmark }: {
+export function SkillDetail({ skill, held, writeEnabled, onClose, onChanged, onDelete, onBookmark, onReview }: {
   skill: SkillStatus;
+  /** Set when this skill is being held pending review — no install path may
+   *  be offered from here, or the detail dialog becomes the way around the gate. */
+  held?: boolean;
   writeEnabled: boolean;
   onClose: () => void;
   onChanged: () => void;
   onDelete: () => void;
   onBookmark: (on: boolean) => void;
+  /** Close this and open the review sheet — the only next step for a held skill. */
+  onReview: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const [updating, setUpdating] = useState(false);
@@ -93,23 +100,34 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
     }
   };
 
-  // Escape closes, and focus moves into the dialog so a keyboard user is not
-  // left tabbing through the list behind it.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
-    document.addEventListener("keydown", onKey);
-    const t = setTimeout(() => panel.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus(), 30);
-    return () => { document.removeEventListener("keydown", onKey); clearTimeout(t); };
-  }, [onClose]);
+  // The shared trap, not a local half of one. This copy did Escape and initial
+  // focus but no Tab cycle, so Tab off "Close" — the last control in here —
+  // landed on the Tweaks button BEHIND the scrim, and closing left focus
+  // wherever it had wandered instead of on the card that opened this.
+  //
+  // It kept `onClose` out of its deps for a reason that still holds and that
+  // `useFocusTrap` handles the same way: every caller passes an inline arrow,
+  // so depending on its identity re-armed the trap on every render of the
+  // Skills screen (which polls the catalogue) and threw a keyboard user back to
+  // the top of the dialog each time. Escape still belongs to the confirm
+  // dialog below when one is open — the trap tracks which overlay is innermost.
+  useFocusTrap(panel, onClose);
 
   const installed = skill.installs.filter((i) => i.installed);
   const mine = isUserSkill(skill.source);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label={`${skill.id} skill`} onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 60, background: "var(--bg-scrim)", display: "grid", placeItems: "center", padding: 24 }}>
-      <div ref={panel} onClick={(e) => e.stopPropagation()}
-        style={{ width: "min(980px, 100%)", maxHeight: "86vh", display: "flex", flexDirection: "column", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,.35)", overflow: "hidden" }}>
+    <div role="dialog" aria-modal="true" aria-label={`${skill.id} skill`}
+      style={{ position: "fixed", inset: 0, zIndex: 60, display: "grid", placeItems: "center", padding: 24 }}>
+      {/* Click-to-dismiss belongs on a backdrop of its own, not on this
+          container — as every other dialog in the app does it. With `onClose`
+          on the container, every click inside the confirm dialog below (which
+          is a child of it) bubbled up and closed the whole detail sheet, so
+          "Cancel" and "Overwrite my edits" both dismissed the thing you were
+          reading. A `stopPropagation` on the panel could not cover a sibling. */}
+      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)" }} />
+      <div ref={panel}
+        style={{ position: "relative", width: "min(980px, 100%)", maxHeight: "86vh", display: "flex", flexDirection: "column", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,.35)", overflow: "hidden" }}>
 
         {/* Header */}
         <div style={{ padding: "16px 18px", display: "flex", alignItems: "flex-start", gap: 10, borderBottom: "1px solid var(--border-subtle)" }}>
@@ -168,12 +186,16 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
                   {([["What", skill.explain.what], ["How", skill.explain.how], ["Win", skill.explain.win]] as const).map(([k, v]) => (
                     <div key={k} style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
                       <span style={{ flex: "none", width: 30 }}><Label tone={k === "Win" ? "accent" : undefined}>{k}</Label></span>
-                      <span style={{ fontSize: "var(--fs-13)", lineHeight: 1.6, color: "var(--text-secondary)" }}>{v}</span>
+                      <span style={{ minWidth: 0, fontSize: "var(--fs-13)", lineHeight: 1.6, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>{v}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.65, color: "var(--text-secondary)" }}>
+                /* overflowWrap: a description comes out of an imported
+                   SKILL.md's frontmatter, so it can be one unbroken 10k-char
+                   token. Without this it ran ~75,000px wide and pushed the
+                   facts sidebar off the dialog. */
+                <p style={{ margin: 0, fontSize: "var(--fs-13)", lineHeight: 1.65, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>
                   {skill.description}
                 </p>
               )}
@@ -187,7 +209,7 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
                 <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                   <Label>Agent trigger</Label><span style={rule} />
                 </div>
-                <p style={{ margin: 0, fontSize: "var(--fs-12)", lineHeight: 1.6, color: "var(--text-tertiary)" }}>
+                <p style={{ margin: 0, fontSize: "var(--fs-12)", lineHeight: 1.6, color: "var(--text-tertiary)", overflowWrap: "anywhere" }}>
                   {skill.description}
                 </p>
               </div>
@@ -228,9 +250,18 @@ export function SkillDetail({ skill, writeEnabled, onClose, onChanged, onDelete,
                       : <span style={{ fontSize: "var(--text-micro)", color: "var(--text-quaternary)" }}>not installed</span>}
                   </div>
                 ))}
-                {installed.length === 0 && writeEnabled && (
+                {held ? (
+                  <HeldButton onClick={onReview} style={{ marginTop: 4, height: 26 }} />
+                ) : installed.length === 0 && writeEnabled && (
                   <button className="btn btn-sm btn-primary fr" style={{ marginTop: 4, height: 26 }}
-                    onClick={() => void BatonAPI.installSkillEverywhere(skill.id).then(onChanged)}>
+                    onClick={() => {
+                      // Same contract as the catalogue card's own "Add to all":
+                      // a refused install must say so. Without the catch this
+                      // rejected unhandled and the button looked like a no-op.
+                      void BatonAPI.installSkillEverywhere(skill.id)
+                        .then(onChanged)
+                        .catch((e) => showToast({ kind: "error", title: "Couldn’t install to all agents", desc: (e as Error).message }));
+                    }}>
                     <Icon name="zap" size={12} /> Add to all
                   </button>
                 )}

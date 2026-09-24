@@ -18,7 +18,9 @@
  * <repo>/.baton/skills, and carry source: 'imported'.
  */
 import { parseFrontmatter } from '../util/frontmatter.js';
+import { parseRelations } from './graph.js';
 import { existsSync } from 'node:fs';
+import { lazyReference, type FileDigest } from './digests.js';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -26,7 +28,28 @@ import { join } from 'node:path';
 export interface SkillReference {
   /** Path relative to the skill dir, e.g. "references/blast-radius-checklist.md". */
   rel: string;
+  /**
+   * The file's text. For a bundled skill this is a lazy getter — see
+   * {@link lazyReference} — so listing skills costs the directory entry and
+   * none of the bytes.
+   */
   content: string;
+  /** Size and hash of {@link content}, for a caller that must weigh or
+   *  fingerprint the file without loading it — a listing does exactly that.
+   *  Bundled references answer it from a build-time manifest (./digests.ts). */
+  readonly digest?: FileDigest;
+  /**
+   * The read, with failure told apart from emptiness: `null` means the file
+   * could not be read, `''` means it read as empty.
+   *
+   * `content` collapses both to `''`, which is right for a property access
+   * mid-render but wrong for a caller about to WRITE the bytes somewhere. An
+   * install that cannot tell them apart writes a zero-byte reference file,
+   * counts it, and reports a `digest` taken from the manifest — a hash over
+   * bytes it never wrote. Present only on lazy (bundled) references; a caller
+   * that must not guess should check for it rather than assume it.
+   */
+  readonly tryContent?: () => string | null;
 }
 
 /** The human-facing 3-line explainer shown on skill cards: what the skill is,
@@ -65,6 +88,10 @@ export interface SkillDef {
   /** Supporting files installed alongside the skill (loaded on demand by the agent). */
   references: SkillReference[];
   source: SkillSource;
+  /** Skills this one's text names — installing without them dangles the
+   *  instruction — and skills merely useful with it. Declared; see ./graph.ts. */
+  requires: string[];
+  worksWith: string[];
   /** 3-line human explainer (what / how / win) for the UI. Bundled skills carry
    *  one; imported skills fall back to their description. */
   explain?: SkillExplain;
@@ -134,6 +161,18 @@ const BUNDLED_META: Record<string, { tags: string[]; produces: string[] }> = {
     tags: ['migrate', 'migration', 'port', 'convert', 'rewrite', 'angular', 'react', 'next.js', 'nextjs', 'vue', 'nestjs', 'express', 'framework', 'stack', 'phase', 'parity', 'endpoints', 'components', 'dry', 'reuse', 'resumable', 'ledger', 'parallel', 'multi-agent', 'fan-out', 'worktree', 'cursor', 'codex', 'antigravity', 'handoff'],
     produces: ['codebase inventory', 'ordered phase plan', 'MIGRATION.md ledger', 'reuse index', 'per-phase parity re-verify', '95% skeptic gate', 'auto-commit per phase (never pushes)', 'parallel fan-out plan + per-phase HANDOFF briefs'],
   },
+  'create-baton-skill': {
+    tags: ['skill', 'skills', 'create skill', 'write skill', 'author skill', 'new skill', 'improve skill', 'upgrade skill', 'score skill', 'skill quality', 'meta', 'authoring', 'archetype', 'gate', 'approval gate', 'skeptic', 'rubric', 'checkpoint', 'ledger', 'catalog', 'frontmatter', 'description', 'triggers', 'lint', 'scanner', 'playbook', 'workflow'],
+    produces: ['restraint-ladder verdict', 'plain-language authoring interview', 'archetype classification', 'baseline failure transcript', 'gate-library assembly', 'drafted SKILL.md', 'archetype-aware rubric score', 'skeptic re-score (lower wins)', 'compliance + loophole closing', 'mechanical check pass', 'catalog registration + installs'],
+  },
+  'monolith-split': {
+    tags: ['split', 'separate', 'extract', 'decouple', 'monolith', 'microservice', 'service', 'backend', 'frontend', 'api', 'next.js', 'nextjs', 'nestjs', 'fastify', 'express', 'fastapi', 'go', 'spring', 'django', 'rails', 'monorepo', 'boundary', 'network boundary', 'contract', 'strangler', 'proxy', 'feature flag', 'checkpoint', 'rollback', 'cutover', 'parity', 'authorization', 'cors', 'serialization', 'transaction', 'resumable', 'ledger'],
+    produces: ['plain-language split interview', 'STAYS/MOVES/SHARED classification', '17-category seam inventory', 'golden-master capture', 'SPLIT.md ledger', 'reversible checkpoints (flag + tag + revert line)', 'proven-no-op CP-0 + rollback drill', 'differential parity (flag off vs on)', '95% skeptic gate', 'auto-commit per checkpoint (never pushes)'],
+  },
+  'llm-council': {
+    tags: ['council', 'debate', 'second opinion', 'pressure-test', 'stress-test', 'multiple perspectives', 'karpathy', 'decision', 'tradeoff', 'architecture', 'peer review', 'chairman', 'subagents', 'parallel'],
+    produces: ['worth-it gate + prior-verdict recall', 'neutral decision brief', '3-5 lens seating with stated tensions', 'independent parallel member answers (grounded or [unverified])', 'diversity check + at most one re-seat', 'shuffled anonymized peer review with FINAL RANKING tally', 'chairman verdict (recommendation, confidence, overturn conditions, first step)', 'transcript in the hub .baton/council/ + advisory decision memory (updated when you decide)'],
+  },
 };
 
 /** What / how / advantage — three short lines per bundled skill, shown on the
@@ -195,6 +234,16 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     how: 'Inventory → ordered phases → migrate one at ≥95% checked parity; fans out across agents; resumes from MIGRATION.md.',
     win: 'A 100+-file rewrite survives usage limits and lands with no dropped feature or duplicate code.',
   },
+  'create-baton-skill': {
+    what: 'Author a skill \u2014 or upgrade one \u2014 to the bar of a production gated pipeline.',
+    how: 'Restraint gate \u2192 archetype \u2192 baseline failure test \u2192 gate library \u2192 rubric + skeptic score that blocks below 85.',
+    win: 'Skills stop being vague checklists: right shape, real gates, and tested against an agent that tries to skip them.',
+  },
+  'monolith-split': {
+    what: 'Split one codebase into an app + its own backend service, without the running app ever breaking.',
+    how: 'Plain-language interview → seam inventory → golden master → reversible checkpoints (flag + tag) at ≥95% parity.',
+    win: 'A function call becomes a network boundary without losing an authz check, a transaction, or a field.',
+  },
   'map-codebase': {
     what: 'Builds the repo map every other skill navigates by.',
     how: '`baton kb rebuild` → knowledge graph + CODEBASE.md, served to agents over MCP.',
@@ -209,6 +258,11 @@ const SKILL_EXPLAIN: Record<string, SkillExplain> = {
     what: 'Restructure code without changing behavior.',
     how: 'Green test baseline → isolated worktree → small steps → graph-checked callers.',
     win: 'Refactors land without breaking the caller you forgot existed.',
+  },
+  'llm-council': {
+    what: 'Pressure-tests one consequential decision with a small council of independent lenses.',
+    how: 'Gate → neutral brief → seat 3-5 lenses → parallel grounded answers → anonymized peer review → chairman verdict.',
+    win: 'A recommendation with a confidence level and what would overturn it — never acted on without your go-ahead.',
   },
 };
 
@@ -267,6 +321,7 @@ const INLINE_SKILLS: SkillDef[] = [
     body: MAP_BODY,
     references: [],
     source: 'bundled',
+    requires: [], worksWith: [],
     explain: SKILL_EXPLAIN['map-codebase'],
   },
   {
@@ -278,11 +333,13 @@ const INLINE_SKILLS: SkillDef[] = [
     body: REFACTOR_BODY,
     references: [],
     source: 'bundled',
+    requires: [], worksWith: [],
     explain: SKILL_EXPLAIN['safe-refactor'],
   },
 ];
 
-/* ---- file-backed loader (cached — bundled skills never change at runtime) ---- */
+/* ---- file-backed loader (cached — bundled skills never change at runtime) ----
+   Reference files are named here and read only on demand: see lazyReference in ./digests.ts. */
 
 let fileBackedCache: SkillDef[] | null = null;
 
@@ -303,12 +360,11 @@ async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
   const references: SkillReference[] = [];
   const refDir = join(BUNDLED_DIR, id, 'references');
   if (existsSync(refDir)) {
-    let files: string[] = [];
-    try { files = await readdir(refDir); } catch { files = []; }
-    for (const f of files.sort()) {
-      try {
-        references.push({ rel: `references/${f}`, content: await readFile(join(refDir, f), 'utf-8') });
-      } catch { /* skip unreadable reference */ }
+    let entries: { name: string; isDirectory(): boolean }[] = [];
+    try { entries = await readdir(refDir, { withFileTypes: true }); } catch { entries = []; }
+    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (e.isDirectory()) continue;   // a reference is a file; readFile would have thrown anyway
+      references.push(lazyReference(BUNDLED_DIR, id, `references/${e.name}`));
     }
   }
 
@@ -327,6 +383,7 @@ async function loadOneFileSkill(id: string): Promise<SkillDef | null> {
     body: parsed.content.trim() + '\n',
     references,
     source: 'bundled',
+    ...parseRelations(data),
     explain: SKILL_EXPLAIN[id],
     raw: nameMatchesId ? raw : undefined,
   };

@@ -123,6 +123,18 @@ const RULES: Rule[] = [
  */
 const HIDDEN = /[\p{Cf}\p{Co}\p{Cs}]/u;
 
+/**
+ * Is this line a markdown fence delimiter (``` or ~~~)?
+ *
+ * Exported because src/skills/lint.ts needs the same question answered, and two
+ * implementations of "am I inside a code block" would be two different sets of
+ * bugs on the same hostile input.
+ */
+export function isFenceDelimiter(line: string): boolean {
+  const t = line.trimStart();
+  return t.startsWith('```') || t.startsWith('~~~');
+}
+
 /** Wording near a match that forbids rather than instructs. */
 const NEGATORS = ['never', 'do not', "don't", 'must not', 'avoid', 'not allowed', 'refuse to', 'without'];
 
@@ -168,8 +180,7 @@ export function scanSkill(files: readonly { rel: string; content: string }[]): S
 
     for (let i = 0; i < lines.length; i++) {
       const raw = lines[i]!;
-      const trimmed = raw.trimStart();
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      if (isFenceDelimiter(raw)) {
         inFence = !inFence;
         continue;
       }

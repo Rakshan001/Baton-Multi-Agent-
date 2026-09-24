@@ -403,8 +403,8 @@ skills
 
 skills
   .command('import')
-  .argument('<source>', 'a file path or http(s) URL to a SKILL.md')
-  .option('--as <shortcut>', 'the shortcut agents invoke it by (default: its frontmatter name)')
+  .argument('<source>', 'a file path, a SKILL.md URL, or a GitHub repo/folder URL')
+  .option('--as <shortcut>', 'the shortcut agents invoke it by — also picks the skill when a repo holds several')
   .option('--replace', 'overwrite a skill of yours that already has this shortcut')
   .description('add a skill from a path or URL to your library (~/.baton/skills)')
   .action((source: string, opts: { as?: string; replace?: boolean }) => run(() => skillsImportCmd(source, opts)));

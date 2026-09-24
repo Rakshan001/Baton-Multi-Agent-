@@ -13,7 +13,7 @@ import {
   listSkillStatus, installSkill, installSkillEverywhere, uninstallSkill, importSkillFromSource,
   removeSkill, exportSkills, importSkillBundle, globalSkillsDir, isUserSkill, importWarnings,
   storedSkillPath,
-  findSkill, bookmarkSkill, updateSkill, loadCatalog,
+  loadSkillRecordingUse, bookmarkSkill, updateSkill, loadCatalog,
   SKILL_AGENTS, SkillNotFoundError, SkillAgentUnsupportedError, SkillImportError, SkillExistsError,
   SkillLocallyEditedError, SkillQuarantinedError,
 } from '../skills/install.js';
@@ -133,7 +133,7 @@ export async function skillsRemoveCmd(id: string, opts: { yes?: boolean } = {}):
     if (!opts.yes) {
       // Validate BEFORE prompting: "delete this?" about a skill that does not
       // exist, or one we would refuse anyway, is a question worth nobody's time.
-      const skill = await findSkill(root, id);
+      const skill = await loadSkillRecordingUse(root, id);
       if (!skill) throw new SkillNotFoundError(id);
       if (!isUserSkill(skill.source)) {
         throw new SkillImportError(`'${id}' is a Baton built-in — it ships with the package and can't be deleted`);

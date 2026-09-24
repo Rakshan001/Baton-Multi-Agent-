@@ -19,6 +19,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { withLock } from '../util/lock.js';
 
 export const BOOKMARKS_VERSION = 1;
 
@@ -57,22 +58,37 @@ export async function loadBookmarks(): Promise<Set<string>> {
  * Written via a temp file and rename so an interrupted write cannot leave a
  * half-serialised file behind — cheap here, and the alternative is a corrupt
  * JSON that silently reads back as "nothing bookmarked".
+ *
+ * Two things make that temp file safe to share a directory with other writers,
+ * and it had neither:
+ *
+ * - **The pid is in its name.** `~/.baton` is machine-wide, so every Baton
+ *   process on the machine staged to the one path `skill-bookmarks.json.tmp`.
+ *   One would overwrite another's staged file and then rename it away, so the
+ *   other's rename hit ENOENT and the WHOLE list it was installing was lost —
+ *   the same defect already fixed in the usage ledger (skills/usage.ts).
+ * - **The read-modify-write is serialised.** The pid does not separate two
+ *   pins inside ONE daemon, which both load the same list and write back their
+ *   own copy of it: the second erases the first, and one of the two renames
+ *   still throws ENOENT. See util/lock.ts.
  */
 export async function setBookmark(id: string, on: boolean): Promise<Set<string>> {
-  const ids = await loadBookmarks();
-  if (on) {
-    if (!ids.has(id) && ids.size >= MAX_BOOKMARKS) {
-      throw new Error(`you have ${MAX_BOOKMARKS} bookmarks already — remove one first`);
+  return withLock(bookmarksPath(), async () => {
+    const ids = await loadBookmarks();
+    if (on) {
+      if (!ids.has(id) && ids.size >= MAX_BOOKMARKS) {
+        throw new Error(`you have ${MAX_BOOKMARKS} bookmarks already — remove one first`);
+      }
+      ids.add(id);
+    } else {
+      ids.delete(id);
     }
-    ids.add(id);
-  } else {
-    ids.delete(id);
-  }
-  const path = bookmarksPath();
-  const tmp = `${path}.tmp`;
-  const body: BookmarkFile = { version: BOOKMARKS_VERSION, ids: [...ids] };
-  await mkdir(join(homedir(), '.baton'), { recursive: true });
-  await writeFile(tmp, JSON.stringify(body, null, 2), 'utf-8');
-  await rename(tmp, path);
-  return ids;
+    const path = bookmarksPath();
+    const tmp = `${path}.${process.pid}.tmp`;
+    const body: BookmarkFile = { version: BOOKMARKS_VERSION, ids: [...ids] };
+    await mkdir(join(homedir(), '.baton'), { recursive: true });
+    await writeFile(tmp, JSON.stringify(body, null, 2), 'utf-8');
+    await rename(tmp, path);
+    return ids;
+  });
 }

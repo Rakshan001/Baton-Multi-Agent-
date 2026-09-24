@@ -9,7 +9,13 @@
  */
 import { describe, it, expect } from 'vitest';
 import { bundledSkills } from '../src/skills/catalog.js';
-import { SKILL_AGENTS, findSkill, skillTargetFor, renderSkill } from '../src/skills/install.js';
+import { SKILL_AGENTS, loadSkillRecordingUse, skillTargetFor, renderSkill } from '../src/skills/install.js';
+import { usePrivateHome } from './helpers/private-home.js';
+
+/* File scope, not per-describe: every block here installs or loads a skill,
+   which touches machine-wide state in ~/.baton. One call covers the whole file
+   including whatever describe someone adds next. */
+usePrivateHome();
 
 const ID = 'dispatch-plan';
 
@@ -47,7 +53,7 @@ describe('the dispatch-plan skill exists and is installable', () => {
   });
 
   it('is findable by id the way `baton skills install` looks it up', async () => {
-    expect((await findSkill(process.cwd(), ID))?.id).toBe(ID);
+    expect((await loadSkillRecordingUse(process.cwd(), ID))?.id).toBe(ID);
   });
 });
 

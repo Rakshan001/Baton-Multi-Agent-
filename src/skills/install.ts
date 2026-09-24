@@ -43,14 +43,16 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { bundledSkills, type SkillDef, type SkillSource } from './catalog.js';
+import { parseRelations } from './graph.js';
 import { summarize, type SkillSummary } from './summary.js';
 import { loadBookmarks, setBookmark } from './bookmarks.js';
+import { recordUsage } from './usage.js';
 import { isReleased, quarantinePath, releaseSkill, requiresReview } from './quarantine.js';
 import { scanSkill, type ScanFinding } from './scan.js';
 import { clearOrigin, getOrigin, hashSkillFiles, setOrigin } from './origins.js';
 import { gitExcludeLocal, gitUnexcludeLocal } from '../git.js';
 import { fetchGitHubSkill, parseGitHubUrl, parseSkillSource,
-  type RemoteSkillFile, type SkillCandidate } from './github.js';
+  type GitHubRef, type RemoteSkillFile, type SkillCandidate } from './github.js';
 
 /** Agent CLIs that have a skill/rule directory Baton can write. */
 export const SKILL_AGENTS = ['claude', 'cursor', 'antigravity'] as const;
@@ -81,7 +83,7 @@ export interface SkillInstallState {
  * This is a {@link SkillSummary} — metadata only. Neither reference *content*
  * nor the skill **body** is serialized here: the bundled set is ~330 KB, so a
  * listing that carried bodies spent ~58k tokens to render a list of names.
- * Fetch a body with {@link findSkill} or `GET /api/skills/:id/file`, and use
+ * Fetch a body with {@link loadSkillRecordingUse} or `GET /api/skills/:id/file`, and use
  * `contentSha256` to skip that fetch when your copy is already current.
  */
 export interface SkillStatus extends SkillSummary {
@@ -253,6 +255,9 @@ export function parseSkillMarkdown(text: string, fallbackId: string): SkillDef {
     body: content.trim() + '\n',
     references: [],
     source: 'imported',
+    // An imported skill declares relations the same way a bundled one does —
+    // this is the single construction point for everything not bundled.
+    ...parseRelations(data),
   };
 }
 
@@ -391,8 +396,33 @@ export async function loadCatalog(root: string): Promise<SkillDef[]> {
   return [...bundled, ...global, ...imported];
 }
 
-export async function findSkill(root: string, id: string): Promise<SkillDef | null> {
+/**
+ * Catalog lookup with no side effect.
+ *
+ * Separate from {@link loadSkillRecordingUse} so that one operation records one
+ * usage entry: installing looks a skill up on its way to writing it, and an
+ * install that also recorded a "load" would double-count itself.
+ */
+async function lookupSkill(root: string, id: string): Promise<SkillDef | null> {
   return (await loadCatalog(root)).find((s) => s.id === id) ?? null;
+}
+
+/**
+ * Fetch one skill, body and all — the on-demand path a listing deliberately
+ * avoids, and therefore the one place a plain read counts as using a skill.
+ * A miss records nothing: an id that does not exist is not a use of anything.
+ *
+ * Named for the write, not for the lookup. `findSkill` sat one letter away from
+ * the pure {@link lookupSkill} and gave no hint that calling it appends to the
+ * usage ledger, so a read path could pick the wrong one and silently turn a
+ * list into a write — the exact failure the plan's "a list must never become a
+ * write" forbids. Anything that only needs the metadata should call
+ * {@link listSkillStatus}, which stays pure.
+ */
+export async function loadSkillRecordingUse(root: string, id: string): Promise<SkillDef | null> {
+  const skill = await lookupSkill(root, id);
+  if (skill) await recordUsage(id, 'load');
+  return skill;
 }
 
 /** Catalog with per-agent install state. Metadata only — no bodies, no reference content. */
@@ -423,6 +453,16 @@ export interface InstallResult {
   /** Number of reference files written alongside the skill. */
   references: number;
   /**
+   * `rel` of every reference that could NOT be read, and so was not written.
+   *
+   * Reported rather than written as an empty file: `lazyReference.content`
+   * degrades an unreadable file to `''`, and writing that produces a
+   * zero-byte reference whose digest still claims the manifest's bytes. An
+   * agent finding the file present and empty believes it read it; a missing
+   * file it can at least report. Empty on a healthy install.
+   */
+  unreadable: string[];
+  /**
    * Whether Baton git-excluded what it wrote. False outside a git repo (a
    * folder workspace), where there is nothing to exclude from.
    *
@@ -450,16 +490,49 @@ export class SkillQuarantinedError extends Error {
 /**
  * A library that predates the review gate is treated as already reviewed.
  *
- * Someone with twenty imported skills must not upgrade Baton and find all
- * twenty blocked by a feature they never opted into. The ABSENCE of the
- * quarantine file is the signal — it exists only once something has been
+ * Someone with twenty skills in their own library must not upgrade Baton and
+ * find all twenty blocked by a feature they never opted into. The ABSENCE of
+ * the quarantine file is the signal — it exists only once something has been
  * released — so this runs exactly once, and every skill imported after it goes
  * through the gate like any other.
+ *
+ * **`global` only, never `imported`.** The two sources look alike — both are
+ * "the user's own" as far as export and delete are concerned — but they sit in
+ * different places, and only one of them can arrive by `git pull`:
+ *
+ *   - `global`   — `~/.baton/skills`, which this user imported by hand. Old
+ *                  ones genuinely predate the gate, which is who this is for.
+ *   - `imported` — `<repo>/.baton/skills`, TRACKED IN GIT. A skill there may
+ *                  have landed one second ago from a branch nobody read.
+ *
+ * Grandfathering both meant that on any machine which had never used the gate
+ * — a new user, a fresh container, CI — a hostile skill committed to a repo
+ * installed with no review, because the same missing file that proved the
+ * library was old also released the thing that had just arrived. The gate
+ * worked only after it had already been used once, which is the wrong way
+ * round. See test/skill-quarantine-grandfather.test.ts.
+ *
+ * The other half: this ran LAZILY, at the first install, and keyed on the
+ * absence of the quarantine file — but that file is created BY that install.
+ * Anything imported before it was therefore swept up as "pre-existing", so on
+ * a fresh machine importing a hostile skill and installing it released it
+ * unread, `global` restriction and all. The absence of the file was never a
+ * good proxy for "this library is old": the library is only old at the moment
+ * the gate initialises. So the save path calls this BEFORE a new skill lands —
+ * the genuinely pre-existing library is grandfathered, the arrival is not.
+ *
+ * A repo-local skill is therefore held even on a first run. That is a real cost
+ * for anyone who was keeping skills in `.baton/skills` — one review each — and
+ * it is the correct side to be wrong on: holding a skill is reversible in one
+ * click, and installing an unread one is not.
  */
-async function grandfatherExistingLibrary(root: string): Promise<void> {
+async function grandfatherExistingLibrary(): Promise<void> {
   if (existsSync(quarantinePath())) return;
-  for (const skill of await loadCatalog(root)) {
-    if (!requiresReview(skill.source)) continue;
+  // Only the machine-wide library: `imported` lives in the repo and git can
+  // deliver it, so it is never grandfathered. Reading that directory directly
+  // rather than the whole catalog is also what lets the IMPORT path call this
+  // before a new skill lands, which is the other half of the fix.
+  for (const skill of await readSkillDir(globalSkillsDir(), 'global', new Set())) {
     await releaseSkill(skill.id, hashSkillFiles(skillFileList(skill)), 'grandfathered (library predates the review gate)');
   }
   // Nothing to grandfather: still stamp the file, or a first-ever import would
@@ -471,13 +544,13 @@ async function grandfatherExistingLibrary(root: string): Promise<void> {
 
 export async function installSkill(root: string, id: string, agent: string): Promise<InstallResult> {
   if (!isSkillAgent(agent)) throw new SkillAgentUnsupportedError(agent);
-  const skill = await findSkill(root, id);
+  const skill = await lookupSkill(root, id);
   if (!skill) throw new SkillNotFoundError(id);
 
   // The one chokepoint: installSkillEverywhere routes through here too, so a
   // skill cannot reach an agent's config directory without passing this.
   if (requiresReview(skill.source)) {
-    await grandfatherExistingLibrary(root);
+    await grandfatherExistingLibrary();
     if (!(await isReleased(id, hashSkillFiles(skillFileList(skill))))) throw new SkillQuarantinedError(id);
   }
   const target = skillTargetFor(agent, id, root)!;
@@ -488,10 +561,16 @@ export async function installSkill(root: string, id: string, agent: string): Pro
   await writeFile(target.path, main, 'utf-8');
 
   let references = 0;
+  const unreadable: string[] = [];
   for (const ref of skill.references) {
+    // `tryContent` tells a failed read from an empty file; `content` cannot.
+    // Only lazy (bundled) references carry it — for every other source the
+    // text is already in memory, so there is no read left to fail.
+    const text = ref.tryContent ? ref.tryContent() : ref.content;
+    if (text === null) { unreadable.push(ref.rel); continue; }
     const dest = join(target.refsDir, ref.rel);
     await mkdir(dirname(dest), { recursive: true });
-    await writeFile(dest, ref.content, 'utf-8');
+    await writeFile(dest, text, 'utf-8');
     references++;
   }
   // Q22. Baton's own scaffolding must not become the agent's diff: every
@@ -503,7 +582,10 @@ export async function installSkill(root: string, id: string, agent: string): Pro
   for (const rel of target.excludes) {
     excluded = (await gitExcludeLocal(root, rel)) || excluded;
   }
-  return { skill: id, agent, rel: target.rel, path: target.path, wrote: true, references, excluded };
+  // Recorded after the write, and best-effort: an unwritable ~/.baton costs the
+  // ledger an entry, never the user their install.
+  await recordUsage(id, 'install');
+  return { skill: id, agent, rel: target.rel, path: target.path, wrote: true, references, unreadable, excluded };
 }
 
 /**
@@ -513,14 +595,39 @@ export async function installSkill(root: string, id: string, agent: string): Pro
  * nothing.
  */
 export async function installSkillEverywhere(root: string, id: string): Promise<InstallResult[]> {
-  if (!(await findSkill(root, id))) throw new SkillNotFoundError(id);
+  if (!(await lookupSkill(root, id))) throw new SkillNotFoundError(id);
   const results: InstallResult[] = [];
   for (const agent of SKILL_AGENTS) results.push(await installSkill(root, id, agent));
   return results;
 }
 
+/**
+ * Could this string be a skill id, as far as the filesystem is concerned?
+ *
+ * Every other operation answers that question by resolving the id against the
+ * catalog — and every id in the catalog is either a slug or a directory name,
+ * so neither can name anywhere but a child of the skills directory. Uninstall
+ * is the exception: it must work for a skill the user has already DELETED from
+ * their library but is still wired into an agent, so it cannot require the
+ * catalog, and what it does with the id is `rm -r`.
+ *
+ * Deliberately a shape check and not a slug check: a bundled skill's id is its
+ * directory name, which is not required to be slug-clean, and a guard that
+ * refused those would break uninstalling them.
+ */
+function isPathSafeSkillId(id: unknown): id is string {
+  return typeof id === 'string' && id !== '' && id === id.trim()
+    && id !== '.' && id !== '..' && !/[\\/\0]/.test(id);
+}
+
 export async function uninstallSkill(root: string, id: string, agent: string): Promise<{ removed: boolean; rel: string }> {
   if (!isSkillAgent(agent)) throw new SkillAgentUnsupportedError(agent);
+  // The id arrives unresolved — `DELETE /api/skills/:id/install` hands over
+  // `decodeURIComponent(...)`, so `%2F` and `%2E%2E` in the path segment are a
+  // real traversal, and the CLI takes whatever was typed. Without this,
+  // `../../src` named `<root>/src` and this function deleted it recursively,
+  // reporting `removed: false` while it did.
+  if (!isPathSafeSkillId(id)) throw new SkillNotFoundError(id);
   const target = skillTargetFor(agent, id, root)!;
   const had = existsSync(target.path);
   if (agent === 'claude' || agent === 'antigravity') {
@@ -533,6 +640,7 @@ export async function uninstallSkill(root: string, id: string, agent: string): P
   // Symmetric with install. A pattern that outlives what it was for makes a
   // hand-written file at the same path invisible to git, and silently.
   for (const rel of target.excludes) await gitUnexcludeLocal(root, rel);
+  await recordUsage(id, 'uninstall');
   return { removed: had, rel: target.rel };
 }
 
@@ -646,14 +754,26 @@ export interface SaveSkillOpts {
  *
  * Handles the three shapes a file actually arrives in: no frontmatter at all,
  * frontmatter without a name, and frontmatter with one.
+ *
+ * A leading byte-order mark is dropped first. Windows editors write one, and it
+ * arrives through every door — an upload, a raw URL, a file already in the
+ * library. gray-matter skips it, so parseSkillMarkdown has ALREADY read the
+ * frontmatter by the time this runs; a fence regex that did not skip it
+ * disagreed with the id it had just produced, read the file as having no
+ * frontmatter, and wrapped the real block — description included — inside a
+ * second one as body text. What was stored then opened `---\nname: <id>\n---`
+ * with no `description:`, which is the field an agent's harness matches to
+ * decide whether to load a skill at all: it installed, it listed, and it never
+ * triggered.
  */
 export function withSkillName(text: string, id: string): string {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(text);
-  if (!fm) return `---\nname: ${id}\n---\n\n${text.trim()}\n`;
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(src);
+  if (!fm) return `---\nname: ${id}\n---\n\n${src.trim()}\n`;
   const block = /^name:.*$/m.test(fm[1])
     ? fm[1].replace(/^name:.*$/m, `name: ${id}`)
     : `name: ${id}\n${fm[1]}`;
-  return `---\n${block}\n---\n${text.slice(fm[0].length)}`;
+  return `---\n${block}\n---\n${src.slice(fm[0].length)}`;
 }
 
 /**
@@ -731,6 +851,7 @@ export function danglingReferences(text: string): string[] {
   return [...found].slice(0, 10);
 }
 
+/** Skipped files named one by one before the rest are counted instead. */
 const MAX_LISTED_SKIPPED = 5;
 
 /**
@@ -786,6 +907,8 @@ async function saveSkill(text: string, fallbackId: string, opts: SaveSkillOpts):
   // started serving, with `✓ updated` printed over it.
   assertUsableSkillText(text, 'that skill');
   // Draw the line BEFORE this skill exists: whatever is in the library now
+  // predates the gate, and what we are about to write does not.
+  await grandfatherExistingLibrary();
   const parsed = parseSkillMarkdown(text, fallbackId);
   // An explicit shortcut always wins over whatever the file declared: the user
   // saw the field and typed in it. Re-slugified rather than trusted, because it
@@ -882,6 +1005,9 @@ function skillIsStored(id: string): boolean {
  * has to refuse.
  */
 async function saveSkillFolder(files: RemoteSkillFile[], fallbackId: string, opts: SaveSkillOpts): Promise<SkillDef> {
+  // Draw the line BEFORE this skill exists: whatever is in the library now
+  // predates the gate, and what we are about to write does not.
+  await grandfatherExistingLibrary();
   const main = files.find((f) => /^SKILL\.md$/i.test(f.rel));
   if (!main) throw new SkillImportError('that skill has no SKILL.md');
   assertUsableSkillText(main.content, 'that skill');
@@ -955,6 +1081,50 @@ export function scanStoredSkill(skill: SkillDef): ScanFinding[] {
 }
 
 /**
+ * Is this skill held from the agent RIGHT NOW?
+ *
+ * Not the same question as `requiresReview`, which asks only where the skill
+ * came from and is therefore true of every import forever. Re-importing a
+ * skill you already read and released — `--replace` over identical bytes —
+ * leaves it released, and telling the user it is held would send them to the
+ * dashboard to redo a decision that is already recorded. The hash is what the
+ * release binds to, so the hash is what this asks about.
+ */
+async function isHeld(skill: SkillDef): Promise<boolean> {
+  if (!requiresReview(skill.source)) return false;
+  return !(await isReleased(skill.id, hashSkillFiles(skillFileList(skill))));
+}
+
+/**
+ * Fetch a skill directory from GitHub, in this module's error currency.
+ *
+ * `github.ts` throws plain `Error`s (it cannot import this module without a
+ * cycle), and a plain Error is the one thing neither caller has a branch for:
+ * the CLI's `fail()` rethrows it as an unhandled stack trace, and the HTTP
+ * routes fall through to 500. So a GitHub rate limit — 60 requests an hour
+ * unauthenticated, and a bare repo URL costs two — read as an internal server
+ * error on both surfaces.
+ *
+ * Wrapped in ONE place because there are two call sites, and the update route
+ * kept the bug the last time only the import route was fixed. The try is
+ * deliberately tight around the fetch: `SkillExistsError` from the save that
+ * follows must still reach its 409, which is what offers the caller `replace`.
+ */
+async function fetchSkillFolder(
+  gh: GitHubRef,
+  wanted: string | undefined,
+): ReturnType<typeof fetchGitHubSkill> {
+  try {
+    return await fetchGitHubSkill(gh, wanted, fetchSkillText, MAX_IMPORT_BYTES);
+  } catch (e) {
+    // fetchSkillText already speaks SkillImportError; re-wrapping it would
+    // double the prefix and lose the specific wording (SSRF refusal, size cap).
+    if (e instanceof SkillImportError) throw e;
+    throw new SkillImportError((e as Error).message);
+  }
+}
+
+/**
  * The front door for "add this skill" — whatever the user pasted.
  *
  * A GitHub repo/folder/blob URL fetches the whole skill directory; anything
@@ -971,18 +1141,18 @@ export async function importSkillFromSource(
   // No URL in it at all: a local path, which importSkill already handles.
   if (!parsedSource) {
     const skill = await importSkill(root, input, opts);
-    return { skill, findings: scanStoredSkill(skill), held: requiresReview(skill.source) };
+    return { skill, findings: scanStoredSkill(skill), held: await isHeld(skill) };
   }
 
   const gh = parseGitHubUrl(parsedSource.url);
   if (!gh) {
     const skill = await importSkill(root, parsedSource.url, opts);
     await recordOrigin(skill, { url: parsedSource.url });
-    return { skill, findings: scanStoredSkill(skill), held: requiresReview(skill.source) };
+    return { skill, findings: scanStoredSkill(skill), held: await isHeld(skill) };
   }
 
   const wanted = opts.id || parsedSource.skill;
-  const res = await fetchGitHubSkill(gh, wanted, fetchSkillText, MAX_IMPORT_BYTES);
+  const res = await fetchSkillFolder(gh, wanted);
   if ('choices' in res) return { choices: res.choices };
   // A single-file skill gains nothing from a folder, and a flat file is the
   // shape export and restore already understand.
@@ -997,7 +1167,7 @@ export async function importSkillFromSource(
   await recordOrigin(skill, { url: parsedSource.url, ref: gh.ref, skill: wanted });
   return {
     skill, skipped: res.skill.skipped, origin: res.skill.origin,
-    findings: scanStoredSkill(skill), held: requiresReview(skill.source),
+    findings: scanStoredSkill(skill), held: await isHeld(skill),
   };
 }
 
@@ -1068,7 +1238,7 @@ export async function updateSkill(
   id: string,
   opts: { force?: boolean } = {},
 ): Promise<UpdateSkillResult> {
-  const skill = await findSkill(root, id);
+  const skill = await loadSkillRecordingUse(root, id);
   if (!skill) throw new SkillNotFoundError(id);
   if (!isUserSkill(skill.source)) {
     throw new SkillImportError(`'${id}' is a Baton built-in — it updates when Baton does`);
@@ -1083,10 +1253,7 @@ export async function updateSkill(
 
   const gh = parseGitHubUrl(origin.url);
   const fetched = gh
-    ? await fetchGitHubSkill(
-        { ...gh, ...(origin.ref ? { ref: origin.ref } : {}) },
-        origin.skill ?? id, fetchSkillText, MAX_IMPORT_BYTES,
-      )
+    ? await fetchSkillFolder({ ...gh, ...(origin.ref ? { ref: origin.ref } : {}) }, origin.skill ?? id)
     : { skill: { id, files: [{ rel: 'SKILL.md', content: await fetchSkillText(origin.url) }], skipped: [], origin: origin.url } };
   // A repo that grew a second skill since the import must not silently swap it.
   if ('choices' in fetched) throw new SkillImportError(`'${id}' now matches ${fetched.choices.length} skills in that repo — re-add it by name`);
@@ -1153,13 +1320,13 @@ export async function uploadSkill(root: string, input: UploadSkillInput): Promis
  * clean up from the UI that made it.
  */
 export async function bookmarkSkill(root: string, id: string, on: boolean): Promise<{ id: string; bookmarked: boolean }> {
-  if (!(await findSkill(root, id))) throw new SkillNotFoundError(id);
+  if (!(await loadSkillRecordingUse(root, id))) throw new SkillNotFoundError(id);
   const ids = await setBookmark(id, on);
   return { id, bookmarked: ids.has(id) };
 }
 
 export async function removeSkill(root: string, id: string): Promise<{ removed: boolean; source: SkillSource; unwired: string[] }> {
-  const skill = await findSkill(root, id);
+  const skill = await loadSkillRecordingUse(root, id);
   if (!skill) throw new SkillNotFoundError(id);
   if (!isUserSkill(skill.source)) {
     throw new SkillImportError(`'${id}' is a Baton built-in — it ships with the package and can't be deleted`);
@@ -1191,8 +1358,18 @@ export async function removeSkill(root: string, id: string): Promise<{ removed: 
  * installed, and blurring the line is exactly what the ours/yours split in the
  * dashboard exists to keep clear.
  */
-export async function exportSkillFile(root: string, id: string): Promise<{ id: string; text: string }> {
-  const skill = await findSkill(root, id);
+export async function exportSkillFile(
+  root: string, id: string,
+  /** `record: false` for a caller that has not yet decided to send the body —
+   *  the HTTP route may still answer 304, and "your copy is current" is not a
+   *  use. That caller records on its own 200 path. */
+  opts: { record?: boolean } = {},
+): Promise<{ id: string; text: string }> {
+  // The PURE lookup. This used to record a use before the refusal checks below,
+  // so a 403 for a bundled skill counted as a use — and its HTTP caller records
+  // after deciding to send a body, so every 304 counted too. A refusal is not a
+  // use of anything, and neither is "your copy is current".
+  const skill = await lookupSkill(root, id);
   if (!skill) throw new SkillNotFoundError(id);
   if (!isUserSkill(skill.source)) {
     throw new SkillExportRefused(`'${id}' is a Baton built-in — it ships with the package, so there is nothing to export`);
@@ -1203,6 +1380,7 @@ export async function exportSkillFile(root: string, id: string): Promise<{ id: s
   // Checked rather than asserted so a future source that forgets to set `raw`
   // fails loudly instead of exporting an empty file.
   if (!skill.raw) throw new SkillExportRefused(`'${id}' has no readable content on disk`);
+  if (opts.record !== false) await recordUsage(id, 'load');
   return { id, text: skill.raw };
 }
 
@@ -1235,7 +1413,7 @@ export interface SkillBundle {
 /** Every skill the user owns, as one restorable file. Bundled ones are excluded. */
 export async function exportSkills(root: string): Promise<SkillBundle> {
   // ONE catalog load for the whole bundle. Calling exportSkillFile per skill
-  // re-ran findSkill -> loadCatalog each time, so exporting 20 skills meant 21
+  // re-ran loadSkillRecordingUse -> loadCatalog each time, so exporting 20 skills meant 21
   // full catalog loads — every bundled skill dir re-read, twenty times over.
   const skills: SkillBundle['skills'] = [];
   for (const s of await loadCatalog(root)) {

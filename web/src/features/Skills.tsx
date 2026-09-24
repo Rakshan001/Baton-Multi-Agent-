@@ -31,7 +31,9 @@ import { showToast } from "../lib/toast";
 import { copyText } from "../lib/format";
 import { ls } from "../lib/storage";
 import { SkillDetail } from "./SkillDetail";
-import { isUserSkill, type SkillAgent, type SkillStatus } from "../types";
+import { HeldBanner, HeldButton, SkillReviewSheet } from "./SkillReview";
+import { HELD_EXPLAINER, heldIndex } from "../lib/quarantine";
+import { isUserSkill, type QuarantineView, type SkillAgent, type SkillStatus } from "../types";
 
 /** One track definition for the skill card grid, shared by the loading
  *  skeleton and the loaded grid. They previously disagreed — minmax(360px)
@@ -765,8 +767,9 @@ function Segmented<T extends string>({ value, onChange, options, label }: {
 
 /** One compact row. At a hundred skills this is the readable unit: shortcut,
  *  what it is for, where it is wired, in one scannable line. */
-function SkillRow({ s, writeEnabled, onChanged, onOpen }: {
-  s: SkillStatus; writeEnabled: boolean; onChanged: () => void; onOpen: (id: string) => void;
+function SkillRow({ s, held, writeEnabled, onChanged, onOpen, onReview }: {
+  s: SkillStatus; held: boolean; writeEnabled: boolean; onChanged: () => void;
+  onOpen: (id: string) => void; onReview: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const installed = s.installs.filter((i) => i.installed).length;
@@ -811,11 +814,17 @@ function SkillRow({ s, writeEnabled, onChanged, onOpen }: {
         </span>
       )}
 
+      {held && (
+        <span onClick={(e) => e.stopPropagation()} style={{ flex: "none", display: "inline-flex" }}>
+          <HeldButton onClick={() => onReview(s.id)} style={{ height: 24, fontSize: "var(--text-micro)" }} />
+        </span>
+      )}
+
       <span style={{ flex: "none", display: "inline-flex", gap: 3 }}>
         {s.installs.map((i) => (
-          <button key={i.agent} className="btn btn-icon fr" disabled={!writeEnabled || busy}
+          <button key={i.agent} className="btn btn-icon fr" disabled={!writeEnabled || busy || held}
             data-tip-side="bottom"
-            data-tip={!writeEnabled ? "Read-only" : `${i.installed ? "Remove from" : "Add to"} ${getAgent(i.agent).short}`}
+            data-tip={held ? "Held until you have read it" : !writeEnabled ? "Read-only" : `${i.installed ? "Remove from" : "Add to"} ${getAgent(i.agent).short}`}
             aria-label={`${i.installed ? "Remove" : "Add"} ${s.id} ${i.installed ? "from" : "to"} ${getAgent(i.agent).short}`}
             onClick={(e) => { e.stopPropagation(); void toggle(i.agent, i.installed); }}
             style={{ width: 24, height: 24, opacity: i.installed ? 1 : 0.38 }}>
@@ -840,6 +849,20 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
   const [importing, setImporting] = useState(false);
   /** Which skill has its detail dialog open, by id. */
   const [openId, setOpenId] = useState<string | null>(null);
+  /* Skills the daemon is holding until a person has read them. A daemon older
+     than the review gate 404s here; `usePoll` records the error and `held`
+     stays empty, so the screen degrades to exactly what it was before. */
+  const quarantine = usePoll<QuarantineView>(() => BatonAPI.getQuarantine(), { interval: 30000 });
+  const held = useMemo(() => heldIndex(quarantine.data), [quarantine.data]);
+  /* WHICH skill the reader asked to review, not merely that they asked. A
+     nullary "open the sheet" lands them on whichever skill happens to be first,
+     and the release button there approves content they never asked to see. */
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const openReview = (id: string | null) => setReviewId(id ?? "");
+  /* A release changes BOTH lists: the skill leaves quarantine and becomes
+     installable, so refetching one and not the other leaves the screen
+     disagreeing with itself. */
+  const afterRelease = () => { void quarantine.refetch(); void skills.refetch(); };
   /** Delete confirm raised from the detail dialog (the card raises its own). */
   const [pendingDelete, setPendingDelete] = useState<SkillStatus | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -968,6 +991,10 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
       )}
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* Above everything, including the add panel: a skill waiting on you is
+            not something you should have to scroll for. */}
+        <HeldBanner count={held.size} onOpen={() => openReview(null)} />
+
         {importing && writeEnabled && (
           <AddSkillPanel key={source} seedUrl={source} taken={taken} bundledIds={bundledIds}
             onAdded={skills.refetch} onClose={() => { setImporting(false); setSource(""); }} />
@@ -1020,9 +1047,11 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
                 </button>
               )}
               skills={mine}
+              held={held}
               writeEnabled={writeEnabled}
               onChanged={skills.refetch}
               onOpen={setOpenId}
+              onReview={openReview}
               empty={!q && mineTotal === 0 ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 15px", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", borderRadius: "var(--r-sm)" }}>
                   <Icon name="plus" size={15} style={{ color: "var(--text-quaternary)", flex: "none" }} />
@@ -1043,9 +1072,11 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
               count={built.length}
               hint="Ship with Baton. Install them into any agent; they update when Baton does."
               skills={built}
+              held={held}
               writeEnabled={writeEnabled}
               onChanged={skills.refetch}
               onOpen={setOpenId}
+              onReview={openReview}
             />}
           </>
         )}
@@ -1154,8 +1185,10 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
         return (
           <SkillDetail
             skill={open}
+            held={held.has(open.id)}
             writeEnabled={writeEnabled}
             onClose={() => setOpenId(null)}
+            onReview={() => { setOpenId(null); openReview(open.id); }}
             onChanged={skills.refetch}
             onDelete={() => { setOpenId(null); setPendingDelete(open); }}
             onBookmark={(on) => {
@@ -1166,6 +1199,15 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
           />
         );
       })()}
+
+      <SkillReviewSheet
+        open={reviewId !== null}
+        focusId={reviewId || null}
+        onClose={() => setReviewId(null)}
+        view={quarantine.data ?? null}
+        writeEnabled={writeEnabled}
+        onReleased={afterRelease}
+      />
 
       {/* Deleting from the dialog still routes through the same confirm the card
           uses — one destructive path, asked for once, worded the same way. */}
@@ -1197,16 +1239,19 @@ export function SkillsScreen({ writeEnabled, searchSeed }: { writeEnabled: boole
 
 /** One titled group of skill cards. Renders nothing when it is empty and has
  *  no empty-state to show, so search never leaves a bare heading behind. */
-function SkillBand({ title, count, hint, skills, view, writeEnabled, onChanged, onOpen, action, empty }: {
+function SkillBand({ title, count, hint, skills, held, view, writeEnabled, onChanged, onOpen, onReview, action, empty }: {
   title: string;
   count: number;
   hint?: string;
   skills: SkillStatus[];
+  /** Ids waiting on a human — empty on a daemon that predates the gate. */
+  held: Set<string>;
   /** Cards to browse, rows to scan. Chosen once for the whole screen. */
   view: Density;
   writeEnabled: boolean;
   onChanged: () => void;
   onOpen: (id: string) => void;
+  onReview: (id: string) => void;
   /** Rendered at the end of the heading row (e.g. "Add skill"). */
   action?: React.ReactNode;
   empty?: React.ReactNode;
@@ -1243,11 +1288,11 @@ function SkillBand({ title, count, hint, skills, view, writeEnabled, onChanged, 
       {skills.length ? (
         view === "rows" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            {skills.map((s) => <SkillRow key={s.id} s={s} writeEnabled={writeEnabled} onChanged={onChanged} onOpen={onOpen} />)}
+            {skills.map((s) => <SkillRow key={s.id} s={s} held={held.has(s.id)} writeEnabled={writeEnabled} onChanged={onChanged} onOpen={onOpen} onReview={onReview} />)}
           </div>
         ) : (
           <div style={SKILL_GRID}>
-            {skills.map((s) => <SkillCard key={s.id} s={s} writeEnabled={writeEnabled} onChanged={onChanged} onOpen={onOpen} />)}
+            {skills.map((s) => <SkillCard key={s.id} s={s} held={held.has(s.id)} writeEnabled={writeEnabled} onChanged={onChanged} onOpen={onOpen} onReview={onReview} />)}
           </div>
         )
       ) : empty}
@@ -1255,7 +1300,10 @@ function SkillBand({ title, count, hint, skills, view, writeEnabled, onChanged, 
   );
 }
 
-function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; writeEnabled: boolean; onChanged: () => void; onOpen: (id: string) => void }) {
+function SkillCard({ s, held, writeEnabled, onChanged, onOpen, onReview }: {
+  s: SkillStatus; held: boolean; writeEnabled: boolean; onChanged: () => void;
+  onOpen: (id: string) => void; onReview: (id: string) => void;
+}) {
   const [busy, setBusy] = useState<SkillAgent | "all" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1389,12 +1437,14 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
                 <span style={{ flex: "none", width: 30 }}>
                   <Label tone={k === "Win" ? "accent" : undefined}>{k}</Label>
                 </span>
-                <span style={{ fontSize: "var(--fs-12)", lineHeight: 1.55, color: "var(--text-secondary)" }}>{v}</span>
+                <span style={{ minWidth: 0, fontSize: "var(--fs-12)", lineHeight: 1.55, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>{v}</span>
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ margin: 0, fontSize: "var(--fs-12)", lineHeight: 1.6, color: "var(--text-secondary)" }}>{s.description}</p>
+          /* Same reason as SkillDetail: an imported description can be one
+             unbroken token, and without a wrap rule it escapes the card. */
+          <p style={{ margin: 0, fontSize: "var(--fs-12)", lineHeight: 1.6, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>{s.description}</p>
         )}
 
         {s.produces.length > 0 && (
@@ -1445,6 +1495,23 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
           "Add to …" whether or not the skill was already there. Now installed
           reads as held (agent colour, checked) and missing reads as available
           (ghosted), so the row is scannable before it is clickable. */}
+      {held ? (
+        /* A held skill shows no install controls at all. Disabling them and
+           leaving them there invites the click; the honest card says what the
+           next step actually is, which is reading the thing. */
+        <div style={{ padding: "0 18px 14px" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+            background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: "var(--r-sm)",
+          }}>
+            <Icon name="lock" size={14} style={{ flex: "none", color: "var(--conflict-text)" }} />
+            <span style={{ flex: 1, minWidth: 0, fontSize: "var(--fs-12)", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              {HELD_EXPLAINER}
+            </span>
+            <HeldButton onClick={() => onReview(s.id)} />
+          </div>
+        </div>
+      ) : (
       <div style={{ padding: "0 18px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <Label tone={allInstalled ? "accent" : undefined}>Wired into</Label>
@@ -1504,6 +1571,7 @@ function SkillCard({ s, writeEnabled, onChanged, onOpen }: { s: SkillStatus; wri
           </button>
         </div>
       </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete} busy={deleting}

@@ -6,6 +6,12 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installSkillEverywhere, SkillNotFoundError, SKILL_AGENTS } from '../src/skills/install.js';
+import { usePrivateHome } from './helpers/private-home.js';
+
+/* File scope, not per-describe: every block here installs or loads a skill,
+   which touches machine-wide state in ~/.baton. One call covers the whole file
+   including whatever describe someone adds next. */
+usePrivateHome();
 
 /**
  * S3 — install a skill into every agent Baton can write, in one call. Backs

@@ -13,6 +13,7 @@
  *   GET    /api/meta         → repo root, current branch, capabilities, version
  *   POST   /api/tasks        → create a task (branch + worktree); body { task }
  */
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -48,11 +49,12 @@ import {
   importSkillFromSource, installSkill, installSkillEverywhere, listSkillStatus, loadCatalog,
   resolveSkillRoot, scanStoredSkill, skillFilesOf, uninstallSkill,
   uploadSkill, removeSkill, exportSkillFile, exportSkills, importSkillBundle, bookmarkSkill,
-  updateSkill, SkillLocallyEditedError,
+  updateSkill, SkillLocallyEditedError, SkillQuarantinedError,
   importWarnings,
   SKILL_AGENTS, SkillAgentUnsupportedError, SkillImportError, SkillNotFoundError,
   SkillExistsError, SkillExportRefused,
 } from './skills/install.js';
+import { recordUsage as recordSkillUsage } from './skills/usage.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
 import { collectWorktrees } from './worktrees.js';
@@ -66,7 +68,7 @@ import { readBrief } from './handoff/brief.js';
 import { listBriefs } from './handoff/resume.js';
 import { orderBriefs } from './handoff/order.js';
 import { resolveBriefBySlug } from './handoff/resolve.js';
-import { isReleased, releaseSkill, requiresReview } from './skills/quarantine.js';
+import { isReleased, MAX_RELEASES, releaseSkill, requiresReview } from './skills/quarantine.js';
 import { hashSkillFiles } from './skills/origins.js';
 import { getTask, projectOf } from './store.js';
 import { refreshCodebaseDocs, refreshDocsIfStale } from './kb/codebasemd.js';
@@ -545,10 +547,18 @@ function allowedNames(opts: ServeOptions): string[] {
  * CORS headers every response carries. `Authorization` must be listed or the
  * browser's preflight fails and a token-carrying dashboard never sends a single
  * request — the failure looks like the daemon is down.
+ *
+ * `If-None-Match` is not a CORS-safelisted request header and `ETag` is not a
+ * safelisted RESPONSE header, so a cross-origin dashboard (the Vite dev server
+ * on :5173 talking to :7077) can neither send a conditional request nor read
+ * back the tag to send next time unless both are named here. Without them the
+ * skills catalogue would silently re-download in full on every poll in dev and
+ * nobody would notice until the token bill arrived.
  */
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, If-None-Match',
+  'Access-Control-Expose-Headers': 'ETag',
 } as const;
 
 function send(res: ServerResponse, status: number, body: unknown, origin: string): void {
@@ -561,6 +571,72 @@ function send(res: ServerResponse, status: number, body: unknown, origin: string
     'Cache-Control': 'no-store',
   });
   res.end(json);
+}
+
+/* ── Conditional GET, for the skill reads ────────────────────────────────────
+ *
+ * The skills catalogue is the endpoint clients poll hardest, and a poll that
+ * confirms "still current" should cost a header exchange rather than a payload.
+ *
+ * On caching headers, deliberately: these responses keep `Cache-Control:
+ * no-store` and gain NO freshness lifetime. A `max-age` would license a client
+ * to hand back a stored copy WITHOUT asking the daemon, and a skill body is
+ * instructions an agent then executes — serving yesterday's instructions
+ * because a timer has not expired is a security bug, not a stale render. An
+ * ETag has the opposite shape: it never authorises reuse on its own, it only
+ * lets the daemon answer an explicit "is my copy current?" cheaply, and the
+ * daemon re-reads the content to answer. `no-store` binds HTTP caches, not the
+ * client's own application state, so a dashboard or agent that remembers a tag
+ * and revalidates every time is unaffected — which is precisely the client
+ * this is for.
+ */
+
+/** A strong entity-tag over the exact bytes a 200 would carry. */
+function etagOf(payload: string): string {
+  return `"${createHash('sha256').update(payload, 'utf8').digest('hex')}"`;
+}
+
+/**
+ * RFC 9110 §13.1.2 — does this request already hold the current entity?
+ *
+ * Comparison is WEAK, as the spec requires for If-None-Match: every tag this
+ * daemon issues is a hash of content, so `W/"x"` and `"x"` name the same bytes
+ * and refusing the weak form would just cost a re-download.
+ *
+ * `*` means "if the resource exists at all", so it matches once we have a tag
+ * to compare against — which is only after the route has resolved the entity,
+ * so a 404 or a 403 still wins over a 304.
+ *
+ * Splitting on commas is safe for our own tags (64 hex characters, no commas)
+ * and a client echoing back something else simply fails to match and gets a
+ * full 200 — the direction a mistake has to fall.
+ */
+function ifNoneMatch(req: IncomingMessage, etag: string): boolean {
+  const header = req.headers['if-none-match'];
+  if (!header) return false;
+  const raw = Array.isArray(header) ? header.join(', ') : header;
+  if (raw.trim() === '*') return true;
+  const weaken = (t: string): string => t.trim().replace(/^W\//, '');
+  const mine = weaken(etag);
+  return raw.split(',').some((t) => t.trim() !== '' && weaken(t) === mine);
+}
+
+/**
+ * 304, with a genuinely empty body.
+ *
+ * The tag is repeated (RFC 9110 §15.4.5) so the client can keep revalidating
+ * with it, and `Cache-Control` is repeated so a 304 cannot quietly widen the
+ * caching policy the 200 declared.
+ */
+function sendNotModified(res: ServerResponse, etag: string, origin: string): void {
+  res.writeHead(304, {
+    'ETag': etag,
+    'Access-Control-Allow-Origin': origin,
+    ...CORS_HEADERS,
+    'Vary': 'Origin',
+    'Cache-Control': 'no-store',
+  });
+  res.end();
 }
 
 /** Single definition of the write-gate response — every mutating route uses it. */
@@ -2389,7 +2465,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     // which root it used, so the answer is never ambiguous. The WRITE below
     // still refuses — that one decides where files land.
     const scopeRoot = asked.ok ? asked.root : root;
-    return send(res, 200, {
+    const payload = {
       skills: await listSkillStatus(scopeRoot),
       root: scopeRoot,
       agents: SKILL_AGENTS,
@@ -2399,7 +2475,28 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       // field is correctly read as "does not exclude". False in a folder
       // workspace, where there is no checkout to exclude from.
       excludesInstalls: await isGitRepo(scopeRoot),
-    }, origin);
+    };
+    // Tagged over the serialised answer, not over the summaries alone. The
+    // summaries already carry `contentSha256` per skill — computed once in
+    // src/skills/summary.ts over SKILL.md plus every reference file — so this
+    // hash inherits that work and never re-reads a skill from disk. It also
+    // covers the rest of the envelope, which the summaries do not: install
+    // state, the resolved root, `excludesInstalls`. Tagging the summaries by
+    // themselves would 304 a client whose view of "installed for which agent"
+    // had gone stale, and that panel drives a button that writes files.
+    const body = JSON.stringify(payload);
+    const etag = etagOf(body);
+    if (ifNoneMatch(req, etag)) return sendNotModified(res, etag, origin);
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'ETag': etag,
+      'Access-Control-Allow-Origin': origin,
+      ...CORS_HEADERS,
+      'Vary': 'Origin',
+      'Cache-Control': 'no-store',
+    });
+    res.end(body);
+    return;
   }
 
   // GET /api/skills/export — every skill the USER owns, as one restorable
@@ -2533,6 +2630,20 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
 
     const skill = (await loadCatalog(root)).find((sk) => sk.id === id);
     if (!skill) return send(res, 404, { error: `no skill '${id}'` }, origin);
+    // Bundled skills ship inside the package and are never held, so a release
+    // for one records a human decision nobody was asked to make — and still
+    // spends one of MAX_RELEASES. Behind that cap is a hard cliff: once the
+    // file is full, `recordRelease` drops every further release on the floor
+    // while this route keeps answering `released: true`. Refused before the
+    // hash is even compared, because "there is nothing to release" is the true
+    // answer whatever hash the caller sends.
+    if (!requiresReview(skill.source)) {
+      return send(res, 409, {
+        error: `'${id}' is bundled with Baton — it is never held for review, so there is nothing to release`,
+        hint: 'releases are for skills imported from outside the package',
+        code: 'not-held',
+      }, origin);
+    }
     const actual = hashSkillFiles(skillFilesOf(skill));
     if (actual !== hash) {
       return send(res, 409, {
@@ -2542,6 +2653,26 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     }
     const by = typeof body?.by === 'string' && body.by.trim() ? body.by.trim() : 'dashboard';
     await releaseSkill(id, actual, by);
+    /*
+     * Read it back before saying it happened.
+     *
+     * `recordRelease` stops writing at MAX_RELEASES — deliberately, so a
+     * scripted loop cannot grow the file forever — and it returns void either
+     * way. This route used to answer `released: true` regardless, so at the cap
+     * a human read a skill, took responsibility for it, was told it worked, and
+     * the skill stayed held with nothing recorded anywhere. Of every answer on
+     * this surface that is the one that must never be a guess: it is the record
+     * that a person, not a machine, decided to trust these instructions.
+     */
+    if (!(await isReleased(id, actual))) {
+      return send(res, 409, {
+        // No path in the hint: this route is reachable by a member over
+        // `--host`, and `~/.baton` is the operator's home directory.
+        error: `'${id}' was NOT released — this machine already holds ${MAX_RELEASES} recorded releases, the most it keeps`,
+        hint: 'prune ~/.baton/skill-quarantine.json on the host, then release again',
+        code: 'release-not-recorded',
+      }, origin);
+    }
     return send(res, 200, { id, released: true, hash: actual, by }, origin);
   }
 
@@ -2551,14 +2682,33 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   if (method === 'GET' && skf) {
     const id = decodeURIComponent(skf[1]);
     try {
-      const { text } = await exportSkillFile(root, id);
+      // Not recorded yet: this may still answer 304, and a client confirming
+      // its copy is current has not used the skill. Recorded on the 200 below.
+      const { text } = await exportSkillFile(root, id, { record: false });
+      // Resolved FIRST, so a skill that does not exist still 404s and a bundled
+      // one still 403s: a conditional request must not become a way around a
+      // refusal. Tagged over the bytes this route actually returns — the
+      // markdown — rather than the summary's `contentSha256`, which also spans
+      // the reference files this response does not carry and would cost a
+      // second catalog load to obtain.
+      const etag = etagOf(text);
+      if (ifNoneMatch(req, etag)) return sendNotModified(res, etag, origin);
       // The id is slugified on every write path, but this becomes a filename in
       // a header, so it is re-restricted here rather than trusted in transit.
       const safe = id.replace(/[^a-z0-9._-]/gi, '-');
+      // A body IS being sent, so this is a real use — the one place on this
+      // route where that is true.
+      await recordSkillUsage(id, 'load');
       res.writeHead(200, {
         'Content-Type': 'text/markdown; charset=utf-8',
         'Content-Disposition': `attachment; filename="${safe}.md"`,
+        'ETag': etag,
         'Access-Control-Allow-Origin': origin,
+        // Named explicitly because this route does not spread CORS_HEADERS: an
+        // ETag the browser cannot read is an ETag the dashboard can never send
+        // back, which would make the 304 above unreachable from the one client
+        // that fetches skill bodies most.
+        'Access-Control-Expose-Headers': 'ETag',
         'Vary': 'Origin',
         'Cache-Control': 'no-store',
       });
@@ -2601,6 +2751,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     } catch (e) {
       if (e instanceof SkillNotFoundError) return send(res, 404, { error: e.message }, origin);
       if (e instanceof SkillAgentUnsupportedError) return send(res, 400, { error: e.message }, origin);
+      // 409, not 500: the skill exists and the request was well formed — it is
+      // held, and the caller recovers by releasing it. A 500 said "Baton broke".
+      if (e instanceof SkillQuarantinedError) {
+        return send(res, 409, { error: e.message, id: e.id, code: 'held' }, origin);
+      }
       return send(res, 500, { error: (e as Error).message }, origin);
     }
   }

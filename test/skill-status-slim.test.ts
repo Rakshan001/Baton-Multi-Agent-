@@ -4,7 +4,13 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { listSkillStatus, findSkill } from '../src/skills/install.js';
+import { listSkillStatus, loadSkillRecordingUse } from '../src/skills/install.js';
+import { usePrivateHome } from './helpers/private-home.js';
+
+/* File scope, not per-describe: every block here installs or loads a skill,
+   which touches machine-wide state in ~/.baton. One call covers the whole file
+   including whatever describe someone adds next. */
+usePrivateHome();
 
 async function scratch(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'baton-skill-status-'));
@@ -79,14 +85,14 @@ describe('listSkillStatus', () => {
   });
 });
 
-describe('findSkill', () => {
+describe('loadSkillRecordingUse', () => {
   it('still returns the full body — this is the on-demand path', async () => {
-    const skill = await findSkill(await scratch(), 'bug-fix');
+    const skill = await loadSkillRecordingUse(await scratch(), 'bug-fix');
     expect(skill).not.toBeNull();
     expect(skill!.body.length).toBeGreaterThan(500);
   });
 
   it('returns null for a skill that does not exist', async () => {
-    expect(await findSkill(await scratch(), 'no-such-skill')).toBeNull();
+    expect(await loadSkillRecordingUse(await scratch(), 'no-such-skill')).toBeNull();
   });
 });

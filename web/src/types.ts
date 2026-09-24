@@ -652,6 +652,57 @@ export interface SkillInstallResult {
   references: number;
 }
 
+/* ---- Imported-skill review gate (GET /api/skills/quarantine) ----
+   A skill IS instructions: installSkill writes it where the agent's harness
+   loads it as directive text, so Baton's untrusted-quoting defence cannot
+   apply to it. The defence is a human release instead, and these are the
+   shapes that review screen reads. The scanner cannot decide intent, so
+   nothing here may be presented as a verdict. */
+
+export type FindingCategory =
+  | "permission-bypass" | "instruction-override" | "credential-access"
+  | "exfiltration" | "hidden-characters";
+
+/** Where the match sits — a skill that DOCUMENTS a pattern is not one that USES it. */
+export type FindingContext = "imperative" | "fenced" | "negated";
+
+/** One scanner hit. Evidence for a reader, never a judgement. */
+export interface ScanFindingRow {
+  category: FindingCategory;
+  severity: "high" | "medium";
+  /** Path relative to the skill directory. */
+  file: string;
+  /** 1-based, matching what an editor shows. */
+  line: number;
+  excerpt: string;
+  context: FindingContext;
+  /** The normalised text that matched. */
+  matched: string;
+}
+
+/** One file of a held skill, transported as data and rendered as plain text. */
+export interface HeldSkillFile { rel: string; content: string }
+
+/**
+ * A skill waiting on a human.
+ *
+ * Carries the FULL content, because a person cannot approve what they have not
+ * been shown, and the `hash` the release call must echo back — approving a name
+ * would approve whatever later occupies it.
+ */
+export interface HeldSkill {
+  id: string;
+  name: string;
+  description: string;
+  source: SkillSource;
+  hash: string;
+  files: HeldSkillFile[];
+  findings: ScanFindingRow[];
+}
+
+/** GET /api/skills/quarantine. `note` is the daemon's own wording; show it. */
+export interface QuarantineView { held: HeldSkill[]; note: string }
+
 /** GET /api/kb/context?format=json — the shareable context pack. */
 export interface ContextPackResponse {
   markdown: string;

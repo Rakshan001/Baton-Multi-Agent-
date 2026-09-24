@@ -18,12 +18,13 @@
    and offline so every loading / empty / error / read-only path is real.
    Flip it OFF (Tweaks panel) to use the real fetch path below unchanged.
    ============================================================ */
-import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, WorktreeRow } from "../types";
+import type { StatusRow, TaskDetail, TaskHistory, Task, AgentId, Meta, KbStatus, GraphData, EditSignal, PresenceSession, HandoffLoadSuggestion, HandoffBriefEntry, CompletionReport, BlameResult, RoutingInfo, ImportResult, RepoUsage, TerminalInfo, RunningAgentInfo, MemoryFactStatus, MemoryProject, RetentionPolicy, StorageBreakdown, PurgePreview, PurgeResult, PurgeCategory, DiffFile, AgentRosterEntry, ConnectResult, SkillStatus, SkillAgent, SkillInstallResult, QuarantineView, ContextPackResponse, ReviewRecord, ReviewAxis, FindingStatus, TeamState, Team, InviteResult, MemberRole, Reachability, FleetDaemon, PipelineView, LaneTask, CancelResult, CancelScopeInput, WorktreeRow } from "../types";
 import { DEMO_MEMORY, DEMO_MEMORY_PROJECTS } from "./demoMemory";
 import { DEMO_REVIEWS, DEMO_REVIEW_HEAD } from "./demoReviews";
 import { DEMO_TEAM, DEMO_TEAM_SOLO, DEMO_REACHABILITY } from "./demoTeam";
 import { DEMO_FLEET } from "./fleet";
 import { DEMO_SKILLS, type DemoSkill } from "./demoSkills";
+import { DEMO_QUARANTINE } from "./quarantine";
 import { DEMO_PIPELINE, DEMO_PLAN_MD } from "./demoPipeline";
 import { BUILTIN_ROUTING, suggestRoute } from "./routing";
 import { DEMO_KB, demoGraphFor, DEMO_CONTEXT_PACK } from "./demoKb";
@@ -1016,6 +1017,48 @@ class BatonClient {
     }
     const r = await this.request<{ id: string; bookmarked: boolean }>(
       `/api/skills/${encodeURIComponent(id)}/bookmark`, { method: "POST", body: JSON.stringify({ on }) });
+    this.emit();
+    return r;
+  }
+
+  /* ---- the imported-skill review gate ----
+     A downloaded skill becomes the agent's OWN instructions, so it is held
+     until a person has read it. These two calls are that review: what is
+     waiting, and "I read this exact content and accept it". */
+
+  /** Skills held pending review, each with its findings AND its full content.
+   *  Read-only, and available in read-only mode: seeing what is waiting on you
+   *  must not require write access. */
+  async getQuarantine(): Promise<QuarantineView> {
+    if (this.demo) {
+      const view = JSON.parse(JSON.stringify(DEMO_QUARANTINE)) as QuarantineView;
+      return { ...view, held: view.held.filter((h) => !this.demoReleasedSkills.has(`${h.id}@${h.hash}`)) };
+    }
+    return this.request<QuarantineView>("/api/skills/quarantine");
+  }
+
+  /** Keyed by `id@hash`, not by id: releasing approves CONTENT, so a skill that
+   *  changes after release is held again rather than inheriting the approval. */
+  private demoReleasedSkills = new Set<string>();
+
+  /**
+   * Take responsibility for this exact content.
+   *
+   * The hash is required and the daemon re-checks it against what is on disk —
+   * a 409 means the skill changed between being shown and being approved, and
+   * the caller must re-read it rather than retrying.
+   */
+  async releaseHeldSkill(id: string, hash: string): Promise<{ id: string; released: boolean; hash: string }> {
+    this.assertWrite();
+    if (!hash) throw new ApiError("BAD_REQUEST", "releasing needs the hash of the content you read");
+    if (this.demo) {
+      await this.demoGate(260);
+      this.demoReleasedSkills.add(`${id}@${hash}`);
+      this.emit();
+      return { id, released: true, hash };
+    }
+    const r = await this.request<{ id: string; released: boolean; hash: string }>(
+      `/api/skills/${encodeURIComponent(id)}/release`, { method: "POST", body: JSON.stringify({ hash }) });
     this.emit();
     return r;
   }

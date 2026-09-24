@@ -13,7 +13,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { SkillDef, SkillExplain, SkillSource } from './catalog.js';
+import { digestOf, type FileDigest } from './digests.js';
+import type { SkillDef, SkillExplain, SkillReference, SkillSource } from './catalog.js';
 
 /** A skill as it appears in a list. Deliberately has no `body`. */
 export interface SkillSummary {
@@ -33,9 +34,34 @@ export interface SkillSummary {
   byteSize: number;
 }
 
+/** A reference's digest, carrying the path it belongs to. */
+type RefDigest = FileDigest & { rel: string };
+
+/**
+ * What a reference weighs and hashes to.
+ *
+ * A summary is built on the LIST path, where reading reference files is the
+ * whole cost this module exists to avoid — 125,870 bytes of bundled reference
+ * text per listing, when the answer is a fixed property of files the build
+ * already saw. A bundled reference therefore carries its own digest, served
+ * from the build-time manifest off a `stat` (see ./digests.ts); an in-memory
+ * reference — a global or imported skill, whose text is already loaded — is
+ * hashed directly, which costs no read either.
+ */
+function digestReferences(refs: readonly SkillReference[]): RefDigest[] {
+  // Once per summary, not once per field: on a stale-manifest fallback the
+  // digest costs a file read, and asking twice would pay for it twice.
+  return refs.map((r) => ({ rel: r.rel, ...(r.digest ?? digestOf(r.content)) }));
+}
+
 /**
  * Hash the content an install would write: the skill text plus every reference
  * file, each contributing its path as well as its bytes.
+ *
+ * References enter as their own sha256 rather than as their text. That is the
+ * same commitment — sha256 over the exact bytes an install writes, hashed
+ * again inside this one — so `contentSha256` still changes iff an install
+ * would differ, but it can be computed without the text being in hand.
  *
  * Paths are sorted so that two loads which discovered the same files in a
  * different order agree, and each field is length-prefixed so that moving a
@@ -44,28 +70,29 @@ export interface SkillSummary {
  * Display metadata (name, tags, explain) is deliberately excluded: renaming a
  * card does not change the bytes on disk, so a cached copy stays valid.
  */
-function contentHash(def: SkillDef): string {
+function contentHash(def: SkillDef, refs: RefDigest[]): string {
   const h = createHash('sha256');
   const put = (s: string) => h.update(String(Buffer.byteLength(s, 'utf8'))).update('\0').update(s);
 
   // `raw` is what a byte-faithful install writes; `body` is what a re-rendered
   // one writes. Hash whichever this skill actually installs.
   put(def.raw ?? def.body);
-  for (const ref of [...def.references].sort((a, b) => a.rel.localeCompare(b.rel))) {
+  for (const ref of [...refs].sort((a, b) => a.rel.localeCompare(b.rel))) {
     put(ref.rel);
-    put(ref.content);
+    put(ref.sha256);
   }
   return h.digest('hex');
 }
 
-function contentBytes(def: SkillDef): number {
+function contentBytes(def: SkillDef, refs: RefDigest[]): number {
   let n = Buffer.byteLength(def.raw ?? def.body, 'utf8');
-  for (const ref of def.references) n += Buffer.byteLength(ref.content, 'utf8');
+  for (const ref of refs) n += ref.bytes;
   return n;
 }
 
 /** Strip a full skill down to what a list needs. */
 export function summarize(def: SkillDef): SkillSummary {
+  const refs = digestReferences(def.references);
   const summary: SkillSummary = {
     id: def.id,
     name: def.name,
@@ -74,8 +101,8 @@ export function summarize(def: SkillDef): SkillSummary {
     produces: def.produces,
     source: def.source,
     references: def.references.map((r) => r.rel),
-    contentSha256: contentHash(def),
-    byteSize: contentBytes(def),
+    contentSha256: contentHash(def, refs),
+    byteSize: contentBytes(def, refs),
   };
   if (def.explain) summary.explain = def.explain;
   return summary;

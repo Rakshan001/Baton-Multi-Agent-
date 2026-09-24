@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { withLock } from '../util/lock.js';
 
 export const ORIGINS_VERSION = 1;
 
@@ -127,19 +128,33 @@ async function save(skills: Record<string, SkillOrigin>): Promise<void> {
  * Record where a skill came from. Silently a no-op past the cap rather than an
  * error: failing an otherwise-successful import over bookkeeping would be the
  * tail wagging the dog.
+ *
+ * Serialised on the file, like every other load-mutate-save in Baton (see
+ * util/lock.ts). Restoring a bundle records one origin per skill and the
+ * dashboard imports concurrently, so overlapping writes are the ordinary case:
+ * unserialised, both load the same map and write back their own copy, the
+ * first rename moves the shared pid-scoped temp file away, and the second
+ * throws ENOENT straight into `recordOrigin`'s catch — a skill silently left
+ * with no origin, which is a skill with no update button.
  */
 export async function setOrigin(id: string, origin: SkillOrigin): Promise<void> {
-  const all = await loadOrigins();
-  if (!(id in all) && Object.keys(all).length >= MAX_ORIGINS) return;
-  all[id] = origin;
-  await save(all);
+  return withLock(originsPath(), async () => {
+    const all = await loadOrigins();
+    if (!(id in all) && Object.keys(all).length >= MAX_ORIGINS) return;
+    all[id] = origin;
+    await save(all);
+  });
 }
 
 /** Forget a skill's origin — called when the skill itself is deleted, so the
- *  file does not accumulate entries pointing at things that are gone. */
+ *  file does not accumulate entries pointing at things that are gone. Behind
+ *  the same lock as {@link setOrigin}: a delete racing a write would otherwise
+ *  resurrect the record it just removed, or lose the one being added. */
 export async function clearOrigin(id: string): Promise<void> {
-  const all = await loadOrigins();
-  if (!(id in all)) return;
-  delete all[id];
-  await save(all);
+  return withLock(originsPath(), async () => {
+    const all = await loadOrigins();
+    if (!(id in all)) return;
+    delete all[id];
+    await save(all);
+  });
 }

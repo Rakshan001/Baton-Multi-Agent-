@@ -10,7 +10,7 @@
  * can delete your own skills is worse than no test suite.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,23 +21,17 @@ import {
   SkillImportError, SkillExistsError, SkillExportRefused, SkillNotFoundError,
   SKILL_BUNDLE_VERSION,
 } from '../src/skills/install.js';
-import { loadBookmarks, bookmarksPath } from '../src/skills/bookmarks.js';
+import { loadBookmarks, bookmarksPath, setBookmark } from '../src/skills/bookmarks.js';
+import { usePrivateHome } from './helpers/private-home.js';
 
-let home: string;
+const home = usePrivateHome('baton-skill-home-');
 let repo: string;
-let realHome: string | undefined;
 
 beforeEach(async () => {
-  home = await mkdtemp(join(tmpdir(), 'baton-skill-home-'));
   repo = await mkdtemp(join(tmpdir(), 'baton-skill-repo-'));
-  realHome = process.env.HOME;
-  process.env.HOME = home;
 });
 
 afterEach(async () => {
-  if (realHome === undefined) delete process.env.HOME;
-  else process.env.HOME = realHome;
-  await rm(home, { recursive: true, force: true });
   await rm(repo, { recursive: true, force: true });
 });
 
@@ -71,6 +65,40 @@ describe('withSkillName', () => {
 
   it('is idempotent — re-normalising an already-normalised file changes nothing', () => {
     const once = withSkillName(SAMPLE, 'chosen-id');
+    expect(withSkillName(once, 'chosen-id')).toBe(once);
+  });
+
+  /**
+   * A byte-order mark in front of the fence.
+   *
+   * Editors on Windows write one routinely, and it lands here through every
+   * door: an upload, a fetched raw URL, a file in the library. gray-matter
+   * skips it, so parsing finds the frontmatter and the skill gets the right id
+   * and description — but the fence regex here does not, so the file reads as
+   * "no frontmatter at all" and the whole thing is WRAPPED in a second one.
+   *
+   * The stored file then opens `---\nname: <id>\n---` with no `description:`,
+   * and that is the field an agent's harness matches to decide whether to load
+   * the skill. So a BOM silently produced a skill that installs, lists, and
+   * never triggers, with its real frontmatter demoted to body text.
+   */
+  it('sees frontmatter that a byte-order mark is sitting in front of', () => {
+    const out = withSkillName(`﻿${SAMPLE}`, 'chosen-id');
+    expect(out).toContain('description: Does a thing.');
+    expect(out).toContain('tags: [a, b]');
+    // One frontmatter block, not two: the second `---` here is the closing fence.
+    expect(out.split('\n---').length - 1, 'the file was wrapped in a second frontmatter block').toBe(1);
+    expect(out.startsWith('---\n'), 'the BOM survived into the stored file').toBe(true);
+  });
+
+  it('still wraps a BOM-prefixed file that genuinely has no frontmatter', () => {
+    const out = withSkillName('﻿# Just a heading\n\nBody text.\n', 'chosen-id');
+    expect(out.startsWith('---\nname: chosen-id\n---\n')).toBe(true);
+    expect(out).toContain('# Just a heading');
+  });
+
+  it('is still idempotent for a BOM-prefixed file', () => {
+    const once = withSkillName(`﻿${SAMPLE}`, 'chosen-id');
     expect(withSkillName(once, 'chosen-id')).toBe(once);
   });
 });
@@ -311,10 +339,46 @@ describe('bookmarks', () => {
   });
 
   it('survives a corrupt bookmarks file instead of breaking the catalog', async () => {
-    await mkdir(join(home, '.baton'), { recursive: true });
+    await mkdir(join(home(), '.baton'), { recursive: true });
     await writeFile(bookmarksPath(), '{ not json', 'utf-8');
     expect(await loadBookmarks()).toEqual(new Set());
     await expect(listSkillStatus(repo)).resolves.toBeInstanceOf(Array);
+  });
+
+  /**
+   * Same class of bug the usage ledger had, and the one file that still has it.
+   *
+   * `setBookmark` is a read-modify-write staged under a temp name and renamed
+   * into place — but the temp name is a bare `.tmp` with nothing in it that
+   * says who is writing. Every Baton process on the machine stages to that one
+   * path, and two pins inside one daemon share it too.
+   *
+   * Two failures follow: another writer's staged file is overwritten and then
+   * renamed away underneath them (so THEIR rename hits ENOENT and the whole
+   * list they were installing is lost), and two overlapping pins each write
+   * back the list they loaded, so the second erases the first.
+   */
+  it('does not take over another process\'s in-flight bookmark write', async () => {
+    const foreign = `${bookmarksPath()}.tmp`;
+    const foreignBody = JSON.stringify({ version: 1, ids: ['from-another-agent'] });
+    await mkdir(join(home(), '.baton'), { recursive: true });
+    await writeFile(foreign, foreignBody, 'utf-8');
+
+    await setBookmark('mine', true);
+
+    expect(existsSync(foreign), 'the other process\'s temp file was renamed away').toBe(true);
+    expect(await readFile(foreign, 'utf-8'), 'the other process\'s temp file was overwritten')
+      .toBe(foreignBody);
+  });
+
+  it('keeps both pins when two are set at once', async () => {
+    await Promise.all([setBookmark('one', true), setBookmark('two', true), setBookmark('three', true)]);
+    expect([...await loadBookmarks()].sort()).toEqual(['one', 'three', 'two']);
+  });
+
+  it('leaves no temp file behind after overlapping writes', async () => {
+    await Promise.all([setBookmark('one', true), setBookmark('two', true)]);
+    expect(await readdir(join(home(), '.baton'))).toEqual(['skill-bookmarks.json']);
   });
 
   it('drops the bookmark when the skill it pinned is deleted', async () => {
@@ -400,7 +464,7 @@ describe('bundle round trip with a directory-shaped skill', () => {
     const r = await importSkillBundle(repo, evil, {});
     expect(r.imported).toEqual([]);
     expect(r.skipped[0].why).toMatch(/outside its folder/);
-    expect(existsSync(join(home, '.ssh', 'authorized_keys'))).toBe(false);
+    expect(existsSync(join(home(), '.ssh', 'authorized_keys'))).toBe(false);
   });
 
   it('refuses a bundle version it cannot read', async () => {

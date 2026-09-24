@@ -1,0 +1,69 @@
+The `llm-council` bundled skill (SKILL.md and references/) is original Baton work
+that learns from four upstream projects. Attribution and licensing for each:
+
+1. llm-council — https://github.com/karpathy/llm-council
+   Andrej Karpathy. The originating method: several independent answers,
+   anonymous peer ranking, and a chairman synthesis. Credited as the source of
+   the idea; no text or code is included.
+
+2. llm-council-skill — https://github.com/gcpdev/llm-council-skill
+   Copyright (c) 2026 Gustavo Publio — MIT License (reproduced in full below).
+   references/external-seats.md adapts its approach to external-model seats:
+   prefer a provider CLI, fall back to the provider HTTP API with
+   OPENAI_API_KEY / GEMINI_API_KEY and OPENAI_MODEL / GEMINI_MODEL overrides
+   from the environment, and continue with the remaining seats when one
+   provider fails. Those derived parts are offered under the MIT terms below
+   and are NOT covered by Baton's AGPL-3.0-or-later terms.
+
+3. llm-council-skill — https://github.com/tenfoldmarc/llm-council-skill
+   Published without a license. Only methodology ideas were used (thinking-
+   style lenses chosen to create tension, workspace context enrichment,
+   parallel advisors, shuffled anonymized peer review, verdict sections with a
+   single first step, a saved transcript and optional HTML report). All wording
+   in this skill was written independently; no text was copied.
+
+4. llm-council — https://github.com/Txnishkk93/llm-council
+   Published without a license. Only methodology ideas were used (stances
+   adapted to the question rather than a fixed set, a parseable "FINAL
+   RANKING:" block with an average-rank tally, not manufacturing disagreement,
+   and honesty that inline role-play is a single model). All wording in this
+   skill was written independently; no text was copied.
+
+Everything else in this skill — prior-verdict recall, grounded claims with
+reviewer false-claim checks, the diversity re-seat, seat types, budget tiers,
+confidence and "what would overturn it", persistence to .baton/council/ and
+shared memory, and the never-act-without-the-user gate — is Baton's own work
+under Baton's license.
+
+Content-scanner note: Baton's skill scanner reports `credential-access` findings
+for this skill (references/external-seats.md and the "No secrets" rule in
+SKILL.md). They are expected: the text names API-key environment variables and
+tells the agent to scrub secrets from the brief. The skill never reads, prints
+or stores a credential value.
+
+Keep the credits footer in SKILL.md when editing: it is the copy of this notice
+that travels with an installed skill.
+
+-------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2026 Gustavo Publio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

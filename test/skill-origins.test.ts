@@ -8,7 +8,7 @@
  * suite that can rewrite the developer's own library is worse than no suite.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -16,22 +16,16 @@ import {
   MAX_ORIGINS, ORIGINS_VERSION,
 } from '../src/skills/origins.js';
 import { updateSkill, globalSkillsDir, SkillLocallyEditedError } from '../src/skills/install.js';
+import { usePrivateHome } from './helpers/private-home.js';
 
-let home: string;
+const home = usePrivateHome('baton-origin-home-');
 let repo: string;
-let realHome: string | undefined;
 
 beforeEach(async () => {
-  home = await mkdtemp(join(tmpdir(), 'baton-origin-home-'));
   repo = await mkdtemp(join(tmpdir(), 'baton-origin-repo-'));
-  realHome = process.env.HOME;
-  process.env.HOME = home;
 });
 
 afterEach(async () => {
-  if (realHome === undefined) delete process.env.HOME;
-  else process.env.HOME = realHome;
-  await rm(home, { recursive: true, force: true });
   await rm(repo, { recursive: true, force: true });
 });
 
@@ -67,19 +61,19 @@ describe('the origins file', () => {
   });
 
   it('reads a corrupt file as nothing recorded rather than throwing', async () => {
-    await mkdir(join(home, '.baton'), { recursive: true });
+    await mkdir(join(home(), '.baton'), { recursive: true });
     await writeFile(originsPath(), '{ this is not json', 'utf-8');
     expect(await loadOrigins()).toEqual({});
   });
 
   it('ignores a file written by a different version', async () => {
-    await mkdir(join(home, '.baton'), { recursive: true });
+    await mkdir(join(home(), '.baton'), { recursive: true });
     await writeFile(originsPath(), JSON.stringify({ version: ORIGINS_VERSION + 9, skills: { a: ORIGIN } }), 'utf-8');
     expect(await loadOrigins()).toEqual({});
   });
 
   it('drops malformed entries but keeps the good ones', async () => {
-    await mkdir(join(home, '.baton'), { recursive: true });
+    await mkdir(join(home(), '.baton'), { recursive: true });
     await writeFile(originsPath(), JSON.stringify({
       version: ORIGINS_VERSION,
       skills: { good: ORIGIN, bad: { url: 42 }, alsoBad: null },
@@ -95,12 +89,50 @@ describe('the origins file', () => {
   });
 
   it('stops recording new skills past the cap, without disturbing existing ones', async () => {
-    for (let i = 0; i < MAX_ORIGINS; i++) await setOrigin(`s${i}`, ORIGIN);
+    // Seeded in ONE write rather than 500 sequential read-modify-writes. The
+    // subject is the cap, not the throughput -- and the loop was a real source
+    // of flake: under load it blew the 5s timeout, and its still-running writes
+    // then landed in the NEXT test's freshly redirected HOME, filling that
+    // test's cap so its own setOrigin was silently refused.
+    const skills: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_ORIGINS; i++) skills[`s${i}`] = { ...ORIGIN, fetchedAt: '2026-01-01T00:00:00Z' };
+    await mkdir(join(home(), '.baton'), { recursive: true });
+    await writeFile(originsPath(), JSON.stringify({ version: ORIGINS_VERSION, skills }), 'utf-8');
+
     await setOrigin('one-too-many', ORIGIN);
     expect(await getOrigin('one-too-many')).toBeNull();
     // An UPDATE to something already recorded still works at the cap.
     await setOrigin('s0', { ...ORIGIN, contentHash: 'changed' });
     expect((await getOrigin('s0'))!.contentHash).toBe('changed');
+  });
+
+  /**
+   * Two records written at once.
+   *
+   * `save()` is a read-modify-write staged under one temp path per PID, which
+   * keeps two AGENTS apart but not two writes inside one daemon. Restoring a
+   * bundle records an origin per skill and the dashboard imports concurrently,
+   * so overlapping writes are the normal case, not the exotic one: unserialized
+   * the first rename moves the shared temp file away and the second throws
+   * ENOENT — through `recordOrigin`, which swallows it — while the record it
+   * was writing is gone. A skill that silently loses its origin loses its
+   * update button, which is the one thing this file exists to provide.
+   */
+  it('keeps every record when several are written at once', async () => {
+    await Promise.all([
+      setOrigin('a', { ...ORIGIN, contentHash: 'ha' }),
+      setOrigin('b', { ...ORIGIN, contentHash: 'hb' }),
+      setOrigin('c', { ...ORIGIN, contentHash: 'hc' }),
+    ]);
+    expect(Object.keys(await loadOrigins()).sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not throw, or leave a temp file, when a write overlaps a delete', async () => {
+    await setOrigin('doomed', ORIGIN);
+    await Promise.all([setOrigin('kept', { ...ORIGIN, contentHash: 'hk' }), clearOrigin('doomed')]);
+    expect(await getOrigin('kept')).toMatchObject({ contentHash: 'hk' });
+    expect(await getOrigin('doomed')).toBeNull();
+    expect(await readdir(join(home(), '.baton'))).toEqual(['skill-origins.json']);
   });
 });
 
