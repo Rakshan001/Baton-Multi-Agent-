@@ -6,14 +6,21 @@ import { parseConflicts, CONFLICT_LABELS } from '../src/git.js';
 
 describe('hardenedArgs', () => {
   it('prepends -c config flags before the subcommand', () => {
-    const out = hardenedArgs(['status', '--porcelain=v2']);
+    const out = hardenedArgs(['status', '--porcelain=v2', '--ignore-submodules=none']);
     // original args are preserved at the tail, in order
-    expect(out.slice(-2)).toEqual(['status', '--porcelain=v2']);
+    expect(out.slice(-3)).toEqual(['status', '--porcelain=v2', '--ignore-submodules=none']);
     // pager and credential helper are neutralized
     expect(out).toContain('core.pager=cat');
     expect(out).toContain('credential.helper=');
     // every -c is paired with a value
     expect(out.filter((a) => a === '-c').length).toBeGreaterThan(0);
+  });
+
+  it('pins status.showUntrackedFiles=normal so a user "no" cannot hide new files', () => {
+    const out = hardenedArgs(['status']);
+    const i = out.indexOf('status.showUntrackedFiles=normal');
+    expect(i).toBeGreaterThan(0);
+    expect(out[i - 1]).toBe('-c');
   });
 
   it('keeps an existing -C path valid (config flags come first)', () => {

@@ -396,7 +396,9 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
     };
   }
   const repo = await repoState(path);
-  const r = await gitTry(['-C', path, 'status', '--porcelain=v2']);
+  // --ignore-submodules=none: a `diff.ignoreSubmodules=all` (or `.gitmodules`
+  // ignore=all) hid submodule edits, and removal passes `--force`.
+  const r = await gitTry(['-C', path, 'status', '--porcelain=v2', '--ignore-submodules=none']);
   if (!r.ok || r.stdout === '') {
     // `!r.ok` means git could not answer at all — the directory was deleted, or
     // it is no longer a worktree. Reporting that as `clean` (which is what this

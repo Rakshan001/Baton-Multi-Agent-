@@ -109,7 +109,8 @@ async function mergeTarget(repoPath: string): Promise<string | null> {
 async function isDirty(worktreePath: string): Promise<boolean> {
   // status --porcelain covers modified AND untracked — `git worktree remove`
   // refuses on either, so classify the same way.
-  const r = await gitTry(['status', '--porcelain'], worktreePath);
+  // --ignore-submodules=none: config must not hide submodule edits from a removal guard.
+  const r = await gitTry(['status', '--porcelain', '--ignore-submodules=none'], worktreePath);
   return r.ok ? r.stdout.trim().length > 0 : true; // unreadable → treat as dirty (fail safe)
 }
 

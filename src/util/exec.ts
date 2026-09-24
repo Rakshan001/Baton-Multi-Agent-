@@ -38,6 +38,10 @@ const HARDENED_GIT_CONFIG = [
   'core.fsmonitor=false', // avoid fsmonitor races
   'core.quotepath=false', // emit literal UTF-8 paths (keeps porcelain v2 parsing simple)
   'core.precomposeunicode=true', // NFC paths on macOS so comparisons are stable
+  // A user's `no` makes status omit untracked files, so a worktree holding only
+  // new work reads as clean and a removal guard lets it be deleted. `-c` also
+  // reaches git's own check inside a non-forced `worktree remove`.
+  'status.showUntrackedFiles=normal',
 ] as const;
 
 /** Env vars that could redirect git to an editor, pager, prompt, or alt config. */
