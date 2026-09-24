@@ -45,6 +45,7 @@ export async function serveCmd(opts: ServeCmdOpts = {}): Promise<void> {
 
   await serve({
     port,
+    portExplicit: Boolean(opts.port),
     writeEnabled: !!opts.write,
     ...(opts.host ? { host: opts.host } : {}),
     ...(allowedHosts.length ? { allowedHosts } : {}),

@@ -55,6 +55,7 @@ import {
   SkillExistsError, SkillExportRefused,
 } from './skills/install.js';
 import { recordUsage as recordSkillUsage } from './skills/usage.js';
+import { nextFreePort, portFree, servePortClash } from './util/port.js';
 import { bus } from './events.js';
 import { WorktreeWatcher } from './watch.js';
 import { collectWorktrees } from './worktrees.js';
@@ -307,6 +308,12 @@ const VERSION = BATON_VERSION;
 
 interface ServeOptions {
   port: number;
+  /**
+   * True when the operator passed `--port`. An explicit port never moves on
+   * EADDRINUSE — they asked for that number. The default (7077) may advance
+   * so a second project can run.
+   */
+  portExplicit?: boolean;
   /** When true, advertise write capability to the dashboard (merge/remove land in a later phase). */
   writeEnabled?: boolean;
   /**
@@ -3501,17 +3508,55 @@ export async function serve(portOrOpts: number | ServeOptions): Promise<void> {
       // live daemon can both claim it, and the leftover often sorts first —
       // checking only that one would print "unknown holder" while the
       // registry knew exactly who to name.
-      const claims = (await listDaemonRecords().catch(() => [])).filter((r) => r.port === opts.port);
+      const requested = opts.port;
+      const claims = (await listDaemonRecords().catch(() => [])).filter((r) => r.port === requested);
       let holder: DaemonRecord | undefined;
       for (const c of claims) {
         if ((await verifyDaemon(c).catch(() => 'stale')) === 'live') { holder = c; break; }
       }
-      console.error(holder
-        ? `baton serve: port ${opts.port} is already serving ${holder.root} — stop it with: baton daemon stop ${opts.port} ${holder.pid}`
-        : `baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
-      process.exit(1);
+      const clash = servePortClash({
+        portExplicit: !!opts.portExplicit,
+        root,
+        holderRoot: holder?.root ?? null,
+      });
+      const failMsg = holder
+        ? `baton serve: port ${requested} is already serving ${holder.root} — stop it with: baton daemon stop ${requested} ${holder.pid}`
+        : `baton serve: port ${requested} is already in use — is another daemon running? (try: baton serve --port <other>)`;
+      if (clash !== 'advance') {
+        console.error(failMsg);
+        process.exit(1);
+      }
+      let next: number;
+      try {
+        next = await nextFreePort(requested + 1, new Set([requested]));
+      } catch (err) {
+        console.error(failMsg);
+        console.error(`  ${(err as Error).message}`);
+        process.exit(1);
+      }
+      // Mutate before the retry so SIGINT cleanup and the fleet record name
+      // the port this pid actually holds.
+      opts.port = next;
+      console.warn(`baton serve: port ${requested} is busy${holder ? ` (serving ${holder.root})` : ''} — moving to ${next}`);
+      console.warn(`  graphify MCP URLs embed the port; re-run \`baton kb mcp\` if agents were wired to ${requested}.`);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(opts.port, bindAddr, () => {
+            server.off('error', reject);
+            resolve();
+          });
+        });
+      } catch (e2) {
+        if ((e2 as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          console.error(`baton serve: port ${opts.port} is already in use — is another daemon running? (try: baton serve --port <other>)`);
+          process.exit(1);
+        }
+        throw e2;
+      }
+    } else {
+      throw e;
     }
-    throw e;
   }
   // Announce to the fleet — after listen succeeds, so a record always names a
   // port this pid actually holds. Best-effort: the fleet is a convenience,

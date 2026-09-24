@@ -13,8 +13,8 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { createServer } from 'node:net';
 import { execa } from 'execa';
+import { nextFreePort } from '../util/port.js';
 import { gitTry } from '../util/exec.js';
 import { isGitRepo } from '../git.js';
 import { detectProjects, findNestedGitRepos, PROJECT_MARKERS, type SubProject } from '../kb/projects.js';
@@ -149,24 +149,6 @@ export async function classifyTarget(absPath: string): Promise<Target> {
   const nested = (await detectProjects(absPath)).filter((p) => p.path !== absPath);
   const hasMarkers = PROJECT_MARKERS.some((m) => existsSync(join(absPath, m))) || nested.length > 0;
   return hasMarkers ? { kind: 'bare-project', root: absPath } : { kind: 'empty', root: absPath };
-}
-
-/** True if a TCP port is bindable on loopback (i.e. free right now). */
-function portFree(port: number): Promise<boolean> {
-  return new Promise((res) => {
-    const s = createServer();
-    s.once('error', () => res(false));
-    s.once('listening', () => s.close(() => res(true)));
-    s.listen(port, '127.0.0.1');
-  });
-}
-
-/** First free port at/after `start`, skipping `used` (so callers don't double-assign). */
-async function nextFreePort(start: number, used: Set<number>): Promise<number> {
-  let p = start;
-  while (used.has(p) || !(await portFree(p))) p++;
-  used.add(p);
-  return p;
 }
 
 const CONNECT_LINE: Record<AgentConnectOutcome['status'], (o: AgentConnectOutcome) => string> = {
