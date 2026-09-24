@@ -51,6 +51,7 @@ export function DetailSheet({
 
   const [diffFiles, setDiffFiles] = useState<DiffFile[] | null>(null); // null = loading
   const [diffError, setDiffError] = useState(false); // an errored diff is NOT the same as "no changes"
+  const [diffTruncated, setDiffTruncated] = useState(false); // the daemon cut it at a cap: the count is a floor
   // One spawn action at a time — a double-click must not start two agents.
   const [spawning, setSpawning] = useState<null | "terminal" | "headless">(null);
   /** Is a headless run live for THIS task? null = not yet known. */
@@ -64,9 +65,9 @@ export function DetailSheet({
       .catch(() => setRunning(null));   // unknown beats claiming "not running"
 
   useEffect(() => {
-    let on = true; setTask(null); setError(null); setDiffFiles(null); setDiffError(false); setRunning(null);
+    let on = true; setTask(null); setError(null); setDiffFiles(null); setDiffError(false); setDiffTruncated(false); setRunning(null);
     BatonAPI.getTask(slug).then((t) => on && setTask(t)).catch((e) => on && setError(e as Error));
-    BatonAPI.getDiff(slug).then((f) => on && setDiffFiles(f)).catch(() => { if (on) { setDiffFiles([]); setDiffError(true); } });
+    BatonAPI.getDiff(slug).then((r) => { if (on) { setDiffFiles(r.files); setDiffTruncated(r.truncated); } }).catch(() => { if (on) { setDiffFiles([]); setDiffError(true); } });
     BatonAPI.getRunningAgents()
       .then((rs) => on && setRunning(rs.some((r) => r.slug === slug)))
       .catch(() => on && setRunning(null));
@@ -201,7 +202,7 @@ export function DetailSheet({
                   style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9, ...(diffFiles?.length ? {} : { opacity: 0.55 }) }}
                   data-tip={diffFiles === null ? "Loading changes…" : diffFiles.length ? "Open the git diff in a code view" : diffError ? "Couldn't load the diff — check the daemon, then reopen this session" : "No changes on this branch yet"}>
                   <Icon name="terminal" size={14} style={{ color: "var(--accent-text)" }} />
-                  <span style={{ textAlign: "left" }}>View changes<br /><span style={{ fontSize: "var(--fs-11)", color: diffError ? "var(--conflict-text)" : "var(--text-tertiary)", fontWeight: 400 }}>{diffFiles === null ? "…" : diffError ? "diff unavailable" : `${diffFiles.length} file${diffFiles.length === 1 ? "" : "s"}`} · git diff</span></span>
+                  <span style={{ textAlign: "left" }}>View changes<br /><span style={{ fontSize: "var(--fs-11)", color: diffError ? "var(--conflict-text)" : "var(--text-tertiary)", fontWeight: 400 }}>{diffFiles === null ? "…" : diffError ? "diff unavailable" : `${diffFiles.length}${diffTruncated ? "+" : ""} file${diffFiles.length === 1 && !diffTruncated ? "" : "s"}`} · git diff</span></span>
                 </button>
                 <button className="btn fr" onClick={() => onHandoff(slug)} style={{ flex: "1 1 160px", justifyContent: "flex-start", gap: 9 }} data-tip="Hand this work to another agent">
                   <Icon name="share" size={14} style={{ color: "var(--accent-text)" }} />

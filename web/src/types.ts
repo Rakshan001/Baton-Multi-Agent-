@@ -724,8 +724,11 @@ export type DiffLineType = "add" | "del" | "ctx";
 export interface DiffLine { t: DiffLineType; o: number | null; n: number | null; s: string }
 export interface DiffHunk { header: string; lines: DiffLine[] }
 export type FileStatus = "added" | "modified" | "deleted" | "renamed";
-/** `oldPath` is set only when `status` is "renamed". */
-export interface DiffFile { path: string; status: FileStatus; oldPath?: string; hunks: DiffHunk[]; add: number; del: number; lang: string }
+/** `oldPath` is set only when `status` is "renamed". `tooLarge`: listed without
+ *  its content because this one file was too big to show (not the whole diff). */
+export interface DiffFile { path: string; status: FileStatus; oldPath?: string; tooLarge?: true; hunks: DiffHunk[]; add: number; del: number; lang: string }
+/** `truncated`: the daemon's shared size budget or file cap was hit, so files and counts are partial. */
+export interface DiffResult { files: DiffFile[]; truncated: boolean }
 
 /** Agent CLIs Baton can install a skill into (have a skill/rule directory). */
 export type SkillAgent = "claude" | "cursor" | "antigravity";

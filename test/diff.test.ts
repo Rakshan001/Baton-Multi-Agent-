@@ -1,7 +1,13 @@
 // Copyright (C) 2026 Rakshan Shetty
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { describe, expect, it } from 'vitest';
-import { parseUnifiedDiff } from '../src/diff.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { git } from '../src/util/exec.js';
+import { usePrivateHome } from './helpers/private-home.js';
+import { collectDiff, parseUnifiedDiff, DIFF_MAX_CHARS, DIFF_MAX_FILES } from '../src/diff.js';
+import type { Task } from '../src/store.js';
 
 const MODIFIED = `diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644
@@ -127,5 +133,93 @@ index 1111111..2222222 100644
     expect(r.status).toBe('renamed');
     expect(m.status).toBe('modified');
     expect(m.oldPath).toBeUndefined();
+  });
+});
+
+/** 2d: a diff too big to read says so, instead of reading as "no changes". */
+describe('collectDiff truncation', () => {
+  // No user git config (e.g. a global diff driver) may shape these diffs. exec.ts
+  // caches git's env on the first call, so git keeps the first test's HOME.
+  usePrivateHome('baton-diff-home-');
+  let repo: string;
+  const task = (): Task => ({
+    slug: 't', task: 't', branch: 'b', worktreePath: repo, baseBranch: 'main', baseCommit: null,
+    createdAt: '2026-09-21T10:00:00.000Z', phase: 1, dependsOn: [], assignee: null, scope: [], expects: [],
+    state: 'queued', requireReview: true,
+  } as Task);
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'baton-diff-trunc-'));
+    await git(['init', '-q', '-b', 'main'], repo);
+    await git(['config', 'user.email', 't@t.dev'], repo);
+    await git(['config', 'user.name', 't'], repo);
+    await writeFile(join(repo, 'big.txt'), 'seed\n', 'utf-8');
+    await writeFile(join(repo, 'small.txt'), 'seed\n', 'utf-8');
+    await git(['add', '-A'], repo);
+    await git(['commit', '-qm', 'init'], repo);
+  });
+  afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
+
+  it('has sane defaults', () => {
+    expect(DIFF_MAX_CHARS).toBe(5_000_000);
+    expect(DIFF_MAX_FILES).toBe(1000);
+  });
+
+  it('a small diff is not truncated', async () => {
+    await writeFile(join(repo, 'small.txt'), 'seed\nmore\n', 'utf-8');
+    const r = await collectDiff(task());
+    expect(r.truncated).toBe(false);
+    expect(r.files.map((f) => f.path)).toEqual(['small.txt']);
+  });
+
+  it('a tracked diff past the cap keeps the partial files and says truncated', async () => {
+    await writeFile(join(repo, 'big.txt'), Array.from({ length: 2000 }, (_, i) => `row ${i} ${'x'.repeat(20)}`).join('\n'), 'utf-8');
+    const r = await collectDiff(task(), { maxChars: 2_000 });
+    expect(r.truncated).toBe(true);
+    expect(r.files.length).toBeGreaterThanOrEqual(1);
+    expect(r.files[0].path).toBe('big.txt');
+  });
+
+  it('caps tracked and untracked files together at maxFiles', async () => {
+    await writeFile(join(repo, 'small.txt'), 'seed\nmore\n', 'utf-8');
+    for (let i = 0; i < 5; i++) await writeFile(join(repo, `u${i}.txt`), 'u\n', 'utf-8');
+    const r = await collectDiff(task(), { maxFiles: 3 });
+    expect(r.truncated).toBe(true);
+    expect(r.files).toHaveLength(3);
+    expect(r.files[0].path).toBe('small.txt');
+  });
+
+  it('one untracked file over the per-file cap is marked tooLarge, not the whole diff truncated', async () => {
+    await writeFile(join(repo, 'huge.txt'), Array.from({ length: 4000 }, () => 'z'.repeat(70)).join('\n'), 'utf-8');
+    await writeFile(join(repo, 'note.txt'), 'hello\n', 'utf-8');
+    const r = await collectDiff(task());
+    expect(r.truncated).toBe(false);
+    const huge = r.files.find((f) => f.path === 'huge.txt');
+    const note = r.files.find((f) => f.path === 'note.txt');
+    expect(huge).toMatchObject({ status: 'added', hunks: [], add: 0, tooLarge: true });
+    expect(note?.hunks.length).toBe(1);
+    expect(note?.tooLarge).toBeUndefined();
+  });
+
+  it('untracked files past the 50th are listed as tooLarge, without the global flag', async () => {
+    for (let i = 0; i < 52; i++) await writeFile(join(repo, `u${String(i).padStart(2, '0')}.txt`), 'u\n', 'utf-8');
+    const r = await collectDiff(task());
+    expect(r.truncated).toBe(false);
+    expect(r.files).toHaveLength(52);
+    expect(r.files.filter((f) => f.tooLarge)).toHaveLength(2);
+    expect(r.files.slice(0, 50).every((f) => f.hunks.length === 1)).toBe(true);
+  });
+
+  it('the budget is shared: tracked output spends it before untracked files', async () => {
+    await writeFile(join(repo, 'big.txt'), Array.from({ length: 400 }, (_, i) => `row ${i} ${'x'.repeat(20)}`).join('\n'), 'utf-8');
+    await writeFile(join(repo, 'new.txt'), Array.from({ length: 400 }, (_, i) => `new ${i} ${'x'.repeat(20)}`).join('\n'), 'utf-8');
+    // Enough for either diff alone (~12 KB each), not both.
+    const r = await collectDiff(task(), { maxChars: 16_000 });
+    expect(r.truncated).toBe(true);
+    const big = r.files.find((f) => f.path === 'big.txt');
+    const added = r.files.find((f) => f.path === 'new.txt');
+    expect(big?.hunks.length).toBeGreaterThan(0);
+    expect(big?.tooLarge).toBeUndefined();
+    expect(added).toMatchObject({ status: 'added', hunks: [], tooLarge: true });
   });
 });

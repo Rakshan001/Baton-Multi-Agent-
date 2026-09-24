@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Rakshan Shetty
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect } from 'vitest';
-import { hardenedArgs, gitEnv } from '../src/util/exec.js';
+import { hardenedArgs, gitEnv, gitTry } from '../src/util/exec.js';
 import { parseConflicts, CONFLICT_LABELS } from '../src/git.js';
 
 describe('hardenedArgs', () => {
@@ -87,5 +87,21 @@ describe('parseConflicts', () => {
     expect(CONFLICT_LABELS.UU).toBe('both modified');
     const out = parseConflicts('u ZZ N... 1 2 3 4 h1 h2 h3 weird.ts');
     expect(out[0]).toEqual({ path: 'weird.ts', xy: 'ZZ', label: 'ZZ' });
+  });
+});
+
+describe('gitTry maxBuffer', () => {
+  it('caps stdout only: a long stderr does not mark the result truncated', async () => {
+    // stdout is empty; stderr ("fatal: Needed a single revision") is past the cap.
+    const r = await gitTry(['rev-parse', '--verify', '--end-of-options', 'no-such-ref-zzz'], undefined, undefined, { maxBuffer: 5 });
+    expect(r.ok).toBe(false);
+    expect(r.stderr.length).toBeGreaterThan(5);
+    expect(r.truncated).toBeUndefined();
+  });
+
+  it('marks a stdout past the cap truncated, keeping what was read', async () => {
+    const r = await gitTry(['version'], undefined, undefined, { maxBuffer: 4 });
+    expect(r.truncated).toBe(true);
+    expect(r.stdout).toBe('git');
   });
 });

@@ -144,13 +144,14 @@ export function DiffViewer({
   writeEnabled: boolean;
 }) {
   const [files, setFiles] = useState<DiffFile[] | null>(null); // null = loading
+  const [truncated, setTruncated] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   useEffect(() => {
     let on = true;
-    setFiles(null); setLoadError(null); setActive(0);
+    setFiles(null); setTruncated(false); setLoadError(null); setActive(0);
     BatonAPI.getDiff(slug)
-      .then((f) => { if (on) setFiles(f); })
+      .then((r) => { if (on) { setFiles(r.files); setTruncated(r.truncated); } })
       .catch((e) => { if (on) { setFiles([]); setLoadError((e as Error).message); } });
     return () => { on = false; };
   }, [slug]);
@@ -204,6 +205,13 @@ export function DiffViewer({
           <button className="btn btn-ghost btn-icon fr" onClick={onClose} aria-label="Close diff · Esc" data-tip="Close · Esc" data-tip-side="bottom"><Icon name="x" size={16} /></button>
         </div>
 
+        {files !== null && truncated && (
+          <div role="status" style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: "1px solid var(--border-subtle)", background: "var(--dirty-soft)", color: "var(--dirty-text)", fontSize: "var(--fs-12)" }}>
+            <Icon name="alertTriangle" size={13} />
+            <span>This diff is too large to show in full (over about 5 MB or 1,000 files), so the files and counts shown are partial. Open the branch in git for the rest.</span>
+          </div>
+        )}
+
         {files === null ? (
           <div style={{ flex: 1, display: "grid", placeItems: "center" }}>
             <div className="skeleton" style={{ width: 320, height: 14 }} aria-label="Loading diff…" />
@@ -219,7 +227,7 @@ export function DiffViewer({
             <div style={{ width: 256, flex: "none", borderRight: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", background: "var(--bg-surface)" }}>
               <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 7 }}>
                 <Icon name="folder" size={13} style={{ color: "var(--text-tertiary)" }} />
-                <span className="tag">{list.length} changed file{list.length === 1 ? "" : "s"}</span>
+                <span className="tag">{list.length}{truncated ? "+" : ""} changed file{list.length === 1 && !truncated ? "" : "s"}</span>
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: 6 }}>
                 {list.map((file, i) => {
@@ -253,7 +261,9 @@ export function DiffViewer({
                 <CopyButton value={f.path} iconOnly className="btn btn-sm btn-ghost" title="Copy path" />
               </div>
               <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                {mode === "split" && isWide ? <SplitLines hunks={f.hunks} /> : <UnifiedLines hunks={f.hunks} />}
+                {f.tooLarge && f.hunks.length === 0
+                  ? <div role="note" style={{ padding: "18px 16px", color: "var(--text-tertiary)", fontSize: "var(--fs-12)" }}>Not shown here: this file is too large, or comes after the first 50 new files. Open it in your editor or with git.</div>
+                  : mode === "split" && isWide ? <SplitLines hunks={f.hunks} /> : <UnifiedLines hunks={f.hunks} />}
                 <div style={{ padding: "10px 14px", color: "var(--text-quaternary)", fontSize: "var(--fs-11)", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border-subtle)" }}>
                   <span className="kbd">[</span><span className="kbd">]</span> switch files · <span className="kbd">esc</span> close
                 </div>

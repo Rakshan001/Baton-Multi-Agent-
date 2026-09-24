@@ -1958,13 +1958,13 @@ class BatonClient {
     }
   }
   /** Full diff vs the task's base — GET /api/tasks/:slug/diff (demo: scripted fixtures). */
-  async getDiff(slug: string): Promise<DiffFile[]> {
+  async getDiff(slug: string): Promise<import("../types").DiffResult> {
     if (this.demo) {
       await this.demoGate(120);
-      return demoDiff(slug);
+      return { files: demoDiff(slug), truncated: false };
     }
-    const r = await this.request<{ files: DiffFile[] }>(`/api/tasks/${encodeURIComponent(slug)}/diff`);
-    return r.files;
+    const r = await this.request<{ files: DiffFile[]; truncated?: boolean }>(`/api/tasks/${encodeURIComponent(slug)}/diff`);
+    return { files: r.files, truncated: r.truncated === true };
   }
   async getBlame(file: string): Promise<BlameResult> {
     if (this.demo) {

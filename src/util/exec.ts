@@ -18,6 +18,8 @@ export interface GitResult {
   ok: boolean;
   stdout: string;
   stderr: string;
+  /** Output hit the caller's `maxBuffer`; `stdout` holds the first part only. */
+  truncated?: true;
 }
 
 /** Hard ceiling on any single git command, so a hung git never blocks Baton. */
@@ -157,17 +159,33 @@ export async function probeBinary(cmd: string, args: string[] = ['--version'], t
   }
 }
 
-/** Run a git command without throwing. Inspect `.ok` for success. */
-export async function gitTry(args: string[], cwd?: string, signal?: AbortSignal): Promise<GitResult> {
+/**
+ * Run a git command without throwing. Inspect `.ok` for success.
+ *
+ * `opts.maxBuffer` caps stdout only (in characters, as execa counts) — stderr
+ * keeps execa's default, so a burst of warnings never reads as a cut-off
+ * stdout. Past it the result is `ok: false, truncated: true` with the output
+ * read so far, so a caller can show part of a huge diff instead of none.
+ */
+export async function gitTry(
+  args: string[],
+  cwd?: string,
+  signal?: AbortSignal,
+  opts: { maxBuffer?: number } = {},
+): Promise<GitResult> {
   try {
-    const { stdout, stderr } = await execa('git', hardenedArgs(args), execOpts(cwd, signal));
+    const { stdout, stderr } = await execa('git', hardenedArgs(args), {
+      ...execOpts(cwd, signal),
+      ...(opts.maxBuffer !== undefined ? { maxBuffer: { stdout: opts.maxBuffer } } : {}),
+    });
     return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
+    const e = err as { stdout?: string; stderr?: string; message?: string; isMaxBuffer?: boolean };
     return {
       ok: false,
       stdout: (e.stdout ?? '').trim(),
       stderr: (e.stderr ?? e.message ?? '').trim(),
+      ...(e.isMaxBuffer ? { truncated: true as const } : {}),
     };
   }
 }

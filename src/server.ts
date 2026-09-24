@@ -2567,7 +2567,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
     const slug = decodeURIComponent(mDiff[1]);
     const task = (await loadTasks(root)).find((t) => t.slug === slug);
     if (!task) return send(res, 404, { error: `no task '${slug}'` }, origin);
-    return send(res, 200, { files: await collectDiff(task) }, origin);
+    return send(res, 200, await collectDiff(task), origin);   // { files, truncated }
   }
 
   // GET /api/agents — the roster: installed? drivable? MCP wired? live sessions?
