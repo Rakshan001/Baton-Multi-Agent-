@@ -298,3 +298,67 @@ describe('loopback host link', () => {
     expect(Object.keys((await remoteClaims(root)).byPath)).toEqual(['theirs.ts']);
   });
 });
+
+/**
+ * The federated half of the two-spellings-one-file bug.
+ *
+ * `canonicalSignalPath` folds `./a`, `a/./b` and `src\a.ts` onto one key so the
+ * local `edit_signals` table cannot hold two rows for one file. The remote view
+ * arrives from another machine — which may be a Windows agent, or one that
+ * spells its paths with a leading `./` — so the same fold has to happen here or
+ * a remote holder is invisible to a differently-spelled ask.
+ */
+describe('remote holders survive a differently-spelled path', () => {
+  const holder = (memberId: string): RemoteHolder => ({
+    memberId, memberName: 'ana', slug: 'auth-api', at: Date.now(),
+  } as RemoteHolder);
+
+  it('finds a holder stored under a folded spelling', () => {
+    const view = {
+      linked: true, reachable: true,
+      byPath: { 'src/a.ts': [holder('m1')] },
+    } as unknown as RemoteClaimsView;
+    const out = remoteHoldersFor(view, ['./src/a.ts']);
+    expect(out['./src/a.ts'], 'a leading ./ must not hide a remote holder').toHaveLength(1);
+  });
+
+  it('finds a holder a Windows peer stored with backslashes', () => {
+    const view = {
+      linked: true, reachable: true,
+      byPath: { 'src\\a.ts': [holder('m2')] },
+    } as unknown as RemoteClaimsView;
+    const out = remoteHoldersFor(view, ['src/a.ts']);
+    expect(out['src/a.ts'], 'a Windows peer must not be invisible to a POSIX ask').toHaveLength(1);
+  });
+
+  it('lists a peer once when it published two spellings of one file', () => {
+    // The exact case the fold was written for: a peer whose own history still
+    // carries a legacy `./src/a.ts` row ALONGSIDE the new `src/a.ts` row. Both
+    // fold to one key, so without a dedupe that member is counted twice and any
+    // "who else is here" count rendered from this is doubled. `checkFiles`
+    // dedupes its equivalent fold by slug; this is the federated half.
+    const view = {
+      linked: true, reachable: true,
+      byPath: { 'src/a.ts': [holder('m4')], './src/a.ts': [holder('m4')] },
+    } as unknown as RemoteClaimsView;
+    const out = remoteHoldersFor(view, ['src/a.ts']);
+    expect(out['src/a.ts'], 'one member holding one file is one holder').toHaveLength(1);
+  });
+
+  it('still lists two different peers holding the same file', () => {
+    const view = {
+      linked: true, reachable: true,
+      byPath: { 'src/a.ts': [holder('m5')], './src/a.ts': [holder('m6')] },
+    } as unknown as RemoteClaimsView;
+    const out = remoteHoldersFor(view, ['src/a.ts']);
+    expect(out['src/a.ts'].map((h) => h.memberId).sort()).toEqual(['m5', 'm6']);
+  });
+
+  it('keys the answer by the spelling the caller asked with', () => {
+    const view = {
+      linked: true, reachable: true,
+      byPath: { 'src/a.ts': [holder('m3')] },
+    } as unknown as RemoteClaimsView;
+    expect(Object.keys(remoteHoldersFor(view, ['./src/a.ts']))).toEqual(['./src/a.ts']);
+  });
+});

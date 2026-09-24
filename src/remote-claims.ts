@@ -25,6 +25,7 @@
  *    case is a solo machine, and it must behave exactly as it always has.
  */
 import { loadHostLink, type HostLink } from './host-link.js';
+import { canonicalSignalPath } from './signals.js';
 
 /** How long one answer (success OR failure) is reused. Heartbeats are 30 s, so
  *  the host's own picture is no fresher than this anyway. */
@@ -181,9 +182,12 @@ export async function remoteClaims(root: string, now = Date.now()): Promise<Remo
 
 /**
  * Remote holders for specific paths, excluding this machine's own member id
- * where the caller knows it. Paths are matched exactly: claims are repo-relative
- * by contract (see federation.ts), so normalising here would only paper over a
- * publisher that got it wrong.
+ * where the caller knows it. Paths are FOLDED to a canonical key on both sides
+ * — the stored spelling and the asked one — because "repo-relative by contract"
+ * did not survive contact with real publishers: a Windows peer sends `src\a.ts`
+ * and an older build sends `./src/a.ts`, and matching exactly made those holders
+ * invisible. A miss here reads as "nobody else is on this file", which is the
+ * one answer this module must never get wrong by accident.
  *
  * `projectId` is the ASKER's sub-project, when known. A path is only
  * repo-relative, so across a hub the same string names different files; the
@@ -199,8 +203,30 @@ export function remoteHoldersFor(
   projectId?: string | null,
 ): Record<string, RemoteHolder[]> {
   const out: Record<string, RemoteHolder[]> = Object.create(null) as Record<string, RemoteHolder[]>;
+  // Fold the STORED spellings too, not just the asked one. The remote view came
+  // off another machine: a Windows peer sends `src\a.ts`, and a peer on an
+  // older build may still send `./src/a.ts`. Looking up the asked string alone
+  // left those holders invisible — the federated half of the same
+  // two-spellings-one-file bug `canonicalSignalPath` closes locally. Same shape
+  // as `checkFiles`: fold for the LOOKUP, key the answer by what was ASKED, so
+  // every caller's `out[p]` still resolves.
+  const folded: Record<string, RemoteHolder[]> = Object.create(null) as Record<string, RemoteHolder[]>;
+  for (const [stored, holders] of Object.entries(view.byPath)) {
+    const key = canonicalSignalPath(stored).key;
+    if (!key) continue;
+    const seen = (folded[key] ??= []);
+    // One member holding one file is ONE holder, however many spellings its
+    // history published. A peer mid-migration carries the legacy `./src/a.ts`
+    // row alongside the new `src/a.ts` row — the very case this fold exists for
+    // — and both land on this key. Keyed by member AND branch so a peer
+    // genuinely holding the file from two branches is still two holders.
+    for (const h of holders) {
+      if (!seen.some((x) => x.memberId === h.memberId && x.branch === h.branch)) seen.push(h);
+    }
+  }
   for (const p of paths) {
-    const holders = (view.byPath[p] ?? []).filter(
+    const key = canonicalSignalPath(p).key;
+    const holders = ((key ? folded[key] : undefined) ?? []).filter(
       (h) => (!exceptMemberId || h.memberId !== exceptMemberId)
         && (!projectId || !h.projectId || h.projectId === projectId),
     );

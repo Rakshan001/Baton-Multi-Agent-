@@ -435,3 +435,40 @@ describe('listReviews', () => {
     expect((await listReviews(root)).map((r) => r.slug)).toEqual(['newer', 'older']);
   });
 });
+
+/**
+ * `..` is checked as a SEGMENT, never as a substring.
+ *
+ * `!file.includes('..')` reads like a traversal guard and is really a filename
+ * filter: `test/fixtures/v1..v2.diff` is an ordinary file, and a finding
+ * against it silently lost its location — the reader was shown a finding with
+ * no file at all, which is the same class of quiet wrong answer as a path that
+ * drops out of the signal store. `canonicalSignalPath` already documents this
+ * distinction for signals; the review record is the last place still deciding
+ * it by substring.
+ */
+describe('a finding may cite a file whose name contains dots', () => {
+  it('keeps a legitimate v1..v2 diff path', () => {
+    const f = cleanFinding({
+      axis: 'standards', title: 'Duplicated parse', source: 'baseline: Duplicated Code',
+      file: 'test/fixtures/v1..v2.diff', line: 3,
+    } as unknown as Record<string, unknown>);
+    expect(f?.file, 'a real filename must survive the traversal guard').toBe('test/fixtures/v1..v2.diff');
+  });
+
+  it('still drops a path that really does escape', () => {
+    const f = cleanFinding({
+      axis: 'standards', title: 'Escapes', source: 'baseline: Duplicated Code',
+      file: '../../etc/passwd',
+    } as unknown as Record<string, unknown>);
+    expect(f?.file ?? '').toBe('');
+  });
+
+  it('still drops an absolute path', () => {
+    const f = cleanFinding({
+      axis: 'standards', title: 'Absolute', source: 'baseline: Duplicated Code',
+      file: '/etc/passwd',
+    } as unknown as Record<string, unknown>);
+    expect(f?.file ?? '').toBe('');
+  });
+});

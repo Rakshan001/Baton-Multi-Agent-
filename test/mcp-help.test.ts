@@ -9,13 +9,25 @@ import { TOOL_HELP, TOOL_HELP_BUDGET } from '../src/mcp-help.js';
  * round). This test is the regression lock: total and per-tool budgets, plus
  * the behavioral trigger phrases that make agents actually use each tool at
  * the right moment. Fat creep or trigger loss both fail loudly.
+ *
+ * Everything below counts UTF-8 BYTES, not `String.length`.
+ *
+ * That was not a detail. `String.length` counts UTF-16 code units, and every
+ * neighbouring budget in this repo — test/mcp-wire-budget.test.ts, the figures
+ * in docs/mcp-tools.md — counts bytes, because bytes are what a session pays.
+ * The two units had already diverged by 10: five descriptions carry an em dash,
+ * 3 bytes each, and the char total (3,045) sat exactly on its budget while the
+ * real cost was 3,055. Under the old count a curly quote or an ellipsis was
+ * free; here it costs what it costs. The same correction the wire-budget test
+ * records for the 10,672-vs-10,708 baseline, applied one level down.
  */
+const bytes = (s: string): number => Buffer.byteLength(s, 'utf8');
 const EXPECTED_TOOLS = [
   'orient', 'check_files', 'list_signals', 'get_report', 'who_touched',
   'list_tasks', 'report_progress', 'touch_files', 'save_memory', 'recall_memory',
   'create_handoff', 'search_history', 'save_progress',
   'my_tasks', 'take_task', 'complete_task', 'report_blocked',
-  'next_handoff', 'resolve_handoff',
+  'next_handoff', 'resolve_handoff', 'suggest_skills',
   'list_worktrees',
 ] as const;
 
@@ -25,18 +37,37 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
   });
 
   it('stays inside the total budget (the whole point of T1)', () => {
-    const total = Object.values(TOOL_HELP).reduce((n, d) => n + d.length, 0);
+    const total = Object.values(TOOL_HELP).reduce((n, d) => n + bytes(d), 0);
     expect(total).toBeLessThanOrEqual(TOOL_HELP_BUDGET);
-    // 20 tools now. Three raises so far, each for a feature rather than a
-    // convenience: the pipeline tools, the handoff relay's two ends, then
-    // list_worktrees — the only way an agent learns a sibling worktree exists.
+    // 21 tools now. Four raises so far, each for a feature rather than a
+    // convenience: the pipeline tools, the handoff relay's two ends,
+    // suggest_skills, then list_worktrees.
     // Raising it again needs a deliberate edit — keep every new tool lean.
-    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(3400);
+    expect(TOOL_HELP_BUDGET).toBeLessThanOrEqual(3300);
+  });
+
+  /**
+   * The unit itself, pinned. A budget that silently means something other than
+   * its neighbours drifts again the first time someone types a curly quote, and
+   * the drift is invisible: `length` simply does not see the extra bytes.
+   */
+  it('is a BYTE budget, sitting on the measured value with no slack', () => {
+    const wire = Object.values(TOOL_HELP).reduce((n, d) => n + bytes(d), 0);
+    // Pin the UNIT, not anyone's punctuation. The previous assertion here was
+    // `wire > chars`, which only says "someone typed a multi-byte character" —
+    // it would fail if every em dash were legitimately replaced by a hyphen,
+    // which is not a regression. What must never drift is that `bytes` counts
+    // BYTES: if it silently became `.length`, the budget below would go on
+    // matching while measuring the wrong thing entirely.
+    expect(bytes('\u2014'), 'the budget must count bytes, not UTF-16 code units').toBe(3);
+    expect(TOOL_HELP_BUDGET).toBe(wire);
   });
 
   it('keeps every tool description individually lean', () => {
     for (const [tool, desc] of Object.entries(TOOL_HELP)) {
-      expect(desc.length, `${tool} description too long`).toBeLessThanOrEqual(300);
+      // Bytes here too, for the same reason: the per-tool ceiling and the total
+      // have to be denominated in the same thing or one of them is decoration.
+      expect(bytes(desc), `${tool} description too long`).toBeLessThanOrEqual(300);
       expect(desc.trim().length, `${tool} description empty`).toBeGreaterThan(20);
     }
   });
@@ -74,5 +105,10 @@ describe('TOOL_HELP — slim, budgeted MCP tool descriptions', () => {
     // trigger, briefs stay open forever and the pickup list stops being honest.
     expect(TOOL_HELP.resolve_handoff).toMatch(/finish|done|complete/i);
     expect(TOOL_HELP.resolve_handoff).toMatch(/report|what you did/i);
+    // suggest_skills has to fire BEFORE the work: asked afterwards, the agent
+    // has already improvised through a task a playbook covered. And it must say
+    // what it returns, so nobody expects a playbook back.
+    expect(TOOL_HELP.suggest_skills).toMatch(/before/i);
+    expect(TOOL_HELP.suggest_skills).toMatch(/never bodies|summar/i);
   });
 });

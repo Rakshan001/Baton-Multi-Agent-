@@ -60,6 +60,7 @@ import { WorktreeWatcher } from './watch.js';
 import { collectWorktrees } from './worktrees.js';
 import { StatusPoller } from './poller.js';
 import { checkFiles, getSignals, isWatcherActive, liveSessions, SIGNAL_WINDOW_MIN, SignalTracker } from './signals.js';
+import { capPaths, PATHS_CAP } from './mcp.js';
 import { holderProjects } from './conflicts.js';
 import { getReport, listReports } from './reports.js';
 import { queryFile } from './history.js';
@@ -1871,12 +1872,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
   // GET /api/signals/check?files=a,b,c[&exclude=slug] — "ask before editing" for
   // agents without MCP; exclude drops the caller's own task from the answer.
   if (method === 'GET' && path === '/api/signals/check') {
-    const files = (url.searchParams.get('files') ?? '').split(',').map((f) => f.trim()).filter(Boolean);
-    if (!files.length) return send(res, 400, { error: 'pass ?files=path1,path2' }, origin);
+    const asked = (url.searchParams.get('files') ?? '').split(',').map((f) => f.trim()).filter(Boolean);
+    if (!asked.length) return send(res, 400, { error: 'pass ?files=path1,path2' }, origin);
+    // Same cap as the MCP tool. `checkFiles` runs git per task, and this plain
+    // GET was the one way into that work with no bound at all. Over-cap paths
+    // are NAMED in the response rather than dropped: an unasked path looks
+    // exactly like an unheld one here, and "not busy" is the conclusion this
+    // endpoint exists to stop an agent reaching without evidence.
+    const { within: files, skipped } = capPaths(asked);
     const exclude = url.searchParams.get('exclude')?.trim() || undefined;
     // Same two-source answer as the MCP tool — an agent without MCP must not get
     // a blinder version of "is anyone on this file". Reachability is reported
     // separately so "could not ask" never reads as "nobody is there".
+    // Nothing normalises the paths here on purpose: `checkFiles` folds each one
+    // onto the store's canonical key itself (`canonicalSignalPath`), so this
+    // route, the two MCP tools, `baton blame` and the edit guard all answer
+    // `./src/a.ts` and `src/a.ts` identically. Answers stay keyed by the
+    // spelling the query string used, which is why `checked[p]` still resolves.
     const [checked, view, project] = await Promise.all([
       checkFiles(root, files, exclude), remoteClaims(root), projectOf(root, exclude),
     ]);
@@ -1888,6 +1900,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, root: string, o
       files: checked,
       watcherActive: isWatcherActive(root),
       ...(view.linked ? { remote: { reachable: view.reachable, ...(note ? { note } : {}) } } : {}),
+      ...(skipped.length
+        ? {
+          notChecked: {
+            count: skipped.length,
+            first: skipped.slice(0, 5),
+            note: `Over the ${PATHS_CAP}-path cap for one call — these were NOT checked. Ask again in smaller batches; do not read their absence as "not busy".`,
+          },
+        }
+        : {}),
     }, origin);
   }
   // GET /api/reports[/:slug] — completion reports of merged tasks

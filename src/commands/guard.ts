@@ -16,7 +16,7 @@ import { relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
 import { gitRoot } from '../git.js';
 import { activeBatonRoot, batonDir } from '../store.js';
-import { checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
+import { canonicalSignalPath, checkFiles, recordHookEdit, sessionSlug, type FileCheck } from '../signals.js';
 import { snapshotDue } from './snapshot.js';
 import { guardrailReminderDue, formatGuardrailReminder } from '../handoff/guardrails.js';
 
@@ -59,14 +59,24 @@ export function normalizeGuardPayload(raw: RawHookPayload): GuardPayload {
   return raw;
 }
 
-/** The worktree-relative path an edit targets, or null if this call is not our business. */
+/**
+ * The worktree-relative path an edit targets, or null if this call is not our
+ * business.
+ *
+ * `node:path` is right HERE and nowhere downstream: the payload is this
+ * machine's own absolute path from its own agent, so the platform's rules are
+ * the correct rules. The moment the result becomes a signal key it is compared
+ * BETWEEN machines, which is why `canonicalSignalPath` finishes the job —
+ * folding `path.relative()`'s Windows `src\a.ts` onto the same key every other
+ * agent uses, and rejecting an escape by SEGMENT. The `rel.startsWith('..')` it
+ * replaces was a substring test, so a file honestly named `..rc.json` was
+ * silently never recorded and its editor was invisible to everyone.
+ */
 export function guardTarget(payload: GuardPayload, worktreeRoot: string): string | null {
   if (!payload.tool_name || !EDIT_TOOLS.has(payload.tool_name)) return null;
   const file = payload.tool_input?.file_path;
   if (!file || !isAbsolute(file)) return null;
-  const rel = relative(worktreeRoot, file);
-  if (!rel || rel.startsWith('..')) return null; // outside this worktree
-  return rel;
+  return canonicalSignalPath(relative(worktreeRoot, file)).key; // null ⇒ outside this worktree
 }
 
 const age = (iso: string): string => {

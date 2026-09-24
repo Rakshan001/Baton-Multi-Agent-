@@ -261,7 +261,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
       description: TOOL_HELP.take_task,
       inputSchema: {
         slug: z.string().optional().describe('Which task. Omit to take the next one for you.'),
-        resume: z.boolean().optional().describe('Adopt a stalled task another agent left — read its worktree before adding to it'),
+        resume: z.boolean().optional().describe('Adopt a stalled task; read its worktree before adding to it'),
       },
     },
     async (args: ToolArgs) => {
@@ -316,7 +316,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
       description: TOOL_HELP.complete_task,
       inputSchema: {
         slug: z.string().optional().describe('Which task. Omit if you hold exactly one.'),
-        attest: z.boolean().optional().describe('You RAN what the plan expects and it passed. Your claim, recorded as yours — not a verification.'),
+        attest: z.boolean().optional().describe('You RAN what the plan expects and it passed. Your claim, recorded as yours.'),
       },
     },
     async (args: ToolArgs) => {
@@ -362,7 +362,7 @@ export function registerPipelineTools(reg: RegisterTool, root: string): void {
     {
       description: TOOL_HELP.report_blocked,
       inputSchema: {
-        reason: z.string().describe('What is actually in the way — specific enough for a person to act on'),
+        reason: z.string().describe('What is in the way, specific enough to act on'),
         slug: z.string().optional().describe('Which task. Omit if you hold exactly one.'),
       },
     },

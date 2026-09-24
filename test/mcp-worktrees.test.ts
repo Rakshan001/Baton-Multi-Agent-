@@ -222,14 +222,14 @@ describe('list_worktrees — the vocabulary and the context budget', () => {
     // counted by the budget that polices them all rather than sitting beside it
     // uncounted. A description kept outside the registry to dodge the budget
     // assertion is how the registry stops meaning anything.
-    // Counted in the unit TOOL_HELP_BUDGET is stated in — chars, which is what
-    // mcp-help.ts measures today. If that budget ever moves to bytes, this line
-    // moves with it; what must stay true is that the two agree.
-    const total = Object.values(TOOL_HELP).reduce((n, d) => n + d.length, 0);
+    // Counted in the unit TOOL_HELP_BUDGET is stated in — UTF-8 bytes, which is
+    // what mcp-help.ts measures now (test/mcp-help.test.ts pins the unit). What
+    // must stay true is that the two agree.
+    const total = Object.values(TOOL_HELP).reduce((n, d) => n + Buffer.byteLength(d, 'utf8'), 0);
     expect(total).toBe(TOOL_HELP_BUDGET);
 
     // …and that the new tool is held to the same per-tool ceiling as the rest.
-    expect(TOOL_HELP.list_worktrees.length).toBeLessThanOrEqual(300);
+    expect(Buffer.byteLength(TOOL_HELP.list_worktrees, 'utf8')).toBeLessThanOrEqual(300);
     expect(TOOL_HELP.list_worktrees.trim().length).toBeGreaterThan(20);
     // One filter argument. No pagination, no sort, no field selector: every
     // byte of schema is paid by every agent in every session, called or not.

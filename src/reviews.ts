@@ -187,7 +187,12 @@ export function cleanFinding(raw: Partial<ReviewFinding>): ReviewFinding | null 
   if (!title || !source) return null;
 
   const rawFile = str(raw.file, 300);
-  const file = rawFile && !rawFile.startsWith('/') && !rawFile.includes('..') ? rawFile : '';
+  // `..` as a SEGMENT, not a substring: `test/fixtures/v1..v2.diff` is an
+  // ordinary filename, and a substring test quietly stripped the location off
+  // a finding against it. Same rule `canonicalSignalPath` documents for signal
+  // keys — the escape is `..` standing alone between separators.
+  const file = rawFile && !rawFile.startsWith('/')
+    && !rawFile.split(/[\\/]/).includes('..') ? rawFile : '';
   const line = typeof raw.line === 'number' && Number.isFinite(raw.line) && raw.line > 0
     ? Math.floor(raw.line)
     : undefined;
