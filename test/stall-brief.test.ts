@@ -20,8 +20,8 @@
  *  4. the brief carries what the next agent actually needs: the last commit,
  *     the `report_progress` line, the block reason and the claimed files.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { StatusPoller } from '../src/poller.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { StatusPoller, STALL_SCAN_MS } from '../src/poller.js';
 import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,7 +34,8 @@ import { handoffPath } from '../src/handoff/brief.js';
 import { START_MARK } from '../src/handoff/untrusted.js';
 import { enteredStall, StallBriefComposer } from '../src/handoff/auto-brief.js';
 import { STALL_GRACE_MS } from '../src/pipeline.js';
-import type { WorktreeHealth, WorktreeRow } from '../src/worktrees.js';
+import { collectWorktrees, type WorktreeHealth, type WorktreeRow } from '../src/worktrees.js';
+import { cachedNewestMtimeIn, clearMtimeCache } from '../src/liveness.js';
 
 let root: string;
 let wt: string;
@@ -280,5 +281,60 @@ describe('the poller gates the stall brief on --write', () => {
       composeStallBriefs(rows: unknown[]): Promise<void>;
     }).composeStallBriefs([]);
     expect((poller as unknown as { stallBriefs: unknown }).stallBriefs).not.toBeNull();
+  });
+
+  /**
+   * The tick is 2s; a stall is 45 minutes old by definition. Composing every
+   * tick paid a full `collectWorktrees` — ref reads plus a synchronous mtime
+   * walk per worktree — thirty times a minute for an answer that changes on a
+   * scale of minutes.
+   */
+  it('composes at most once per STALL_SCAN_MS, however often the tick runs', async () => {
+    let t = Date.parse('2026-09-17T12:00:00.000Z');
+    const poller = new StatusPoller(root, true, () => t);
+    const onWorktrees = vi.fn(async () => {});
+    const p = poller as unknown as {
+      stallBriefs: unknown;
+      composeStallBriefs(rows: unknown[]): Promise<void>;
+    };
+    p.stallBriefs = { onWorktrees };
+    await p.composeStallBriefs([]);
+    await p.composeStallBriefs([]);
+    t += STALL_SCAN_MS - 1;
+    await p.composeStallBriefs([]);
+    expect(onWorktrees).toHaveBeenCalledTimes(1);
+    t += 1;
+    await p.composeStallBriefs([]);
+    expect(onWorktrees).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The read paths (/api/worktrees, list_worktrees) reuse an mtime walk for up
+   * to 30s. A brief is a WRITE into someone's worktree, so the poller must
+   * walk fresh: primed with a stale "nothing written" for this worktree, the
+   * cached read path reports the claim time while the poller sees the real,
+   * just-written file.
+   */
+  it('decides on a fresh mtime walk, never the read-path cache', async () => {
+    clearMtimeCache();
+    try {
+      expect(cachedNewestMtimeIn(wt, Date.now, () => 0)).toBe(0);   // prime: stale
+      const claimedAt = Date.parse(task().claimedBy!.at);
+      const cached = (await collectWorktrees(root, { status: () => Promise.resolve([]) }))[0]!;
+      expect(Date.parse(cached.lastActivityAt!)).toBe(claimedAt);
+
+      const poller = new StatusPoller(root, true);
+      let seen: WorktreeRow[] = [];
+      (poller as unknown as { stallBriefs: unknown }).stallBriefs = {
+        onWorktrees: async (rows: WorktreeRow[]) => { seen = rows; },
+      };
+      await (poller as unknown as {
+        composeStallBriefs(rows: unknown[]): Promise<void>;
+      }).composeStallBriefs([]);
+      expect(seen).toHaveLength(1);
+      expect(Date.parse(seen[0]!.lastActivityAt!)).toBeGreaterThan(claimedAt);
+    } finally {
+      clearMtimeCache();
+    }
   });
 });

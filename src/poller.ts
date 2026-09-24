@@ -10,7 +10,7 @@
  */
 import { collectStatus, type StatusRow } from './board.js';
 import { branchCommits } from './git.js';
-import { livenessProbe } from './liveness.js';
+import { livenessProbe, newestMtimeIn } from './liveness.js';
 import { isStalled, type PipelineTask } from './pipeline.js';
 import { loadTasks } from './store.js';
 import { bus } from './events.js';
@@ -29,7 +29,7 @@ const INTERVAL_MS = 2000;
  * minutes old by definition (`STALL_GRACE_MS`), so looking once a minute loses
  * nothing and costs ~1/30th as much.
  */
-const STALL_SCAN_MS = 60_000;
+export const STALL_SCAN_MS = 60_000;
 
 /** What a WIP snapshot would capture, cheaply. Same numbers ⇒ same work ⇒ the
  *  ref we already wrote still describes it, so don't spend git on it again. */
@@ -52,15 +52,19 @@ export class StatusPoller {
   /** Holds the stall EDGE map itself, so it must outlive a tick. */
   private stallBriefs: StallBriefComposer | null = null;
   private briefBusy = false;
+  /** When `composeStallBriefs` last did its work. -Infinity: the first call runs. */
+  private lastBriefScan = -Infinity;
+  private readonly now: () => number;
 
   /**
    * `writeEnabled` mirrors the daemon's `--write` flag. It gates the stall
    * brief, which writes a HANDOFF.md INTO someone's worktree — a read-only
    * daemon must not leave files behind in a repo it was told not to touch.
    */
-  constructor(root: string, writeEnabled = false) {
+  constructor(root: string, writeEnabled = false, now: () => number = Date.now) {
     this.root = root;
     this.writeEnabled = writeEnabled;
+    this.now = now;
   }
 
   /**
@@ -147,14 +151,23 @@ export class StatusPoller {
    */
   private async composeStallBriefs(rows: StatusRow[]): Promise<void> {
     if (!this.writeEnabled || this.briefBusy) return;
+    // Once per STALL_SCAN_MS, not every 2s tick: a stall is 45 minutes old by
+    // definition, and each pass costs ref reads plus a synchronous mtime walk
+    // per worktree. The composer's edge map still sees the transition, at most
+    // ~62s late. Stamped before the work, so a slow pass is not re-entered.
+    const now = this.now();
+    if (now - this.lastBriefScan < STALL_SCAN_MS) return;
+    this.lastBriefScan = now;
     this.briefBusy = true;
     try {
       this.stallBriefs ??= stallBriefComposer(this.root);
       // `tasksOnly`: a stall brief is only ever about a task row, so the tick
-      // never pays for a `git worktree list`.
+      // never pays for a `git worktree list`. `newestMtimeIn`, uncached: this
+      // pass WRITES a brief, so it must not act on the read-path mtime cache.
       const worktrees = await collectWorktrees(this.root, {
         status: () => Promise.resolve(rows),
         tasksOnly: true,
+        mtime: newestMtimeIn,
       });
       await this.stallBriefs.onWorktrees(worktrees);
     } catch {

@@ -35,7 +35,7 @@ import { collectStatus, type StatusRow } from './board.js';
 import { isBatonWorktree } from './cleanup.js';
 import { listWorktrees, type RepoState } from './git.js';
 import { loadKb } from './kb/state.js';
-import { livenessProbe } from './liveness.js';
+import { cachedNewestMtimeIn, livenessProbe } from './liveness.js';
 import { STALL_GRACE_MS, stateOf, type TaskState } from './pipeline.js';
 import { isMaterialized, loadTasks, type Task } from './store.js';
 import { gitTry } from './util/exec.js';
@@ -355,6 +355,13 @@ export interface CollectOpts extends HealthOpts {
   /** Task rows only: skips every `git worktree list`. For a caller that acts
    *  on task rows alone (the poller's stall briefs). */
   tasksOnly?: boolean;
+  /**
+   * The mtime walker behind `lastActivityAt`. Defaults to the read-path cache
+   * (`cachedNewestMtimeIn`, up to 30s old). A caller that ACTS on the rows —
+   * the poller's stall brief writes a HANDOFF.md — passes the uncached
+   * `newestMtimeIn`, so a reused walk never drives a write.
+   */
+  mtime?: (dir: string) => number;
 }
 
 /**
@@ -433,7 +440,7 @@ export async function collectWorktrees(root: string, opts: CollectOpts = {}): Pr
     return [repo, { local, wip }] as const;
   })));
 
-  const liveness = livenessProbe(root);
+  const liveness = livenessProbe(root, { mtime: opts.mtime ?? cachedNewestMtimeIn });
 
   const factsFor = (t: Task): WorktreeFacts => {
     const st = statusBySlug?.get(t.slug);

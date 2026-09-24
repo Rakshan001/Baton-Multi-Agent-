@@ -103,3 +103,66 @@ export function livenessProbe(root: string, opts: { mtime?: (dir: string) => num
     return Math.max(beat, m);
   };
 }
+
+/**
+ * How long a READ path may reuse one worktree's mtime walk. `working → quiet`
+ * is 10 minutes and `stalled` 45, so 30s is at most 5% of the smallest window.
+ */
+export const MTIME_TTL_MS = 30_000;
+
+const mtimeCache = new Map<string, { expires: number; mtime: number }>();
+
+/**
+ * Each directory's own window, in [TTL/2, TTL): fixed per path so it is
+ * deterministic, different across paths so entries inserted in one pass do
+ * not all come due — and all walk synchronously — on the same later read.
+ */
+function ttlFor(dir: string): number {
+  // FNV-1a, then a murmur3 finalizer: sibling paths differ only in their last
+  // characters, and without the avalanche their windows would bunch together.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < dir.length; i++) h = Math.imul(h ^ dir.charCodeAt(i), 0x01000193);
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h = (h ^ (h >>> 16)) >>> 0;
+  const half = MTIME_TTL_MS / 2;
+  return half + (h % half);
+}
+
+/**
+ * `newestMtimeIn` with a short per-directory memory, for READ paths only —
+ * `collectWorktrees` behind /api/worktrees and MCP `list_worktrees`, where a
+ * dashboard tab every 5s and every MCP call would otherwise re-walk every
+ * worktree on the event loop.
+ *
+ * Never use it where the answer DECIDES something (takeover, claim, next, a
+ * WIP snapshot, a stall brief): a stale mtime there fails in the unsafe
+ * direction. Those call `livenessProbe` without an `mtime` opt, which walks.
+ *
+ * Clock and walker are defaults so `livenessProbe` can call it with `dir`
+ * alone. Expired entries are evicted on every insert, so the map never holds
+ * more than the directories read within the last window.
+ */
+export function cachedNewestMtimeIn(
+  dir: string,
+  now: () => number = Date.now,
+  walk: (dir: string) => number = newestMtimeIn,
+): number {
+  const t = now();
+  const hit = mtimeCache.get(dir);
+  if (hit && t < hit.expires) return hit.mtime;
+  const mtime = walk(dir);
+  for (const [k, v] of mtimeCache) if (t >= v.expires) mtimeCache.delete(k);
+  mtimeCache.set(dir, { expires: t + ttlFor(dir), mtime });
+  return mtime;
+}
+
+/** Drop every cached walk. For tests. */
+export function clearMtimeCache(): void {
+  mtimeCache.clear();
+}
+
+/** How many walks are cached. For tests. */
+export function mtimeCacheSize(): number {
+  return mtimeCache.size;
+}

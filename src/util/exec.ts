@@ -26,6 +26,91 @@ export interface GitResult {
 export const GIT_TIMEOUT_MS = 30_000;
 
 /**
+ * Most git processes Baton runs at once, across the whole process. A poll tick
+ * fans out per task (board, conflicts, signals, worktrees all `Promise.all`),
+ * so uncapped it runs N gits at once and a 50-worktree hub stalls the event
+ * loop ~200 ms. One global queue bounds every fan-out, and whatever nests them,
+ * where a per-site limit would multiply instead. 8 measured best: 4 is slower,
+ * 16 is no kinder to the loop.
+ *
+ * Queue wait is NOT covered by `GIT_TIMEOUT_MS` — the timeout starts when the
+ * process does. By design: under load a call waits its turn rather than fail.
+ * Measured cost is interactive latency, ~0.4 s at N=20 worktrees and ~1.5 s at
+ * N=50, on a 2 s tick whose `running` guard already skips a beat.
+ */
+export const GIT_MAX_CONCURRENT = 8;
+
+/**
+ * A FIFO concurrency limiter: at most `max` of the wrapped functions run at
+ * once, and waiters start in arrival order. A finished job hands its slot
+ * straight to the next waiter, so nobody can overtake the queue. `async` with
+ * `finally` means a job that rejects OR throws synchronously still releases its
+ * slot.
+ *
+ * `holdMs` bounds how long a job may keep its slot, independently of its
+ * result: at the deadline the slot passes on while the caller keeps awaiting
+ * its own promise. The slot is released exactly once either way, and the timer
+ * is cleared on settle and `unref()`'d, so it never keeps the process alive.
+ * Exported for tests.
+ */
+export function createLimiter(max: number): <T>(fn: () => Promise<T>, holdMs?: number) => Promise<T> {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async <T>(fn: () => Promise<T>, holdMs?: number): Promise<T> => {
+    if (active >= max) await new Promise<void>((resolve) => waiting.push(resolve));
+    else active++;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      const next = waiting.shift();
+      if (next) next(); // the slot passes on; `active` is unchanged
+      else active--;
+    };
+    const timer = holdMs === undefined ? undefined : setTimeout(release, holdMs);
+    timer?.unref?.();
+    try {
+      return await fn();
+    } finally {
+      if (timer) clearTimeout(timer);
+      release();
+    }
+  };
+}
+
+/**
+ * Past its own timeout, how much longer a git may keep its slot. execa's
+ * `timeout` kills git, but the promise settles only once every holder of the
+ * child's stdout/stderr has closed them — a surviving grandchild (gc,
+ * pack-objects, a hung ssh under fetch, a local upload-pack) can keep it
+ * pending for minutes. Without this deadline, eight of those would wedge every
+ * git call in the daemon.
+ */
+const GIT_SLOT_GRACE_MS = 10_000;
+
+/**
+ * The one slot every `execa('git', …)` below goes through. A slot is held for
+ * one child process — never across another await, so the queue cannot
+ * deadlock on itself — and for at most `GIT_TIMEOUT_MS + GIT_SLOT_GRACE_MS`,
+ * so a child that never lets go cannot starve it either. The caller still
+ * awaits the real result; only the slot is given back early.
+ *
+ * An already-aborted `signal` skips the spawn: a queued call whose caller gave
+ * up while waiting rejects at once instead of starting a git nobody wants.
+ */
+const gitLimit = createLimiter(GIT_MAX_CONCURRENT);
+function gitSlot<T>(spawn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return gitLimit(() => {
+    if (signal?.aborted) {
+      const err = new Error('git aborted before it started', { cause: signal.reason });
+      err.name = 'AbortError';
+      return Promise.reject(err);
+    }
+    return spawn();
+  }, GIT_TIMEOUT_MS + GIT_SLOT_GRACE_MS);
+}
+
+/**
  * Config overrides passed as `-c key=value` before every subcommand. They take
  * precedence over repo/global config and neutralize anything that could prompt,
  * page, or run external commands during an otherwise-local operation.
@@ -93,7 +178,7 @@ export async function gitConfigValue(key: string, cwd?: string): Promise<string 
     .filter((c) => c.toLowerCase() !== `${key.toLowerCase()}=`)
     .flatMap((c) => ['-c', c]);
   try {
-    const { stdout } = await execa('git', [...flags, 'config', '--get', key], execOpts(cwd));
+    const { stdout } = await gitSlot(() => execa('git', [...flags, 'config', '--get', key], execOpts(cwd)));
     return stdout.trim() || null;
   } catch {
     return null;   // exit 1 means "not set", which is not an error here
@@ -142,7 +227,7 @@ function execOpts(cwd?: string, signal?: AbortSignal) {
 
 /** Run a git command. Throws on non-zero exit / timeout. Returns trimmed stdout. */
 export async function git(args: string[], cwd?: string, signal?: AbortSignal): Promise<string> {
-  const { stdout } = await execa('git', hardenedArgs(args), execOpts(cwd, signal));
+  const { stdout } = await gitSlot(() => execa('git', hardenedArgs(args), execOpts(cwd, signal)), signal);
   return stdout.trim();
 }
 
@@ -174,10 +259,10 @@ export async function gitTry(
   opts: { maxBuffer?: number } = {},
 ): Promise<GitResult> {
   try {
-    const { stdout, stderr } = await execa('git', hardenedArgs(args), {
+    const { stdout, stderr } = await gitSlot(() => execa('git', hardenedArgs(args), {
       ...execOpts(cwd, signal),
       ...(opts.maxBuffer !== undefined ? { maxBuffer: { stdout: opts.maxBuffer } } : {}),
-    });
+    }), signal);
     return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string; isMaxBuffer?: boolean };
