@@ -20,7 +20,9 @@ export class MainWorktreeError extends Error {
 export class DirtyWorktreeError extends Error {
   state: string;
   constructor(slug: string, state: string) {
-    super(`${slug} has uncommitted changes (${state})`);
+    super(state === 'unreadable'
+      ? `${slug}: git could not read its worktree, so it may hold uncommitted work — retry, or pass --force`
+      : `${slug} has uncommitted changes (${state})`);
     this.name = 'DirtyWorktreeError';
     this.state = state;
   }
@@ -49,7 +51,7 @@ export async function removeTaskWorktree(
     const status = await worktreeStatus(task.worktreePath);
     // Deliberately not `state !== 'clean'`: a worktree that is already gone has
     // nothing to lose, and refusing to remove its task would strand the row.
-    if (hasUnsavedWork(status)) throw new DirtyWorktreeError(slug, status.state);
+    if (hasUnsavedWork(status)) throw new DirtyWorktreeError(slug, status.unreadable ? 'unreadable' : status.state);
   }
 
   // Kill any interactive agent session BEFORE deleting its working directory —
@@ -71,7 +73,7 @@ export async function rmCmd(slug: string, opts: { force?: boolean } = {}): Promi
   } catch (e) {
     if (e instanceof TaskNotFoundError) console.error(`No task '${slug}'. See: baton ls`);
     else if (e instanceof MainWorktreeError) console.error(`✗ ${e.message}.`);
-    else if (e instanceof DirtyWorktreeError) console.error(`✗ ${e.message}. Commit/merge first, or use --force.`);
+    else if (e instanceof DirtyWorktreeError) console.error(e.state === 'unreadable' ? `✗ ${e.message}.` : `✗ ${e.message}. Commit/merge first, or use --force.`);
     else console.error((e as Error).message);
     process.exitCode = 1;
   }

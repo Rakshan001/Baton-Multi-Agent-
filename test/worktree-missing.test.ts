@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git } from '../src/util/exec.js';
@@ -134,6 +135,42 @@ describe('a worktree that is not there', () => {
     expect(t.finishedSha).toBeTruthy();        // read from the branch, not the folder
   });
 
+  /**
+   * The opposite trap: the directory is THERE but git cannot answer for it.
+   * With its `.git` file gone, `git -C` walks up and reports the main checkout
+   * (clean); with the `.git` file broken, git fails. Both used to read as
+   * "missing — nothing to lose", and `rm` deleted the work without `--force`.
+   */
+  for (const [how, breakIt] of [
+    ['its .git file is gone', (w: string) => rm(join(w, '.git'))],
+    ['its .git file points nowhere', (w: string) => writeFile(join(w, '.git'), 'gitdir: /nowhere/at/all\n')],
+  ] as const) {
+    it(`does not treat a present worktree as safe to remove when ${how}`, async () => {
+      await claimed();
+      const scratch = join(wt, 'scratch.txt');
+      await writeFile(scratch, 'uncommitted work', 'utf-8');
+      await breakIt(wt);
+      const st = await worktreeStatus(wt);
+      expect(st.unreadable).toBe(true);
+      expect(hasUnsavedWork(st)).toBe(true);
+      await expect(removeTaskWorktree('auth-api', {}, root)).rejects.toThrow(/could not read/);
+      expect(existsSync(scratch)).toBe(true);
+    });
+  }
+
+  it('refuses a done it could not check, instead of calling the worktree gone', async () => {
+    await claimed();
+    await writeFile(join(wt, 'src', 'a.ts'), 'x\nwork\n', 'utf-8');
+    await git(['add', '-A'], wt);
+    await git(['commit', '-qm', 'the work'], wt);
+    await rm(join(wt, '.git'));
+    await doneCmd('auth-api', {});
+    const said = out.join('\n');
+    expect(said).toContain('could not read');
+    expect(said).not.toContain('worktree is gone');
+    expect((await loadTasks(root))[0].state).toBe('active');
+  });
+
   it('keeps refusing a done with nothing behind it, worktree or not', async () => {
     await claimed();
     await rm(wt, { recursive: true, force: true });
@@ -155,6 +192,12 @@ describe('the evidence verdict on a missing worktree (pure)', () => {
     expect(v.pass).toBe(true);
     expect(v.checks.some((c) => c.level === 'warn' && c.label.includes('worktree is gone'))).toBe(true);
     expect(v.checks.some((c) => c.label === 'working tree clean')).toBe(false);
+  });
+
+  it('refuses when the worktree is present but unreadable', () => {
+    const v = verdictFor({ ...base, worktreeUnreadable: true });
+    expect(v.pass).toBe(false);
+    expect(v.refusals.some((r) => r.label.includes('could not read'))).toBe(true);
   });
 
   it('still refuses zero commits — a gone worktree is not an excuse', () => {

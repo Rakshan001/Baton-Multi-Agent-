@@ -270,8 +270,9 @@ async function reclaim(root: string, item: JunkItem, force: boolean): Promise<vo
       return;
     case 'orphan-worktree-disk':
       if (item.path && existsSync(item.path)) {
-        if (!force && hasUnsavedWork(await worktreeStatus(item.path))) {
-          throw new DirtyWorktreeError(item.id, 'dirty');
+        const st = await worktreeStatus(item.path);
+        if (!force && hasUnsavedWork(st)) {
+          throw new DirtyWorktreeError(item.id, st.unreadable ? 'unreadable' : 'dirty');
         }
       }
       await removeWorktree(item.path ?? '', item.branch ?? '', root);

@@ -109,6 +109,12 @@ export interface WorktreeStatus {
    * every surface that shows one.
    */
   state: 'clean' | 'dirty' | 'conflict' | 'missing';
+  /**
+   * `missing` but the directory is THERE: git could not answer for it (its
+   * `.git` is gone or broken). Whatever is in it is unknown, not absent — so
+   * every removal guard treats it as work to lose.
+   */
+  unreadable?: true;
   repoState: RepoState;
   changedFiles: string[];
   conflictFiles: string[];
@@ -125,7 +131,7 @@ export interface WorktreeStatus {
  * refuse to clean up a worktree precisely because it is already gone.
  */
 export function hasUnsavedWork(st: WorktreeStatus): boolean {
-  return st.state === 'dirty' || st.state === 'conflict';
+  return st.state === 'dirty' || st.state === 'conflict' || st.unreadable === true;
 }
 
 export interface WorktreeEntry {
@@ -336,6 +342,15 @@ export async function repoState(path: string): Promise<RepoState> {
 
 /** Working-tree status of a worktree: missing / clean / dirty / conflict, with churn. */
 export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
+  // A directory with no `.git` of its own is not one git can answer for:
+  // `git -C` walks UP and reports the enclosing repo, so a worktree that lost
+  // its `.git` file read as clean — and was removed without `--force`.
+  if (!(await pathExists(join(path, '.git'))) && (await pathExists(path))) {
+    return {
+      state: 'missing', unreadable: true, repoState: 'clean',
+      changedFiles: [], conflictFiles: [], conflictDetails: [], insertions: 0, deletions: 0,
+    };
+  }
   const repo = await repoState(path);
   const r = await gitTry(['-C', path, 'status', '--porcelain=v2']);
   if (!r.ok || r.stdout === '') {
@@ -348,6 +363,7 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
     const state = r.ok ? 'clean' : 'missing';
     return {
       state,
+      ...(!r.ok && (await pathExists(path)) ? { unreadable: true as const } : {}),
       repoState: repo,
       changedFiles: [],
       conflictFiles: [],

@@ -39,6 +39,8 @@ export interface Evidence {
   scope: string[];
   /** The worktree is recorded but not on disk, so the check below never ran. */
   worktreeMissing?: boolean;
+  /** The worktree is on disk but git could not read it — its contents are unknown. */
+  worktreeUnreadable?: boolean;
   /** Uncommitted changes in the worktree. */
   dirtyFiles: string[];
   /** Files carrying conflict markers. */
@@ -81,7 +83,15 @@ export function verdictFor(e: Evidence): Verdict {
 
   // Uncommitted work is not done work: a merge takes the branch, and anything
   // still in the worktree would be silently left behind.
-  if (e.worktreeMissing) {
+  if (e.worktreeUnreadable) {
+    // Unlike a gone worktree, this one may still hold work — we just cannot see
+    // it. Merging the branch would leave that behind, so this one refuses.
+    checks.push({
+      level: 'refuse',
+      label: 'git could not read the worktree — cannot check for uncommitted work',
+      detail: 'its .git is missing or broken. Run `git worktree repair` from the repo, or — if the folder is only leftovers — move anything you need out, delete it, and finish again.',
+    });
+  } else if (e.worktreeMissing) {
     // Not a refusal: the commits are the evidence, and the branch outlives the
     // directory. But it must not print "working tree clean" — that would be
     // claiming a check passed when it never ran, which is the exact confusion
