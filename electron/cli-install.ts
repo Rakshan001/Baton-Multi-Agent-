@@ -6,7 +6,8 @@
  * unless the user explicitly opts into deletion.
  */
 import {
-  existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
+  accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync,
+  unlinkSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -88,16 +89,30 @@ export function getCliInstallState(): CliInstallState {
   };
 }
 
+/**
+ * First candidate directory we can actually write into.
+ *
+ * `mkdirSync(d, { recursive: true })` is not a permission probe: on a directory
+ * that already exists it succeeds whoever owns it. /usr/local/bin exists and is
+ * root-owned on macOS, so the old loop claimed it and broke out, and the failure
+ * only surfaced at the write — EACCES, with the writable fallback never tried.
+ * Check W_OK so an unwritable candidate falls through to the next one.
+ */
+export function pickBinDir(candidates: string[]): string {
+  for (const d of candidates) {
+    try {
+      mkdirSync(d, { recursive: true });
+      accessSync(d, constants.W_OK);
+      return d;
+    } catch { /* next */ }
+  }
+  throw new Error('No writable bin directory for the CLI symlink');
+}
+
 export function installCliSymlink(cliJs: string): CliInstallState {
   const brand = loadBrand();
   const name = brand.commandName;
-  const candidates = ['/usr/local/bin', join(homedir(), '.local', 'bin')];
-  let dir: string | null = null;
-  for (const d of candidates) {
-    try { mkdirSync(d, { recursive: true }); dir = d; break; }
-    catch { /* next */ }
-  }
-  if (!dir) throw new Error('No writable bin directory for the CLI symlink');
+  const dir = pickBinDir(['/usr/local/bin', join(homedir(), '.local', 'bin')]);
   const link = join(dir, name);
   const wrapper = join(dir, `.${name}-app-cli`);
   writeFileSync(wrapper, `#!/bin/sh\nexec node "${cliJs}" "$@"\n`, { mode: 0o755 });

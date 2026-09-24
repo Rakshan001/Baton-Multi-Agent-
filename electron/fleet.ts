@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Wrap dist/daemons.js — do not reimplement fleet discovery or stopping. */
 import { existsSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { resolveDistEntry } from './spawn.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
 type Daemons = typeof import('../dist/daemons.js');
 
 function resolveDaemons(): string {
@@ -13,13 +13,9 @@ function resolveDaemons(): string {
     const p = join(process.env.BATON_DIST_DIR, 'daemons.js');
     if (existsSync(p)) return pathToFileURL(p).href;
   }
-  for (const p of [
-    join(here, '..', '..', 'dist', 'daemons.js'),
-    join(here, '..', 'dist', 'daemons.js'),
-  ]) {
-    if (existsSync(p)) return pathToFileURL(p).href;
-  }
-  throw new Error('dist/daemons.js not found — run npm run build');
+  // Shares spawn.ts's search so the packaged payload is found here too — this
+  // file used to look only in the dev tree, which threw on every packaged run.
+  return pathToFileURL(resolveDistEntry('daemons.js')).href;
 }
 
 let mod: Promise<Daemons> | null = null;

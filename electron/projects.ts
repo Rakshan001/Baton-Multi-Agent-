@@ -12,7 +12,8 @@ function filePath(): string {
   return join(homedir(), `.${loadBrand().commandName}`, 'projects.json');
 }
 
-function real(p: string): string {
+/** Realpath when the folder exists; `resolve` otherwise. Used to key Start. */
+export function canonicalRoot(p: string): string {
   try { return realpathSync(p); } catch { return resolve(p); }
 }
 
@@ -22,27 +23,27 @@ export function readProjects(): string[] {
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8')) as ProjectsFile;
     if (raw?.version !== 1 || !Array.isArray(raw.roots)) return [];
-    return [...new Set(raw.roots.map(real))];
+    return [...new Set(raw.roots.map(canonicalRoot))];
   } catch { return []; }
 }
 
 export function writeProjects(roots: string[]): void {
   const p = filePath();
   mkdirSync(dirname(p), { recursive: true });
-  const body: ProjectsFile = { version: 1, roots: [...new Set(roots.map(real))] };
+  const body: ProjectsFile = { version: 1, roots: [...new Set(roots.map(canonicalRoot))] };
   const tmp = `${p}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`);
   renameSync(tmp, p);
 }
 
 export function addProject(root: string): string[] {
-  writeProjects([...readProjects(), real(root)]);
+  writeProjects([...readProjects(), canonicalRoot(root)]);
   return readProjects();
 }
 
 export function forgetProject(root: string): string[] {
-  const t = real(root);
-  writeProjects(readProjects().filter((r) => real(r) !== t));
+  const t = canonicalRoot(root);
+  writeProjects(readProjects().filter((r) => canonicalRoot(r) !== t));
   return readProjects();
 }
 

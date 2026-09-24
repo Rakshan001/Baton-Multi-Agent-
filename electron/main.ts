@@ -24,12 +24,16 @@ import {
   nextInQueue, planNotifications, readNotifyPrefs, writeNotifyPrefs,
   type AttentionMap, type AttentionRow, type QueueEntry,
 } from './notify.js';
-import { addProject, assertGitRepo, forgetProject, readProjects } from './projects.js';
-import { lastLines, spawnServe, type SpawnHandle } from './spawn.js';
+import { addProject, assertGitRepo, canonicalRoot, forgetProject, readProjects } from './projects.js';
+import {
+  collectUsedPorts, lastLines, pickServePort, rootIsBusy, ServeStartGate,
+  spawnServe, type SpawnHandle,
+} from './spawn.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const brand = loadBrand();
 const spawns = new Map<string, SpawnHandle>();
+const startGate = new ServeStartGate();
 
 let mainWindow: BrowserWindow | null = null;
 let dashView: BrowserView | null = null;
@@ -421,23 +425,66 @@ function registerIpc(): void {
   ipcMain.handle('projects:start', async (_e, root: string, write: boolean) => {
     try {
       assertGitRepo(root);
-      if ((await listFleet()).some((r) => r.root === root && r.state === 'running')) {
-        return { ok: false, error: 'already running' };
-      }
-      const handle = spawnServe(root, { write: !!write });
-      spawns.set(root, handle);
-      handle.child.on('exit', (code) => {
-        spawns.delete(root);
-        if (code && code !== 0 && mainWindow) {
-          void dialog.showMessageBox(mainWindow, {
-            type: 'error',
-            message: 'serve exited immediately',
-            detail: lastLines(handle).join('\n') || `exit ${code}`,
-          });
+      const key = canonicalRoot(root);
+      const started = await startGate.enqueue(async () => {
+        const fleet = await listFleet();
+        if (rootIsBusy(key, {
+          fleet,
+          spawnKeys: spawns.keys(),
+          inflight: startGate.inflight,
+          canonical: canonicalRoot,
+        })) {
+          return null;
         }
-        emitFleetChanged();
+        startGate.inflight.add(key);
+        let port: number | undefined;
+        try {
+          const used = collectUsedPorts(
+            fleet.map((r) => r.port),
+            startGate.reserved,
+            [...spawns.values()].map((h) => h.port),
+          );
+          port = await pickServePort(used);
+          startGate.reserved.add(port);
+          const h = spawnServe(root, { write: !!write, port });
+          spawns.set(key, h);
+          const release = () => {
+            if (h.port != null) startGate.reserved.delete(h.port);
+            startGate.inflight.delete(key);
+            spawns.delete(key);
+          };
+          // Dialog only after the IPC has returned success — during the 800ms
+          // wait the handler itself reports the failure, so a modal would duplicate it.
+          const notify = { afterIpc: false };
+          h.child.on('error', () => { release(); });
+          h.child.on('exit', (code) => {
+            release();
+            if (notify.afterIpc && code && code !== 0 && mainWindow) {
+              void dialog.showMessageBox(mainWindow, {
+                type: 'error',
+                message: 'serve exited immediately',
+                detail: lastLines(h).join('\n') || `exit ${code}`,
+              });
+            }
+            emitFleetChanged();
+          });
+          return { handle: h, notify };
+        } catch (err) {
+          if (port != null) startGate.reserved.delete(port);
+          startGate.inflight.delete(key);
+          throw err;
+        }
       });
+      if (!started) return { ok: false, error: 'already running' };
+      const { handle, notify } = started;
       await new Promise((r) => setTimeout(r, 800));
+      if (handle.child.pid == null || handle.child.exitCode != null || handle.child.signalCode) {
+        return {
+          ok: false,
+          error: lastLines(handle).join('\n') || `exit ${handle.child.exitCode ?? handle.child.signalCode ?? 'spawn failed'}`,
+        };
+      }
+      notify.afterIpc = true;
       emitFleetChanged();
       return { ok: true, lines: lastLines(handle) };
     } catch (e) {
