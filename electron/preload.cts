@@ -1,6 +1,14 @@
 // Copyright (C) 2026 Rakshan Shetty
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { contextBridge, ipcRenderer } from 'electron';
+/*
+ * Runs in a sandboxed renderer (`sandbox: true`), where preloads are plain
+ * CommonJS scripts: no ESM, and `require` only resolves a small built-in set
+ * (`electron`'s renderer APIs, events, timers, url). Hence `.cts` — it compiles
+ * to `preload.cjs`; the plain `require` (no `import` statement) also keeps
+ * tsc from emitting an `exports` marker, even though this package is
+ * `"type": "module"`. Do not import anything else here.
+ */
+const { contextBridge, ipcRenderer } = require('electron') as typeof import('electron');
 
 const api = {
   getBrand: () => ipcRenderer.invoke('brand:get'),

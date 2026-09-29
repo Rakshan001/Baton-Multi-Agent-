@@ -5,6 +5,7 @@
 - **Supersedes:** v1 of this file (same day)
 - **Diagrams:** [team-sync-architecture.drawio](team-sync-architecture.drawio), 7 pages
 - **Review register** (every finding and where it is resolved): [REVIEW-2026-09-29.md](REVIEW-2026-09-29.md)
+- **Addendum** covering protected branches (main and staging), team code rules, shared context (feature map, API contracts, notes) and the contribution/token dashboard: [GUARDRAILS-CONTEXT-DASHBOARD.md](GUARDRAILS-CONTEXT-DASHBOARD.md)
 - **Research:** [../../research/2026-09-29-token-and-team-research.md](../../research/2026-09-29-token-and-team-research.md), plus the prior-art notes in §17
 
 ---

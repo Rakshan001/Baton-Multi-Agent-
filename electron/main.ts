@@ -18,6 +18,7 @@ import {
 import {
   cleanDeadFleetRecords, cleanFleetRecord, listFleet, stopFleetDaemon, type FleetRow,
 } from './fleet.js';
+import { openExternalSafe } from './external-links.js';
 import { isAllowedDashboardUrl } from './nav-guard.js';
 import { addProject, assertGitRepo, forgetProject, readProjects } from './projects.js';
 import { lastLines, spawnServe, type SpawnHandle } from './spawn.js';
@@ -31,6 +32,10 @@ let dashView: BrowserView | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Every external open goes through the https:/mailto: allowlist. */
+const openExternal = (url: unknown): Promise<boolean> =>
+  openExternalSafe(url, (href) => shell.openExternal(href));
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -82,11 +87,22 @@ function createWindow(): void {
     backgroundColor: '#0f1115',
     icon: existsSync(icon) ? icon : undefined,
     webPreferences: {
-      preload: join(here, 'preload.js'),
+      preload: join(here, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
+  });
+  // The launcher is a single-page app holding the privileged preload bridge:
+  // it never navigates, and new windows are routed to the external allowlist.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    console.warn('[nav-guard] launcher navigation blocked');
+    void openExternal(url);
   });
   const entry = uiPath();
   if (existsSync(entry)) void mainWindow.loadFile(entry);
@@ -125,14 +141,14 @@ async function openDashboard(port: number): Promise<void> {
 
   dashView.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedDashboardUrl(url, ports)) return { action: 'allow' };
-    void shell.openExternal(url);
+    void openExternal(url);
     return { action: 'deny' };
   });
   dashView.webContents.on('will-navigate', (event, url) => {
     if (!isAllowedDashboardUrl(url, ports)) {
       event.preventDefault();
       console.warn('[nav-guard] blocked', url);
-      void shell.openExternal(url);
+      void openExternal(url);
     }
   });
   await dashView.webContents.loadURL(`http://127.0.0.1:${port}/`);
@@ -250,7 +266,7 @@ function registerIpc(): void {
     emitFleetChanged();
     return n;
   });
-  ipcMain.handle('shell:open-external', async (_e, url: string) => { await shell.openExternal(url); });
+  ipcMain.handle('shell:open-external', async (_e, url: unknown) => { await openExternal(url); });
   ipcMain.handle('projects:add', async () => {
     const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory'] });
     if (res.canceled || !res.filePaths[0]) return { ok: false, error: 'cancelled' };

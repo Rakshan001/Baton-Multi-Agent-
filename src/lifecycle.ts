@@ -15,7 +15,7 @@
  * leaves the task exactly where it was — owned, with its worktree and its
  * contributor record intact. Only `done` writes done.
  */
-import { blockers, eligibleFor, isContributor, isStalled, isTerminal, phaseOf, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
+import { blockers, compareWorkOrder, eligibleFor, isContributor, isStalled, isTeamTask, isTerminal, stateOf, type EligibilityOpts, type PipelineTask, type StallOpts } from './pipeline.js';
 import type { Task } from './store.js';
 
 export interface Who {
@@ -31,7 +31,13 @@ export type Refusal =
   | { code: 'not-stalled'; message: string }
   | { code: 'self-review'; message: string }
   | { code: 'open-findings'; message: string }
-  | { code: 'wrong-state'; message: string };
+  | { code: 'wrong-state'; message: string }
+  /**
+   * A local transition asked of a team task. Team state lives only in the fold
+   * (§7.1): the row is a projection of it and is never edited for team state,
+   * so the change has to be written as a team event instead.
+   */
+  | { code: 'team-task'; message: string };
 
 export type Outcome =
   | { ok: true; tasks: Task[]; task: Task }
@@ -290,6 +296,18 @@ function gateReview(tasks: readonly Task[], slug: string, who: Who): Task | Outc
 
 const isOutcome = (x: Task | Outcome): x is Outcome => 'ok' in x;
 
+/**
+ * Team review is a fold event (`review.decide`, §7.2), never a local verdict:
+ * writing `approved`/`changes` onto the row would be a second writer the fold
+ * then disagrees with.
+ */
+function refuseTeamVerdict(tasks: readonly Task[], slug: string): Outcome | null {
+  const t = tasks.find((x) => x.slug === slug);
+  return t && isTeamTask(t as PipelineTask)
+    ? fail('team-task', `'${slug}' is a team task — its review is decided in the team log (review.decide), not on this row.`)
+    : null;
+}
+
 export interface VerdictOpts {
   /** Open findings on the recorded review, injected — lifecycle stays pure. */
   openFindings?: number;
@@ -306,6 +324,8 @@ export interface VerdictOpts {
  * too. This reduces the chance of wrong code landing; it does not eliminate it.
  */
 export function approve(tasks: readonly Task[], slug: string, who: Who, now: string, opts: VerdictOpts = {}): Outcome {
+  const team = refuseTeamVerdict(tasks, slug);
+  if (team) return team;
   const gated = gateReview(tasks, slug, who);
   if (isOutcome(gated)) return gated;
 
@@ -334,6 +354,8 @@ export function approve(tasks: readonly Task[], slug: string, who: Who, now: str
  * the gate accepted, and nothing is accepted now.
  */
 export function reject(tasks: readonly Task[], slug: string, who: Who, notes: string, now: string): Outcome {
+  const team = refuseTeamVerdict(tasks, slug);
+  if (team) return team;
   const gated = gateReview(tasks, slug, who);
   if (isOutcome(gated)) return gated;
   if (!notes.trim()) {
@@ -351,14 +373,22 @@ export function reject(tasks: readonly Task[], slug: string, who: Who, notes: st
   return { ok: true, tasks: replace(tasks, next), task: next };
 }
 
-/** Pick the task an idle agent should start: lowest phase first, then declared
- *  assignment over the open pool, so an agent takes its own work before helping. */
+/**
+ * The deterministic work order (Team Sync v2 §7.3). One definition, in
+ * `compareWorkOrder` (src/pipeline.ts), shared with anything else that ranks
+ * rows — see it for the steps and the solo guarantee.
+ */
+export function compareForNext(agent: string): (a: Task, b: Task) => number {
+  return compareWorkOrder(agent);
+}
+
+/**
+ * Pick the task an idle agent should start, in `compareForNext` order — so an
+ * agent takes its own work before helping with the open pool. On a team row
+ * the agent already holds, that row comes back first (§7.3 step 1).
+ */
 export function nextFor(agent: string, tasks: readonly Task[], opts: EligibilityOpts = {}): Task | null {
   const eligible = eligibleFor(agent, tasks as readonly PipelineTask[], opts) as Task[];
   if (!eligible.length) return null;
-  return [...eligible].sort((a, b) =>
-    phaseOf(a) - phaseOf(b)
-    || Number(a.assignee == null) - Number(b.assignee == null)
-    || a.createdAt.localeCompare(b.createdAt),
-  )[0];
+  return [...eligible].sort(compareForNext(agent))[0];
 }
