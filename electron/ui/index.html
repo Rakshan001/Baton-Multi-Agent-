@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Strict CSP for the built launcher. The Vite dev server drops this tag
+         (see vite.config.ts): its HMR client and React Refresh preamble are
+         inline scripts. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <title></title>
   </head>
   <body>
