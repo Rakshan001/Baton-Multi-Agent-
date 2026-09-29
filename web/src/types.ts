@@ -833,3 +833,207 @@ export interface CancelResult {
 
 export type CancelScopeInput =
   | { slug: string } | { phase: number } | { plan: string };
+
+/* ============================================================
+   Team workspace v2 (spec D Rev 2–3, Team Sync §4–§7). These mirror the
+   folded team state the daemon will serve (team-api task). Until then the
+   Team screens run on lib/demoTeam.ts fixtures through lib/teamApi.ts.
+   ============================================================ */
+
+/** Project-scoped roles (Team Sync §5.1). Custodian is team-wide, a flag. */
+export type ProjectRole = "lead" | "developer" | "designer" | "viewer";
+
+export interface TeamDevice {
+  id: string;
+  /** Human label, defaults to the host name ("Priya's Mac mini"). */
+  label: string;
+  /** From `sysctl hw.model`, mapped to a name ("Mac mini (M4)"). */
+  model: string;
+  online: boolean;
+  lastSeen?: string;
+  /** Six SAS words over the device key, shown in mono. */
+  fingerprintWords: string;
+  /** An always-on store-and-forward device (never a custodian). */
+  relay?: boolean;
+  revokedAt?: string;
+  /** True for the device this dashboard runs on. */
+  thisDevice?: boolean;
+}
+
+/** How a repo on a member's disk resolved to a team project (Team Sync §4.3). */
+export type RepoMatch = "remote" | "root-commit" | "located" | "unmatched";
+
+export interface MemberRepo {
+  /** Folder as the member opened it. */
+  path: string;
+  projectKey: string | null;
+  match: RepoMatch;
+  /** Another clone of the same project; the human picks the primary. */
+  duplicateOf?: string;
+}
+
+export interface TeamPerson {
+  id: string;
+  name: string;
+  /** Free job role ("Backend", "UI/Design", …), not a permission. */
+  jobRole: string;
+  avatarHue: number;
+  timezone: string;
+  custodian: boolean;
+  /** projectKey (or "*") → role in that project. */
+  roles: Record<string, ProjectRole>;
+  devices: TeamDevice[];
+  /** The folder the member opens in Baton and the repos found in it (§1). */
+  root: { path: string; repos: MemberRepo[] };
+  presence: "online" | "away" | "offline";
+  lastSeen?: string;
+  /** Came online after work was assigned and received it from a peer. */
+  joinedLateAt?: string;
+}
+
+export interface TeamProject {
+  key: string;
+  name: string;
+  remote: string;
+  /** Protected-branch policy (guardrails §1.1). */
+  protectedBranches: string[];
+  /** Whether GitHub-side protection (L4) covers those branches. */
+  serverProtection: boolean;
+}
+
+export type TeamTaskState =
+  | "unassigned" | "assigned" | "acknowledged" | "active" | "blocked" | "paused"
+  | "review" | "changes" | "approved" | "pushed" | "merged" | "done"
+  | "needs-owner" | "cancelled";
+
+/** P0 critical · P1 high · P2 normal (default) · P3 low. */
+export type Priority = 0 | 1 | 2 | 3;
+
+export interface AgentBrief {
+  goal: string;
+  inScope: string[];
+  outOfScope: string[];
+  acceptance: string[];
+  skills: string[];
+}
+
+export interface TeamAttachment {
+  id: string;
+  name: string;
+  /** Sniffed by the blob server from the bytes, never derived from the name. */
+  kind: "image" | "pdf" | "markdown" | "svg" | "html" | "other";
+  sizeBytes: number;
+  /** The file on the separate, API-less blob origin (Team Sync §12.4). */
+  blobUrl?: string;
+  /** Demo only: stand-in preview content. Real previews come from the blob origin. */
+  previewText?: string;
+  previewHue?: number;
+}
+
+export interface ReviewComment {
+  id: string;
+  authorId: string;
+  /** Peer free text: always rendered as quoted plain text. */
+  text: string;
+  at: string;
+  decision?: "approved" | "changes" | "question";
+}
+
+export interface TaskReview {
+  branch: string;
+  sha: string;
+  intent: "track" | "ready";
+  files: { path: string; added: number; removed: number; deleted?: boolean; /** share of the file's lines removed */ removedPct?: number }[];
+  /** SHA the approval was given on; stale when it differs from `sha`. */
+  approvedSha?: string;
+  commitsSinceApproval?: number;
+  comments: ReviewComment[];
+}
+
+export interface TaskEvent {
+  at: string;
+  /** Local template key: texts are built in the UI, never taken from peers. */
+  kind: "created" | "assigned" | "delivered" | "acknowledged" | "reminded" | "taken" | "pushed"
+    | "review.requested" | "review.decided" | "reassigned" | "completed" | "conflict" | "lost-claim" | "merged" | "resolved";
+  actorId?: string;
+  targetId?: string;
+  viaDevice?: string;
+}
+
+export interface TeamTask {
+  id: string;
+  rev: number;
+  title: string;
+  project: string;
+  /** Feature group this child belongs to (Team Sync §7.5). */
+  group?: string;
+  state: TeamTaskState;
+  priority: Priority;
+  urgent: boolean;
+  assignee: string | null;
+  brief: AgentBrief;
+  /** Human-only note from the lead. Agents never see it. */
+  note?: string;
+  noteAuthor?: string;
+  attachments: TeamAttachment[];
+  assignedAt?: string;
+  acknowledgedAt?: string;
+  /** Reminders not yet cleared by an acknowledgement. */
+  reminders: { at: string; by: string }[];
+  review?: TaskReview;
+  /** Both sides of a concurrent conflict (state `needs-owner`). */
+  conflict?: { a: ConflictSide; b: ConflictSide };
+  lostClaim?: { loserId: string; winnerId: string; worktree: string; at: string };
+  /** Last event from the assignee's devices (stalls are shown, never re-offered). */
+  lastSignalAt?: string;
+  events: TaskEvent[];
+  /** The assignee's checkout is on a protected branch (guardrails §1.4). */
+  onProtectedBranch?: string;
+  /** Simple-mode pre-checks on the assignee's device. */
+  prechecks?: { repoLocated: boolean; gitAuth: boolean; branchPushed: boolean };
+}
+
+export interface ConflictSide { actorId: string; action: "reassign" | "complete" | "priority" | "cancel"; targetId?: string; at: string }
+
+export interface FeatureGroup { id: string; title: string; taskIds: string[] }
+
+export type InboxKind =
+  | "task.assigned" | "task.reminded" | "review.requested" | "review.decided"
+  | "push.requested" | "skill.offer" | "pair.request" | "lost-claim" | "needs-owner" | "pr.merged";
+
+export interface InboxItem {
+  id: string;
+  kind: InboxKind;
+  /** Recipient member id. */
+  to: string;
+  at: string;
+  read: boolean;
+  taskId?: string;
+  actorId?: string;
+  /** Collapsed repeat count ("Reminded 3×"). */
+  count?: number;
+  decision?: "approved" | "changes" | "question";
+  deviceLabel?: string;
+  skill?: string;
+}
+
+export interface TeamDigest {
+  since: string;
+  assigned: number;
+  reviews: number;
+  merged: number;
+  reminders: number;
+}
+
+export interface TeamWorkspace {
+  teamName: string;
+  /** The member this dashboard acts as. */
+  viewerId: string;
+  people: TeamPerson[];
+  projects: TeamProject[];
+  tasks: TeamTask[];
+  groups: FeatureGroup[];
+  inbox: InboxItem[];
+  digest: TeamDigest | null;
+  recovery: { mode: boolean; paperKey: boolean; paperKeyCreatedAt?: string };
+}

@@ -40,6 +40,10 @@ const EVENT_TYPES = new Set([
   // whole roster — a screen that redrew a poll interval later would look like
   // it had ignored the click.
   "team.changed",
+  // Team workspace v2 events (task.assigned, review.decided, member.pair.*,
+  // spec D §7) are added here only once src/events.ts publishes them: new
+  // event types go to the daemon's bus first. Until then the Team screens
+  // run on the demo store in lib/teamApi.ts, which notifies its own readers.
 ]);
 
 export function useEvents({ enabled = true, baseUrl = "" }: { enabled?: boolean; baseUrl?: string } = {}): {

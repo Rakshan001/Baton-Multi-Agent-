@@ -23,17 +23,19 @@
   --sp-20: 80px;
 
   /* Radius */
-  --r-xs: 5px;
-  --r-sm: 7px;
-  --r-md: 9px;
-  --r-lg: 12px;
-  --r-xl: 16px;
-  --r-2xl: 22px;
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --r-2xl: 12px;
   --r-full: 999px;
 
   /* Type */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Geist (SIL OFL, bundled in web/public/fonts, same file Orca ships) with a
+     system fallback; mono is a system stack, as in Orca. */
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
 
   --fs-11: 11px;
   --fs-12: 12px;
@@ -63,8 +65,8 @@
   --ls-caps: 0.06em;
 
   /* Motion */
-  --dur-1: 110ms;
-  --dur-2: 170ms;
+  --dur-1: 150ms;
+  --dur-2: 200ms;
   --dur-3: 240ms;
   --dur-4: 360ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -83,6 +85,19 @@
   --z-overlay: 400;
   --z-cmd: 500;
   --z-tweaks: 600;
+
+  /* Focus ring (spec D §3.2): 2px blue + 2px offset, both themes. */
+  --focus-ring: #3b82f6;
+
+  /* Status hues (spec D §3.2). Always pair with an icon or a text label —
+     never colour alone. Theme blocks below add readable -fg variants. */
+  --st-online: #22c55e;
+  --st-away: #f59e0b;
+  --st-offline: #737373;
+  --st-danger: #ef4444;
+  --st-review: #a855f7;
+  --st-ready: #3b82f6;
+  --st-merged: #8b5cf6;
 }
 
 /* ---- DARK theme (default) ---- */
@@ -90,26 +105,26 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-base: #08090a;
-  --bg-canvas: #0a0b0d;
-  --bg-surface: #111315;
-  --bg-surface-2: #16181b;
-  --bg-elevated: #1b1e22;
-  --bg-overlay: #212529;
-  --bg-input: #131517;
+  --bg-base: #0a0a0a;
+  --bg-canvas: #0a0a0a;
+  --bg-surface: #111111;
+  --bg-surface-2: #1a1a1a;
+  --bg-elevated: #171717;
+  --bg-overlay: #1f1f1f;
+  --bg-input: #111111;
   --bg-hover: rgba(255, 255, 255, 0.04);
   --bg-active: rgba(255, 255, 255, 0.07);
   --bg-scrim: rgba(0, 0, 0, 0.62);
 
-  --border-subtle: rgba(255, 255, 255, 0.055);
-  --border-default: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.15);
+  --border-subtle: #1f1f1f;
+  --border-default: #2e2e2e;
+  --border-strong: #454545;
   --border-accent: hsla(var(--accent-h), var(--accent-s), 62%, 0.55);
 
-  --text-primary: #ecedee;
-  --text-secondary: #9ba1a6;
-  --text-tertiary: #6a7075;
-  --text-quaternary: #4b5055;
+  --text-primary: #ededed;
+  --text-secondary: #a1a1a1;
+  --text-tertiary: #8a8a8a;
+  --text-quaternary: #5c5c5c;
   --text-on-accent: #ffffff;
 
   --accent: hsl(var(--accent-h), var(--accent-s), var(--accent-l));
@@ -152,11 +167,11 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55), 0 4px 10px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 24px 60px rgba(0, 0, 0, 0.6), 0 8px 18px rgba(0, 0, 0, 0.45);
   --shadow-drag: 0 20px 48px rgba(0, 0, 0, 0.66), 0 0 0 1px var(--border-strong);
-  --ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent);
+  --ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring);
   --grid-dot: rgba(255, 255, 255, 0.045);
 
   /* Code + diff */
-  --code-bg: #0c0d0f;
+  --code-bg: #0d0d0d;
   --code-gutter: #6a7075;
   --code-line-hover: rgba(255, 255, 255, 0.035);
   --syn-key: #c084fc;
@@ -171,16 +186,29 @@
   --diff-del-bg: rgba(248, 113, 113, 0.1);
   --diff-del-gutter: rgba(248, 113, 113, 0.18);
   --diff-del-mark: #f87171;
+
+  /* shadcn-level tokens (web/src/styles/index.css maps these into Tailwind). */
+  --ui-primary: #ededed;
+  --ui-primary-fg: #0a0a0a;
+  --ui-hover: #1f1f1f;
+  --ui-selected: #262626;
+  --st-online-fg: #4ade80;
+  --st-away-fg: #fbbf24;
+  --st-offline-fg: #a1a1a1;
+  --st-danger-fg: #f87171;
+  --st-review-fg: #c084fc;
+  --st-ready-fg: #60a5fa;
+  --st-merged-fg: #a78bfa;
 }
 
 /* ---- LIGHT theme ---- */
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg-base: #f6f7f9;
-  --bg-canvas: #eef0f3;
-  --bg-surface: #ffffff;
-  --bg-surface-2: #ffffff;
+  --bg-base: #ffffff;
+  --bg-canvas: #fafafa;
+  --bg-surface: #fafafa;
+  --bg-surface-2: #f2f2f2;
   --bg-elevated: #ffffff;
   --bg-overlay: #ffffff;
   --bg-input: #ffffff;
@@ -188,15 +216,15 @@
   --bg-active: rgba(9, 12, 18, 0.06);
   --bg-scrim: rgba(20, 24, 30, 0.32);
 
-  --border-subtle: rgba(13, 18, 28, 0.07);
-  --border-default: rgba(13, 18, 28, 0.11);
-  --border-strong: rgba(13, 18, 28, 0.18);
+  --border-subtle: #ededed;
+  --border-default: #e0e0e0;
+  --border-strong: #c7c7c7;
   --border-accent: hsla(var(--accent-h), var(--accent-s), 50%, 0.5);
 
-  --text-primary: #14181d;
-  --text-secondary: #565d66;
-  --text-tertiary: #7e858d;
-  --text-quaternary: #a2a8af;
+  --text-primary: #171717;
+  --text-secondary: #5e5e5e;
+  --text-tertiary: #6b6b6b;
+  --text-quaternary: #a3a3a3;
   --text-on-accent: #ffffff;
 
   --accent: hsl(var(--accent-h), var(--accent-s), 50%);
@@ -238,7 +266,7 @@
   --shadow-lg: 0 14px 36px rgba(16, 24, 40, 0.14), 0 4px 10px rgba(16, 24, 40, 0.08);
   --shadow-xl: 0 26px 64px rgba(16, 24, 40, 0.18), 0 8px 18px rgba(16, 24, 40, 0.1);
   --shadow-drag: 0 22px 50px rgba(16, 24, 40, 0.24), 0 0 0 1px var(--border-strong);
-  --ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent);
+  --ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring);
   --grid-dot: rgba(13, 18, 28, 0.06);
 
   --code-bg: #fbfcfd;
@@ -256,4 +284,16 @@
   --diff-del-bg: rgba(220, 38, 38, 0.08);
   --diff-del-gutter: rgba(220, 38, 38, 0.14);
   --diff-del-mark: #dc2626;
+
+  --ui-primary: #171717;
+  --ui-primary-fg: #ffffff;
+  --ui-hover: #f2f2f2;
+  --ui-selected: #ebebeb;
+  --st-online-fg: #166534;
+  --st-away-fg: #a04a06;
+  --st-offline-fg: #525252;
+  --st-danger-fg: #b91c1c;
+  --st-review-fg: #7e22ce;
+  --st-ready-fg: #1d4ed8;
+  --st-merged-fg: #6d28d9;
 }

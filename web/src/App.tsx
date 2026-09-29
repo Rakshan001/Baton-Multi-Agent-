@@ -1,27 +1,27 @@
 // Copyright (C) 2026 Rakshan Shetty
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* ============================================================
-   BATON — App shell + root (ported from app.jsx)
-   TopBar · Sidebar · BottomTabBar · routing · overlays
+   BATON — App root
+   Data + overlays live here; the frame is the Orca-style shell in
+   ./shell (sidebar · top bar · ⌘K palette · right detail sheet).
+   Screens are addressed by hash routes (lib/routes.ts) so every one of
+   them can be deep-linked, including from notifications.
    ============================================================ */
-import { useState, useEffect, useRef, useSyncExternalStore } from "react";
-import { Icon, type IconName } from "./components/Icon";
-import { BatonMark } from "./components/BatonMark";
-import { CommandBar } from "./components/CommandBar";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Icon } from "./components/Icon";
 import { ToastViewport } from "./components/Toast";
-import { ApiDot, ComingSoon } from "./components/primitives";
 import { TweaksPanel } from "./components/TweaksPanel";
-import { usePrefs, ls, type Prefs } from "./hooks/usePrefs";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./components/ui/sheet";
+import { usePrefs, ls } from "./hooks/usePrefs";
 import { useStatus, useRootAgents, useHistory, usePoll } from "./hooks/usePoll";
 import { useEvents } from "./hooks/useEvents";
-import { useMediaQuery } from "./hooks/useMediaQuery";
 import { BatonAPI } from "./lib/api";
 import { showToast } from "./lib/toast";
 import { WORKSPACE } from "./lib/preview";
-import {
-  addConnection, fetchMeta, loadConnections, projectFromMeta, removeConnection,
-  DEFAULT_CONNECTION, type Connection,
-} from "./lib/connections";
+import { pathFor, routeForPath } from "./lib/routes";
+import { loadConnections, projectFromMeta, DEFAULT_CONNECTION, type Connection } from "./lib/connections";
 import type { ScenarioName } from "./lib/demoData";
 import { CommandCenter } from "./features/CommandCenter";
 import { KnowledgeGraphScreen } from "./features/KnowledgeGraph";
@@ -42,214 +42,23 @@ import { MemoryScreen } from "./features/Memory";
 import { PipelineScreen } from "./features/Pipeline";
 import { ReviewsScreen } from "./features/Reviews";
 import { TeamScreen } from "./features/Team";
+import { SidebarContent } from "./shell/Sidebar";
+import { TopBar } from "./shell/TopBar";
+import { CommandPalette } from "./shell/CommandPalette";
+import { useTeamSync } from "./shell/teamSync";
+import { prefersSimpleMode, roleSummary, teamApi, unreadCount, useTeamWorkspace } from "./lib/teamApi";
+import { ConfirmHost } from "./features/team/confirm";
+import { PeopleScreen } from "./features/team/People";
+import { TeamBoardScreen } from "./features/team/Board";
+import { InboxScreen } from "./features/team/Inbox";
+import { WorkloadScreen } from "./features/team/Workload";
+import { ProfileScreen } from "./features/team/Profile";
+import { SimpleModeScreen } from "./features/team/SimpleMode";
+import { PairingScreen } from "./features/team/Pairing";
+import { TeamAdminScreen } from "./features/team/TeamAdmin";
+import { TaskSheet } from "./features/team/TaskSheet";
+import { nameHue } from "./features/team/ui";
 import type { Meta, AgentId, Project, AgentRosterEntry } from "./types";
-
-interface NavItem { id: string; label: string; icon: IconName }
-const NAV: NavItem[] = [
-  { id: "home", label: "Command Center", icon: "grid" },
-  { id: "activity", label: "Activity", icon: "zap" },
-  { id: "pipeline", label: "Pipeline", icon: "layers" },
-  { id: "conflicts", label: "Conflicts", icon: "alertTriangle" },
-  { id: "graph", label: "Knowledge Graph", icon: "network" },
-  { id: "memory", label: "Memory", icon: "sparkle" },
-  { id: "reviews", label: "Code review", icon: "fileWarning" },
-  { id: "history", label: "History", icon: "history" },
-  { id: "agents", label: "Agents", icon: "bot" },
-  { id: "team", label: "Team", icon: "share" },
-  { id: "skills", label: "Skills", icon: "command" },
-  { id: "settings", label: "Settings", icon: "settings" },
-];
-
-interface Counts { active: number; total: number; conflicts: number }
-
-type ProbeState = Record<string, Meta | "loading" | "offline">;
-
-function ProjectSwitcher({ project, onProject, demo, connections, onConnectionsChange }: {
-  project: Project; onProject: (id: string) => void; demo: boolean;
-  connections: Connection[]; onConnectionsChange: (next: Connection[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [probes, setProbes] = useState<ProbeState>({});
-  const [adding, setAdding] = useState(false);
-  const [draftName, setDraftName] = useState("");
-  const [draftUrl, setDraftUrl] = useState("");
-  const [addError, setAddError] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  const ws = WORKSPACE;
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDoc); document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
-  }, [open]);
-
-  // Real mode: probe every connection's /api/meta when the menu opens.
-  useEffect(() => {
-    if (!open || demo) return;
-    setAdding(false); setAddError(null);
-    setProbes(Object.fromEntries(connections.map((c) => [c.id, "loading" as const])));
-    for (const c of connections) {
-      fetchMeta(c)
-        .then((meta) => setProbes((p) => ({ ...p, [c.id]: meta })))
-        .catch(() => setProbes((p) => ({ ...p, [c.id]: "offline" })));
-    }
-  }, [open, demo, connections]);
-
-  const submitAdd = async (force = false) => {
-    setAddError(null);
-    let conn: { name: string; baseUrl: string };
-    try {
-      conn = { name: draftName, baseUrl: draftUrl };
-      if (!force) await fetchMeta({ id: "probe", name: draftName, baseUrl: draftUrl.trim().replace(/\/+$/, "") });
-    } catch {
-      setAddError(`Could not reach ${draftUrl}/api/meta — is \`baton serve\` running there?`);
-      return;
-    }
-    try {
-      const added = addConnection(conn);
-      onConnectionsChange(loadConnections());
-      setAdding(false); setDraftName(""); setDraftUrl("");
-      showToast({ kind: "ok", title: `Added ${added.name}`, desc: added.baseUrl, mono: true });
-    } catch (e) {
-      setAddError((e as Error).message);
-    }
-  };
-
-  const remove = (id: string) => {
-    removeConnection(id);
-    if (project.id === id) onProject("default");
-    onConnectionsChange(loadConnections());
-  };
-
-  const rows: Array<{ id: string; name: string; sub: string; color: string; live?: boolean; offline?: boolean; removable?: boolean }> = demo
-    ? ws.projects.map((p) => ({ id: p.id, name: p.name, sub: p.framework, color: p.color, live: !!p.primary }))
-    : connections.map((c) => {
-        const probe = probes[c.id];
-        const meta = typeof probe === "object" ? probe : null;
-        const proj = projectFromMeta(c, meta);
-        return {
-          id: c.id, name: proj.name, color: proj.color,
-          sub: probe === "loading" ? "checking…" : meta ? `${meta.branch} · ${meta.repo}` : "unreachable",
-          offline: probe === "offline", removable: c.id !== "default",
-        };
-      });
-
-  return (
-    <div style={{ position: "relative" }} ref={ref}>
-      <button className="fr" onClick={() => setOpen((o) => !o)} aria-haspopup="true" aria-expanded={open} data-tip={project.path} data-tip-side="bottom" style={{
-        display: "inline-flex", alignItems: "center", gap: 8, height: 32, padding: "0 8px 0 10px", borderRadius: "var(--r-sm)",
-        background: open ? "var(--bg-active)" : "var(--bg-surface-2)", border: "1px solid var(--border-subtle)", cursor: "pointer", color: "var(--text-primary)", fontFamily: "inherit" }}
-        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--border-default)")}
-        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border-subtle)")}>
-        <span style={{ width: 14, height: 14, borderRadius: 4, background: project.color, flex: "none", display: "grid", placeItems: "center", color: "#fff", fontSize: 9, fontWeight: 800 }}>{project.name[0]?.toUpperCase()}</span>
-        <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)" }}>{project.name}</span>
-        <span style={{ color: "var(--text-quaternary)" }}>/</span>
-        <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>{project.branch}</span>
-        <Icon name="chevronDown" size={13} style={{ color: "var(--text-tertiary)", transform: open ? "rotate(180deg)" : "none", transition: "transform var(--dur-1)" }} />
-      </button>
-      {open && (
-        <div role="menu" style={{ position: "absolute", top: 38, left: 0, width: 320, background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
-          borderRadius: "var(--r-lg)", boxShadow: "var(--shadow-xl)", padding: 6, zIndex: "var(--z-overlay)" as unknown as number, animation: "scale-in var(--dur-1) var(--ease-out)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 9px 8px" }}>
-            <Icon name="folder" size={13} style={{ color: "var(--text-tertiary)" }} />
-            <span className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{demo ? ws.folder : "daemons"}</span>
-            <span className="tag" style={{ marginLeft: "auto" }}>{rows.length} {demo ? "projects" : `connection${rows.length === 1 ? "" : "s"}`}</span>
-          </div>
-          {rows.map((p) => {
-            const on = p.id === project.id;
-            return (
-              <div key={p.id} style={{ position: "relative" }}
-                onMouseEnter={(e) => { const x = e.currentTarget.querySelector<HTMLElement>("[data-rm]"); if (x) x.style.opacity = "1"; }}
-                onMouseLeave={(e) => { const x = e.currentTarget.querySelector<HTMLElement>("[data-rm]"); if (x) x.style.opacity = "0"; }}>
-                <button role="menuitem" className="fr" onClick={() => { onProject(p.id); setOpen(false); }} style={{
-                  width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 9px", borderRadius: "var(--r-sm)", border: "none", cursor: "pointer", textAlign: "left",
-                  background: on ? "var(--accent-soft)" : "transparent", opacity: p.offline ? 0.65 : 1 }}
-                  onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                  onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{ width: 22, height: 22, borderRadius: 6, background: p.color, flex: "none", display: "grid", placeItems: "center", color: "#fff", fontSize: 11, fontWeight: 800 }}>{p.name[0]?.toUpperCase()}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", color: on ? "var(--accent-text)" : "var(--text-primary)" }}>{p.name}</span>
-                      {p.live && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--clean-text)", background: "var(--clean-soft)", border: "1px solid var(--clean-border)", borderRadius: 99, padding: "1px 5px" }}>live</span>}
-                      {p.offline && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "var(--ls-caps)", textTransform: "uppercase", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, padding: "1px 5px" }}>unreachable</span>}
-                    </div>
-                    <div className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.sub}</div>
-                  </div>
-                  {on && <Icon name="check" size={15} style={{ color: "var(--accent)", flex: "none" }} />}
-                </button>
-                {p.removable && (
-                  <button data-rm className="fr" aria-label={`Remove ${p.name}`} onClick={(e) => { e.stopPropagation(); remove(p.id); }} style={{
-                    position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", opacity: 0, transition: "opacity var(--dur-1)",
-                    width: 20, height: 20, display: "grid", placeItems: "center", borderRadius: 5, border: "none", cursor: "pointer",
-                    background: "var(--bg-surface-2)", color: "var(--text-tertiary)" }}>
-                    <Icon name="x" size={12} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          <div style={{ height: 1, background: "var(--border-subtle)", margin: "6px 4px" }} />
-          {demo ? (
-            <button className="fr" disabled style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "8px 9px", borderRadius: "var(--r-sm)", border: "none", background: "transparent", color: "var(--text-tertiary)", cursor: "not-allowed", opacity: 0.8, textAlign: "left" }}
-              data-tip="Opening another folder from the UI is planned.">
-              <span style={{ width: 22, height: 22, borderRadius: 6, display: "grid", placeItems: "center", border: "1px dashed var(--border-default)", flex: "none" }}><Icon name="plus" size={13} /></span>
-              <span style={{ flex: 1, fontSize: "var(--fs-13)" }}>Open folder…</span>
-              <ComingSoon />
-            </button>
-          ) : adding ? (
-            <div style={{ padding: "8px 9px", display: "flex", flexDirection: "column", gap: 7 }}>
-              <input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Name (e.g. skfin)" autoFocus
-                style={{ height: 30, padding: "0 9px", background: "var(--bg-input)", border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)", color: "var(--text-primary)", fontSize: "var(--fs-13)", outline: "none" }} />
-              <input value={draftUrl} onChange={(e) => setDraftUrl(e.target.value)} placeholder="http://localhost:7078" className="mono"
-                onKeyDown={(e) => { if (e.key === "Enter") void submitAdd(); }}
-                style={{ height: 30, padding: "0 9px", background: "var(--bg-input)", border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)", color: "var(--text-primary)", fontSize: "var(--fs-12)", outline: "none" }} />
-              {addError && (
-                <div style={{ fontSize: "var(--fs-12)", color: "var(--conflict-text)" }}>
-                  {addError} <button className="fr" onClick={() => void submitAdd(true)} style={{ border: "none", background: "none", color: "var(--accent-text)", cursor: "pointer", padding: 0, fontSize: "inherit", textDecoration: "underline" }}>Add anyway</button>
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                <button className="btn fr" style={{ height: 28 }} onClick={() => { setAdding(false); setAddError(null); }}>Cancel</button>
-                <button className="btn btn-primary fr" style={{ height: 28 }} disabled={!draftUrl.trim()} onClick={() => void submitAdd()}>Add</button>
-              </div>
-            </div>
-          ) : (
-            <button className="fr" onClick={() => setAdding(true)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "8px 9px", borderRadius: "var(--r-sm)", border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", textAlign: "left" }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              data-tip="Run `baton serve -p <port>` in another repo, then add its URL here.">
-              <span style={{ width: 22, height: 22, borderRadius: 6, display: "grid", placeItems: "center", border: "1px dashed var(--border-default)", flex: "none" }}><Icon name="plus" size={13} /></span>
-              <span style={{ flex: 1, fontSize: "var(--fs-13)" }}>Add connection…</span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StatStrip({ counts, navigate }: { counts: Counts; navigate: (id: string) => void }) {
-  const seg = (label: string, value: number, dot: string, opts: { onClick?: () => void; tip?: string; danger?: boolean; glow?: boolean } = {}) => {
-    const Comp: any = opts.onClick ? "button" : "div";
-    return (
-      <Comp className={opts.onClick ? "bar-seg fr" : "bar-seg"} onClick={opts.onClick} data-tip={opts.tip}>
-        <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flex: "none" }} />
-        <span className="mono" style={{ fontSize: "var(--fs-14)", fontWeight: "var(--fw-semibold)", letterSpacing: "-0.02em", color: opts.danger ? "var(--conflict-text)" : "var(--text-primary)" }}>{value}</span>
-        <span style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>{label}</span>
-      </Comp>
-    );
-  };
-  return (
-    <div role="group" aria-label="Live counters" style={{ display: "flex", alignItems: "center", height: 32, background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--r-md)", padding: 2 }}>
-      {seg("Active", counts.active, "var(--accent)", { tip: "Sessions with an agent attached", glow: counts.active > 0 })}
-      <span style={{ width: 1, height: 16, background: "var(--border-subtle)" }} />
-      {seg("Tasks", counts.total, "var(--idle)", { tip: "Total sessions" })}
-      <span style={{ width: 1, height: 16, background: "var(--border-subtle)" }} />
-      {seg("Conflicts", counts.conflicts, counts.conflicts ? "var(--conflict)" : "var(--idle)", { danger: counts.conflicts > 0, glow: counts.conflicts > 0, onClick: () => navigate("conflicts"), tip: "View conflicts" })}
-    </div>
-  );
-}
 
 /**
  * "The daemon stopped answering, and everything below is the last thing we
@@ -293,140 +102,27 @@ function StaleBanner({ since, onRetry, retrying }: {
   );
 }
 
-function TopBar({ counts, apiState, lastUpdated, onRefresh, onMenu, onSearch, onLaunch, navigate, prefs, route, project, onProject, demo, live, reconnecting, connections, onConnectionsChange }: {
-  counts: Counts; apiState: "online" | "fetching" | "offline"; lastUpdated: number | null;
-  onRefresh: () => void; onMenu: () => void; onSearch: () => void; onLaunch: (agent: AgentId | null) => void;
-  navigate: (id: string) => void; prefs: Prefs; route: string; project: Project; onProject: (id: string) => void; demo: boolean; live: boolean; reconnecting: boolean;
-  connections: Connection[]; onConnectionsChange: (next: Connection[]) => void;
-}) {
-  const isMobile = useMediaQuery("(max-width: 860px)");
-  const isNarrow = useMediaQuery("(max-width: 1080px)");
-  const navLabel = NAV.find((n) => n.id === route)?.label;
-  return (
-    <header style={{ height: 54, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 12px 0 14px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-surface)", zIndex: "var(--z-sticky)" as unknown as number }}>
-      {isMobile && <button className="btn btn-ghost btn-icon fr" onClick={onMenu} aria-label="Menu"><Icon name="list" size={18} /></button>}
-      <BatonMark size={24} withWord={!isMobile} />
-      {!isMobile && <ProjectSwitcher project={project} onProject={onProject} demo={demo} connections={connections} onConnectionsChange={onConnectionsChange} />}
-      {!isMobile && <span className="vdivider" style={{ height: 24, margin: "0 2px" }} />}
-      {!isMobile && <StatStrip counts={counts} navigate={navigate} />}
-      {isMobile && navLabel && <span style={{ fontSize: "var(--fs-15)", fontWeight: "var(--fw-semibold)", marginLeft: 2, letterSpacing: "var(--ls-snug)" }}>{navLabel}</span>}
-      <div style={{ flex: 1 }} />
-
-      <button className="btn btn-primary fr" onClick={() => onLaunch(null)} data-tip={isMobile ? "Launch session" : undefined} aria-label="Launch session" style={{ height: 32, padding: isMobile ? 0 : "0 12px 0 10px", width: isMobile ? 32 : "auto", flex: "none" }}>
-        <Icon name="plus" size={15} />{!isMobile && <span>New session</span>}
-      </button>
-
-      <button className="fr" onClick={onSearch} aria-label="Search (Command K)" style={{
-        display: "flex", alignItems: "center", gap: 8, height: 32, padding: "0 8px 0 11px", width: isMobile ? 32 : isNarrow ? 36 : 200, justifyContent: isMobile || isNarrow ? "center" : "flex-start",
-        background: "var(--bg-input)", border: "1px solid var(--border-default)", borderRadius: "var(--r-sm)", cursor: "pointer", color: "var(--text-tertiary)", flex: "none" }}
-        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--border-strong)")}
-        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border-default)")}>
-        <Icon name="search" size={15} />
-        {!isMobile && !isNarrow && <><span style={{ fontSize: "var(--fs-13)", flex: 1, textAlign: "left" }}>Search…</span><span className="kbd">⌘K</span></>}
-      </button>
-
-      {demo && !isMobile && (
-        <span data-tip="Showing illustrative data — the daemon isn't being queried. Turn off in Tweaks." data-tip-side="bottom" style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 32, padding: "0 10px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", flex: "none" }}>
-          <Icon name="sparkle" size={13} /> Demo data
-        </span>
-      )}
-      {prefs.writeEnabled && !isMobile && (
-        <span data-tip="Write actions enabled — Merge, Remove are live" data-tip-side="bottom" style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 32, padding: "0 10px", borderRadius: "var(--r-sm)", background: "var(--clean-soft)", border: "1px solid var(--clean-border)", color: "var(--clean-text)", fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", flex: "none" }}>
-          <Icon name="gitMerge" size={13} /> Write
-        </span>
-      )}
-      {/* The inverse state matters more: half the buttons quietly disable in
-          read-only, so say it once up here instead of tooltip-by-tooltip. */}
-      {!prefs.writeEnabled && !isMobile && (
-        <span data-tip={demo ? "Write actions are off — toggle them in the ⌘K palette" : "Merge, GC and Repair are disabled.\nRestart with `baton serve --write` to enable."} data-tip-side="bottom" style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 32, padding: "0 10px", borderRadius: "var(--r-sm)", background: "var(--bg-surface-2)", border: "1px dashed var(--border-default)", color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", flex: "none" }}>
-          <Icon name="lock" size={12} /> Read-only
-        </span>
-      )}
-      <ApiDot state={apiState} lastUpdated={lastUpdated} onRefresh={onRefresh} live={live} reconnecting={reconnecting} compact={isMobile} />
-      <ThemeToggle prefs={prefs} />
-    </header>
-  );
-}
-
-function ThemeToggle({ prefs }: { prefs: Prefs }) {
-  const next = prefs.resolvedTheme === "dark" ? "light" : "dark";
-  return (
-    <button className="btn btn-ghost btn-icon fr" onClick={() => prefs.setTheme(next)} aria-label={`Switch to ${next} theme`} data-tip={`Switch to ${next}`} data-tip-side="bottom">
-      <Icon name={prefs.resolvedTheme === "dark" ? "sun" : "moon"} size={17} />
-    </button>
-  );
-}
-
-function Sidebar({ route, navigate, counts, project }: { route: string; navigate: (id: string) => void; counts: Counts; project: Project }) {
-  return (
-    <nav aria-label="Primary" style={{ width: 216, flex: "none", borderRight: "1px solid var(--border-subtle)", background: "var(--bg-surface)", display: "flex", flexDirection: "column", padding: 10, gap: 2 }}>
-      {NAV.map((n) => {
-        const active = route === n.id;
-        const badge = n.id === "conflicts" && counts.conflicts > 0 ? counts.conflicts : null;
-        return (
-          <button key={n.id} className="nav-item fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined}>
-            <Icon name={n.icon} size={17} style={{ flex: "none" }} />
-            <span style={{ flex: 1 }}>{n.label}</span>
-            {badge && <span className="mono" style={{ fontSize: 11, fontWeight: "var(--fw-semibold)", color: "var(--conflict-text)", background: "var(--conflict-soft)", border: "1px solid var(--conflict-border)", borderRadius: 99, minWidth: 18, height: 18, display: "grid", placeItems: "center", padding: "0 5px" }}>{badge}</span>}
-          </button>
-        );
-      })}
-      <div style={{ flex: 1 }} />
-      <div style={{ padding: "10px 9px", borderTop: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", gap: 9 }}>
-        <span style={{ width: 24, height: 24, borderRadius: 6, background: project.color, flex: "none", display: "grid", placeItems: "center", color: "#fff", fontSize: 11, fontWeight: 800 }}>{project.name[0]}</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: "var(--fs-12)", fontWeight: "var(--fw-semibold)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.name}</div>
-          <div className="mono" data-tip={project.path} style={{ fontSize: 10, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.path}</div>
-        </div>
-      </div>
-    </nav>
-  );
-}
-
-function BottomTabBar({ route, navigate, counts }: { route: string; navigate: (id: string) => void; counts: Counts }) {
-  return (
-    <nav aria-label="Primary" style={{ flex: "none", display: "flex", borderTop: "1px solid var(--border-default)", background: "var(--bg-surface)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      {NAV.map((n) => {
-        const active = route === n.id; const badge = n.id === "conflicts" && counts.conflicts > 0 ? counts.conflicts : null;
-        return (
-          <button key={n.id} className="fr" onClick={() => navigate(n.id)} aria-current={active ? "page" : undefined} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "9px 0 10px", minHeight: 56, border: "none", background: "transparent", cursor: "pointer", position: "relative", color: active ? "var(--accent-text)" : "var(--text-tertiary)" }}>
-            <span style={{ position: "relative" }}>
-              <Icon name={n.icon} size={20} />
-              {badge && <span style={{ position: "absolute", top: -4, right: -7, fontSize: 9, fontWeight: 700, color: "#fff", background: "var(--conflict-strong)", borderRadius: 99, minWidth: 14, height: 14, display: "grid", placeItems: "center", padding: "0 3px" }}>{badge}</span>}
-            </span>
-            <span style={{ fontSize: 10, fontWeight: "var(--fw-medium)" }}>{n.label.replace("Command ", "")}</span>
-          </button>
-        );
-      })}
-    </nav>
-  );
-}
-
-function MobileNavDrawer({ open, onClose, route, navigate }: { open: boolean; onClose: () => void; route: string; navigate: (id: string) => void }) {
-  if (!open) return null;
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: "var(--z-sheet)" as unknown as number }}>
-      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "var(--bg-scrim)", animation: "fade-in var(--dur-2)" }} />
-      <div role="dialog" aria-modal="true" aria-label="Navigation" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 260, background: "var(--bg-surface)", borderRight: "1px solid var(--border-strong)", boxShadow: "var(--shadow-xl)", animation: "sheet-in-right var(--dur-3) var(--ease-out)", display: "flex", flexDirection: "column", padding: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 6px 14px" }}><BatonMark size={24} withWord /></div>
-        {NAV.map((n) => {
-          const active = route === n.id;
-          return <button key={n.id} className="fr" onClick={() => { navigate(n.id); onClose(); }} style={{ display: "flex", alignItems: "center", gap: 12, height: 44, padding: "0 12px", borderRadius: "var(--r-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent-text)" : "var(--text-secondary)", fontSize: "var(--fs-14)", fontWeight: "var(--fw-medium)", fontFamily: "inherit" }}>
-            <Icon name={n.icon} size={18} /> {n.label}
-          </button>;
-        })}
-      </div>
-    </div>
-  );
-}
-
 /** Module-level so the identity is stable — a new function each render would
  *  resubscribe on every render. */
 const subscribeApi = (fn: () => void) => BatonAPI.subscribe(fn);
 
+/** Read before HashRouter mounts — it normalises an empty hash to `#/`. */
+const INITIAL_HASH = typeof window !== "undefined" ? window.location.hash : "";
+
 export default function App() {
+  return (
+    <HashRouter>
+      <TooltipProvider delayDuration={300}>
+        <AppInner />
+      </TooltipProvider>
+    </HashRouter>
+  );
+}
+
+function AppInner() {
   const prefs = usePrefs();
-  const [route, setRoute] = useState<string>(() => ls.get("baton:route", "home"));
+  const location = useLocation();
+  const routerNavigate = useNavigate();
   const [selected, setSelected] = useState<string | null>(null);
   const [diffSlug, setDiffSlug] = useState<string | null>(null);
   const [handoffSlug, setHandoffSlug] = useState<string | null>(null);
@@ -442,7 +138,11 @@ export default function App() {
   const setDemo = (v: boolean) => { BatonAPI.setDemo(v); setDemoState(v); };
   const [connections, setConnections] = useState<Connection[]>(loadConnections);
   const [connectionId, setConnectionId] = useState(() => BatonAPI.connectionId);
+  const [simpleMode, setSimpleModeRaw] = useState<boolean>(() => ls.get("baton:simpleMode", false));
+  const setSimpleMode = (v: boolean) => { setSimpleModeRaw(v); ls.set("baton:simpleMode", v); };
   const activeConn = connections.find((c) => c.id === connectionId) ?? DEFAULT_CONNECTION;
+  const teamWs = useTeamWorkspace();
+  const { sync, setDemoState: setDemoSync } = useTeamSync(demo, teamWs);
   // The daemon has refused this browser's credential (or we never had one).
   // Subscribed rather than polled so the gate appears the instant any request
   // or the event stream is turned away.
@@ -454,7 +154,6 @@ export default function App() {
   const history = useHistory(events.live);
   const meta = usePoll<Meta>(() => BatonAPI.getMeta(), { interval: 30000, deps: [connectionId] });
   const agents = usePoll<AgentRosterEntry[]>(() => BatonAPI.getAgents(), { interval: 8000, deps: [connectionId] });
-  const isMobile = useMediaQuery("(max-width: 860px)");
 
   // Real mode: the UI's write capability follows the daemon (`baton serve --write`)
   // instead of hiding behind a per-browser toggle. Demo mode keeps pure prefs.
@@ -464,12 +163,28 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [daemonWrite]);
 
-  const navigate = (r: string) => { setRoute(r); ls.set("baton:route", r); };
+  // One source of truth for "where am I": the hash. The old `baton:route`
+  // value is still written (as a route id) so a bare URL reopens the last
+  // screen, exactly as before hash routing.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    if (location.pathname === "/" && (INITIAL_HASH === "" || INITIAL_HASH === "#")) {
+      const saved = ls.get<string>("baton:route", "home");
+      const path = pathFor(saved);
+      if (path !== "/") routerNavigate(path, { replace: true });
+    }
+  }, [location.pathname, routerNavigate]);
+  const routeId = routeForPath(location.pathname).id;
+  useEffect(() => { ls.set("baton:route", routeId); }, [routeId]);
+
+  const navigate = useCallback((id: string) => routerNavigate(pathFor(id)), [routerNavigate]);
   // ⌘K data hits deep-link into a screen with its search pre-filled.
   const [searchSeed, setSearchSeed] = useState<{ route: string; q: string; n: number }>({ route: "", q: "", n: 0 });
-  const seedSearch = (r: string, q: string) => { setSearchSeed((s) => ({ route: r, q, n: s.n + 1 })); navigate(r); };
-  const onOpen = (slug: string) => setSelected(slug);
-  const onLaunch = (agent: AgentId | null) => setLaunchOpen({ agent });
+  const seedSearch = useCallback((r: string, q: string) => { setSearchSeed((s) => ({ route: r, q, n: s.n + 1 })); navigate(r); }, [navigate]);
+  const onOpen = useCallback((slug: string) => setSelected(slug), []);
+  const onLaunch = useCallback((agent: AgentId | null) => setLaunchOpen({ agent }), []);
   const onLive = (slug: string) => setLiveSlug(slug);
 
   const project: Project = demo
@@ -508,7 +223,7 @@ export default function App() {
     showToast({ kind: "info", title: `Scenario: ${s}`, desc: desc[s] });
   };
 
-  // ⌘K
+  // ⌘K / Ctrl+K
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen((o) => !o); }
@@ -518,12 +233,22 @@ export default function App() {
   }, []);
 
   const sessions = status.data || [];
-  const counts: Counts = {
-    active: sessions.filter((s) => s.agent !== null).length,
-    total: sessions.length,
-    conflicts: sessions.filter((s) => s.status === "conflict").length,
-  };
+  const conflicts = sessions.filter((s) => s.status === "conflict").length;
   const apiState = prefs.offline || status.error ? "offline" : status.isFetching ? "fetching" : "online";
+  const viewer = meta.data?.viewer;
+  // Demo: the team viewer (switchable under "View as"). Real: the daemon's viewer.
+  const teamViewer = teamWs?.people.find((p) => p.id === teamWs.viewerId);
+  const pname = (k: string) => teamWs?.projects.find((p) => p.key === k)?.name ?? k;
+  const userName = teamViewer?.name ?? viewer?.name ?? "You";
+  const userRole = teamViewer
+    ? roleSummary(teamViewer, pname)
+    : viewer?.role ? (viewer.role === "owner" ? "Owner" : "Member") : viewer?.local ? "This machine" : null;
+  const inboxUnread = unreadCount(teamWs);
+  const viewAs = demo && teamWs ? {
+    people: teamWs.people.map((p) => ({ id: p.id, name: p.name, role: roleSummary(p, pname) })),
+    current: teamWs.viewerId,
+    onChange: (id: string) => { teamApi.setViewer(id); setSimpleMode(prefersSimpleMode(teamWs.people.find((p) => p.id === id))); },
+  } : undefined;
 
   // connection phase, derived from the real first status poll
   const firstLoadDone = status.data !== null || status.error !== null;
@@ -534,49 +259,39 @@ export default function App() {
   useEffect(() => { if (retrying && !status.isFetching) setRetrying(false); }, [retrying, status.isFetching]);
   const retry = () => { setRetrying(true); status.refetch(); history.refetch(); meta.refetch(); };
 
+  const tweaks = <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />;
+  const toasts = <ToastViewport />;
+
   // The credential gate stands in FRONT of the offline screen, and the order
   // matters: a 401 means the daemon is up and does not know us. Showing
   // "Baton isn't running" there would send a member off to debug the one
   // machine that is working fine.
   if (needsAuth && !demo) {
     return (
-      <div style={{ height: "100%" }}>
+      <div className="h-full">
         <SignIn baseUrl={activeConn.baseUrl} refused={!!BatonAPI.token}
           onSignedIn={() => { status.refetch(); history.refetch(); meta.refetch(); agents.refetch(); }} />
-        <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
-        <ToastViewport />
+        {tweaks}{toasts}
       </div>
     );
   }
 
   if (phase !== "connected") {
     return (
-      <div style={{ height: "100%" }}>
+      <div className="h-full">
         <Connect phase={phase === "connecting" ? "connecting" : "offline"} onRetry={retry} retrying={retrying}
           alternatives={!demo && connections.length > 1 ? connections.filter((c) => c.id !== connectionId) : []}
           onPick={onProject} />
-        <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
-        <ToastViewport />
+        {tweaks}{toasts}
       </div>
     );
   }
 
-  const screen = (() => {
-    switch (route) {
-      case "activity": return <ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />;
-      case "pipeline": return <PipelineScreen writeEnabled={prefs.writeEnabled} />;
-      case "conflicts": return <ConflictsScreen status={status} onOpen={onOpen} />;
-      case "graph": return <KnowledgeGraphScreen writeEnabled={prefs.writeEnabled} />;
-      case "memory": return <MemoryScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "memory" ? searchSeed : undefined} />;
-      case "reviews": return <ReviewsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "reviews" ? searchSeed : undefined} />;
-      case "history": return <HistoryScreen history={history} onOpen={onOpen} searchSeed={searchSeed.route === "history" ? searchSeed : undefined} />;
-      case "agents": return <AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={prefs.writeEnabled} />;
-      case "team": return <TeamScreen writeEnabled={prefs.writeEnabled} subscribe={events.subscribe} knownProjects={(meta.data?.projects ?? []).map((p) => p.id)} />;
-      case "skills": return <SkillsScreen writeEnabled={prefs.writeEnabled} searchSeed={searchSeed.route === "skills" ? searchSeed : undefined} />;
-      case "settings": return <SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} viewer={meta.data?.viewer} meta={meta.data} />;
-      default: return <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={prefs.writeEnabled} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
-    }
-  })();
+  const seed = (r: string) => (searchSeed.route === r ? searchSeed : undefined);
+  const w = prefs.writeEnabled;
+  const home = <CommandCenter status={status} rootAgents={rootAgents.data ?? []} view={prefs.view} setView={prefs.setView} onOpen={onOpen} writeEnabled={w} filter={filter} setFilter={setFilter} project={project} onNewSession={() => onLaunch(null)} />;
+
+  const classicTeam = <TeamScreen writeEnabled={w} subscribe={events.subscribe} knownProjects={(meta.data?.projects ?? []).map((p) => p.id)} />;
 
   const selectedRow = (slug: string | null) => sessions.find((s) => s.slug === slug);
 
@@ -595,31 +310,93 @@ export default function App() {
    */
   const stale = !demo && !prefs.offline && apiState === "offline" && status.data !== null;
 
-  return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      {stale && <StaleBanner since={status.lastUpdated} onRetry={retry} retrying={retrying} />}
-      <TopBar counts={counts} apiState={apiState} lastUpdated={status.lastUpdated}
-        onRefresh={() => { status.refetch(); history.refetch(); }}
-        onMenu={() => setNavOpen(true)} onSearch={() => setCmdOpen(true)} onLaunch={onLaunch} navigate={navigate}
-        prefs={prefs} route={route} project={project} onProject={onProject} demo={demo} live={events.live} reconnecting={events.reconnecting}
-        connections={connections} onConnectionsChange={setConnections} />
-      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-        {!isMobile && <Sidebar route={route} navigate={navigate} counts={counts} project={project} />}
-        <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", background: "var(--bg-base)" }}>
-          <div key={route} style={{ flex: 1, minHeight: 0, animation: "route-in var(--dur-2) var(--ease-out)" }}>{screen}</div>
-        </main>
-      </div>
-      {isMobile && <BottomTabBar route={route} navigate={navigate} counts={counts} />}
-      <MobileNavDrawer open={navOpen} onClose={() => setNavOpen(false)} route={route} navigate={navigate} />
+  const sidebarProps = {
+    project, onProject, demo, connections, onConnectionsChange: setConnections, conflicts, inboxUnread,
+  };
 
-      {selected && <DetailSheet slug={selected} onClose={() => setSelected(null)} writeEnabled={prefs.writeEnabled} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />}
-      {diffSlug && <DiffViewer slug={diffSlug} session={selectedRow(diffSlug)} onClose={() => setDiffSlug(null)} writeEnabled={prefs.writeEnabled} onHandoff={(s) => { setDiffSlug(null); setHandoffSlug(s); }} />}
-      {handoffSlug && <HandoffDialog slug={handoffSlug} session={selectedRow(handoffSlug)} onClose={() => setHandoffSlug(null)} writeEnabled={prefs.writeEnabled} />}
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <a href="#main" onClick={(e) => { e.preventDefault(); document.getElementById("main")?.focus(); }}
+        className="sr-only z-[100] rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2">
+        Skip to main content
+      </a>
+      {stale && <StaleBanner since={status.lastUpdated} onRetry={retry} retrying={retrying} />}
+      <div className="flex min-h-0 flex-1">
+        {/* Simple mode is one screen: no navigation to get lost in. */}
+        {!simpleMode && <aside className="hidden w-60 shrink-0 border-r border-sidebar-border bg-sidebar md:block">
+          <SidebarContent {...sidebarProps} />
+        </aside>}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <TopBar onMenu={() => setNavOpen(true)} onSearch={() => setCmdOpen(true)} onLaunch={() => onLaunch(null)}
+            projectName={project.name} prefs={prefs} demo={demo} apiState={apiState} lastUpdated={status.lastUpdated}
+            onRefresh={() => { status.refetch(); history.refetch(); }} live={events.live} reconnecting={events.reconnecting}
+            sync={sync} onDemoSync={setDemoSync} userName={userName} userHue={teamViewer?.avatarHue ?? nameHue(userName)} userRole={userRole} viewAs={viewAs}
+            simpleMode={simpleMode} onSimpleMode={setSimpleMode} />
+          <main id="main" tabIndex={-1} className="min-h-0 flex-1 bg-background focus:outline-none">
+            <div key={routeId} className="h-full" style={{ animation: "route-in var(--dur-2) var(--ease-out)" }}>
+              {simpleMode ? (
+                <Routes>
+                  <Route path="/board/task/:taskId" element={<><SimpleModeScreen onExit={() => setSimpleMode(false)} /><SimpleTaskSheet /></>} />
+                  <Route path="*" element={<SimpleModeScreen onExit={() => setSimpleMode(false)} />} />
+                </Routes>
+              ) : (
+                <Routes>
+                  <Route path="/" element={home} />
+                  <Route path="/activity" element={<ActivityScreen status={status} onOpen={onOpen} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />} />
+                  <Route path="/pipeline" element={<PipelineScreen writeEnabled={w} />} />
+                  <Route path="/conflicts" element={<ConflictsScreen status={status} onOpen={onOpen} />} />
+                  <Route path="/graph" element={<KnowledgeGraphScreen writeEnabled={w} />} />
+                  <Route path="/memory" element={<MemoryScreen writeEnabled={w} searchSeed={seed("memory")} />} />
+                  <Route path="/reviews" element={<ReviewsScreen writeEnabled={w} searchSeed={seed("reviews")} />} />
+                  <Route path="/history" element={<HistoryScreen history={history} onOpen={onOpen} searchSeed={seed("history")} />} />
+                  <Route path="/agents" element={<AgentsScreen agents={agents} onOpen={onOpen} onLaunch={onLaunch} onHandoff={setHandoffSlug} writeEnabled={w} />} />
+                  {/* Without a team workspace (real mode today) the classic v1 screen
+                      manages members, so #/people and the legacy "team" route still work. */}
+                  <Route path="/people" element={teamWs ? <PeopleScreen /> : classicTeam} />
+                  <Route path="/people/:memberId" element={teamWs ? <PeopleScreen /> : classicTeam} />
+                  <Route path="/board" element={<TeamBoardScreen />} />
+                  <Route path="/board/task/:taskId" element={<TeamBoardScreen />} />
+                  <Route path="/inbox" element={<InboxScreen />} />
+                  <Route path="/inbox/:itemId" element={<InboxScreen />} />
+                  <Route path="/workload" element={<WorkloadScreen />} />
+                  <Route path="/skills" element={<SkillsScreen writeEnabled={w} searchSeed={seed("skills")} />} />
+                  <Route path="/settings" element={<SettingsScreen prefs={prefs} repo={meta.data?.repo ?? null} viewer={meta.data?.viewer} meta={meta.data} />} />
+                  <Route path="/settings/team" element={teamWs ? <TeamAdminScreen /> : classicTeam} />
+                  {/* The v1 members / editing-now / teams / share screen: still the live one against a real daemon. */}
+                  <Route path="/settings/team/classic" element={classicTeam} />
+                  <Route path="/settings/team/pair" element={<PairingScreen />} />
+                  <Route path="/profile" element={<ProfileScreen simpleMode={simpleMode} onSimpleMode={setSimpleMode} />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              )}
+            </div>
+          </main>
+        </div>
+      </div>
+
+      <Sheet open={navOpen} onOpenChange={setNavOpen}>
+        <SheetContent side="left" showCloseButton={false} className="w-72 max-w-[85vw] bg-sidebar p-0 md:hidden">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SheetDescription className="sr-only">Switch project or screen</SheetDescription>
+          <SidebarContent {...sidebarProps} onNavigate={() => setNavOpen(false)} />
+        </SheetContent>
+      </Sheet>
+
+      {selected && <DetailSheet slug={selected} onClose={() => setSelected(null)} writeEnabled={w} onOpenDiff={setDiffSlug} onHandoff={setHandoffSlug} onLive={onLive} />}
+      {diffSlug && <DiffViewer slug={diffSlug} session={selectedRow(diffSlug)} onClose={() => setDiffSlug(null)} writeEnabled={w} onHandoff={(s) => { setDiffSlug(null); setHandoffSlug(s); }} />}
+      {handoffSlug && <HandoffDialog slug={handoffSlug} session={selectedRow(handoffSlug)} onClose={() => setHandoffSlug(null)} writeEnabled={w} />}
       {liveSlug && <LiveSession slug={liveSlug} session={selectedRow(liveSlug)} sessions={sessions} onClose={() => setLiveSlug(null)} setSlug={setLiveSlug} onOpenDiff={(s) => { setLiveSlug(null); setDiffSlug(s); }} demo={demo} subscribe={events.subscribe} />}
-      {launchOpen && <LaunchSession initialAgent={launchOpen.agent} onClose={() => setLaunchOpen(null)} writeEnabled={prefs.writeEnabled} onLaunched={(slug) => setSelected(slug)} />}
-      <CommandBar open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate} onOpen={onOpen} onLaunch={onLaunch} sessions={sessions} history={history.data || []} prefs={prefs} onSeedSearch={seedSearch} />
-      <TweaksPanel prefs={prefs} scenario={scenario} setScenario={setScenario} demo={demo} setDemo={setDemo} />
-      <ToastViewport />
+      {launchOpen && <LaunchSession initialAgent={launchOpen.agent} onClose={() => setLaunchOpen(null)} writeEnabled={w} onLaunched={(slug) => setSelected(slug)} />}
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} navigate={navigate} onOpen={onOpen} onLaunch={onLaunch}
+        sessions={sessions} history={history.data || []} prefs={prefs} onSeedSearch={seedSearch} />
+      <ConfirmHost />
+      {tweaks}{toasts}
     </div>
   );
+}
+
+/** Task detail over simple mode (the card title links here); closing returns to My tasks. */
+function SimpleTaskSheet() {
+  const { taskId } = useParams();
+  return taskId ? <TaskSheet id={taskId} back="/" /> : null;
 }

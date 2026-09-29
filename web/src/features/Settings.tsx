@@ -5,6 +5,7 @@
    Appearance · Connection · Agent registry
    ============================================================ */
 import { useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { Icon } from "../components/Icon";
 import { AgentBadge, SegmentedControl, Switch, ComingSoon, ConfirmDialog } from "../components/primitives";
 import { BatonMark } from "../components/BatonMark";
@@ -570,6 +571,12 @@ export function SettingsScreen({ prefs, repo, viewer, meta }: { prefs: Prefs; re
             </SettingRow>
             <SettingRow label="Reduce motion" hint="Minimize animations and transitions across the app.">
               <Switch checked={prefs.motion === "reduce"} onChange={(v) => prefs.setMotion(v ? "reduce" : "full")} label="Reduce motion" />
+            </SettingRow>
+          </SettingsBlock>
+
+          <SettingsBlock title="Team" desc="Members, invites, teams and remote sharing for this hub.">
+            <SettingRow label="Team admin" hint="Who can connect, what they're editing, and how the hub is shared.">
+              <Link to="/settings/team" className="btn btn-sm fr">Open <Icon name="chevronRight" size={13} /></Link>
             </SettingRow>
           </SettingsBlock>
 
