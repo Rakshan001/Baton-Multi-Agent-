@@ -33,7 +33,7 @@ in its task. Demo mode must keep working after every task.
 Set up the new UI stack and design tokens that every later UI task builds on.
 
 ### electron-hardening
-**scope:** `electron/main.ts`, `electron/nav-guard.ts`, `electron/preload.ts`, `electron/ui/index.html`, `test/electron-*.test.ts`
+**scope:** `electron/main.ts`, `electron/nav-guard.ts`, `electron/preload.cts`, `electron/ui/index.html`, `test/electron-*.test.ts`
 **expects:** main window sandbox true; strict CSP on launcher UI; shell.openExternal only for https: and mailto: via one validated helper used by all three call sites; tests cover rejected schemes (file:, smb:, custom); desktop build passes
 **principles:** fixes S-H4 from the review register; no behavior change for allowed links
 **skills:** traceable-changes, verify-before-done
@@ -93,8 +93,16 @@ The whole Team workspace, built against fixtures.
 
 ## Phase 2 — Sync and trust
 
+### fold-hardening
+**scope:** `src/team/fold.ts`, `src/team/rbac.ts`, `src/team/envelope.ts`, `src/team/feed.ts`, `test/team-security-r3.test.ts`
+**expects:** every blocker in REVIEW-2026-09-29.md "Round 3" fixed with a regression test from its r3-* PoC: pin-based equivocation (a revoke's cutoffHash chain is canonical up to the cutoff; genesis immune to forks); forks fed into key discovery so recovery works after a fork; near-linear fold (worklist key discovery, single-sweep bans, copy-on-write state, frontier-keyed cache) with hard caps on events per feed, org events and devices plus a fold time budget; recovery votes bound to author, cutoffSeq and cutoffHash and allowed only as a 2-custodian tiebreak or against forked/revoked targets; restore statements bound to the previous epoch; signer seq high-water mark and a custodian-signed legitimate-restore event; 5k-event adversarial folds under 1 s
+**principles:** fold stays pure and deterministic; no network code in this task
+**skills:** traceable-changes, verify-before-done
+
+Close the round-3 security blockers before any device talks to another.
+
 ### keychain-signer
-**scope:** `electron/signer.ts`, `electron/capability.ts`, `electron/main.ts`, `electron/preload.ts`, `test/electron-signer.test.ts`
+**scope:** `electron/signer.ts`, `electron/capability.ts`, `electron/main.ts`, `electron/preload.cts`, `test/electron-signer.test.ts`
 **expects:** Ed25519 device key generated and stored in macOS Keychain (ThisDeviceOnly, app-restricted), never on disk; per-launch 256-bit IPC capability in memory; confirmAndSign(action) shows a native dialog stating the exact action then signs; hardware-UUID change mints a new key; ~/.baton/team excluded from Time Machine
 **principles:** fixes S-C2 and S-C3; the daemon never sees the private key
 **skills:** traceable-changes, verify-before-done
@@ -111,7 +119,7 @@ Move signing and irreversible confirmation into Electron main.
 Daemon endpoints for the Team workspace.
 
 ### peer-sync
-**after:** team-fold
+**after:** team-fold, fold-hardening
 **scope:** `src/team/sync.ts`, `src/team/tls.ts`, `src/util/x509.ts`, `test/team-sync.test.ts`
 **expects:** mutual TLS 1.3, no resumption, SPKI equals admitted key, client never rejectUnauthorized:false (test fails if switched); ordered resumable sync ORG→CHECKPOINT→EVENTS→LIVE→BLOBS with (device,seq) cursor; rollback and quota protections per §8.3; single refold after catch-up; end-to-end test with 4 daemons reproducing the admin-offline scenario §8 ends with identical folds
 **principles:** zero dependencies; nothing parsed before size checks
@@ -127,6 +135,14 @@ Peer-to-peer replication between devices.
 **skills:** traceable-changes, verify-before-done
 
 Finding peers and admitting new devices.
+
+### branch-guard
+**scope:** `src/team/branch-policy.ts`, `src/commands/guard.ts`, `src/hooks-git.ts`, `test/team-branch-policy.test.ts`, `test/guard*.test.ts`
+**expects:** per GUARDRAILS-CONTEXT-DASHBOARD.md §1: project.policy protected globs (default main, staging); guard denies agent edits on protected checkouts and every push/commit/ref form in §1.2 (HEAD:main, refs/heads/main, +main, :main, --all, --mirror, --no-verify, update-ref, branch -D/-f, gh pr merge incl --admin, gh api ref/merge writes, hooksPath edits); idempotent pre-commit and pre-push hooks with hash re-verification; case-insensitive NFC ref matching; table-driven tests for every form
+**principles:** guard stays fail-open on errors but denies on positive match; server-side protection is the real boundary and is documented as such
+**skills:** traceable-changes, verify-before-done
+
+Keep agents off main and staging.
 
 ## Phase 3 — Work loop
 
@@ -154,6 +170,21 @@ Attachments that cannot become XSS.
 
 Push, PR and merge awareness.
 
+### shared-context
+**after:** mcp-team-tools
+**scope:** `src/team/context.ts`, `src/team/contract.ts`, `src/team/mcp-context.ts`, `test/team-context.test.ts`
+**expects:** context.featuremap from graphify capped 30 KB; context.contract from a declared repo file or loopback URL only; secret scan blocks publish; sha anchoring with stale markers; MCP feature_map (≤1500 tokens, path filter) and get_contract (requested operations only, ≤3000 tokens, cursor); visibility follows project read roles; outputs wrapped as untrusted data
+**skills:** traceable-changes, verify-before-done
+
+Shared feature map, API contracts and team notes.
+
+### usage-rollup
+**scope:** `src/team/usage-rollup.ts`, `test/team-usage-rollup.test.ts`
+**expects:** daily aggregates per project/agent from existing src/usage.ts parsers; team projects only; no paths, prompts or titles; opt-in flag; activity per member per day derived from the fold; cache savings and cost per merged task computed honestly
+**skills:** traceable-changes, verify-before-done
+
+Data for the contribution and token dashboard.
+
 ## Phase 4 — Delivery to people
 
 ### skill-offers
@@ -180,6 +211,21 @@ Desktop notifications for team events.
 **skills:** ui-ux-pro-max, verify-before-done
 
 Connect the Team workspace to the real daemon.
+
+### team-rules
+**scope:** `src/team/rules.ts`, `test/team-rules.test.ts`
+**expects:** team.rules offered and accepted like skills with the same content validation; installed as a managed block in untracked AGENTS.md/CLAUDE.md or .claude/rules/baton-team.md when CLAUDE.md is tracked; Cursor alwaysApply rule; Antigravity .agents/rules; ≤150 lines enforced
+**skills:** traceable-changes, verify-before-done
+
+Shared coding rules for every agent.
+
+### dashboard-ui @antigravity
+**after:** usage-rollup, team-ui-live
+**scope:** `web/src/features/dashboard/**`
+**expects:** GUARDRAILS-CONTEXT-DASHBOARD.md §4.2: 4 stat tiles, 52-week contribution grid with legend, keyboard focus values and table fallback, stacked daily token/cost bars, member/agent/project tabs; hand-built with the Tailwind theme, no chart library; demo fixtures; clean and minimal
+**skills:** ui-ux-pro-max, verify-before-done
+
+Contribution dots and token cost, Orca-style.
 
 ## Phase 5 — Durability and release
 
