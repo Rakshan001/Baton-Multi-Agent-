@@ -118,9 +118,9 @@ Orca UI primitives and theme — Lovecast Inc.
   Copyright (c) 2026 Lovecast Inc.
   License: MIT
   Copied (with modifications): shadcn/Radix UI primitives from
-  src/renderer/src/components/ui/ (badge, button, card, command, dialog,
-  dropdown-menu, input, label, popover, popover-content-ref, scroll-area,
-  select, separator, sheet, sonner, tabs, tooltip) into web/src/components/ui/,
+  src/renderer/src/components/ui/ (button, command, dialog, dropdown-menu,
+  input, label, popover, popover-content-ref, sheet, tabs, tooltip) into
+  web/src/components/ui/,
   the cn() helper from src/renderer/src/lib/utils.ts into web/src/lib/utils.ts,
   and the Tailwind v4 theme mapping / base layer from
   src/renderer/src/assets/main.css into web/src/styles/index.css.
@@ -142,6 +142,16 @@ Orca UI primitives and theme — Lovecast Inc.
   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
   IN THE SOFTWARE.
+
+-------------------------------------------------------------------------------
+shadcn/ui — shadcn
+  https://github.com/shadcn-ui/ui
+  Copyright (c) 2023 shadcn
+  License: MIT
+  The primitives above (via Orca) follow shadcn/ui's component code: the
+  class-variance-authority variants, Radix wiring and Tailwind classes in
+  web/src/components/ui/. The MIT permission notice reproduced above for
+  Orca applies to this code as well.
 
 -------------------------------------------------------------------------------
 Geist font — Vercel, in collaboration with basement.studio

@@ -62,3 +62,6 @@ export async function copyText(text: string): Promise<boolean> {
     return true;
   }
 }
+
+/** Local wall-clock time ("12:00") for an ISO timestamp, or an em dash. */
+export const clockTime = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—");

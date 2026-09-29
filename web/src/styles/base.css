@@ -274,6 +274,10 @@ button.bar-seg:hover { background: var(--bg-hover); }
 }
 [data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; transform: translateX(-50%) translateY(0); }
 [data-tip-side="bottom"]::after { bottom: auto; top: calc(100% + 8px); }
+/* A resting tooltip is invisible but still counts as scrollable overflow, so
+   a [data-tip] near a pane's right edge gave every screen a stray horizontal
+   scrollbar. Only generate the box while it is actually showing. */
+[data-tip]:not(:hover):not(:focus-visible)::after { display: none; }
 
 /* Skill rows: the dense view a hundred-skill library needs. */
 .skill-row { transition: background var(--dur-1), border-color var(--dur-1); }
