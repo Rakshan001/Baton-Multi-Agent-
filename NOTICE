@@ -111,3 +111,42 @@ taste-skill
   frontmatter `name:` (renamed to Baton's skill-id convention), catalog
   metadata, and an attribution footer. The upstream taste-skill-v1 is not
   bundled: its author documents it as superseded by design-taste.
+
+-------------------------------------------------------------------------------
+Orca UI primitives and theme — Lovecast Inc.
+  https://github.com/stablyai/orca (referenced locally under .refs/orca)
+  Copyright (c) 2026 Lovecast Inc.
+  License: MIT
+  Copied (with modifications): shadcn/Radix UI primitives from
+  src/renderer/src/components/ui/ (badge, button, card, command, dialog,
+  dropdown-menu, input, label, popover, popover-content-ref, scroll-area,
+  select, separator, sheet, sonner, tabs, tooltip) into web/src/components/ui/,
+  the cn() helper from src/renderer/src/lib/utils.ts into web/src/lib/utils.ts,
+  and the Tailwind v4 theme mapping / base layer from
+  src/renderer/src/assets/main.css into web/src/styles/index.css.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to
+  deal in the Software without restriction, including without limitation the
+  rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+  sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+  IN THE SOFTWARE.
+
+-------------------------------------------------------------------------------
+Geist font — Vercel, in collaboration with basement.studio
+  https://github.com/vercel/geist-font
+  Copyright (c) 2023 Vercel, in collaboration with basement.studio
+  License: SIL Open Font License 1.1
+  Bundled: web/public/fonts/Geist-Variable.woff2 (unmodified; the same file
+  Orca ships). Full license text: web/public/fonts/Geist-OFL.txt.

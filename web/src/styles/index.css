@@ -1,0 +1,130 @@
+/* Copyright (C) 2026 Rakshan Shetty
+   SPDX-License-Identifier: AGPL-3.0-or-later
+   The @theme mapping and base layer below are adapted from Orca
+   (MIT, Copyright (c) 2026 Lovecast Inc.) src/renderer/src/assets/main.css.
+   See NOTICE. */
+/* ============================================================
+   BATON — stylesheet entry (Tailwind v4 + legacy tokens)
+
+   Layering matters: the legacy tokens and component classes are imported INTO
+   Tailwind's `base` layer, so they sit after preflight (and still restyle the
+   inline-style screens) but below `utilities` — a Tailwind class on a shadcn
+   primitive always beats a legacy global like `button { color: inherit }`.
+   Inline `style={{…}}` beats every layer, so the old screens are unaffected.
+   ============================================================ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./tokens.css" layer(base);
+@import "./base.css" layer(base);
+
+/* The theme lives on <html data-theme="dark|light"> (usePrefs), not a class. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Tailwind colour names -> Baton tokens. The legacy names (`--accent`,
+   `--ring`) mean something else in Baton, so shadcn's semantic colours are
+   mapped here instead of redefining those variables. */
+@theme inline {
+  --color-background: var(--bg-base);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--bg-surface);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--bg-elevated);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--ui-primary);
+  --color-primary-foreground: var(--ui-primary-fg);
+  --color-secondary: var(--bg-surface-2);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--bg-surface-2);
+  --color-muted-foreground: var(--text-secondary);
+  --color-subtle-foreground: var(--text-tertiary);
+  --color-accent: var(--ui-hover);
+  --color-accent-foreground: var(--text-primary);
+  --color-selected: var(--ui-selected);
+  --color-destructive: var(--st-danger);
+  --color-destructive-foreground: var(--st-danger-fg);
+  --color-border: var(--border-default);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--border-default);
+  --color-ring: var(--focus-ring);
+  --color-brand: var(--accent);
+
+  --color-sidebar: var(--bg-surface);
+  --color-sidebar-foreground: var(--text-primary);
+  --color-sidebar-accent: var(--ui-hover);
+  --color-sidebar-accent-foreground: var(--text-primary);
+  --color-sidebar-border: var(--border-subtle);
+
+  --color-status-online: var(--st-online);
+  --color-status-online-foreground: var(--st-online-fg);
+  --color-status-away: var(--st-away);
+  --color-status-away-foreground: var(--st-away-fg);
+  --color-status-offline: var(--st-offline);
+  --color-status-offline-foreground: var(--st-offline-fg);
+  --color-status-danger: var(--st-danger);
+  --color-status-danger-foreground: var(--st-danger-fg);
+  --color-status-review: var(--st-review);
+  --color-status-review-foreground: var(--st-review-fg);
+  --color-status-ready: var(--st-ready);
+  --color-status-ready-foreground: var(--st-ready-fg);
+  --color-status-merged: var(--st-merged);
+  --color-status-merged-foreground: var(--st-merged-fg);
+
+  /* spec D §3.3: 6px controls, 8px cards, 12px sheets and dialogs */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+}
+
+/* Status triads for pills and badges. Tailwind callers can use the opacity
+   modifier instead (bg-status-online/12, border-status-online/30); these
+   are for inline-style callers. */
+:root {
+  --st-online-bg: color-mix(in srgb, var(--st-online) 12%, transparent);
+  --st-online-border: color-mix(in srgb, var(--st-online) 30%, transparent);
+  --st-away-bg: color-mix(in srgb, var(--st-away) 12%, transparent);
+  --st-away-border: color-mix(in srgb, var(--st-away) 30%, transparent);
+  --st-offline-bg: color-mix(in srgb, var(--st-offline) 12%, transparent);
+  --st-offline-border: color-mix(in srgb, var(--st-offline) 30%, transparent);
+  --st-danger-bg: color-mix(in srgb, var(--st-danger) 12%, transparent);
+  --st-danger-border: color-mix(in srgb, var(--st-danger) 30%, transparent);
+  --st-review-bg: color-mix(in srgb, var(--st-review) 12%, transparent);
+  --st-review-border: color-mix(in srgb, var(--st-review) 30%, transparent);
+  --st-ready-bg: color-mix(in srgb, var(--st-ready) 12%, transparent);
+  --st-ready-border: color-mix(in srgb, var(--st-ready) 30%, transparent);
+  --st-merged-bg: color-mix(in srgb, var(--st-merged) 12%, transparent);
+  --st-merged-border: color-mix(in srgb, var(--st-merged) 30%, transparent);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--border-default);
+  }
+
+  :where(button:not(:disabled)) {
+    cursor: pointer;
+  }
+}
+
+/* Sleek scrollbar (Orca) for dense panes that opt in. */
+.scrollbar-sleek {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 34%, transparent) transparent;
+}
+
+/* Radix popovers: keep long menus inside the viewport (Orca). */
+[data-slot="popover-content"] {
+  max-height: var(--radix-popover-content-available-height);
+}

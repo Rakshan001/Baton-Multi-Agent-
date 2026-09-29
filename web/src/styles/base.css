@@ -10,6 +10,11 @@
    [data-tip] tooltip near a narrow-viewport button) unless html itself is
    pinned. */
 html { overflow-x: hidden; }
+/* Tailwind preflight (same layer, earlier) strips list bullets and makes
+   svg/img block-level; the legacy inline-style screens were written against
+   UA defaults, so restore those two here. Tailwind utilities still win. */
+ul, ol { list-style: revert; }
+svg, img, canvas, video { display: revert; vertical-align: revert; }
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   font-family: var(--font-sans);
@@ -52,7 +57,7 @@ button { font-family: inherit; color: inherit; }
 /* Focus — visible AA rings, only on keyboard */
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: var(--r-xs);
 }
