@@ -12,6 +12,8 @@
  * Design: docs/superpowers/specs/2026-08-05-task-pipeline-design.md
  */
 
+import { MAX_REMINDER_BOOST } from './team/types.js';
+
 /**
  * Stored lifecycle states.
  *
@@ -27,11 +29,50 @@ export type TaskState =
   | 'blocked'    // the agent reported it cannot proceed; still owned
   | 'review'     // evidence passed, awaiting a verdict
   | 'done'
-  | 'cancelled'; // stopped by a human, or deliberately dropped
+  | 'cancelled'  // stopped by a human, or deliberately dropped
+  /*
+   * Team Sync v2 (§7.2). Reachable ONLY on an `origin:'team'` row, and only by
+   * materialising the folded team state onto it (src/team/materialize.ts) — no
+   * local transition writes them. So a solo plan can never be in one of these,
+   * and nothing solo has to know they exist. The mapping to the fold's
+   * `TeamTaskState` is `teamStateOf` / `taskStateOf` in materialize.ts.
+   */
+  | 'assigned'     // a Lead named a member; not yet acknowledged
+  | 'acknowledged' // the member saw it; not yet taken
+  | 'paused'       // taken, deliberately on hold, still owned
+  | 'changes'      // a reviewer asked for rework
+  | 'approved'     // review passed; waiting to be pushed and merged
+  | 'pushed'       // the member pushed the approved sha; waiting for the merge
+  | 'merged'       // on the base branch; about to be closed as done
+  | 'needs-owner'; // causally concurrent edits conflicted (§7.6); a Lead decides
 
 export const TASK_STATES: readonly TaskState[] = [
   'queued', 'claimed', 'active', 'blocked', 'review', 'done', 'cancelled',
+  'assigned', 'acknowledged', 'paused', 'changes', 'approved', 'pushed', 'merged', 'needs-owner',
 ];
+
+/**
+ * P0 critical, P1 high, P2 normal (the default), P3 low — the LOCAL display
+ * form stored on a row. The fold keeps the numeric `PriorityLevel` (0..3);
+ * `levelOf` / `priorityFromLevel` in src/team/materialize.ts convert.
+ */
+export type PriorityLabel = 'P0' | 'P1' | 'P2' | 'P3';
+/** @deprecated alias of `PriorityLabel`, kept so existing call sites compile. */
+export type Priority = PriorityLabel;
+export const DEFAULT_PRIORITY: PriorityLabel = 'P2';
+
+/** Where a task row came from. Absent means `local`. */
+export type TaskOrigin = 'local' | 'team';
+
+/** What a Lead hands a member (Team Sync v2). Structured so an agent gets the
+ *  scope boundary and the acceptance bar as lists, not a paragraph to parse. */
+export interface TaskBrief {
+  goal: string;
+  inScope: string[];
+  outOfScope: string[];
+  acceptance: string[];
+  skills: string[];
+}
 
 /**
  * States that no longer hold up a phase. `cancelled` counts alongside `done` on
@@ -78,6 +119,25 @@ export interface PipelineFields {
   /** The last verdict. `notes` is the rejection's reason — the one thing the
    *  agent picking the work back up actually needs. */
   reviewedBy?: { actor: string; at: string; verdict: 'approve' | 'reject'; notes?: string };
+  /* ---- Team Sync v2 (§7.3–7.4). All optional; absent reads as the solo default. ---- */
+  /** Absent means P2. */
+  priority?: PriorityLabel;
+  /** "Drop what you're doing" — sorts ahead of every priority. */
+  urgent?: boolean;
+  /** Team member the task is assigned to, or null/absent when nobody is. */
+  member?: string | null;
+  brief?: TaskBrief;
+  /** Revision of `brief`, so a prompt can name the exact brief it carries. */
+  briefRev?: number;
+  /** Absent means `local`. */
+  origin?: TaskOrigin;
+  /** Unacknowledged reminders since the last ack. */
+  reminders?: number;
+  /** Team rows only: the fold's task id (the row's slug is a local name). */
+  teamId?: string;
+  /** Team rows only: lamport of the effective assign (§7.3 tiebreak, as the
+   *  fold's `sortTasks`). Absent for an unassigned (open-pool) task. */
+  assignLamport?: number;
 }
 
 /** The minimum a task must expose for the pipeline to reason about it. */
@@ -92,6 +152,29 @@ export interface PipelineTask extends PipelineFields {
  */
 export function stateOf(t: PipelineTask): TaskState {
   return t.state ?? 'queued';
+}
+
+/** A team-origin row. Only these may enter the Team Sync v2 states. */
+export function isTeamTask(t: PipelineTask): boolean {
+  return t.origin === 'team';
+}
+
+const PRIORITY_LEVEL: Readonly<Record<PriorityLabel, number>> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+export function priorityOf(t: PipelineTask): PriorityLabel {
+  return t.priority ?? DEFAULT_PRIORITY;
+}
+
+/**
+ * Effective priority as a number (0 = P0): `P − min(reminders, MAX_REMINDER_BOOST)`,
+ * capped at P0 (§7.3) — the fold's own formula. Only that many reminders count,
+ * so a device that ignores the Lead's rate limit gains nothing by spamming them.
+ */
+export function effectivePriority(t: PipelineTask): number {
+  const r = Number.isFinite(t.reminders) ? Math.floor(t.reminders as number) : 0;
+  // A hand-edited row with a nonsense priority sorts as the default, not NaN.
+  const base = PRIORITY_LEVEL[priorityOf(t)] ?? PRIORITY_LEVEL[DEFAULT_PRIORITY];
+  return Math.max(base - Math.min(Math.max(r, 0), MAX_REMINDER_BOOST), 0);
 }
 
 /**
@@ -182,6 +265,31 @@ export interface EligibilityOpts {
    * as it always has — a phase lifts the moment its last task is marked done.
    */
   integrated?: (phase: number) => boolean;
+  /**
+   * Team mode: the PERSON this device belongs to. A team row assigned to them
+   * with no agent named (`assignee` null) counts as this agent's own. Omit in
+   * solo mode — it only ever affects `origin:'team'` rows.
+   */
+  member?: string;
+}
+
+/** A team row's holder is still working it (the "held row" of §7.3). */
+const HELD_WORK: ReadonlySet<TaskState> = new Set<TaskState>(['claimed', 'active', 'paused', 'changes']);
+
+/**
+ * Team rows only: this agent holds the take and the work is still in its
+ * hands. `blocked` is left out on purpose — it waits on a human, so offering
+ * it as "next" would send the agent straight back into the same wall.
+ */
+export function isHeldTeamRow(t: PipelineTask, agent: string): boolean {
+  return isTeamTask(t) && t.claimedBy?.agent === agent && HELD_WORK.has(stateOf(t));
+}
+
+/** Team rows only: assigned to this agent (or to this member with no agent named). */
+function isOwnTeamRow(t: PipelineTask, agent: string, member: string | undefined): boolean {
+  if (!isTeamTask(t)) return false;
+  if (t.assignee != null) return t.assignee === agent;
+  return member !== undefined && t.member === member;
 }
 
 /**
@@ -203,11 +311,80 @@ export function eligibleFor(
   const open = openPhase(tasks, opts);
   const bySlug = new Map(tasks.map((t) => [t.slug, t]));
   return tasks.filter((t) => {
-    if (stateOf(t) !== 'queued') return false;
-    if (t.assignee != null && t.assignee !== agent) return false;
+    // Team Sync v2 (§7.3). A team row this agent already holds is always its
+    // next task — already started, so neither the barrier nor deps re-apply.
+    // Its own `assigned`/`acknowledged` rows are offered like queued ones. No
+    // solo row can be in either shape, so the solo rule below is untouched.
+    if (isHeldTeamRow(t, agent)) return true;
+    const st = stateOf(t);
+    const ownTeam = (st === 'assigned' || st === 'acknowledged') && isOwnTeamRow(t, agent, opts.member);
+    if (!ownTeam) {
+      if (st !== 'queued') return false;
+      if (t.assignee != null && t.assignee !== agent) return false;
+    }
     if (phaseOf(t) > open) return false;
     return (t.dependsOn ?? []).every((d) => depBlocker(bySlug.get(d), d, opts.isFetchable) === null);
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Work order (§7.3)                                                   */
+/* ------------------------------------------------------------------ */
+
+type SortKey = ReadonlyArray<number | string>;
+
+/**
+ * The one sort key for the deterministic work order, shared by solo and team
+ * rows so a mixed list still sorts totally:
+ *   1. the task `agent` currently holds
+ *   2. urgent
+ *   3. effective priority
+ *   4. phase (lower first — the barrier's own order)
+ *   5. solo rows: own assignment over the open pool, then oldest `createdAt`
+ *      team rows: the assign's lamport (open pool last), then the fold task id
+ *      — exactly the fold's `sortTasks` tiebreak, so two devices agree
+ *   6. slug, so input order never decides
+ *
+ * At step 5 a team row sorts before a solo row: a Lead's assignment is the
+ * shared commitment, a local row is this machine's own.
+ *
+ * Solo rows with no priority fields tie on 1–3, so a solo plan sorts exactly as
+ * it did before v2 (phase, own-before-pool, oldest) — except that two rows with
+ * an IDENTICAL `createdAt` now break by slug instead of by input order.
+ * `createdAt` is compared by position, not by the key array, because the
+ * pre-v2 order used `localeCompare` and changing that could reorder rows.
+ */
+function orderKey(t: PipelineTask & { createdAt?: string }, agent: string): { head: SortKey; tail: SortKey } {
+  const holds = t.claimedBy?.agent === agent && !isTerminal(stateOf(t));
+  const head: SortKey = [holds ? 0 : 1, t.urgent === true ? 0 : 1, effectivePriority(t), phaseOf(t)];
+  const tail: SortKey = isTeamTask(t)
+    ? [0, t.assignLamport ?? Number.MAX_SAFE_INTEGER, t.teamId ?? t.slug]
+    : [1, t.assignee == null ? 1 : 0];
+  return { head, tail };
+}
+
+function cmpKey(a: SortKey, b: SortKey): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x === y) continue;
+    if (typeof x === 'number' && typeof y === 'number') return x - y;
+    return String(x) < String(y) ? -1 : 1;
+  }
+  return a.length - b.length;
+}
+
+/** Comparator for `agent`'s work order; see `orderKey`. */
+export function compareWorkOrder(agent: string): (a: PipelineTask & { createdAt?: string }, b: PipelineTask & { createdAt?: string }) => number {
+  return (a, b) => {
+    const ka = orderKey(a, agent);
+    const kb = orderKey(b, agent);
+    return cmpKey(ka.head, kb.head)
+      || cmpKey(ka.tail, kb.tail)
+      // Solo only (a team/solo pair was already split by the tail's first slot).
+      || (!isTeamTask(a) ? (a.createdAt ?? '').localeCompare(b.createdAt ?? '') : 0)
+      || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+  };
 }
 
 export interface StallOpts {

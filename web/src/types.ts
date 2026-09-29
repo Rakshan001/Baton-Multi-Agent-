@@ -769,7 +769,9 @@ export interface Reachability {
 /* ---- pipeline swimlanes — GET /api/pipeline (src/pipeline-view.ts) ---- */
 
 export type TaskState =
-  | "queued" | "claimed" | "active" | "paused" | "review" | "blocked" | "done" | "cancelled";
+  | "queued" | "claimed" | "active" | "paused" | "review" | "blocked" | "done" | "cancelled"
+  // Team Sync v2 (§7.2) — only ever on team-origin tasks.
+  | "assigned" | "acknowledged" | "changes" | "approved" | "pushed" | "merged" | "needs-owner";
 
 /** What a lane header says about its phase. `holding` means every task in it is
  *  finished but its branches have not landed — which is WHY the next lane is

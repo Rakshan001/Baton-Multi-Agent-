@@ -48,6 +48,14 @@ const STATE_COLOR: Record<TaskState, string> = {
   blocked: "var(--conflict)",
   done: "var(--ok)",
   cancelled: "var(--idle)",
+  // Team Sync v2 states — only team-origin tasks reach these.
+  assigned: "var(--idle)",
+  acknowledged: "var(--idle)",
+  changes: "var(--dirty)",
+  approved: "var(--ok)",
+  pushed: "var(--ok)",
+  merged: "var(--ok)",
+  "needs-owner": "var(--conflict)",
 };
 
 /* ---------- small pieces ---------- */
