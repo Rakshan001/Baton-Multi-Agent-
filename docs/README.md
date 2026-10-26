@@ -19,6 +19,7 @@ Everything you need to run multiple AI coding agents on one repo with Baton. New
 | [The dashboard](./dashboard.md) | The realtime web UI: screens, project switcher, read-only vs `--write`, demo mode. |
 | [Knowledge base](./knowledge-graph.md) | `baton kb` — graphify code graphs, the `CODEBASE.md` map, export/import/share. |
 | [Session handoff](./session-handoff.md) | `baton pass` / `take` / `done`, the `HANDOFF.md` brief, and the Claude hooks. |
+| [Automatic failover](./failover.md) | `baton failover` — detect a provider limit in a headless run and start the next agent on the same handoff. |
 | [Skills](./skills.md) | The skills catalog, installing into agent config, and importing your own. |
 | [Project memory](./memory.md) | Evidence-anchored shared facts and the anti-hallucination model. |
 | [MCP tools](./mcp-tools.md) | The coordination tools agents get over MCP, and how to wire each agent. |

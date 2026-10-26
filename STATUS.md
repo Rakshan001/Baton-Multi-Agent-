@@ -1,5 +1,7 @@
 # Baton — Project Status
 
+> **In progress (`feat/auto-failover`):** `baton failover` — a foreground supervisor that detects provider limit lines in a headless agent's output, writes the existing `HANDOFF.md` brief, and starts the next agent in an explicit chain. Pure supervisor + matcher in `src/failover.ts`; CLI/claim wiring in `src/commands/failover.ts`; 12 unit tests in `test/failover.test.ts`.
+
 > **Desktop (2026-08-23):** `feat/baton-desktop` lands D1–D6 — Electron fleet shell (`electron/`), branding-as-data (`branding/`), packaging (`config/scripts/stage-payload.mjs` + `electron-builder.cjs`), and `.github/workflows/desktop-release.yml`. Daemons stay out-of-process; `src/server.ts` / `src/daemons.ts` untouched.
 
 

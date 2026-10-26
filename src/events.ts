@@ -24,6 +24,9 @@ export type BatonEvent =
    *  a flag, the plan's `@agent`, or the routing chain. */
   | { type: 'dispatch.started'; slug: string; agent: string; source: 'flag' | 'plan' | 'routing' }
   | { type: 'agent.stopped'; slug: string; agent: string }
+  /** A supervisor stopped one agent on a provider limit and started the next on
+   *  the same task. `reason` is the output line that triggered the handoff. */
+  | { type: 'agent.failover'; slug: string; from: string; to: string; reason: string; attempt: number }
   | { type: 'agent.output'; slug: string; line: string; stream: 'out' | 'err' }
   | { type: 'file.edited'; slug: string; path: string; at: string }
   | { type: 'signal.overlap'; path: string; slugs: string[] }

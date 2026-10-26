@@ -49,6 +49,7 @@ import { hooksInstallCmd } from './commands/hooks.js';
 import { routeCmd } from './commands/route.js';
 import { usageCmd } from './commands/usage.js';
 import { startCmd, stopCmd } from './commands/start.js';
+import { failoverCmd, type FailoverCmdOptions } from './commands/failover.js';
 import { cancelCmd } from './commands/cancel.js';
 import { memoryAddCmd, memoryGcCmd, memoryListCmd, memoryLogCmd, memoryMigrateCmd, memoryRepairCmd, memoryRmCmd } from './commands/memory.js';
 import { connectCmd } from './commands/connect.js';
@@ -520,6 +521,15 @@ program
   .argument('<slug>', 'task slug')
   .description('stop a baton-started headless agent')
   .action((slug: string) => run(() => stopCmd(slug)));
+
+program
+  .command('failover')
+  .argument('<slug>', 'task slug')
+  .requiredOption('--agents <list>', 'ordered chain of headless agents, e.g. claude,codex,gemini')
+  .option('--max <n>', 'maximum agents to try (default: the whole chain)', (value: string) => Number.parseInt(value, 10))
+  .option('--pattern <regex>', 'extra limit pattern (repeatable)', (value: string, previous: string[]) => [...previous, value], [] as string[])
+  .description('run an agent headlessly; on a rate/usage limit, hand off to the next agent')
+  .action((slug: string, opts: FailoverCmdOptions) => run(() => failoverCmd(slug, opts)));
 
 program
   .command('usage')

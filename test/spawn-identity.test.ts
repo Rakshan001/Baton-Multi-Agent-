@@ -50,7 +50,7 @@ async function taskAt(root: string, slug: string): Promise<string> {
   await addTask(root, {
     slug, task: 'a task', agent: 'claude', branch: `baton/${slug}`,
     worktreePath: wt, status: 'todo', createdAt: new Date().toISOString(),
-    baseCommit: 'abc',
+    baseCommit: 'abc', scope: ['src/a.ts'],
   } as never);
   return wt;
 }
@@ -87,5 +87,11 @@ describe('a headless run tells the agent who it is', () => {
     const out = await envSeenByAgent('mysession', 'BATON_SLUG', 'nodex9');
 
     expect(out).toContain('SAW=mysession');
+  }, 20_000);
+
+  it('exports the task scope for custom headless drivers', async () => {
+    const out = await envSeenByAgent('scoped', 'BATON_SCOPE', 'nodex9');
+
+    expect(out).toContain('SAW=["src/a.ts"]');
   }, 20_000);
 });

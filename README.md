@@ -128,6 +128,10 @@ baton pass fix-checkout --to cursor     # → HANDOFF.md
 baton take fix-checkout                 # on the other agent
 ```
 
+For a headless run, `baton failover fix-checkout --agents claude,codex,gemini`
+does that automatically when the agent's own output reports a limit. See
+[Automatic failover](docs/failover.md).
+
 **Two agents just edited the same file.**
 Every task gets its own worktree and branch, so they physically cannot collide. Before an agent touches a shared file, it asks — and gets told who's in there and what they're doing.
 ```bash

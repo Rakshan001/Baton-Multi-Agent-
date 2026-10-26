@@ -250,6 +250,9 @@ export async function startAgent(
       BATON_ROOT: repoRoot,
       BATON_SLUG: slug,
       BATON_TASK: task.task,
+      // The task's declared file scope, so custom headless drivers do not have
+      // to re-read .baton/tasks.json just to learn what they may edit.
+      BATON_SCOPE: JSON.stringify(task.scope ?? []),
       BATON_AGENT: agent,
     },
   });
